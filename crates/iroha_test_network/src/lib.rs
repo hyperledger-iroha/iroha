@@ -71,6 +71,8 @@ use iroha_data_model::{
         DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
     },
     transaction::Executable,
+    transaction::signed::TransactionResultInner,
+    trigger::DataTriggerSequence,
 };
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_primitives::{
@@ -3146,9 +3148,15 @@ impl Network {
                 .iter()
                 .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
                 .collect::<Vec<_>>();
+            let placeholder_results = std::iter::repeat_with(|| {
+                TransactionResultInner::Ok(DataTriggerSequence::default())
+            })
+            .take(hashes.len())
+            .collect::<Vec<_>>();
             working
-                .set_transaction_results(Vec::new(), &hashes, Vec::new())
+                .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
                 .expect("genesis placeholder hashes should match payload");
+            working.set_committed_fragment_count(0);
 
             let sig = iroha_data_model::block::BlockSignature::new(
                 signer_index,
@@ -3167,8 +3175,9 @@ impl Network {
             rebuilt.set_da_proof_policies(cached_genesis.0.da_proof_policies().cloned());
             rebuilt.set_da_pin_intents(cached_genesis.0.da_pin_intents().cloned());
             rebuilt
-                .set_transaction_results(Vec::new(), &hashes, Vec::new())
+                .set_transaction_results(Vec::new(), &hashes, placeholder_results)
                 .expect("genesis placeholder hashes should match payload");
+            rebuilt.set_committed_fragment_count(0);
             let mut augmented = GenesisBlock(rebuilt);
 
             let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());

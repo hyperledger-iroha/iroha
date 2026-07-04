@@ -988,7 +988,7 @@ mod tests {
             expires_at: None,
             entry_ids: Vec::new(),
             blinded_digest: [0u8; 32],
-            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
         let err = ProofToken::decode(&token.encode()).expect_err("empty entries should fail");
         assert!(matches!(err, DecodeError::MissingEntries));
@@ -1003,7 +1003,7 @@ mod tests {
             expires_at: Some(19),
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
         let err = ProofToken::decode(&token.encode()).expect_err("invalid expiry should fail");
         assert!(matches!(
@@ -1024,7 +1024,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
         let err = ProofToken::decode(&issued_overflow.encode())
             .expect_err("unrepresentable issued_at should fail closed");
@@ -1043,7 +1043,7 @@ mod tests {
             expires_at: Some(u64::MAX),
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
         let err = ProofToken::decode(&expiry_overflow.encode())
             .expect_err("unrepresentable expires_at should fail closed");
@@ -1065,7 +1065,7 @@ mod tests {
             expires_at: Some(u64::MAX),
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
 
         assert!(token.checked_issued_at().is_none());
@@ -1090,7 +1090,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
         let mut bytes = token.encode();
         bytes[FRAME_MAGIC.len() + 1] = 0x80;
@@ -1259,7 +1259,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec![String::new(); usize::from(u16::MAX) + 1],
             blinded_digest: [0u8; 32],
-            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
 
         let err = token
@@ -1294,7 +1294,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec!["x".repeat(usize::from(u16::MAX) + 1)],
             blinded_digest: [0u8; 32],
-            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
 
         let err = token
@@ -1358,7 +1358,7 @@ mod tests {
             expires_at: None,
             entry_ids: vec!["denylist/entry".to_string()],
             blinded_digest: [0u8; 32],
-            signature: Signature::from_bytes(&[0u8; SIGNATURE_LENGTH]),
+            signature: proof_token_signature_placeholder(),
         };
 
         for counter in 0u32..2048 {

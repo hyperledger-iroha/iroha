@@ -1370,6 +1370,12 @@ impl From<crate::isi::governance::ProposeRuntimeUpgradeProposal> for Instruction
     }
 }
 #[cfg(feature = "governance")]
+impl From<crate::isi::governance::ProposeSccpRouteManifest> for InstructionBox {
+    fn from(i: crate::isi::governance::ProposeSccpRouteManifest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+#[cfg(feature = "governance")]
 impl From<crate::isi::governance::CastZkBallot> for InstructionBox {
     fn from(i: crate::isi::governance::CastZkBallot) -> Self {
         InstructionBox(Box::new(i))
@@ -4797,7 +4803,8 @@ mod tests {
                 assertion_public_key: vec![0x04; 65],
                 assertion_usage_count_limit: None,
                 one_use: true,
-                issuer_signature: Signature::from_bytes(&[0xAB; 64]),
+                issuer_signature: Signature::try_from_bytes(&[0xAB; 64])
+                    .expect("checked offline note registry issuer signature fixture"),
             },
             asset: AssetId::of(asset_definition_id.clone(), account_id),
             amount: Numeric::new(20, 0),

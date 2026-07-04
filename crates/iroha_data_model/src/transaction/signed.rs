@@ -42,8 +42,14 @@ fn verify_typed_signature_for_signer<T: Encode>(
     signer: &PublicKey,
     payload: &T,
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(signer, payload)
 }
@@ -1731,6 +1737,38 @@ mod tests {
     }
 
     #[test]
+    fn transaction_signature_decode_rejects_empty_signature_material() {
+        let signature = TransactionSignature(SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&[]),
+        ));
+        let encoded = norito::to_bytes(&signature).expect("encode invalid transaction signature");
+
+        let err = norito::core::decode_from_bytes::<TransactionSignature>(&encoded)
+            .expect_err("empty transaction signature must fail closed");
+        let message = err.to_string();
+        assert!(
+            message.contains("empty") || message.contains("length mismatch"),
+            "unexpected transaction signature decode error: {message}"
+        );
+    }
+
+    #[test]
+    fn transaction_signature_decode_rejects_all_zero_signature_material() {
+        let signature = TransactionSignature(SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&[0_u8; 64]),
+        ));
+        let encoded = norito::to_bytes(&signature).expect("encode invalid transaction signature");
+
+        let err = norito::core::decode_from_bytes::<TransactionSignature>(&encoded)
+            .expect_err("all-zero transaction signature must fail closed");
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected transaction signature decode error: {message}"
+        );
+    }
+
+    #[test]
     fn signed_transaction_decode_from_slice_rejects_trailing_bytes() {
         let signed_tx = sample_signed_transaction();
         let mut bytes = norito::codec::encode_adaptive(&signed_tx);
@@ -1838,6 +1876,64 @@ mod tests {
     }
 
     #[test]
+    fn signed_transaction_decode_rejects_empty_signature_without_decode_panic() {
+        let mut invalid_tx = sample_signed_transaction();
+        invalid_tx.signature = TransactionSignature(iroha_crypto::SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&[]),
+        ));
+
+        let encoded = norito::to_bytes(&invalid_tx).expect("encode invalid transaction fixture");
+        let err = norito::core::decode_from_bytes::<SignedTransaction>(&encoded)
+            .expect_err("empty signed transaction signature must fail closed");
+        let message = err.to_string();
+        assert!(
+            message.contains("empty") || message.contains("length mismatch"),
+            "unexpected signed transaction decode error: {message}"
+        );
+
+        let err = SignedTransaction::decode_all_versioned(&invalid_tx.encode_versioned())
+            .expect_err("empty signed transaction signature must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("empty") || message.contains("length mismatch"),
+            "unexpected versioned signed transaction decode error: {message}"
+        );
+        assert!(
+            !message.contains("panic during decode"),
+            "empty signatures should not surface as decode panics: {message}"
+        );
+    }
+
+    #[test]
+    fn signed_transaction_decode_rejects_all_zero_signature_without_decode_panic() {
+        let mut invalid_tx = sample_signed_transaction();
+        invalid_tx.signature = TransactionSignature(iroha_crypto::SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&[0_u8; 64]),
+        ));
+
+        let encoded = norito::to_bytes(&invalid_tx).expect("encode invalid transaction fixture");
+        let err = norito::core::decode_from_bytes::<SignedTransaction>(&encoded)
+            .expect_err("all-zero signed transaction signature must fail closed");
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected signed transaction decode error: {message}"
+        );
+
+        let err = SignedTransaction::decode_all_versioned(&invalid_tx.encode_versioned())
+            .expect_err("all-zero signed transaction signature must be rejected");
+        let message = err.to_string();
+        assert!(
+            message.contains("all zero"),
+            "unexpected versioned signed transaction decode error: {message}"
+        );
+        assert!(
+            !message.contains("panic during decode"),
+            "all-zero signatures should not surface as decode panics: {message}"
+        );
+    }
+
+    #[test]
     fn signed_transaction_versioned_decode_preserves_invalid_signature_for_validation() {
         let mut invalid_tx = sample_signed_transaction();
         let mut signature = invalid_tx.signature().0.payload().to_vec();
@@ -1846,7 +1942,8 @@ mod tests {
             .expect("test signature payload is non-empty");
         *last ^= 0xFF;
         invalid_tx.signature = TransactionSignature(iroha_crypto::SignatureOf::from_signature(
-            iroha_crypto::Signature::from_bytes(&signature),
+            iroha_crypto::Signature::try_from_bytes(&signature)
+                .expect("tampered transaction signature remains structurally admissible"),
         ));
 
         let decoded = SignedTransaction::decode_all_versioned(&invalid_tx.encode_versioned())
@@ -1880,6 +1977,45 @@ mod tests {
                 err,
                 TransactionSignatureError::CryptoError("Signature verification failed".to_owned()),
                 "{label} transaction signature R was not rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_transaction_rejects_malformed_mldsa_signature_lengths() {
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+        let chain: ChainId = "mldsa-tx-signature-length".parse().expect("chain id");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "mldsa tx".into())])
+            .sign(key_pair.private_key());
+
+        tx.verify_signature()
+            .expect("valid ML-DSA transaction signature verifies");
+        let valid_signature = tx.signature.0.payload().to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x5A);
+                payload
+            }),
+        ] {
+            let mut invalid_tx = tx.clone();
+            invalid_tx.signature = TransactionSignature(SignatureOf::from_signature(
+                Signature::from_bytes(&replacement_signature),
+            ));
+
+            let err = invalid_tx
+                .verify_signature()
+                .expect_err("malformed ML-DSA transaction signature length must fail admission");
+            assert!(
+                matches!(err, TransactionSignatureError::CryptoError(_)),
+                "{label} ML-DSA transaction signature length failed with unexpected error: {err:?}"
             );
         }
     }

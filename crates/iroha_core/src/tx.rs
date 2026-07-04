@@ -970,6 +970,7 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         || any.is::<iroha_data_model::isi::ExecuteTrigger>()
         || any.is::<iroha_data_model::isi::CustomInstruction>()
         || any.is::<iroha_data_model::isi::governance::ProposeDeployContract>()
+        || any.is::<iroha_data_model::isi::governance::ProposeSccpRouteManifest>()
         || any.is::<iroha_data_model::isi::governance::CastZkBallot>()
         || any.is::<iroha_data_model::isi::governance::CastPlainBallot>()
         || any.is::<iroha_data_model::isi::governance::ApproveGovernanceProposal>()
@@ -5909,6 +5910,10 @@ pub(crate) fn enforce_fraud_policy(
                 iroha_crypto::ed25519_parse_signature(signature_bytes)
                     .map_err(|err| signature_parse_rejection(err.to_string()))?
             }
+            iroha_crypto::Algorithm::MlDsa => {
+                iroha_crypto::mldsa65_parse_signature(signature_bytes)
+                    .map_err(|err| signature_parse_rejection(err.to_string()))?
+            }
             _ => iroha_crypto::Signature::try_from_bytes(signature_bytes).map_err(|err| {
                 #[cfg(feature = "telemetry")]
                 if let Some(ctx) = fraud_ctx.as_ref() {
@@ -8682,7 +8687,12 @@ pub mod tests {
     }
 
     #[test]
-    fn fraud_policy_rejects_noncanonical_ed25519_attestation_signature_r_before_backend() {
+    fn fraud_policy_rejects_malformed_ed25519_attestation_signature_r_before_backend() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
         const NONCANONICAL_R: [u8; 32] = [
             0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -8704,11 +8714,6 @@ pub mod tests {
             },
         );
         let valid_signature = checked_signature_of(attester.private_key(), &unsigned);
-        let mut signature_bytes = valid_signature.payload().to_vec();
-        signature_bytes[..NONCANONICAL_R.len()].copy_from_slice(&NONCANONICAL_R);
-        let mut assessment = unsigned;
-        assessment.signature = Some(signature_bytes);
-        let metadata = fraud_metadata_with_assessment(&assessment);
         let cfg = iroha_config::parameters::actual::FraudMonitoring {
             enabled: true,
             required_minimum_band: Some(iroha_config::parameters::actual::FraudRiskBand::Medium),
@@ -8721,17 +8726,90 @@ pub mod tests {
         let catalog = DataSpaceCatalog::default();
         let assignment = single_lane_assignment(&catalog);
 
-        let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
-            .expect_err("noncanonical Ed25519 attestation signature R must be rejected");
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature_bytes = valid_signature.payload().to_vec();
+            signature_bytes[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let mut assessment = unsigned.clone();
+            assessment.signature = Some(signature_bytes);
+            let metadata = fraud_metadata_with_assessment(&assessment);
 
-        match err {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
-                assert!(
-                    reason.contains("signature is malformed"),
-                    "unexpected rejection reason: {reason}"
-                );
+            let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
+                .expect_err("malformed Ed25519 attestation signature R must be rejected");
+
+            match err {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+                    assert!(
+                        reason.contains("signature is malformed"),
+                        "{label} R produced unexpected rejection reason: {reason}"
+                    );
+                }
+                other => panic!("expected Validation::NotPermitted for {label} R, got {other:?}"),
             }
-            other => panic!("expected Validation::NotPermitted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fraud_policy_rejects_malformed_mldsa_attestation_signature_lengths_before_backend() {
+        let attester = checked_fixture_keypair(b"fraud-attester-mldsa".to_vec(), Algorithm::MlDsa);
+        let unsigned = FraudAssessment::new(
+            Vec::new(),
+            iroha_data_model::fraud::types::FraudAssessmentParts {
+                query_id: [0xFB; 32],
+                engine_id: "risk-engine-eu".to_owned(),
+                risk_score_bps: 650,
+                confidence_bps: 9_000,
+                decision: iroha_data_model::fraud::types::AssessmentDecision::Allow,
+                generated_at_ms: 1,
+                signature: None,
+            },
+        );
+        let valid_signature = checked_signature_of(attester.private_key(), &unsigned);
+        let cfg = iroha_config::parameters::actual::FraudMonitoring {
+            enabled: true,
+            required_minimum_band: Some(iroha_config::parameters::actual::FraudRiskBand::Medium),
+            attesters: vec![iroha_config::parameters::actual::FraudAttester {
+                engine_id: "risk-engine-eu".to_owned(),
+                public_key: attester.public_key().clone(),
+            }],
+            ..Default::default()
+        };
+        let catalog = DataSpaceCatalog::default();
+        let assignment = single_lane_assignment(&catalog);
+
+        for label in ["short", "overlong"] {
+            let mut signature_bytes = valid_signature.payload().to_vec();
+            match label {
+                "short" => {
+                    signature_bytes
+                        .pop()
+                        .expect("ML-DSA fraud attestation signature is non-empty");
+                }
+                "overlong" => signature_bytes.push(0xA5),
+                _ => unreachable!("covered labels"),
+            }
+            let mut assessment = unsigned.clone();
+            assessment.signature = Some(signature_bytes);
+            let metadata = fraud_metadata_with_assessment(&assessment);
+
+            let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
+                .expect_err("malformed ML-DSA attestation signature length must be rejected");
+
+            match err {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
+                    assert!(
+                        reason.contains("signature is malformed"),
+                        "{label} ML-DSA signature length produced unexpected rejection reason: {reason}"
+                    );
+                }
+                other => {
+                    panic!(
+                        "expected Validation::NotPermitted for {label} ML-DSA length, got {other:?}"
+                    )
+                }
+            }
         }
     }
 
@@ -9745,7 +9823,8 @@ pub mod tests {
         );
         let flip_index = signature_payload.len() - 1;
         signature_payload[flip_index] ^= 0xFF;
-        let forged_signature = iroha_crypto::Signature::from_bytes(&signature_payload);
+        let forged_signature = iroha_crypto::Signature::try_from_bytes(&signature_payload)
+            .expect("tampered transaction signature remains structurally admissible");
         invalid_tx.set_signature(TransactionSignature(
             iroha_crypto::SignatureOf::from_signature(forged_signature),
         ));

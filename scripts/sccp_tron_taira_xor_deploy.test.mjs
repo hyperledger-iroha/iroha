@@ -1600,7 +1600,7 @@ test("route manifest draft binds deployment evidence, verifier material, and TAI
   });
 });
 
-test("TRON route-config refuses allow-unready for production-ready manifests", async () => {
+test("TRON route-config rejects removed allow-unready option", async () => {
   await withTempDir(async (dir) => {
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
     const liveEvidencePath = join(dir, "live-evidence.json");
@@ -1622,7 +1622,7 @@ test("TRON route-config refuses allow-unready for production-ready manifests", a
     });
     const toml = buildTairaXorRouteConfigToml(manifest);
     assert.match(toml, /production_ready = true/u);
-    assert.match(toml, /sccp_allow_unready_transparent_proofs = false/u);
+    assert.doesNotMatch(toml, /sccp_allow_unready_transparent_proofs/u);
     const snakeCaseSettlementToml = buildTairaXorRouteConfigToml({
       ...manifest,
       settlement: {
@@ -1642,7 +1642,7 @@ test("TRON route-config refuses allow-unready for production-ready manifests", a
 
     assert.throws(
       () => buildTairaXorRouteConfigToml(manifest, { "allow-unready": "true" }),
-      /production-ready route manifests cannot enable --allow-unready/u,
+      /--allow-unready was removed/u,
     );
     assert.throws(
       () =>
@@ -1651,12 +1651,12 @@ test("TRON route-config refuses allow-unready for production-ready manifests", a
           manifest,
           { "allow-unready": "true" },
         ),
-      /production-ready route manifests cannot enable --allow-unready/u,
+      /--allow-unready was removed/u,
     );
   });
 });
 
-test("TRON route-config rejects malformed allow-unready option values", async () => {
+test("TRON route-config rejects any allow-unready option value", async () => {
   await withTempDir(async (dir) => {
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
     const liveEvidencePath = join(dir, "live-evidence.json");
@@ -1680,7 +1680,7 @@ test("TRON route-config rejects malformed allow-unready option values", async ()
     for (const value of malformedBooleanOptionValues) {
       assert.throws(
         () => buildTairaXorRouteConfigToml(manifest, { "allow-unready": value }),
-        /--allow-unready must be true or false/u,
+        /--allow-unready was removed/u,
       );
       assert.throws(
         () =>
@@ -1689,13 +1689,13 @@ test("TRON route-config rejects malformed allow-unready option values", async ()
             manifest,
             { "allow-unready": value },
           ),
-        /--allow-unready must be true or false/u,
+        /--allow-unready was removed/u,
       );
     }
   });
 });
 
-test("TRON route-config CLI rejects malformed allow-unready before writing artifacts", async () => {
+test("TRON route-config CLI rejects removed allow-unready before writing artifacts", async () => {
   await withTempDir(async (dir) => {
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
     const liveEvidencePath = join(dir, "live-evidence.json");
@@ -1738,7 +1738,7 @@ test("TRON route-config CLI rejects malformed allow-unready before writing artif
             value,
           ]),
         (error) => {
-          assert.match(`${error.message}\n${error.stderr ?? ""}`, /--allow-unready must be true or false/u);
+          assert.match(`${error.message}\n${error.stderr ?? ""}`, /--allow-unready was removed/u);
           return true;
         },
       );
@@ -3271,57 +3271,34 @@ test("route manifest draft supports Nile evidence but blocks production readines
     assert.equal(disabled.destinationRollout.destinationNetworkId, TRON_NILE_NETWORK_ID_HEX);
     assert.equal(disabled.destinationBinding.networkIdHex, TRON_NILE_NETWORK_ID_HEX);
 
-    const toml = buildTairaXorRouteConfigToml(disabled);
-    assert.match(toml, /\[zk\]/u);
-    assert.match(toml, /sccp_allow_unready_transparent_proofs = true/u);
-    assert.match(toml, /\[\[zk\.sccp_route_manifests\]\]/u);
-    assert.match(toml, /route_id = "taira_tron_xor"/u);
-    assert.match(toml, /asset_key = "xor"/u);
-    assert.match(toml, /tron_network = "nile"/u);
-    assert.match(toml, /chain_id_hex = "0xcd8690dc"/u);
-    assert.match(toml, /network_id_hex = "0x00000000000000000000000000000000000000000000000000000000cd8690dc"/u);
-    assert.match(toml, /taira_xor_bridge_address = "/u);
-    assert.match(toml, /taira_burn_record_settlement_asset_definition_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"/u);
-    assert.match(toml, /taira_burn_record_vk_backend = "halo2\/ipa"/u);
-    assert.match(toml, /taira_burn_record_gas_limit = 2000000/u);
-    assert.equal(toml.includes("private_key"), false);
+    assert.throws(
+      () => buildTairaXorRouteConfigToml(disabled),
+      /route-config requires production-ready route manifests/u,
+    );
 
     const baseConfig = [
       "[torii]",
       'address = "0.0.0.0:8080"',
       "",
       "[zk]",
-      "sccp_allow_unready_transparent_proofs = false",
       "sccp_source_verifier_materials = []",
       "",
       "[zk.halo2]",
       "enabled = true",
       "",
     ].join("\n");
-    const merged = buildMergedTairaXorRouteConfigToml(baseConfig, disabled);
-    assert.match(merged, /\[torii\]\naddress = "0\.0\.0\.0:8080"/u);
-    assert.match(merged, /\[zk\]\nsccp_allow_unready_transparent_proofs = true/u);
-    assert.match(merged, /sccp_source_verifier_materials = \[\]/u);
-    assert.match(merged, /\[\[zk\.sccp_route_manifests\]\]/u);
-    assert.match(merged, /tron_network = "nile"/u);
-    assert.match(merged, /\n\[zk\.halo2\]\nenabled = true/u);
-    assert.equal(
-      (merged.match(/sccp_allow_unready_transparent_proofs =/gu) ?? []).length,
-      1,
-    );
-    assert.equal(merged.includes("private_key"), false);
     assert.throws(
       () =>
         buildMergedTairaXorRouteConfigToml(
           `${baseConfig}\n[[zk.sccp_route_manifests]]\nroute_id = "other"\n`,
           disabled,
         ),
-      /already contains zk\.sccp_route_manifests/u,
+      /route-config requires production-ready route manifests/u,
     );
 
     assert.throws(
       () => buildTairaXorRouteConfigToml(disabled, { "allow-unready": "false" }),
-      /non-production route manifests require --allow-unready true/u,
+      /--allow-unready was removed/u,
     );
 
     await assert.rejects(

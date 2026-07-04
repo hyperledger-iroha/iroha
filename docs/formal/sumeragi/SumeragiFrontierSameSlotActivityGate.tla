@@ -75,13 +75,6 @@ PayloadPendingExact ==
 PayloadCommitInflightExact ==
   IF Bug = "payload_reject_commit_inflight" THEN FALSE ELSE TRUE
 
-PayloadFrontierSlotExact ==
-  /\ ~PayloadOldView
-  /\ ~PayloadWrongHeight
-  /\ ~PayloadFinalizedSlot
-  /\ ~PayloadStaleSlot
-  /\ ~PayloadBodyPresent
-
 PayloadOldView ==
   IF Bug = "payload_accept_old_view" THEN TRUE ELSE FALSE
 
@@ -97,15 +90,22 @@ PayloadStaleSlot ==
 PayloadBodyPresent ==
   IF Bug = "payload_accept_body_present" THEN TRUE ELSE FALSE
 
-IngressExact ==
-  /\ ~IngressNoBacklog
-  /\ ~IngressNoPayloadProgress
+PayloadFrontierSlotExact ==
+  /\ ~PayloadOldView
+  /\ ~PayloadWrongHeight
+  /\ ~PayloadFinalizedSlot
+  /\ ~PayloadStaleSlot
+  /\ ~PayloadBodyPresent
 
 IngressNoBacklog ==
   IF Bug = "ingress_accept_no_backlog" THEN TRUE ELSE FALSE
 
 IngressNoPayloadProgress ==
   IF Bug = "ingress_accept_no_payload" THEN TRUE ELSE FALSE
+
+IngressExact ==
+  /\ ~IngressNoBacklog
+  /\ ~IngressNoPayloadProgress
 
 VoteBackedSlotExact ==
   IF Bug = "vote_reject_slot_evidence" THEN FALSE ELSE TRUE

@@ -2902,18 +2902,13 @@ pub(crate) fn metal_ed25519_verify_batch(
     if !metal_runtime_allowed() {
         return None;
     }
-    use ed25519_dalek::VerifyingKey;
-
     let invalid_inputs = signatures
         .iter()
         .zip(public_keys)
         .map(|(signature, public_key)| {
             crate::signature::signature_bytes_are_all_zero(signature)
-                || crate::signature::material_bytes_are_all_zero(public_key)
                 || crate::signature::signature_has_invalid_ed25519_r(signature)
-                || VerifyingKey::from_bytes(public_key)
-                    .map(|key| crate::signature::ed25519_public_key_is_weak(&key))
-                    .unwrap_or(true)
+                || crate::signature::ed25519_public_key_bytes_are_invalid(public_key)
         })
         .collect::<Vec<_>>();
     let valid_count = invalid_inputs

@@ -1877,6 +1877,16 @@ mod tests {
 
     use super::*;
 
+    const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[derive(Debug)]
     struct FailingOperatorAuthRng;
 
@@ -2703,24 +2713,45 @@ mod tests {
     }
 
     #[test]
+    fn ed25519_signature_verify_rejects_weak_or_noncanonical_public_key_material() {
+        let mut rng = OsRng;
+        let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
+        let message = b"operator-auth-test";
+        let signature = signing_key.sign(message).to_bytes();
+
+        for (label, public_key_bytes) in [
+            ("small-order", ED25519_SMALL_ORDER_POINT),
+            ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
+        ] {
+            let err = verify_signature(
+                OperatorWebAuthnAlgorithm::Ed25519,
+                &public_key_bytes,
+                message,
+                &signature,
+            )
+            .expect_err("malformed Ed25519 public key material must be rejected");
+
+            assert_eq!(
+                err.code, "operator_webauthn_signature_invalid",
+                "{label} public key should fail"
+            );
+            assert_eq!(
+                err.metric_label, "signature_invalid",
+                "{label} public key should map to signature_invalid"
+            );
+        }
+    }
+
+    #[test]
     fn ed25519_signature_verify_rejects_malformed_signature_r() {
-        const SMALL_ORDER_R: [u8; 32] = [
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
         let mut rng = OsRng;
         let signing_key = ed25519_dalek::SigningKey::generate(&mut rng);
         let public_key = signing_key.verifying_key().to_bytes();
         let message = b"operator-auth-test";
 
         for (label, replacement_r) in [
-            ("small-order", SMALL_ORDER_R),
-            ("noncanonical", NONCANONICAL_R),
+            ("small-order", ED25519_SMALL_ORDER_POINT),
+            ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
         ] {
             let mut signature = signing_key.sign(message).to_bytes();
             signature[..32].copy_from_slice(&replacement_r);

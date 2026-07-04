@@ -10,7 +10,7 @@ public let sccpEvmGroth16Bn254ProofBackendV1 = "evm-groth16-bn254-v1"
 public let sccpNativeEvmProverBundleSchemaV1 = "sccp-native-evm-groth16-prover-bundle-v1"
 /// Schema id for Ethereum mainnet native EVM prover cross-SDK parity fixtures.
 public let sccpEthNativeEvmProverParityFixtureSchemaV1 =
-    "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1"
+    "sccp-ethereum-mainnet-native-evm-cross-sdk-parity-v1"
 /// Schema id for Ethereum mainnet native EVM prover self-test fixtures.
 public let sccpEthNativeEvmProverSelfTestSchemaV1 =
     "sccp-ethereum-mainnet-native-evm-prover-self-test-v1"

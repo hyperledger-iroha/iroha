@@ -374,9 +374,7 @@ fn material_from_bundle(path: &str) -> SccpSourceVerifierMaterialV1 {
     })
 }
 
-fn main() {
-    let args = parse_args();
-
+fn maybe_emit_parameter_json_input(args: &BTreeMap<String, String>) -> bool {
     if let Some(path) = args.get("parameter-json-in") {
         let text = fs::read_to_string(path).unwrap_or_else(|error| {
             eprintln!("failed to read --parameter-json-in {path}: {error}");
@@ -393,220 +391,284 @@ fn main() {
                 .expect("SCCP lane-material parameter must serialize");
             println!("{parameter_json}");
         }
-        return;
+        return true;
     }
 
-    let material = if let Some(path) = args.get("source-material-bundle") {
-        material_from_bundle(path)
-    } else if args.contains_key("source-trust-anchor-hash")
+    false
+}
+
+fn has_explicit_source_material_hashes(args: &BTreeMap<String, String>) -> bool {
+    args.contains_key("source-trust-anchor-hash")
         || args.contains_key("consensus-verifier-hash")
         || args.contains_key("message-inclusion-verifier-hash")
         || args.contains_key("finality-policy-hash")
-    {
-        let material = sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
-            decode_hex::<32>(
-                &required(&args, "source-trust-anchor-hash"),
-                "source-trust-anchor-hash",
-            ),
-            decode_hex::<32>(
-                &required(&args, "consensus-verifier-hash"),
-                "consensus-verifier-hash",
-            ),
-            decode_hex::<32>(
-                &required(&args, "message-inclusion-verifier-hash"),
-                "message-inclusion-verifier-hash",
-            ),
-            decode_hex::<32>(
-                &required(&args, "finality-policy-hash"),
-                "finality-policy-hash",
-            ),
-            decode_hex::<20>(
-                &required(&args, "source-bridge-emitter-address"),
-                "source-bridge-emitter-address",
-            ),
-            decode_hex::<32>(
-                &required(&args, "source-bridge-emitter-code-hash"),
-                "source-bridge-emitter-code-hash",
-            ),
-            decode_hex::<32>(
-                &required(&args, "source-bridge-network-id"),
-                "source-bridge-network-id",
-            ),
-            decode_hex::<20>(
-                &required(&args, "source-bridge-owner-address"),
-                "source-bridge-owner-address",
-            ),
-        )
-        .unwrap_or_else(|| {
-            eprintln!("explicit BSC source verifier material is not production-ready");
-            process::exit(1);
-        });
-        if let Some(expected_config_hash) = args.get("source-bridge-config-hash") {
-            let expected_config_hash =
-                decode_hex::<32>(expected_config_hash, "source-bridge-config-hash");
-            if material.source_bridge_config_hash != expected_config_hash {
-                eprintln!(
-                    "--source-bridge-config-hash does not match computed BSC source bridge config hash"
-                );
-                process::exit(1);
-            }
-        }
-        material
-    } else {
-        let mut material = sccp_evm_family_mainnet_source_verifier_material_v1(SCCP_DOMAIN_BSC)
-            .expect("BSC source verifier material template");
-        material.source_bridge_emitter_address = decode_hex::<20>(
-            &required(&args, "source-bridge-emitter-address"),
+}
+
+fn explicit_source_material_from_args(
+    args: &BTreeMap<String, String>,
+) -> SccpSourceVerifierMaterialV1 {
+    let material = sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
+        decode_hex::<32>(
+            &required(args, "source-trust-anchor-hash"),
+            "source-trust-anchor-hash",
+        ),
+        decode_hex::<32>(
+            &required(args, "consensus-verifier-hash"),
+            "consensus-verifier-hash",
+        ),
+        decode_hex::<32>(
+            &required(args, "message-inclusion-verifier-hash"),
+            "message-inclusion-verifier-hash",
+        ),
+        decode_hex::<32>(
+            &required(args, "finality-policy-hash"),
+            "finality-policy-hash",
+        ),
+        decode_hex::<20>(
+            &required(args, "source-bridge-emitter-address"),
             "source-bridge-emitter-address",
-        )
-        .to_vec();
-        material.source_bridge_emitter_code_hash = decode_hex::<32>(
-            &required(&args, "source-bridge-emitter-code-hash"),
+        ),
+        decode_hex::<32>(
+            &required(args, "source-bridge-emitter-code-hash"),
             "source-bridge-emitter-code-hash",
-        );
-        material
-    };
+        ),
+        decode_hex::<32>(
+            &required(args, "source-bridge-network-id"),
+            "source-bridge-network-id",
+        ),
+        decode_hex::<20>(
+            &required(args, "source-bridge-owner-address"),
+            "source-bridge-owner-address",
+        ),
+    )
+    .unwrap_or_else(|| {
+        eprintln!("explicit BSC source verifier material is not production-ready");
+        process::exit(1);
+    });
+    if let Some(expected_config_hash) = args.get("source-bridge-config-hash") {
+        let expected_config_hash =
+            decode_hex::<32>(expected_config_hash, "source-bridge-config-hash");
+        if material.source_bridge_config_hash != expected_config_hash {
+            eprintln!(
+                "--source-bridge-config-hash does not match computed BSC source bridge config hash"
+            );
+            process::exit(1);
+        }
+    }
+    material
+}
+
+fn template_source_material_from_args(
+    args: &BTreeMap<String, String>,
+) -> SccpSourceVerifierMaterialV1 {
+    let mut material = sccp_evm_family_mainnet_source_verifier_material_v1(SCCP_DOMAIN_BSC)
+        .expect("BSC source verifier material template");
+    material.source_bridge_emitter_address = decode_hex::<20>(
+        &required(args, "source-bridge-emitter-address"),
+        "source-bridge-emitter-address",
+    )
+    .to_vec();
+    material.source_bridge_emitter_code_hash = decode_hex::<32>(
+        &required(args, "source-bridge-emitter-code-hash"),
+        "source-bridge-emitter-code-hash",
+    );
+    material
+}
+
+fn source_material_from_args(args: &BTreeMap<String, String>) -> SccpSourceVerifierMaterialV1 {
+    match args.get("source-material-bundle") {
+        Some(path) => material_from_bundle(path),
+        None if has_explicit_source_material_hashes(args) => {
+            explicit_source_material_from_args(args)
+        }
+        None => template_source_material_from_args(args),
+    }
+}
+
+fn checked_bsc_source_material_from_args(
+    args: &BTreeMap<String, String>,
+) -> SccpSourceVerifierMaterialV1 {
+    let material = source_material_from_args(args);
     if material.source_domain != SCCP_DOMAIN_BSC
         || !sccp_source_verifier_material_is_production_ready(&material)
     {
         eprintln!("BSC source verifier material is not production-ready");
         process::exit(1);
     }
+    material
+}
 
+fn bsc_source_adapter_deployment_from_args(
+    args: &BTreeMap<String, String>,
+    material: &SccpSourceVerifierMaterialV1,
+) -> SccpSourceAdapterEngineDeploymentV1 {
     let deployment_receipt_hash = decode_hex::<32>(
-        &required(&args, "deployment-receipt-hash"),
+        &required(args, "deployment-receipt-hash"),
         "deployment-receipt-hash",
     );
-    let deployment =
-        build_sccp_bsc_mainnet_source_adapter_deployment(&material, deployment_receipt_hash)
-            .expect("BSC source adapter deployment material must be ready");
+    build_sccp_bsc_mainnet_source_adapter_deployment(material, deployment_receipt_hash)
+        .expect("BSC source adapter deployment material must be ready")
+}
 
-    let rollout = sccp_evm_mainnet_destination_rollout_with_binding_v1(
+fn bsc_destination_rollout_from_args(args: &BTreeMap<String, String>) -> SccpDestinationRolloutV1 {
+    sccp_evm_mainnet_destination_rollout_with_binding_v1(
         SCCP_DOMAIN_BSC,
-        required(&args, "verifier-address"),
-        required(&args, "verifier-code-hash"),
-        required(&args, "verifier-key-hash"),
-        required(&args, "destination-network-id"),
-        required(&args, "destination-bridge-address"),
+        required(args, "verifier-address"),
+        required(args, "verifier-code-hash"),
+        required(args, "verifier-key-hash"),
+        required(args, "destination-network-id"),
+        required(args, "destination-bridge-address"),
     )
-    .expect("BSC destination rollout must be production-ready");
+    .expect("BSC destination rollout must be production-ready")
+}
 
-    let destination_binding_hash = decode_hex::<32>(
+fn rollout_destination_binding_hash(rollout: &SccpDestinationRolloutV1) -> [u8; 32] {
+    decode_hex::<32>(
         rollout
             .destination_binding_hash
             .as_deref()
             .expect("destination binding hash"),
         "destination-binding-hash",
-    );
-    let source_material_hash = sccp_source_verifier_material_hash(&material);
-    let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&deployment);
+    )
+}
+
+fn bsc_allowlist_from_args(
+    args: &BTreeMap<String, String>,
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+    rollout: &SccpDestinationRolloutV1,
+    destination_binding_hash: [u8; 32],
+    source_material_hash: [u8; 32],
+    source_deployment_hash: [u8; 32],
+) -> SccpRouteAllowlistReadinessV1 {
     let allowlist = sccp_profiled_route_allowlist_for_lane_evidence_v1(
         SCCP_DOMAIN_BSC,
-        &material,
-        &deployment,
-        &rollout,
+        material,
+        deployment,
+        rollout,
     )
     .expect("BSC route allowlist lane evidence must be ready");
-    let allowlist = sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
+    sccp_evm_route_allowlist_with_lane_canary_evidence_v1(
         allowlist,
-        &rollout,
+        rollout,
         destination_binding_hash,
         source_material_hash,
         source_deployment_hash,
-        decode_hex::<32>(&required(&args, "canary-tx-hash"), "canary-tx-hash"),
-        required_u32(&args, "canary-log-index"),
-        required_u64(&args, "canary-receipt-block-number"),
+        decode_hex::<32>(&required(args, "canary-tx-hash"), "canary-tx-hash"),
+        required_u32(args, "canary-log-index"),
+        required_u64(args, "canary-receipt-block-number"),
         decode_hex::<32>(
-            &required(&args, "canary-receipt-block-hash"),
+            &required(args, "canary-receipt-block-hash"),
             "canary-receipt-block-hash",
         ),
         true,
         decode_hex::<32>(
-            &required(&args, "canary-block-receipts-root"),
+            &required(args, "canary-block-receipts-root"),
             "canary-block-receipts-root",
         ),
         decode_hex::<32>(
-            &required(&args, "canary-call-data-sha256"),
+            &required(args, "canary-call-data-sha256"),
             "canary-call-data-sha256",
         ),
-        decode_hex::<32>(&required(&args, "canary-message-id"), "canary-message-id"),
+        decode_hex::<32>(&required(args, "canary-message-id"), "canary-message-id"),
         decode_hex::<32>(
-            &required(&args, "canary-payload-hash"),
+            &required(args, "canary-payload-hash"),
             "canary-payload-hash",
         ),
-        optional_u32(&args, "canary-target-domain", SCCP_DOMAIN_BSC),
+        optional_u32(args, "canary-target-domain", SCCP_DOMAIN_BSC),
         decode_hex::<32>(
-            &required(&args, "canary-statement-hash"),
+            &required(args, "canary-statement-hash"),
             "canary-statement-hash",
         ),
         decode_hex::<32>(
-            &required(&args, "canary-commitment-root"),
+            &required(args, "canary-commitment-root"),
             "canary-commitment-root",
         ),
         decode_hex::<32>(
-            &required(&args, "canary-finality-height"),
+            &required(args, "canary-finality-height"),
             "canary-finality-height",
         ),
         decode_hex::<32>(
-            &required(&args, "canary-finality-block-hash"),
+            &required(args, "canary-finality-block-hash"),
             "canary-finality-block-hash",
         ),
-        optional_u32(&args, "canary-proof-version", 1),
-        optional_u32(&args, "canary-proof-source-domain", SCCP_DOMAIN_SORA),
+        optional_u32(args, "canary-proof-version", 1),
+        optional_u32(args, "canary-proof-source-domain", SCCP_DOMAIN_SORA),
         true,
     )
-    .expect("BSC route canary evidence must bind to lane materials");
+    .expect("BSC route canary evidence must bind to lane materials")
+}
 
+fn ensure_bsc_lane_readiness(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+    rollout: &SccpDestinationRolloutV1,
+    allowlist: &SccpRouteAllowlistReadinessV1,
+) {
     let readiness = sccp_lane_production_readiness_with_deployment_materials_for_domain(
         SCCP_DOMAIN_BSC,
-        &material,
-        &deployment,
-        &rollout,
-        &allowlist,
+        material,
+        deployment,
+        rollout,
+        allowlist,
     )
     .expect("BSC lane readiness must be derivable");
     if !readiness.production_ready {
         eprintln!("BSC lane is not production-ready: {:?}", readiness.blockers);
         process::exit(1);
     }
+}
 
-    let payload = SccpOnChainLaneMaterialsV1 {
+fn lane_payload(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+    rollout: &SccpDestinationRolloutV1,
+    allowlist: &SccpRouteAllowlistReadinessV1,
+) -> SccpOnChainLaneMaterialsV1 {
+    SccpOnChainLaneMaterialsV1 {
         version: 1,
-        sccp_source_verifier_materials: vec![material_to_config(&material)],
-        sccp_source_adapter_engine_deployments: vec![deployment_to_config(&deployment)],
-        sccp_destination_rollouts: vec![rollout_to_config(&rollout)],
-        sccp_route_allowlists: vec![allowlist_to_config(&allowlist)],
-    };
-
-    if args.contains_key("--summary") {
-        eprintln!("source_material_hash={}", h256(&source_material_hash));
-        eprintln!(
-            "source_adapter_deployment_hash={}",
-            h256(&source_deployment_hash)
-        );
-        eprintln!(
-            "destination_binding_hash={}",
-            rollout
-                .destination_binding_hash
-                .as_deref()
-                .unwrap_or_default()
-        );
-        eprintln!(
-            "route_allowlist_hash={}",
-            allowlist
-                .route_allowlist_hash
-                .as_deref()
-                .unwrap_or_default()
-        );
-        eprintln!(
-            "route_canary_evidence_hash={}",
-            allowlist
-                .route_canary_evidence_hash
-                .as_deref()
-                .unwrap_or_default()
-        );
+        sccp_source_verifier_materials: vec![material_to_config(material)],
+        sccp_source_adapter_engine_deployments: vec![deployment_to_config(deployment)],
+        sccp_destination_rollouts: vec![rollout_to_config(rollout)],
+        sccp_route_allowlists: vec![allowlist_to_config(allowlist)],
     }
+}
 
+fn emit_summary(
+    source_material_hash: &[u8; 32],
+    source_deployment_hash: &[u8; 32],
+    rollout: &SccpDestinationRolloutV1,
+    allowlist: &SccpRouteAllowlistReadinessV1,
+) {
+    eprintln!("source_material_hash={}", h256(source_material_hash));
+    eprintln!(
+        "source_adapter_deployment_hash={}",
+        h256(source_deployment_hash)
+    );
+    eprintln!(
+        "destination_binding_hash={}",
+        rollout
+            .destination_binding_hash
+            .as_deref()
+            .unwrap_or_default()
+    );
+    eprintln!(
+        "route_allowlist_hash={}",
+        allowlist
+            .route_allowlist_hash
+            .as_deref()
+            .unwrap_or_default()
+    );
+    eprintln!(
+        "route_canary_evidence_hash={}",
+        allowlist
+            .route_canary_evidence_hash
+            .as_deref()
+            .unwrap_or_default()
+    );
+}
+
+fn emit_lane_payload(args: &BTreeMap<String, String>, payload: SccpOnChainLaneMaterialsV1) {
     if args.contains_key("--instruction-base64") {
         let id = CustomParameterId::new(
             "sccp_lane_materials_v1"
@@ -623,4 +685,40 @@ fn main() {
             .expect("SCCP on-chain lane material payload must serialize");
         println!("{{\"Custom\":{{\"id\":\"sccp_lane_materials_v1\",\"payload\":{payload_json}}}}}");
     }
+}
+
+fn main() {
+    let args = parse_args();
+    if maybe_emit_parameter_json_input(&args) {
+        return;
+    }
+
+    let material = checked_bsc_source_material_from_args(&args);
+    let deployment = bsc_source_adapter_deployment_from_args(&args, &material);
+    let rollout = bsc_destination_rollout_from_args(&args);
+    let destination_binding_hash = rollout_destination_binding_hash(&rollout);
+    let source_material_hash = sccp_source_verifier_material_hash(&material);
+    let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&deployment);
+    let allowlist = bsc_allowlist_from_args(
+        &args,
+        &material,
+        &deployment,
+        &rollout,
+        destination_binding_hash,
+        source_material_hash,
+        source_deployment_hash,
+    );
+    ensure_bsc_lane_readiness(&material, &deployment, &rollout, &allowlist);
+
+    if args.contains_key("--summary") {
+        emit_summary(
+            &source_material_hash,
+            &source_deployment_hash,
+            &rollout,
+            &allowlist,
+        );
+    }
+
+    let payload = lane_payload(&material, &deployment, &rollout, &allowlist);
+    emit_lane_payload(&args, payload);
 }

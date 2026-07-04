@@ -2649,6 +2649,11 @@ fn parse_ed25519_seed_hex(value: &str, flag: &str) -> Result<[u8; 32], CliError>
             bytes.len()
         ))
     })?;
+    if seed.iter().all(|byte| *byte == 0) {
+        return Err(CliError::Config(format!(
+            "{flag} seed material must not be all zero"
+        )));
+    }
     Ok(seed)
 }
 
@@ -3419,6 +3424,19 @@ mod tests {
             parse_ed25519_seed_hex("abcd", "--key-hex"),
             Err(CliError::Config(message)) if message.contains("exactly 32 seed bytes")
         ));
+    }
+
+    #[test]
+    fn parse_ed25519_seed_hex_rejects_all_zero_seed_material() {
+        for value in [
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "ed25519:0x0000000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            assert!(matches!(
+                parse_ed25519_seed_hex(value, "--key-hex"),
+                Err(CliError::Config(message)) if message.contains("must not be all zero")
+            ));
+        }
     }
 
     #[test]

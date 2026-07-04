@@ -2782,11 +2782,7 @@ mod tests {
         let (mut snapshot, _) =
             build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
         snapshot.issuers[0].ed25519_public = [0u8; 32];
-        snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
-            &snapshot.issuers[0].ed25519_public,
-            &snapshot.issuers[0].mldsa65_public,
-        )
-        .expect("zero-key issuer fingerprint still computes structurally");
+        snapshot.issuers[0].fingerprint = [0xEE; 32];
 
         let err = RelayDirectory::from_guard_directory_snapshot(snapshot)
             .expect_err("all-zero issuer Ed25519 key should fail before certificate verification");
@@ -2810,11 +2806,7 @@ mod tests {
             let (mut snapshot, _) =
                 build_directory_snapshot(CertificateValidationPhase::Phase3RequireDual, [0xAA; 32]);
             snapshot.issuers[0].ed25519_public = public_key;
-            snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
-                &snapshot.issuers[0].ed25519_public,
-                &snapshot.issuers[0].mldsa65_public,
-            )
-            .expect("invalid-key issuer fingerprint still computes structurally");
+            snapshot.issuers[0].fingerprint = [0xEE; 32];
 
             let err = RelayDirectory::from_guard_directory_snapshot(snapshot).expect_err(
                 "invalid issuer Ed25519 key should fail before certificate verification",

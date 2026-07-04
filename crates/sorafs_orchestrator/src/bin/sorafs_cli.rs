@@ -28,7 +28,7 @@ use base64::{
     },
 };
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature as DalekSig, Signer, SigningKey, VerifyingKey};
 use hex::encode as hex_encode;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
@@ -17984,7 +17984,7 @@ fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
 
 fn checked_manifest_ed25519_signature_from_bytes(
     signature: &[u8; ed25519_dalek::SIGNATURE_LENGTH],
-) -> Result<Signature, String> {
+) -> Result<DalekSig, String> {
     if signature.iter().all(|byte| *byte == 0) {
         return Err("signature material must not be all zero".to_string());
     }
@@ -18003,7 +18003,9 @@ fn checked_manifest_ed25519_signature_from_bytes(
         return Err("signature R is small-order (weak); rejected".to_string());
     }
 
-    Ok(Signature::from_bytes(signature))
+    iroha_crypto::ed25519_parse_signature(signature)
+        .map_err(|err| format!("invalid signature material: {err}"))?;
+    Ok(DalekSig::from_bytes(signature))
 }
 
 fn checked_manifest_ed25519_verifying_key_from_bytes(

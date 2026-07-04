@@ -72,7 +72,6 @@ fn zk_config_with_root_history_cap(
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_PAST_AGE_BLOCKS,
         bridge_proof_max_future_drift_blocks:
             iroha_config::parameters::defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS,
-        sccp_allow_unready_transparent_proofs: false,
         sccp_source_verifier_materials: Vec::new(),
         sccp_source_adapter_engine_deployments: Vec::new(),
         sccp_destination_rollouts: Vec::new(),

@@ -6883,6 +6883,20 @@ export async function runBscGroth16ProofSelfTest(options = {}) {
     false,
   );
   const manifestProductionState = proofSelfTestManifestProductionState(manifest);
+  if (allowUnreadyCandidate && allowUnreadyMainnetCandidate) {
+    throw new Error(
+      "--allow-unready-candidate and --allow-unready-mainnet-candidate are mutually exclusive.",
+    );
+  }
+  if (
+    manifestProductionState.productionReady === true &&
+    manifestProductionState.productionBlockers.length === 0 &&
+    (allowUnreadyCandidate || allowUnreadyMainnetCandidate)
+  ) {
+    throw new Error(
+      "unready candidate proof-self-test flags are only allowed for manifests that are not production-ready.",
+    );
+  }
   if (
     manifestProductionState.productionReady !== true ||
     manifestProductionState.productionBlockers.length > 0
@@ -11658,11 +11672,12 @@ proof-self-test command runs a deterministic synthetic witness through SnarkJS
 wtns/prove/verify, checks the prover-returned public signals against the
 Keccak-derived expected values, and verifies adversarial witnesses are rejected.
 By default it requires a productionReady manifest; --allow-unready-candidate
-true is accepted only for testnet candidate evidence refreshes, while
+true is accepted only for unready testnet candidate evidence refreshes, while
 --allow-unready-mainnet-candidate true is the separate explicit opt-in for
-mainnet candidate evidence refreshes. Both modes still write the manifest
-production blockers into the report. They are evidence only and do not mark
-candidate material production-ready. The
+unready mainnet candidate evidence refreshes. The two opt-ins are mutually
+exclusive and are rejected for productionReady manifests. Both modes still
+write the manifest production blockers into the report. They are evidence only
+and do not mark candidate material production-ready. The
 evidence-template command writes manifest-bound public review/audit draft
 envelopes and report files for external reviewers. These drafts intentionally
 carry pending/false results, are not signable, and are refused by

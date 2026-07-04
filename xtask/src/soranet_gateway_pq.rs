@@ -433,6 +433,12 @@ mod tests {
         0xff, 0x7f,
     ];
 
+    const NONCANONICAL_NON_SMALL_ORDER_ED25519_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn sample_certificate() -> RelayCertificateV2 {
         RelayCertificateV2 {
             relay_id: [0x11; 32],
@@ -587,13 +593,18 @@ emit_metrics = true
 
     #[test]
     fn rejects_noncanonical_srcv2_identity_key() {
-        let err = parse_srcv2_identity_ed25519_key(&NONCANONICAL_ED25519_IDENTITY)
-            .expect_err("noncanonical SRCv2 identity key must fail readiness");
-        let message = format!("{err:?}");
-        assert!(
-            message.contains("invalid Ed25519 identity key in SRCv2")
-                && message.contains("non-canonical"),
-            "unexpected error: {message}"
-        );
+        for public_key in [
+            NONCANONICAL_ED25519_IDENTITY,
+            NONCANONICAL_NON_SMALL_ORDER_ED25519_POINT,
+        ] {
+            let err = parse_srcv2_identity_ed25519_key(&public_key)
+                .expect_err("noncanonical SRCv2 identity key must fail readiness");
+            let message = format!("{err:?}");
+            assert!(
+                message.contains("invalid Ed25519 identity key in SRCv2")
+                    && message.contains("non-canonical"),
+                "unexpected error: {message}"
+            );
+        }
     }
 }

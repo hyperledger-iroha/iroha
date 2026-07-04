@@ -385,6 +385,19 @@ def _require_fixed_bytes(
     return raw
 
 
+def _optional_expected_destination_binding_hash(
+    args: argparse.Namespace,
+) -> bytes | None:
+    value = getattr(args, "expected_destination_binding_hash", None)
+    if value is None:
+        return None
+    return _require_fixed_bytes(
+        value,
+        label="--expected-destination-binding-hash",
+        byte_length=32,
+    )
+
+
 def _require_distinct_hash_roles(
     fields: tuple[tuple[str, bytes], ...],
     *,
@@ -1599,7 +1612,7 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
     if args.domain == SCCP_DOMAIN_ETH and block_tag != "finalized":
         raise ValueError("Ethereum destination TOML requires --block-tag finalized")
     expected_hash = _destination_binding_hash_from_args(args)
-    expected_pin = getattr(args, "expected_destination_binding_hash", None)
+    expected_pin = _optional_expected_destination_binding_hash(args)
     if expected_pin is None:
         raise ValueError(
             "--expected-destination-binding-hash is required before rendering production TOML"
@@ -1722,7 +1735,7 @@ def _json_summary(
             f"SORA -> {profile['chain'].upper()} binding: "
             f"expected {_hex(expected_hash)}, got {_hex(destination_binding_hash)}"
         )
-    expected_pin = getattr(args, "expected_destination_binding_hash", None)
+    expected_pin = _optional_expected_destination_binding_hash(args)
     if expected_pin is not None and expected_pin != expected_hash:
         raise ValueError(
             "expected destination binding hash does not match deployment inputs: "
@@ -2263,12 +2276,13 @@ def main(argv: list[str] | None = None) -> int:
         apply_runtime_bytecode_hash(args)
         apply_bridge_runtime_bytecode_hash(args)
         destination_binding_hash = _destination_binding_hash_from_args(args)
+        expected_pin = _optional_expected_destination_binding_hash(args)
         expected_matches = False
-        if args.expected_destination_binding_hash is not None:
-            if args.expected_destination_binding_hash != destination_binding_hash:
+        if expected_pin is not None:
+            if expected_pin != destination_binding_hash:
                 raise ValueError(
                     "expected destination binding hash does not match deployment inputs: "
-                    f"expected {_hex(args.expected_destination_binding_hash)}, "
+                    f"expected {_hex(expected_pin)}, "
                     f"got {_hex(destination_binding_hash)}"
                 )
             expected_matches = True

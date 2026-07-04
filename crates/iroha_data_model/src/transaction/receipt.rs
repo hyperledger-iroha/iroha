@@ -14,8 +14,14 @@ fn verify_signature_for_signer(
     signer: &PublicKey,
     payload: &[u8],
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(signer, payload)
 }
@@ -120,6 +126,11 @@ mod tests {
             .expect("generate checked Ed25519 transaction receipt fixture keypair")
     }
 
+    fn checked_mldsa_keypair() -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
+            .expect("generate checked ML-DSA transaction receipt fixture keypair")
+    }
+
     fn sample_receipt_payload(key_pair: &KeyPair) -> TransactionSubmissionReceiptPayload {
         TransactionSubmissionReceiptPayload {
             tx_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0xA5; 32])),
@@ -146,13 +157,8 @@ mod tests {
         0xff, 0x7f,
     ];
 
-    fn signature_with_malformed_ed25519_r(
-        signature: &Signature,
-        replacement_r: &[u8; 32],
-    ) -> Signature {
-        let mut payload = signature.payload().to_vec();
-        payload[..replacement_r.len()].copy_from_slice(replacement_r);
-        Signature::from_bytes(&payload)
+    fn signature_with_payload(replacement_payload: &[u8]) -> Signature {
+        Signature::from_bytes(replacement_payload)
     }
 
     #[test]
@@ -167,25 +173,73 @@ mod tests {
     }
 
     #[test]
-    fn submission_receipt_rejects_malformed_ed25519_signature_r() {
+    fn submission_receipt_rejects_malformed_ed25519_signature() {
         let key_pair = checked_ed25519_keypair();
         let receipt =
             TransactionSubmissionReceipt::sign(sample_receipt_payload(&key_pair), &key_pair);
 
-        for (label, replacement_r) in [
-            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
-            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        let mut small_order_signature = receipt.signature.payload().to_vec();
+        small_order_signature[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
+            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        let mut noncanonical_signature = receipt.signature.payload().to_vec();
+        noncanonical_signature[..NONCANONICAL_ED25519_SIGNATURE_R.len()]
+            .copy_from_slice(&NONCANONICAL_ED25519_SIGNATURE_R);
+
+        for (label, replacement_payload) in [
+            ("all-zero", vec![0_u8; 64]),
+            ("short", vec![0x42_u8; 32]),
+            ("small-order", small_order_signature),
+            ("noncanonical", noncanonical_signature),
         ] {
             let mut invalid_receipt = receipt.clone();
-            invalid_receipt.signature =
-                signature_with_malformed_ed25519_r(&receipt.signature, &replacement_r);
+            invalid_receipt.signature = signature_with_payload(&replacement_payload);
 
-            assert_eq!(
-                invalid_receipt
-                    .verify()
-                    .expect_err("malformed receipt signature R must fail admission"),
-                iroha_crypto::Error::BadSignature,
-                "{label} receipt signature R was not rejected"
+            let err = invalid_receipt
+                .verify()
+                .expect_err("malformed receipt signature must fail admission");
+            assert!(
+                matches!(
+                    err,
+                    iroha_crypto::Error::BadSignature | iroha_crypto::Error::Parse(_)
+                ),
+                "{label} receipt signature failed with unexpected error: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn submission_receipt_rejects_malformed_mldsa_signature_lengths() {
+        let key_pair = checked_mldsa_keypair();
+        let receipt =
+            TransactionSubmissionReceipt::sign(sample_receipt_payload(&key_pair), &key_pair);
+        receipt
+            .verify()
+            .expect("valid ML-DSA transaction receipt signature verifies");
+        let valid_signature = receipt.signature.payload().to_vec();
+
+        for (label, replacement_payload) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x5B);
+                payload
+            }),
+        ] {
+            let mut invalid_receipt = receipt.clone();
+            invalid_receipt.signature = signature_with_payload(&replacement_payload);
+
+            let err = invalid_receipt
+                .verify()
+                .expect_err("malformed ML-DSA receipt signature length must fail admission");
+            assert!(
+                matches!(
+                    err,
+                    iroha_crypto::Error::BadSignature | iroha_crypto::Error::Parse(_)
+                ),
+                "{label} receipt ML-DSA signature length failed with unexpected error: {err:?}"
             );
         }
     }

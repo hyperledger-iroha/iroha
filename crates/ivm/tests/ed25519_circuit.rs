@@ -2,6 +2,11 @@
 use ed25519_dalek::{Signer, SigningKey};
 use ivm::halo2::Ed25519VerifyCircuit;
 
+const NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY: [u8; 32] = [
+    0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+
 #[test]
 fn test_ed25519_circuit_ok() {
     let keypair = SigningKey::from_bytes(&[0x31; 32]);
@@ -51,6 +56,21 @@ fn test_ed25519_circuit_weak_public_key_is_false() {
     let signature = keypair.sign(msg);
     let circuit = Ed25519VerifyCircuit {
         public_key: [0u8; 32],
+        signature: signature.to_bytes(),
+        message: msg,
+        result: false,
+    };
+
+    assert!(circuit.verify().is_ok());
+}
+
+#[test]
+fn test_ed25519_circuit_noncanonical_public_key_is_false() {
+    let keypair = SigningKey::from_bytes(&[0x35; 32]);
+    let msg = b"ed25519 noncanonical public key";
+    let signature = keypair.sign(msg);
+    let circuit = Ed25519VerifyCircuit {
+        public_key: NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY,
         signature: signature.to_bytes(),
         message: msg,
         result: false,

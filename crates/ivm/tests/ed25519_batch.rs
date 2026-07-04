@@ -12,6 +12,11 @@ const ED25519_NON_CANONICAL_IDENTITY: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
 ];
 
+const ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT: [u8; 32] = [
+    0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+
 #[test]
 fn ed25519_batch_mixed_validity() {
     let key1 = SigningKey::from_bytes(&[7u8; 32]);
@@ -66,6 +71,27 @@ fn ed25519_batch_rejects_noncanonical_or_small_order_signature_r_before_accelera
             message,
             signature,
             public_key,
+        };
+
+        assert_eq!(verify_ed25519_batch_items(&[item]), vec![false]);
+    }
+}
+
+#[test]
+fn ed25519_batch_rejects_noncanonical_or_small_order_public_key_before_accelerator_dispatch() {
+    let key = SigningKey::from_bytes(&[0x29; 32]);
+    let message = b"batch-invalid-public-key";
+    let signature = key.sign(message).to_bytes();
+
+    for invalid_public_key in [
+        ED25519_SMALL_ORDER_POINT,
+        ED25519_NON_CANONICAL_IDENTITY,
+        ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT,
+    ] {
+        let item = Ed25519BatchItem {
+            message,
+            signature,
+            public_key: invalid_public_key,
         };
 
         assert_eq!(verify_ed25519_batch_items(&[item]), vec![false]);

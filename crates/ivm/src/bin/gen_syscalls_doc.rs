@@ -305,10 +305,33 @@ fn spec_entry(
     map.get(&n).cloned().unwrap_or_else(|| guess_defaults(n))
 }
 
+fn split_gas_terms(gas_raw: &str) -> Vec<&str> {
+    let mut terms = Vec::new();
+    let mut start = 0;
+    let mut paren_depth = 0_u32;
+    for (idx, ch) in gas_raw.char_indices() {
+        match ch {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '+' if paren_depth == 0 => {
+                terms.push(&gas_raw[start..idx]);
+                start = idx + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    terms.push(&gas_raw[start..]);
+    terms
+}
+
 fn rewrite_gas_tokens(gas_raw: &str) -> (String, Vec<String>) {
     let mut out_gas = String::new();
     let mut gas_keys = Vec::new();
-    for (i, part) in gas_raw.split('+').map(|s| s.trim()).enumerate() {
+    for (i, part) in split_gas_terms(gas_raw)
+        .into_iter()
+        .map(|s| s.trim())
+        .enumerate()
+    {
         if i > 0 {
             out_gas.push_str(" + ");
         }
@@ -571,5 +594,22 @@ fn main() {
     } else if check {
         eprintln!("syscalls.md missing generated markers");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_gas_tokens;
+
+    #[test]
+    fn rewrite_gas_tokens_preserves_parenthesized_plus_text() {
+        let (rendered, keys) =
+            rewrite_gas_tokens("G_soracloud + request bytes (+ response bytes under host)");
+
+        assert_eq!(
+            rendered,
+            "asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under host)"
+        );
+        assert_eq!(keys, ["G_soracloud"]);
     }
 }

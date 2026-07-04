@@ -1,6 +1,6 @@
 import CryptoKit
 import Foundation
-import IrohaSwift
+@testable import IrohaSwift
 import XCTest
 
 final class OfflineProofVerifierTests: XCTestCase {
@@ -13,6 +13,45 @@ final class OfflineProofVerifierTests: XCTestCase {
             OfflineProofVerifierError.invalidProof("proof-invalid").errorDescription,
             "proof-invalid"
         )
+    }
+
+    func testEd25519VerifierSupportRejectsWeakOrNoncanonicalPublicKeysBeforeCryptoKit() throws {
+        guard #available(macOS 10.15, iOS 13.0, *) else {
+            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
+        }
+        let key = Curve25519.Signing.PrivateKey()
+        let payload = Data("swift-offline-ed25519-public-key-admission".utf8)
+        let signature = try key.signature(for: payload)
+        XCTAssertTrue(try OfflineProofVerifierSupportTestHooks.verifyEd25519Signature(
+            payload: payload,
+            signature: signature,
+            rawPublicKey: key.publicKey.rawRepresentation
+        ))
+
+        let smallOrderKey = Data([
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        let noncanonicalKey = Data([
+            0xEE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
+        ])
+
+        for rawPublicKey in [
+            Data(repeating: 0, count: 32),
+            smallOrderKey,
+            noncanonicalKey,
+        ] {
+            XCTAssertFalse(try OfflineProofVerifierSupportTestHooks.verifyEd25519Signature(
+                payload: payload,
+                signature: signature,
+                rawPublicKey: rawPublicKey
+            ))
+        }
     }
 
     func testDefaultIosRootCertificateIsBase64Encoded() {

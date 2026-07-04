@@ -12281,6 +12281,32 @@ pub(crate) mod valid {
                 .expect("test block seeded keypair should be valid")
         }
 
+        fn checked_da_ack_signature(byte: u8) -> Signature {
+            Signature::try_from_bytes(&[byte; 64])
+                .expect("checked core block DA acknowledgement signature fixture")
+        }
+
+        fn state_confidential_features_at_height(
+            state: &State,
+            height: u64,
+        ) -> Option<ConfidentialFeatureDigest> {
+            let view = state.query_view();
+            let digest = compute_confidential_feature_digest(view.world(), view.zk(), height);
+            (!digest.is_empty()).then_some(digest)
+        }
+
+        fn with_current_state_da_sidecars(
+            builder: BlockBuilder<Chained>,
+            state: &State,
+        ) -> BlockBuilder<Chained> {
+            let height = builder.0.header.height().get();
+            let nexus = state.nexus_snapshot();
+            let proof_policies = crate::da::active_proof_policy_bundle_at_height(&nexus, height);
+            builder
+                .with_da_proof_policies(Some(proof_policies))
+                .with_confidential_features(state_confidential_features_at_height(state, height))
+        }
+
         fn insert_consensus_key(
             world: &mut World,
             name: &str,
@@ -15917,12 +15943,13 @@ pub(crate) mod valid {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             );
             let bundle = DaCommitmentBundle::new(vec![record]);
-            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle))
+                .with_da_commitments(Some(bundle));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -15944,12 +15971,17 @@ pub(crate) mod valid {
             let Err((_, err)) = result else {
                 panic!("expected DA commitment bundle rejection");
             };
-            assert!(matches!(
-                err.as_ref(),
-                BlockValidationError::DaCommitmentBundle(DaCommitmentValidationError::ProofPolicy(
-                    crate::da::DaProofPolicyError::UnknownLane { .. }
-                ))
-            ));
+            assert!(
+                matches!(
+                    err.as_ref(),
+                    BlockValidationError::DaCommitmentBundle(
+                        DaCommitmentValidationError::ProofPolicy(
+                            crate::da::DaProofPolicyError::UnknownLane { .. }
+                        )
+                    )
+                ),
+                "expected unknown DA lane rejection, got {err:?}"
+            );
         }
 
         #[test]
@@ -16010,15 +16042,15 @@ pub(crate) mod valid {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             );
-            let signed: SignedBlock =
-                BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
-                    .chain(0, state.view().latest_block().as_deref())
-                    .with_da_commitments(Some(DaCommitmentBundle::new(vec![record])))
-                    .sign(leader.private_key())
-                    .unpack(|_| {})
-                    .into();
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+                .chain(0, state.view().latest_block().as_deref())
+                .with_da_commitments(Some(DaCommitmentBundle::new(vec![record])));
+            let signed: SignedBlock = with_current_state_da_sidecars(builder, &state)
+                .sign(leader.private_key())
+                .unpack(|_| {})
+                .into();
 
             let mut voting_block = None;
             let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
@@ -16261,13 +16293,14 @@ pub(crate) mod valid {
                     None,
                     RetentionClass::default(),
                     StorageTicketId::new([tag; 32]),
-                    Signature::from_bytes(&[tag; 64]),
+                    checked_da_ack_signature(tag),
                 )
             };
             let bundle = DaCommitmentBundle::new(vec![make_record(1, 0xC1), make_record(2, 0xC2)]);
-            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle))
+                .with_da_commitments(Some(bundle));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -16334,13 +16367,14 @@ pub(crate) mod valid {
                     None,
                     RetentionClass::default(),
                     StorageTicketId::new([0xDD; 32]),
-                    Signature::from_bytes(&[tag; 64]),
+                    checked_da_ack_signature(tag),
                 )
             };
             let bundle = DaCommitmentBundle::new(vec![make_record(1, 0xC1), make_record(2, 0xC2)]);
-            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle))
+                .with_da_commitments(Some(bundle));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -16406,16 +16440,17 @@ pub(crate) mod valid {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xDD; 32]),
-                Signature::from_bytes(&[0xEE; 64]),
+                checked_da_ack_signature(0xEE),
             );
             let bundle = DaCommitmentBundle::new(vec![record]);
             let expected = Some(bundle.canonical_hash());
             let forged = Some(HashOf::<DaCommitmentBundle>::from_untyped_unchecked(
                 Hash::prehashed([0xFA; 32]),
             ));
-            let mut chained = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+            let chained = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
                 .with_da_commitments(Some(bundle));
+            let mut chained = with_current_state_da_sidecars(chained, &state);
             chained.0.header.set_da_commitments_hash(forged);
             let signed: SignedBlock = chained.sign(leader.private_key()).unpack(|_| {}).into();
 
@@ -16831,7 +16866,7 @@ pub(crate) mod valid {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEF; 32]),
-                Signature::from_bytes(&[0x12; 64]),
+                checked_da_ack_signature(0x12),
             );
             state
                 .ensure_da_indexes_hydrated()
@@ -16862,13 +16897,14 @@ pub(crate) mod valid {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x13; 64]),
+                checked_da_ack_signature(0x13),
             );
             let bundle = DaCommitmentBundle::new(vec![regression]);
 
-            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle))
+                .with_da_commitments(Some(bundle));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed: SignedBlock = new_block.into();
@@ -17436,12 +17472,13 @@ pub(crate) mod valid {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                checked_da_ack_signature(0x11),
             );
             let bundle = DaCommitmentBundle::new(vec![record]);
-            let new_block = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
+            let builder = BlockBuilder::new_with_time_source(Vec::new(), time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
-                .with_da_commitments(Some(bundle))
+                .with_da_commitments(Some(bundle));
+            let new_block = with_current_state_da_sidecars(builder, &state)
                 .sign(leader.private_key())
                 .unpack(|_| {});
             let signed_block: SignedBlock = new_block.into();
@@ -18467,7 +18504,7 @@ pub(crate) mod valid {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xDD; 32]),
-                Signature::from_bytes(&[0xEE; 64]),
+                checked_da_ack_signature(0xEE),
             );
             let bundle = DaCommitmentBundle::new(vec![record]);
             let canonical_hash = bundle.canonical_hash();
@@ -18918,6 +18955,24 @@ mod commit {
             block
         }
 
+        fn axt_policy_snapshot_for_validation_test(state: &State) -> AxtPolicySnapshot {
+            let mut entries: Vec<_> = state
+                .world
+                .axt_policies
+                .view()
+                .iter()
+                .map(|(dsid, policy)| AxtPolicyBinding {
+                    dsid: *dsid,
+                    policy: *policy,
+                })
+                .collect();
+            entries.sort_by_key(|binding| binding.dsid);
+            AxtPolicySnapshot {
+                version: AxtPolicySnapshot::compute_version(&entries),
+                entries,
+            }
+        }
+
         fn expect_axt_error(
             err: BlockValidationError,
             reason: AxtRejectReason,
@@ -19013,7 +19068,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
@@ -19068,7 +19123,7 @@ mod commit {
                 handles: vec![handle.clone(), handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
@@ -19131,7 +19186,7 @@ mod commit {
                 ],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let result = validate_axt_envelopes(&block, &state_block);
@@ -19184,7 +19239,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19237,7 +19292,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19284,7 +19339,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19337,7 +19392,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19387,7 +19442,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19446,7 +19501,7 @@ mod commit {
                 handles: vec![handle, other],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19503,7 +19558,7 @@ mod commit {
                 handles: vec![first, second],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19542,7 +19597,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19586,7 +19641,7 @@ mod commit {
                 handles: Vec::new(),
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19673,7 +19728,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19719,7 +19774,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19774,7 +19829,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(2),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19829,7 +19884,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(2),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19876,7 +19931,7 @@ mod commit {
                 handles: vec![handle_one, handle_two],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19918,7 +19973,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -19964,7 +20019,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20010,7 +20065,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20056,7 +20111,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20099,7 +20154,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20198,7 +20253,7 @@ mod commit {
                 commit_height: Some(1),
             };
 
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 
@@ -20386,7 +20441,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
             let result = validate_axt_envelopes(&block, &state_block);
@@ -20447,7 +20502,7 @@ mod commit {
                 handles: vec![handle],
                 commit_height: Some(1),
             };
-            let snapshot = state.axt_policy_snapshot();
+            let snapshot = axt_policy_snapshot_for_validation_test(&state);
             let block = build_block_with_envelopes(envelope, snapshot);
             let state_block = state.block(block.header());
 

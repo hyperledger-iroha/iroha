@@ -123,6 +123,48 @@ def _parse_positive_u64(value: str, *, label: str) -> int:
     return parsed
 
 
+def _require_rpc_commitment(value: object, *, label: str) -> str:
+    if type(value) is not str or value not in {"finalized", "confirmed"}:
+        raise ValueError(f"{label} must be finalized or confirmed")
+    return value
+
+
+def _optional_live_bytes32_arg(
+    args: argparse.Namespace,
+    name: str,
+    *,
+    label: str,
+) -> bytes | None:
+    value = getattr(args, name, None)
+    if value is None:
+        return None
+    if not isinstance(value, (bytes, bytearray)):
+        raise ValueError(f"{label} must be bytes")
+    raw = bytes(value)
+    if len(raw) != 32:
+        raise ValueError(f"{label} must be 32 bytes")
+    if not any(raw):
+        raise ValueError(f"{label} must not be zero")
+    return raw
+
+
+def _optional_live_solana_program_id_arg(
+    args: argparse.Namespace,
+    name: str,
+    *,
+    label: str,
+) -> str | None:
+    value = getattr(args, name, None)
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ValueError(f"{label} must be a Solana public key")
+    try:
+        return evidence.normalize_solana_program_id(value, label=label)
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
+        raise ValueError(f"{label} must be a Solana public key") from None
+
+
 def _encode_solana_base58(raw: bytes) -> str:
     if not isinstance(raw, (bytes, bytearray)):
         raise ValueError("Solana public key bytes must be bytes")
@@ -388,8 +430,10 @@ def collect_live_evidence(
     opener: Urlopen = urllib.request.urlopen,
     timeout: float = 15.0,
 ) -> dict[str, Any]:
-    if commitment not in {"finalized", "confirmed"}:
-        raise ValueError("Solana JSON-RPC commitment must be finalized or confirmed")
+    commitment = _require_rpc_commitment(
+        commitment,
+        label="Solana JSON-RPC commitment",
+    )
     program_id = evidence.normalize_solana_program_id(
         verifier_program_id,
         label="verifier program id",
@@ -508,8 +552,10 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
         raise ValueError("Solana live evidence must be an object")
 
     commitment = live.get("rpc_commitment")
-    if commitment not in {"finalized", "confirmed"}:
-        raise ValueError("Solana live RPC commitment metadata must be finalized or confirmed")
+    commitment = _require_rpc_commitment(
+        commitment,
+        label="Solana live RPC commitment metadata",
+    )
 
     try:
         program_id = evidence.normalize_solana_program_id(
@@ -745,14 +791,30 @@ def _summary(args: argparse.Namespace, live: dict[str, Any]) -> dict[str, Any]:
         program_bytes,
     )
     destination_binding_hash = evidence.solana_destination_binding_hash()
-    expected_binding_matches = args.expected_destination_binding_hash == destination_binding_hash
-    expected_code_hash = getattr(args, "expected_verifier_code_hash", None)
+    expected_destination_binding_hash = _optional_live_bytes32_arg(
+        args,
+        "expected_destination_binding_hash",
+        label="--expected-destination-binding-hash",
+    )
+    destination_args.expected_destination_binding_hash = expected_destination_binding_hash
+    expected_binding_matches = (
+        expected_destination_binding_hash == destination_binding_hash
+    )
+    expected_code_hash = _optional_live_bytes32_arg(
+        args,
+        "expected_verifier_code_hash",
+        label="--expected-verifier-code-hash",
+    )
     if expected_code_hash is not None and expected_code_hash != verifier_code_hash:
         raise ValueError(
             "--expected-verifier-code-hash does not match live Solana verifier program bytes: "
             f"expected {_hex(expected_code_hash)}, got {live['verifier_code_hash']}"
         )
-    expected_programdata = getattr(args, "expected_programdata_address", None)
+    expected_programdata = _optional_live_solana_program_id_arg(
+        args,
+        "expected_programdata_address",
+        label="--expected-programdata-address",
+    )
     if expected_programdata is not None and expected_programdata != live["programdata_address"]:
         raise ValueError(
             "--expected-programdata-address does not match live Solana program account: "

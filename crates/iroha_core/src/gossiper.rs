@@ -3487,7 +3487,8 @@ mod tests {
             .checked_sub(1)
             .expect("transaction signature payload should never be empty");
         signature_payload[flip_index] ^= 0xFF;
-        let forged_signature = iroha_crypto::Signature::from_bytes(&signature_payload);
+        let forged_signature = iroha_crypto::Signature::try_from_bytes(&signature_payload)
+            .expect("tampered gossip signature remains structurally admissible");
         tx.set_signature(TransactionSignature(
             iroha_crypto::SignatureOf::from_signature(forged_signature),
         ));
@@ -6165,13 +6166,51 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let (kura, _) = Kura::new(&kura_cfg, &LaneGeometry::default()).expect("init kura");
         let live_query = LiveQueryStore::start_test();
         let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
-        let queue = Arc::new(Queue::test_with_router(
+        let mismatched_lane = LaneId::new(1);
+        let mismatched_dataspace = DataSpaceId::new(7);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lanes"),
+            vec![
+                iroha_data_model::nexus::LaneConfig::default(),
+                iroha_data_model::nexus::LaneConfig {
+                    id: mismatched_lane,
+                    dataspace_id: mismatched_dataspace,
+                    alias: "mismatched".to_string(),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: mismatched_dataspace,
+                alias: "mismatched".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        {
+            let mut nexus = state.nexus.write();
+            nexus.enabled = false;
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+        }
+        let lane_catalog = Arc::new(lane_catalog);
+        let dataspace_catalog = Arc::new(dataspace_catalog);
+        let queue = Arc::new(Queue::from_config_with_router_limits_and_catalogs(
             QueueConfig::default(),
-            &TimeSource::new_system(),
+            tokio::sync::broadcast::Sender::new(1),
             Arc::new(FixedRouter {
-                lane: LaneId::new(1),
-                dataspace: DataSpaceId::new(7),
+                lane: mismatched_lane,
+                dataspace: mismatched_dataspace,
             }),
+            crate::queue::QueueLimits::default(),
+            &lane_catalog,
+            &dataspace_catalog,
+            None,
         ));
 
         let now = Instant::now();
@@ -6301,7 +6340,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = false;
+            nexus.enabled = true;
             nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
@@ -6324,6 +6363,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             &dataspace_catalog,
             None,
         ));
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
         let now = Instant::now();
         let gossiper = TransactionGossiper {
             chain_id: "test-chain".parse().expect("chain id"),
@@ -6433,7 +6473,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = false;
+            nexus.enabled = true;
             nexus.fees.base_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_byte_fee = iroha_primitives::numeric::Numeric::zero();
             nexus.fees.per_instruction_fee = iroha_primitives::numeric::Numeric::zero();
@@ -6441,6 +6481,8 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog;
+            nexus.routing_policy.default_lane = restricted_lane;
+            nexus.routing_policy.default_dataspace = restricted_dataspace;
         }
 
         let lane_catalog = Arc::new(lane_catalog);

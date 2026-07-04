@@ -2735,6 +2735,38 @@ def write_complete_evidence(tmp_path: Path) -> tuple[Path, str]:
     return evidence, payload
 
 
+def test_release_bundle_verifier_rejects_legacy_native_evm_parity_fixture_schema(
+    tmp_path: Path,
+) -> None:
+    """Native EVM parity fixtures must use the production cross-SDK schema."""
+
+    verifier = load_verify_helpers()
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    assert parity_payload["schema"] == verifier.NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA
+    parity_payload["schema"] = (
+        "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1"
+    )
+    parity_path.write_text(
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    _, blockers = verifier._native_evm_prover_parity_fixture_status(
+        native_bundle,
+        None,
+        payload,
+    )
+
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "schema must match native prover bundle"
+    ) in blockers
+
+
 def test_release_bundle_active_launch_policy_is_ethereum_mainnet() -> None:
     """Readiness and verifier constants must pin the Ethereum launch lane."""
 
@@ -3212,6 +3244,25 @@ def test_release_bundle_verifier_guards_ton_route_manifest_cli_inventory(
                 for error in errors
             )
         assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.TON_ROUTE_MANIFEST_CLI_MARKERS,
+        0,
+    )
+    verifier.TON_ROUTE_MANIFEST_CLI_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "SCCP TON route-manifest CLI source inventory" in error
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
+    )
 
 
 def test_release_bundle_verifier_guards_tron_runtime_route_manifest_inventory(
@@ -4097,7 +4148,7 @@ def test_release_bundle_verifier_redacts_source_inventory_read_failures(
             "SCCP adversarial SDK SDK test inventory cannot be read"
         ]
         assert unready_helper_errors == [
-            "SCCP unready transparent-proof config-only source inventory "
+            "SCCP unready transparent-proof removed-surface source inventory "
             "cannot be read"
         ]
         assert helper_region is None
@@ -4123,11 +4174,11 @@ def test_release_bundle_verifier_redacts_source_inventory_read_failures(
     assert sdk_invalid_errors == ["SCCP adversarial SDK SDK test inventory is not UTF-8 text"]
     assert sdk_missing_errors == ["SCCP adversarial SDK SDK test inventory cannot be read"]
     assert unready_invalid_errors == [
-        "SCCP unready transparent-proof config-only source inventory "
+        "SCCP unready transparent-proof removed-surface source inventory "
         "is not UTF-8 text"
     ]
     assert unready_missing_errors == [
-        "SCCP unready transparent-proof config-only source inventory cannot be read"
+        "SCCP unready transparent-proof removed-surface source inventory cannot be read"
     ]
     assert region is None
     assert region_errors == ["SCCP adversarial region source is not UTF-8 text"]
@@ -11168,6 +11219,167 @@ def test_release_bundle_rejects_public_source_record_template_hash_replays() -> 
                     f"{source_field} must be deployed evidence, not built-in "
                     "template material"
                 ) in verifier_crypto_errors, (domain, source_field, template_field)
+
+
+def test_release_bundle_rejects_public_crypto_source_record_hash_role_replay() -> None:
+    """Copied public crypto source-record hashes must stay role-separated."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+
+    # Source-inventory marker: bundle public crypto source-record hash role replay covers every launch domain
+    for domain in (
+        all_lanes.SCCP_DOMAIN_ETH,
+        all_lanes.SCCP_DOMAIN_BSC,
+        all_lanes.SCCP_DOMAIN_SOL,
+        all_lanes.SCCP_DOMAIN_TON,
+        all_lanes.SCCP_DOMAIN_TRON,
+    ):
+        profile = all_lanes.LANE_PROFILES[domain]
+        audit_keys = sorted(
+            bundle._source_adapter_gate_audit_keys_for_domain_chain(
+                domain,
+                profile.chain,
+            )
+        )
+        gate_key = bundle._source_adapter_gate_hash_key_for_domain_chain(
+            domain,
+            profile.chain,
+        )
+        gate_hash = fixed_hex32(0xC1 + domain)
+        audit_hashes = {
+            key: fixed_hex32(0xD1 + domain * 10 + index)
+            for index, key in enumerate(audit_keys)
+        }
+        audit_hashes[gate_key] = gate_hash
+        source_record_hash = fixed_hex32(0xE1 + domain)
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": profile.chain,
+                "evm_source_rpc_chain_id": "",
+                "evm_source_block_tag": "",
+                "evm_destination_rpc_chain_id": "",
+                "evm_destination_block_tag": "",
+                "source_verifier_material_hash": source_record_hash,
+                "source_adapter_engine_deployment_hash": source_record_hash,
+                "route_canary_evidence_bound": False,
+                "route_canary_receipt_block_finalized": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": gate_hash,
+                "source_adapter_gate_audit_hashes": audit_hashes,
+            }
+        )
+        if domain == all_lanes.SCCP_DOMAIN_ETH:
+            row["evm_source_rpc_chain_id"] = "1"
+            row["evm_source_block_tag"] = "finalized"
+            row["evm_destination_rpc_chain_id"] = "1"
+            row["evm_destination_block_tag"] = "finalized"
+        elif domain == all_lanes.SCCP_DOMAIN_BSC:
+            row["evm_source_rpc_chain_id"] = "56"
+            row["evm_source_block_tag"] = "latest"
+            row["evm_destination_rpc_chain_id"] = "56"
+            row["evm_destination_block_tag"] = "latest"
+
+        crypto_label = "bundled report.cryptographic_evidence[0]"
+        crypto_errors = bundle._cryptographic_evidence_row_bundle_errors(
+            row,
+            crypto_label,
+        )
+
+        assert (
+            f"{crypto_label} hash role source_adapter_engine_deployment_hash "
+            "must not reuse source_verifier_material_hash"
+        ) in crypto_errors, domain
+
+        verifier_crypto_errors = verifier._cryptographic_evidence_row_schema_errors(row)
+        assert (
+            "readiness report cryptographic evidence row hash role "
+            "source_adapter_engine_deployment_hash must not reuse "
+            "source_verifier_material_hash"
+        ) in verifier_crypto_errors, domain
+
+
+def test_release_bundle_rejects_public_crypto_hash_role_replay_with_malformed_audit_map() -> None:
+    """Malformed audit maps must not suppress public crypto hash-role checks."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    all_lanes = bundle._all_lanes_module()
+
+    # Source-inventory marker: bundle public crypto malformed source-gate audit maps still expose top-level hash role replay
+    for domain in (
+        all_lanes.SCCP_DOMAIN_ETH,
+        all_lanes.SCCP_DOMAIN_BSC,
+        all_lanes.SCCP_DOMAIN_SOL,
+        all_lanes.SCCP_DOMAIN_TON,
+        all_lanes.SCCP_DOMAIN_TRON,
+    ):
+        profile = all_lanes.LANE_PROFILES[domain]
+        replayed_hash = fixed_hex32(0xA1 + domain)
+        row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": profile.chain,
+                "evm_source_rpc_chain_id": "",
+                "evm_source_block_tag": "",
+                "evm_destination_rpc_chain_id": "",
+                "evm_destination_block_tag": "",
+                "source_verifier_material_hash": fixed_hex32(0xB1 + domain),
+                "source_adapter_engine_deployment_hash": fixed_hex32(0xC1 + domain),
+                "destination_binding_hash": replayed_hash,
+                "route_allowlist_hash": replayed_hash,
+                "route_canary_evidence_bound": False,
+                "route_canary_receipt_block_finalized": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": replayed_hash,
+                "source_adapter_gate_audit_hashes": "secret-token-forged-audit-map",
+            }
+        )
+        if domain == all_lanes.SCCP_DOMAIN_ETH:
+            row["evm_source_rpc_chain_id"] = "1"
+            row["evm_source_block_tag"] = "finalized"
+            row["evm_destination_rpc_chain_id"] = "1"
+            row["evm_destination_block_tag"] = "finalized"
+        elif domain == all_lanes.SCCP_DOMAIN_BSC:
+            row["evm_source_rpc_chain_id"] = "56"
+            row["evm_source_block_tag"] = "latest"
+            row["evm_destination_rpc_chain_id"] = "56"
+            row["evm_destination_block_tag"] = "latest"
+
+        crypto_label = "bundled report.cryptographic_evidence[0]"
+        crypto_errors = bundle._cryptographic_evidence_row_bundle_errors(
+            row,
+            crypto_label,
+        )
+
+        assert (
+            f"{crypto_label} source_adapter_gate_audit_hashes must be an object"
+        ) in crypto_errors, domain
+        assert (
+            f"{crypto_label} source_adapter_gate hash role route_allowlist_hash "
+            "must not reuse destination_binding_hash"
+        ) in crypto_errors, domain
+        assert (
+            # Source-inventory marker: source_adapter_gate hash role source_adapter_gate_hash must not reuse destination_binding_hash
+            f"{crypto_label} source_adapter_gate hash role source_adapter_gate_hash "
+            "must not reuse destination_binding_hash"
+        ) in crypto_errors, domain
+
+        verifier_crypto_errors = verifier._cryptographic_evidence_row_schema_errors(row)
+        assert (
+            "readiness report cryptographic evidence row "
+            "source_adapter_gate hash role route_allowlist_hash must not reuse "
+            "destination_binding_hash"
+        ) in verifier_crypto_errors, domain
+        assert (
+            "readiness report cryptographic evidence row "
+            "source_adapter_gate hash role source_adapter_gate_hash must not reuse "
+            "destination_binding_hash"
+        ) in verifier_crypto_errors, domain
 
 
 def test_release_bundle_rejects_public_destination_and_route_template_hash_replays() -> None:
@@ -28149,7 +28361,7 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_key
     )
     parity_bytes = (
         b'{"schema":"forged","schema":"'
-        b'sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1"}\n'
+        b'sccp-ethereum-mainnet-native-evm-cross-sdk-parity-v1"}\n'
     )
     (output_dir / relative_path).write_bytes(parity_bytes)
     rewrite_manifest_artifact(output_dir, relative_path)
@@ -31722,12 +31934,17 @@ def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence(
         "or case-variant aliases remain forged evidence"
     ) in errors
 
-    trx_metadata_percent_line = next(
+    trx_metadata_percent_lines = [
         line
         for line in markdown.splitlines()
         if line.startswith("- TRX XML metadata percent decoding")
-    )
-    weakened = markdown.replace(f"{trx_metadata_percent_line}\n", "")
+        or line.startswith("- sensitive metadata hidden behind nested percent encoding")
+        or line.startswith("- values still percent-decodable after eight rounds")
+    ]
+    assert len(trx_metadata_percent_lines) == 3
+    weakened = markdown
+    for line in trx_metadata_percent_lines:
+        weakened = weakened.replace(f"{line}\n", "")
     errors = verifier._readiness_markdown_invariant_errors(report, weakened)
     assert (
         "readiness report Markdown Required Release Evidence section missing "
@@ -32044,6 +32261,27 @@ def test_release_bundle_required_evidence_source_rows_have_strict_markers(
         )
     ]
     assert missing_markers == []
+
+    assert (
+        "SCCP unready transparent-proof source inventory must pin the removed "
+        "runtime/config surface"
+    ) in markdown
+    assert (
+        "keep the `allow_unready` manifest and source-proof bypasses "
+        "effective only under "
+        "`cfg(test)`"
+    ) in markdown
+    assert (
+        "keep Torii route/proof `allow_unready` bypasses effective only under "
+        "`cfg(test)`"
+    ) in markdown
+    assert (
+        "keep `test-fixtures` out of production SCCP dependencies and "
+        "release/corridor Rust commands"
+    ) in markdown
+    assert "diagnostic `allow_unready` toggle as config-owned" not in markdown
+    assert "config-owned paths" not in markdown
+    assert "force the unready toggle back on" not in markdown
 
 
 def test_release_bundle_required_evidence_markers_are_unique_and_generated(
@@ -35273,6 +35511,37 @@ def test_release_bundle_verifier_rejects_missing_bsc_inbound_adversarial_invento
     assert (
         "readiness report source_inventory missing required gate: "
         "bsc_inbound_adversarial_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ton_inbound_adversarial_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the TON inbound adversarial gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ton_inbound_adversarial_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ton_inbound_adversarial_gate"
     ) in verified.stdout
 
 
@@ -58729,7 +58998,7 @@ def test_release_bundle_verifier_guards_torii_pinned_message_proof(
             sparse_source,
             (
                 "fn bridge_proof_from_sccp_message_bundle(",
-                "SCCP message bridge proofs must be pinned for core replay protection",
+                "unpinned SCCP message records must not be served as source-chain envelopes",
             ),
         ),
     )
@@ -58742,18 +59011,16 @@ def test_release_bundle_verifier_guards_torii_pinned_message_proof(
     assert verified["verified"] is False
     assert any(
         "Ethereum mainnet Torii pinned message proof source inventory" in error
-        and (
-            "missing marker: SCCP message bridge proofs must be pinned for core replay protection"
-            in error
-        )
+        and "missing marker: unpinned SCCP message records must not be served as source-chain envelopes"
+        in error
         for error in verified["errors"]
     )
 
 
-def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
+def test_release_bundle_verifier_guards_sccp_unready_removed_surface_sources(
     tmp_path: Path,
 ) -> None:
-    """Published bundle verification must keep unready-proof toggles config-owned."""
+    """Published bundle verification must pin removed unready proof surfaces."""
 
     verifier = load_verify_helpers()
     assert verifier._sccp_unready_transparent_proof_config_inventory_errors() == []
@@ -58782,13 +59049,152 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
                 (),
             )
             assert any(
-                "SCCP unready transparent-proof config-only source inventory"
+                "SCCP unready transparent-proof removed-surface source inventory"
                 in error
                 and str(sparse_source) in error
                 and f"missing marker: {removed_marker}" in error
                 for error in errors
             )
         assert checked_markers > 0
+
+    sccp_source_path, sccp_required_markers = next(
+        (
+            source_path,
+            required_markers,
+        )
+        for source_path, required_markers in verifier.SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS
+        if "fn sccp_allow_unready_source_proof_bypass_enabled(allow_unready: bool) -> bool"
+        in required_markers
+    )
+    sparse_source_proof_gates = tmp_path / f"sparse-source-proof-{Path(sccp_source_path).name}"
+    sparse_source_proof_gates.write_text(
+        "\n".join(sccp_required_markers)
+        + "\n"
+        + "\n".join(
+            verifier.SCCP_UNREADY_SOURCE_PROOF_BYPASS_CALL_SITE_MARKER
+            for _ in range(
+                verifier.SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES - 2
+            )
+        ),
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+        ((sparse_source_proof_gates, sccp_required_markers),),
+        (),
+        (),
+        (),
+        (),
+        (),
+    )
+    assert any(
+        "SCCP unready transparent-proof removed-surface source inventory" in error
+        and str(sparse_source_proof_gates) in error
+        and "cfg-gates 3 source-proof allow_unready build/admission call sites"
+        in error
+        and "expected at least 4" in error
+        for error in errors
+    )
+
+    for fixture_name, widened_gate, expected_error_fragment in (
+        (
+            "widened-bypass-gate",
+            'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
+            'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
+        ),
+        (
+            "escaped-widened-bypass-gate",
+            'allow_unready && cfg!(any(\\x74est, feature = "test-fixtures"))',
+            'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
+        ),
+        (
+            "feature-only-widened-bypass-gate",
+            'allow_unready && cfg!(feature = "test-fixtures")',
+            'allow_unready && cfg!(feature = "test-fixtures")',
+        ),
+        (
+            "split-feature-widened-bypass-gate",
+            "\n".join(
+                (
+                    "allow_unready",
+                    "    && (cfg!(test)",
+                    '        || cfg!(feature = "test-fixtures"))',
+                )
+            ),
+            "test-fixtures feature",
+        ),
+    ):
+        widened_bypass_source = (
+            tmp_path / f"{fixture_name}-{Path(sccp_source_path).name}"
+        )
+        widened_bypass_source.write_text(
+            "\n".join(sccp_required_markers)
+            + "\n"
+            + "\n".join(
+                verifier.SCCP_UNREADY_SOURCE_PROOF_BYPASS_CALL_SITE_MARKER
+                for _ in range(
+                    verifier.SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES
+                    - 1
+                )
+            )
+            + "\n"
+            + widened_gate
+            + "\n",
+            encoding="utf-8",
+        )
+        errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+            ((widened_bypass_source, sccp_required_markers),),
+            (),
+            (),
+            (),
+            (),
+            (),
+        )
+        assert any(
+            "SCCP unready transparent-proof removed-surface source inventory" in error
+            and str(widened_bypass_source) in error
+            and "contains forbidden widened allow_unready gate" in error
+            and expected_error_fragment in error
+            for error in errors
+        )
+
+    torii_source_path, torii_required_markers = next(
+        (
+            source_path,
+            required_markers,
+        )
+        for source_path, required_markers in verifier.SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS
+        if "fn sccp_allow_unready_torii_route_bypass_enabled(allow_unready: bool) -> bool"
+        in required_markers
+    )
+    sparse_torii_route_gates = (
+        tmp_path / f"sparse-torii-route-{Path(torii_source_path).name}"
+    )
+    sparse_torii_route_gates.write_text(
+        "\n".join(torii_required_markers)
+        + "\n"
+        + "\n".join(
+            verifier.SCCP_UNREADY_TORII_ROUTE_BYPASS_CALL_SITE_MARKER
+            for _ in range(
+                verifier.SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES - 2
+            )
+        ),
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+        ((sparse_torii_route_gates, torii_required_markers),),
+        (),
+        (),
+        (),
+        (),
+        (),
+    )
+    assert any(
+        "SCCP unready transparent-proof removed-surface source inventory" in error
+        and str(sparse_torii_route_gates) in error
+        and "cfg-gates 7 Torii allow_unready route/proof call sites" in error
+        and "expected at least 8" in error
+        for error in errors
+    )
 
     forbidden_env_source = tmp_path / "user-forbidden-env.rs"
     forbidden_env_source.write_text(
@@ -58800,9 +59206,87 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
         (forbidden_env_source,),
     )
     assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
+        "SCCP unready transparent-proof removed-surface source inventory" in error
         and str(forbidden_env_source) in error
         and "contains forbidden environment override" in error
+        for error in errors
+    )
+
+    forbidden_config_source = tmp_path / "user-forbidden-config.rs"
+    forbidden_config_source.write_text(
+        "pub sccp_allow_unready_transparent_proofs: bool\n",
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+        (),
+        (),
+        (),
+        (forbidden_config_source,),
+    )
+    assert any(
+        "SCCP unready transparent-proof removed-surface source inventory" in error
+        and str(forbidden_config_source) in error
+        and "contains forbidden runtime config surface: "
+        "sccp_allow_unready_transparent_proofs" in error
+        for error in errors
+    )
+
+    forbidden_surface_source = tmp_path / "gov_instruction.rs"
+    forbidden_surface_source.write_text(
+        "BuildTairaTronXorDiagnosticMessageBundle\n",
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+        (),
+        (),
+        (forbidden_surface_source,),
+    )
+    assert any(
+        "SCCP unready transparent-proof removed-surface source inventory" in error
+        and str(forbidden_surface_source) in error
+        and "contains forbidden production diagnostic surface: "
+        "BuildTairaTronXorDiagnosticMessageBundle" in error
+        for error in errors
+    )
+
+    forbidden_cargo_source = tmp_path / "Cargo.toml"
+    forbidden_cargo_source.write_text(
+        "[dependencies]\n"
+        'iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }\n',
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+        (),
+        (),
+        (),
+        (),
+        (forbidden_cargo_source,),
+        (),
+    )
+    assert any(
+        "SCCP unready transparent-proof removed-surface source inventory" in error
+        and str(forbidden_cargo_source) in error
+        and "enables iroha_sccp test-fixtures outside dev-dependencies" in error
+        for error in errors
+    )
+
+    forbidden_command_source = tmp_path / "check_sccp_production_corridor.sh"
+    forbidden_command_source.write_text(
+        "cargo test -p iroha_sccp --features test-fixtures -- --nocapture\n",
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+        (),
+        (),
+        (),
+        (),
+        (),
+        (forbidden_command_source,),
+    )
+    assert any(
+        "SCCP unready transparent-proof removed-surface source inventory" in error
+        and str(forbidden_command_source) in error
+        and "enables test-fixtures for the release/corridor rust-sccp command" in error
         for error in errors
     )
 
@@ -58816,7 +59300,7 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
         (forbidden_env_alias_source,),
     )
     assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
+        "SCCP unready transparent-proof removed-surface source inventory" in error
         and str(forbidden_env_alias_source) in error
         and "contains forbidden environment override: "
         "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
@@ -58833,7 +59317,7 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
         (forbidden_env_split_source,),
     )
     assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
+        "SCCP unready transparent-proof removed-surface source inventory" in error
         and str(forbidden_env_split_source) in error
         and "contains forbidden environment override: "
         "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
@@ -58850,7 +59334,7 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
         (forbidden_env_hex_escape_source,),
     )
     assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
+        "SCCP unready transparent-proof removed-surface source inventory" in error
         and str(forbidden_env_hex_escape_source) in error
         and "contains forbidden environment override: "
         "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
@@ -58869,7 +59353,7 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
         (forbidden_env_unicode_plain_escape_source,),
     )
     assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
+        "SCCP unready transparent-proof removed-surface source inventory" in error
         and str(forbidden_env_unicode_plain_escape_source) in error
         and "contains forbidden environment override: "
         "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
@@ -58888,7 +59372,7 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
         (forbidden_env_unicode_escape_source,),
     )
     assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
+        "SCCP unready transparent-proof removed-surface source inventory" in error
         and str(forbidden_env_unicode_escape_source) in error
         and "contains forbidden environment override: "
         "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS" in error
@@ -58901,16 +59385,8 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
         "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS\n",
         encoding="utf-8",
     )
-    verifier.SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
-        (
-            sparse_config,
-            (
-                "pub sccp_allow_unready_transparent_proofs: bool",
-                "sccp_allow_unready_transparent_proofs: self.sccp_allow_unready_transparent_proofs",
-            ),
-        ),
-    )
     verifier.SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV_PATHS = (sparse_config,)
+    verifier.SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_CONFIG_PATHS = (sparse_config,)
 
     bundle_dir = tmp_path / "bundle"
     bundle_dir.mkdir()
@@ -58919,16 +59395,13 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
 
     assert verified["verified"] is False
     assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
-        and (
-            "missing marker: sccp_allow_unready_transparent_proofs: "
-            "self.sccp_allow_unready_transparent_proofs"
-        )
-        in error
+        "SCCP unready transparent-proof removed-surface source inventory" in error
+        and "contains forbidden runtime config surface: "
+        "sccp_allow_unready_transparent_proofs" in error
         for error in verified["errors"]
     )
     assert any(
-        "SCCP unready transparent-proof config-only source inventory" in error
+        "SCCP unready transparent-proof removed-surface source inventory" in error
         and "contains forbidden environment override" in error
         for error in verified["errors"]
     )
@@ -62572,6 +63045,65 @@ def test_release_bundle_verifier_guards_bsc_python_wrong_domain_receipt_transcri
             '"source_domain": SCCP_DOMAIN_ETH})'
         )
         in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_ton_inbound_adversarial_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must keep TON inbound adversarial guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._ton_inbound_adversarial_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.TON_INBOUND_ADVERSARIAL_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"ton-inbound-adversarial-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._ton_inbound_adversarial_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP TON inbound adversarial source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.TON_INBOUND_ADVERSARIAL_MARKERS,
+        0,
+    )
+    verifier.TON_INBOUND_ADVERSARIAL_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "SCCP TON inbound adversarial source inventory" in error
+        and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
 

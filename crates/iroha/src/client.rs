@@ -19913,7 +19913,8 @@ mod tests {
             },
             queued_at_unix: 1,
             rent_quote: DaRentQuote::default(),
-            operator_signature: iroha_crypto::Signature::from_bytes(&[0x11; 64]),
+            operator_signature: iroha_crypto::Signature::try_from_bytes(&[0x42u8; 64])
+                .expect("nonzero DA receipt signature fixture"),
         }
     }
 
@@ -19954,7 +19955,8 @@ mod tests {
             },
             queued_at_unix: 1,
             rent_quote: DaRentQuote::default(),
-            operator_signature: iroha_crypto::Signature::from_bytes(&[0x11; 64]),
+            operator_signature: iroha_crypto::Signature::try_from_bytes(&[0x42u8; 64])
+                .expect("nonzero DA response receipt signature fixture"),
         };
         let response_payload = DaIngestResponsePayload {
             status: "accepted".into(),
@@ -26684,7 +26686,8 @@ mod tests {
                     .as_bytes(),
             )
             .expect("signature header should decode");
-        let signature = Signature::from_bytes(&signature_bytes);
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .expect("operator-panel signature header must pass checked admission");
         let signed_message = Client::operator_request_message(
             &HttpMethod::GET,
             &snapshot.url,
@@ -27271,7 +27274,8 @@ mod tests {
             proof_digest: None,
             retention_class: RetentionPolicy::default(),
             storage_ticket: StorageTicketId::new([0x64; 32]),
-            acknowledgement_sig: iroha_crypto::Signature::from_bytes(&[0x65; 64]),
+            acknowledgement_sig: iroha_crypto::Signature::try_from_bytes(&[0x65; 64])
+                .expect("checked iroha client DA commitment acknowledgement signature fixture"),
         }
     }
 

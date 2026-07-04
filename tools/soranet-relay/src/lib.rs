@@ -56,6 +56,12 @@ mod tests {
         0xff, 0x7f,
     ];
 
+    const NONCANONICAL_NON_SMALL_ORDER_ED25519_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
+        0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[test]
     fn checked_ed25519_verifying_key_rejects_inert_weak_or_noncanonical_material() {
         let all_zero = checked_ed25519_verifying_key_from_bytes(&[0; 32])
@@ -71,6 +77,14 @@ mod tests {
 
         let noncanonical = checked_ed25519_verifying_key_from_bytes(&NONCANONICAL_ED25519_IDENTITY)
             .expect_err("noncanonical Ed25519 key must be rejected");
+        assert!(
+            noncanonical.contains("non-canonical"),
+            "unexpected error: {noncanonical}"
+        );
+
+        let noncanonical =
+            checked_ed25519_verifying_key_from_bytes(&NONCANONICAL_NON_SMALL_ORDER_ED25519_POINT)
+                .expect_err("noncanonical non-small-order Ed25519 key must be rejected");
         assert!(
             noncanonical.contains("non-canonical"),
             "unexpected error: {noncanonical}"

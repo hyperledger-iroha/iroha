@@ -367,6 +367,8 @@ pub enum DirectoryRotateError {
         #[source]
         source: MlDsaError,
     },
+    #[error("generated Ed25519 issuer seed material is invalid: {reason}")]
+    InvalidGeneratedIssuerKeyMaterial { reason: String },
     #[error("rotated issuer fingerprint could not be computed: {source}")]
     IssuerFingerprint {
         #[source]
@@ -717,6 +719,11 @@ fn rotate_snapshot_struct<R: RngCore + CryptoRng>(
 
     let mut ed_seed = [0u8; 32];
     rng.fill_bytes(&mut ed_seed);
+    if ed_seed.iter().all(|byte| *byte == 0) {
+        return Err(DirectoryRotateError::InvalidGeneratedIssuerKeyMaterial {
+            reason: "ed25519 private key seed material must not be all zero".to_string(),
+        });
+    }
     let signing_key = SigningKey::from_bytes(&ed_seed);
     let ed_public = signing_key.verifying_key().to_bytes();
 
@@ -1638,6 +1645,74 @@ mod tests {
                     output.bundle.metadata.validation_phase,
                 )
                 .expect("verify");
+        }
+    }
+
+    #[test]
+    fn rotate_snapshot_rejects_all_zero_generated_ed25519_seed() {
+        struct ZeroRng;
+
+        impl RngCore for ZeroRng {
+            fn next_u32(&mut self) -> u32 {
+                0
+            }
+
+            fn next_u64(&mut self) -> u64 {
+                0
+            }
+
+            fn fill_bytes(&mut self, dest: &mut [u8]) {
+                dest.fill(0);
+            }
+        }
+
+        impl CryptoRng for ZeroRng {}
+
+        let issuer_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
+            .expect("ML-DSA keypair generation should succeed");
+        let mut rng = StdRng::seed_from_u64(0xA55A56);
+        let mut ed_seed = [0u8; 32];
+        rng.fill_bytes(&mut ed_seed);
+        let signing_key = SigningKey::from_bytes(&ed_seed);
+        let ed_public = signing_key.verifying_key().to_bytes();
+        let fingerprint = compute_issuer_fingerprint(&ed_public, issuer_keys.public_key())
+            .expect("sample issuer fingerprint should compute");
+
+        let certificate = sample_certificate(fingerprint);
+        let bundle = certificate
+            .clone()
+            .issue(&signing_key, issuer_keys.secret_key())
+            .expect("issue");
+
+        let snapshot = GuardDirectorySnapshotV2 {
+            version: GUARD_DIRECTORY_VERSION_V2,
+            directory_hash: certificate.directory_hash,
+            published_at_unix: certificate.published_at,
+            valid_after_unix: certificate.valid_after,
+            valid_until_unix: certificate.valid_until,
+            validation_phase: encode_validation_phase(
+                CertificateValidationPhase::Phase3RequireDual,
+            ),
+            issuers: vec![GuardDirectoryIssuerV1 {
+                fingerprint,
+                ed25519_public: ed_public,
+                mldsa65_public: issuer_keys.public_key().to_vec(),
+            }],
+            relays: vec![GuardDirectoryRelayEntryV2 {
+                certificate: bundle.to_cbor(),
+            }],
+        };
+
+        let bytes = snapshot.to_bytes().expect("encode snapshot");
+        let mut rng = ZeroRng;
+        let err = rotate_snapshot(&bytes, &mut rng)
+            .expect_err("all-zero generated Ed25519 issuer seed must fail");
+
+        match err {
+            DirectoryRotateError::InvalidGeneratedIssuerKeyMaterial { reason } => {
+                assert!(reason.contains("all zero"), "unexpected reason: {reason}");
+            }
+            other => panic!("unexpected directory rotation error: {other:?}"),
         }
     }
 

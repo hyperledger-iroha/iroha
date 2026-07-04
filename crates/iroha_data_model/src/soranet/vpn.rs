@@ -782,13 +782,14 @@ impl VpnUsageVoucherV1 {
     /// # Errors
     /// Returns an error when signature verification fails.
     pub fn verify(&self) -> Result<(), iroha_crypto::Error> {
-        let signature = if matches!(
-            self.client_public_key.try_algorithm(),
-            Ok(Algorithm::Ed25519)
-        ) {
-            iroha_crypto::ed25519_parse_signature(self.signature.payload())?
-        } else {
-            Signature::try_from_bytes(self.signature.payload())?
+        let signature = match self.client_public_key.try_algorithm() {
+            Ok(Algorithm::Ed25519) => {
+                iroha_crypto::ed25519_parse_signature(self.signature.payload())?
+            }
+            Ok(Algorithm::MlDsa) => {
+                iroha_crypto::mldsa65_parse_signature(self.signature.payload())?
+            }
+            _ => Signature::try_from_bytes(self.signature.payload())?,
         };
         signature.verify(&self.client_public_key, &self.body.encode())
     }
@@ -1500,6 +1501,11 @@ mod tests {
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
+    const NONCANONICAL_ED25519_POINT: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
@@ -1704,6 +1710,7 @@ mod tests {
         for (label, public_key) in [
             ("all-zero", [0u8; 32]),
             ("small-order", SMALL_ORDER_ED25519_POINT),
+            ("noncanonical", NONCANONICAL_ED25519_POINT),
         ] {
             let mut bytes = ticket.to_bytes(&secret);
             bytes[HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET
@@ -1893,6 +1900,47 @@ mod tests {
                 voucher.verify().unwrap_err(),
                 iroha_crypto::Error::BadSignature,
                 "{label} voucher signature R must fail admission"
+            );
+        }
+    }
+
+    #[test]
+    fn usage_voucher_rejects_malformed_mldsa_signature_lengths() {
+        let key_pair = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+        let body = VpnUsageVoucherBodyV1 {
+            session_id: [0x41; 16],
+            quote_id: [0x42; 32],
+            relay_id: [0x43; 32],
+            sequence: 8,
+            ingress_bytes: 512,
+            egress_bytes: 1_024,
+            active_ms: 2_500,
+            issued_at_ms: 1_700_000_000_555,
+        };
+        let voucher =
+            VpnUsageVoucherV1::try_sign(body, key_pair.private_key()).expect("checked voucher");
+        voucher
+            .verify()
+            .expect("valid ML-DSA usage voucher signature verifies");
+        let valid_signature = voucher.signature.payload().to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x60);
+                payload
+            }),
+        ] {
+            let mut invalid_voucher = voucher.clone();
+            invalid_voucher.signature = Signature::from_bytes(&replacement_signature);
+            assert_eq!(
+                invalid_voucher.verify().unwrap_err(),
+                iroha_crypto::Error::BadSignature,
+                "{label} usage voucher ML-DSA signature length was not rejected"
             );
         }
     }

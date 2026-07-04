@@ -329,10 +329,13 @@ mod tests {
 
         for case in &cases {
             let mut tampered = case.signed.clone();
+            let tampered_signature = [0xAA_u8; 64];
             tampered.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
-                iroha_crypto::SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(
-                    &[0_u8; 64],
-                )),
+                iroha_crypto::SignatureOf::from_signature(
+                    iroha_crypto::Signature::try_from_bytes(&tampered_signature).expect(
+                        "tampered confidential wallet signature remains structurally admissible",
+                    ),
+                ),
             ));
             assert!(
                 tampered.verify_signature().is_err(),

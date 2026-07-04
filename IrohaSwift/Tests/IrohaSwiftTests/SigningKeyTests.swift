@@ -19,6 +19,63 @@ final class SigningKeyTests: XCTestCase {
         XCTAssertTrue(publicKey.isValidSignature(envelope.signature, for: message))
     }
 
+    func testEd25519SignatureAdmissionRejectsInertAndMalformedR() throws {
+        guard #available(macOS 10.15, iOS 13.0, *) else {
+            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
+        }
+        let key = Curve25519.Signing.PrivateKey()
+        let message = Data("swift-ed25519-signature-admission".utf8)
+        let signature = try key.signature(for: message)
+        XCTAssertTrue(Ed25519SignatureAdmission.isValidSignature(signature))
+
+        let smallOrderR = Data([
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        let noncanonicalR = Data([
+            0xEE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
+        ])
+
+        XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(Data(repeating: 0, count: 64)))
+        XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(Data(signature.dropLast())))
+        for replacementR in [smallOrderR, noncanonicalR] {
+            var malformed = signature
+            malformed.replaceSubrange(0..<replacementR.count, with: replacementR)
+            XCTAssertFalse(Ed25519SignatureAdmission.isValidSignature(malformed))
+        }
+    }
+
+    func testEd25519PublicKeyAdmissionRejectsWeakOrNoncanonicalMaterial() throws {
+        guard #available(macOS 10.15, iOS 13.0, *) else {
+            throw XCTSkip("Curve25519 requires macOS 10.15 / iOS 13")
+        }
+        let key = Curve25519.Signing.PrivateKey()
+        XCTAssertTrue(Ed25519PublicKeyAdmission.isValidPublicKey(key.publicKey.rawRepresentation))
+
+        let smallOrderKey = Data([
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        let noncanonicalKey = Data([
+            0xEE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
+        ])
+
+        XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(Data(repeating: 0, count: 32)))
+        XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(Data(repeating: 0x42, count: 31)))
+        XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(smallOrderKey))
+        XCTAssertFalse(Ed25519PublicKeyAdmission.isValidPublicKey(noncanonicalKey))
+    }
+
     func testSm2SigningKeyPreservesMetadata() throws {
         let privateKey = Data(repeating: 0xAB, count: Sm2Keypair.privateKeyLength)
         let publicKey = Data(repeating: 0xCD, count: Sm2Keypair.publicKeyLength)
@@ -65,7 +122,7 @@ final class SigningKeyTests: XCTestCase {
                                               metadata: SigningMetadata(label: "mldsa"))
         let message = Data("swift-ml-dsa".utf8)
         let signature = try signingKey.sign(message)
-        let expectedLength = try keypair.suite.parameters().signatureLength
+        let expectedLength = keypair.suite.parameters().signatureLength
         XCTAssertEqual(signature.count, expectedLength)
 
         guard let verified = NoritoNativeBridge.shared.verifyDetached(
@@ -77,6 +134,119 @@ final class SigningKeyTests: XCTestCase {
             throw XCTSkip("ML-DSA verify bridge is unavailable in this environment.")
         }
         XCTAssertTrue(verified)
+    }
+
+    func testMlDsaSuiteParametersAreAvailableBeforeBridge() {
+        let expected: [(MlDsaSuite, Int, Int, Int)] = [
+            (.mlDsa44, 1_312, 2_560, 2_420),
+            (.mlDsa65, 1_952, 4_032, 3_309),
+            (.mlDsa87, 2_592, 4_896, 4_627),
+        ]
+        for (suite, publicKeyLength, secretKeyLength, signatureLength) in expected {
+            let parameters = suite.parameters()
+            XCTAssertEqual(parameters.publicKeyLength, publicKeyLength)
+            XCTAssertEqual(parameters.secretKeyLength, secretKeyLength)
+            XCTAssertEqual(parameters.signatureLength, signatureLength)
+        }
+    }
+
+    func testMlDsaKeypairRejectsMalformedKeyLengthsBeforeBridge() {
+        let parameters = MlDsaSuite.mlDsa65.parameters()
+        let publicKey = Data(repeating: 0xA5, count: parameters.publicKeyLength)
+        let secretKey = Data(repeating: 0x5A, count: parameters.secretKeyLength)
+        XCTAssertNoThrow(try MlDsaKeypair(suite: .mlDsa65,
+                                          publicKey: publicKey,
+                                          secretKey: secretKey))
+
+        XCTAssertThrowsError(try MlDsaKeypair(suite: .mlDsa65,
+                                              publicKey: Data(publicKey.dropLast()),
+                                              secretKey: secretKey)) { error in
+            guard case MlDsaError.invalidKeyLength = error else {
+                return XCTFail("short ML-DSA public key failed with unexpected error: \(error)")
+            }
+        }
+
+        var overlongSecretKey = secretKey
+        overlongSecretKey.append(0x42)
+        XCTAssertThrowsError(try MlDsaKeypair(suite: .mlDsa65,
+                                              publicKey: publicKey,
+                                              secretKey: overlongSecretKey)) { error in
+            guard case MlDsaError.invalidKeyLength = error else {
+                return XCTFail("overlong ML-DSA secret key failed with unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testMlDsaVerifyRejectsMalformedSignatureLengthsBeforeBridge() throws {
+        let parameters = MlDsaSuite.mlDsa65.parameters()
+        let keypair = try MlDsaKeypair(suite: .mlDsa65,
+                                       publicKey: Data(repeating: 0xA5, count: parameters.publicKeyLength),
+                                       secretKey: Data(repeating: 0x5A, count: parameters.secretKeyLength))
+        let message = Data("swift-ml-dsa-length-admission".utf8)
+
+        XCTAssertThrowsError(try keypair.verify(message: message,
+                                                signature: Data(repeating: 0x11,
+                                                                count: parameters.signatureLength - 1))) { error in
+            guard case MlDsaError.invalidSignatureLength = error else {
+                return XCTFail("short ML-DSA signature failed with unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertThrowsError(try keypair.verify(message: message,
+                                                signature: Data(repeating: 0x22,
+                                                                count: parameters.signatureLength + 1))) { error in
+            guard case MlDsaError.invalidSignatureLength = error else {
+                return XCTFail("overlong ML-DSA signature failed with unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testMlDsaExactLengthVerifyReportsUnavailableBridge() throws {
+        guard !NoritoNativeBridge.shared.mldsaSupported else {
+            throw XCTSkip("ML-DSA bridge is available in this environment.")
+        }
+        let parameters = MlDsaSuite.mlDsa65.parameters()
+        let keypair = try MlDsaKeypair(suite: .mlDsa65,
+                                       publicKey: Data(repeating: 0xA5, count: parameters.publicKeyLength),
+                                       secretKey: Data(repeating: 0x5A, count: parameters.secretKeyLength))
+
+        XCTAssertThrowsError(try keypair.verify(message: Data("swift-ml-dsa-bridge-unavailable".utf8),
+                                                signature: Data(repeating: 0x33,
+                                                                count: parameters.signatureLength))) { error in
+            guard case MlDsaError.bridgeUnavailable = error else {
+                return XCTFail("exact-length ML-DSA verification failed with unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testMlDsaVerifyRejectsMalformedSignaturesWhenBridgeAvailable() throws {
+        guard NoritoNativeBridge.shared.mldsaSupported else {
+            throw XCTSkip("ML-DSA bridge is unavailable in this environment.")
+        }
+        let keypair = try MlDsaKeypair.generate(suite: .mlDsa65)
+        let message = Data("swift-ml-dsa-signature-admission".utf8)
+        let signature = try keypair.sign(message: message)
+
+        XCTAssertTrue(try keypair.verify(message: message, signature: signature))
+
+        var shortSignature = signature
+        shortSignature.removeLast()
+        XCTAssertThrowsError(try keypair.verify(message: message, signature: shortSignature)) { error in
+            guard case MlDsaError.invalidSignatureLength = error else {
+                return XCTFail("short ML-DSA signature failed with unexpected error: \(error)")
+            }
+        }
+
+        var overlongSignature = signature
+        overlongSignature.append(0x42)
+        XCTAssertThrowsError(try keypair.verify(message: message, signature: overlongSignature)) { error in
+            guard case MlDsaError.invalidSignatureLength = error else {
+                return XCTFail("overlong ML-DSA signature failed with unexpected error: \(error)")
+            }
+        }
+
+        let allZeroSignature = Data(repeating: 0, count: signature.count)
+        XCTAssertFalse(try keypair.verify(message: message, signature: allZeroSignature))
     }
 
     func testMultihashPrivateKeyMatchesFixtureAuthority() throws {

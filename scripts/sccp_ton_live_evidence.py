@@ -89,6 +89,25 @@ def _parse_ton_raw_address(value: str, *, label: str) -> str:
     return evidence.normalize_ton_raw_address(value, label=label)
 
 
+def _optional_live_bytes32_arg(
+    args: argparse.Namespace,
+    name: str,
+    *,
+    label: str,
+) -> bytes | None:
+    value = getattr(args, name, None)
+    if value is None:
+        return None
+    if not isinstance(value, (bytes, bytearray)):
+        raise ValueError(f"{label} must be bytes")
+    raw = bytes(value)
+    if len(raw) != 32:
+        raise ValueError(f"{label} must be 32 bytes")
+    if not any(raw):
+        raise ValueError(f"{label} must not be zero")
+    return raw
+
+
 def _decode_hash_text(value: Any, *, label: str) -> bytes:
     if not isinstance(value, str):
         raise RuntimeError(f"{label} must be a string")
@@ -641,14 +660,30 @@ def _summary(args: argparse.Namespace, live: dict[str, Any]) -> dict[str, Any]:
         code_boc_bytes,
     )
     destination_binding_hash = evidence.ton_destination_binding_hash()
-    expected_binding_matches = args.expected_destination_binding_hash == destination_binding_hash
-    expected_code_hash = getattr(args, "expected_verifier_code_hash", None)
+    expected_destination_binding_hash = _optional_live_bytes32_arg(
+        args,
+        "expected_destination_binding_hash",
+        label="--expected-destination-binding-hash",
+    )
+    destination_args.expected_destination_binding_hash = expected_destination_binding_hash
+    expected_binding_matches = (
+        expected_destination_binding_hash == destination_binding_hash
+    )
+    expected_code_hash = _optional_live_bytes32_arg(
+        args,
+        "expected_verifier_code_hash",
+        label="--expected-verifier-code-hash",
+    )
     if expected_code_hash is not None and expected_code_hash != verifier_code_hash:
         raise ValueError(
             "--expected-verifier-code-hash does not match live TON verifier code hash: "
             f"expected {_hex(expected_code_hash)}, got {live['verifier_code_hash']}"
         )
-    expected_state_hash = getattr(args, "expected_account_state_hash", None)
+    expected_state_hash = _optional_live_bytes32_arg(
+        args,
+        "expected_account_state_hash",
+        label="--expected-account-state-hash",
+    )
     if expected_state_hash is not None and expected_state_hash != account_state_hash:
         raise ValueError(
             "--expected-account-state-hash does not match live TON account state: "

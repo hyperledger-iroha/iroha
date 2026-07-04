@@ -148,15 +148,12 @@ import {
   EthereumMainnetBeaconRestConsensusProvider,
   EthereumMainnetSccp,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
-  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
-  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
-  SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
@@ -3049,11 +3046,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(),
-    "",
+    undefined,
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(null),
-    "",
+    null,
   );
   assert.equal(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
@@ -3625,6 +3622,12 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     false,
   );
+  for (const outputProofCircuitId of [undefined, null, ""]) {
+    assert.equal(
+      canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId, 1),
+      false,
+    );
+  }
   for (const previousHopCount of [
     1.5,
     Number.NaN,
@@ -11737,6 +11740,23 @@ test("package dist entrypoint enforces SCCP route-canary role separation", () =>
       solanaSccpRouteCanaryEvidenceHash(distSolanaRouteCanaryGovernedHashReuse),
     /Solana route canary governed hashes/u,
   );
+  const distSolanaRouteCanaryAliasReplay = {
+    ...distSolanaRouteCanaryEvidence,
+    route_allowlist_hash: distSolanaRouteCanaryEvidence.routeAllowlistHash,
+  };
+  assert.throws(
+    () => solanaSccpRouteCanaryEvidenceHash(distSolanaRouteCanaryAliasReplay),
+    /routeAllowlistHash must not use multiple aliases/u,
+  );
+  const distSolanaProgramdataAliasReplay = {
+    ...distSolanaRouteCanaryEvidence,
+    solana_programdata_executable_base64:
+      distSolanaRouteCanaryEvidence.solanaProgramdataExecutableBase64,
+  };
+  assert.throws(
+    () => solanaSccpRouteCanaryEvidenceHash(distSolanaProgramdataAliasReplay),
+    /solanaProgramdataExecutableBase64 must not use multiple aliases/u,
+  );
 
   const distTonRouteCanaryEvidence = {
     routeAllowlistHash: `0x${"31".repeat(32)}`,
@@ -14011,6 +14031,14 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
     () =>
       sccpSourceAdapterVerifierVkHash({
         sourceDomain: SCCP_DOMAIN_ETH,
+        source_domain: SCCP_DOMAIN_BSC,
+      }),
+    /sourceDomain must not use multiple aliases/u,
+  );
+  assert.throws(
+    () =>
+      sccpSourceAdapterVerifierVkHash({
+        sourceDomain: SCCP_DOMAIN_ETH,
         targetDomain: SCCP_DOMAIN_SOL,
       }),
     /targetDomain must be SORA/,
@@ -14033,6 +14061,14 @@ test("package dist entrypoint exports SCCP source record helpers", () => {
   assert.equal(
     sccpDestinationBindingHash(SCCP_DOMAIN_SOL),
     "0x078578f0aa27daa2972d6c19d1d26dbb6bf6ba1e8df84e283d7ef101fc46abf6",
+  );
+  assert.throws(
+    () =>
+      sccpDestinationBindingHash({
+        targetDomain: SCCP_DOMAIN_SOL,
+        target_domain: SCCP_DOMAIN_TON,
+      }),
+    /targetDomain must not use multiple aliases/u,
   );
   assert.equal(
     sccpSolanaFullLightClientGateHash({
@@ -14194,19 +14230,19 @@ test("package dist entrypoint exports BSC validator-set payload helpers", () => 
     commitMessageHash: bscCommitMessageHash(commitMessage),
     validatorPublicKeys: commitValidatorPublicKeys,
     validatorPowers: [1n, 1n, 1n, 1n],
-    signersBitmap: "0x07",
-    signatures: [
-      "0x1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f00",
-      "0x921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f001",
-      "0xcfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d3619600",
-    ],
+	    signersBitmap: "0x07",
+	    signatures: [
+	      "0x1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f1b",
+	      "0x921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f01c",
+	      "0xcfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d361961b",
+	    ],
     validatorSetHash: commitMessage.validatorSetHash,
   };
   assert.equal(canonicalBscCommitSealBytes(commitSeal).length, 297);
-  assert.equal(
-    bscCommitSealHash(commitSeal),
-    "0xcd9d87b24d8c1cf7615cb4267cde5a3fc24bbb770807134ee75d4ddaba992172",
-  );
+	  assert.equal(
+	    bscCommitSealHash(commitSeal),
+	    "0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb",
+	  );
   assert.equal(typeof bscValidatorSetPayloadFromParliaExtra, "function");
   assert.equal(typeof bscValidatorSetPayloadFromHeaderRlp, "function");
   assert.equal(
@@ -14656,7 +14692,7 @@ test("package dist entrypoint exports TRON solid-block header transcript helpers
     rawData: rawHeader,
     witnessSignature: tronHeaderSignature(0),
     parentRawData: parentRawHeader,
-    parentWitnessSignature: tronHeaderSignature(27),
+    parentWitnessSignature: tronHeaderSignature(1),
     rawDataHash: rawHeaderHash,
     parentRawDataHash: parentRawHeaderHash,
     blockId,
@@ -14671,13 +14707,21 @@ test("package dist entrypoint exports TRON solid-block header transcript helpers
   assert.equal(canonicalTronSolidBlockHeaderProofBytes(proof).length, 650);
   assert.equal(
     tronSolidBlockHeaderProofHash(proof),
-    "0x25416bda5734ecef1ab9920d15f1011e962f6ff90e9c6247ff6b2ce34a5ab49f",
+    "0x362579d1667137b9dac3fc20772de7b0b4adb3888d4508bb5d75e53596d43771",
   );
   assert.throws(
     () =>
       canonicalTronSolidBlockHeaderProofBytes({
         ...proof,
         witnessSignature: new Uint8Array(65).fill(0xaa),
+      }),
+    /TRON header signatures must be canonical low-S/,
+  );
+  assert.throws(
+    () =>
+      canonicalTronSolidBlockHeaderProofBytes({
+        ...proof,
+        parentWitnessSignature: tronHeaderSignature(27),
       }),
     /TRON header signatures must be canonical low-S/,
   );

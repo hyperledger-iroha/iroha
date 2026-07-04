@@ -51,6 +51,8 @@ import {
 } from "../src/sccp.js";
 
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
+const LEGACY_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
+  "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
 const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
@@ -4349,6 +4351,16 @@ test("EthereumMainnetSccp validates native prover cross-SDK parity fixtures", ()
   assert.equal(
     descriptor.schema,
     SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverParityFixture(
+        sampleNativeEvmProverParityFixture(bundle, {
+          schema: LEGACY_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+        }),
+        bundle,
+      ),
+    new RegExp(`schema must be ${SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1}`),
   );
   assert.equal(descriptor.domain, SCCP_DOMAIN_ETH);
   assert.equal(descriptor.chain, "eth");

@@ -40,6 +40,15 @@ struct SccpOnChainLaneMaterialsV1 {
     sccp_route_allowlists: Vec<SccpRouteAllowlist>,
 }
 
+struct TonAllowlistInputs {
+    destination_binding_hash: [u8; 32],
+    source_material_hash: [u8; 32],
+    source_deployment_hash: [u8; 32],
+    account_state_hash: [u8; 32],
+    last_transaction_lt: String,
+    last_transaction_hash: [u8; 32],
+}
+
 fn usage() -> ! {
     eprintln!(
         "usage: cargo run -p iroha_core --example sccp_ton_lane_material -- \\
@@ -133,8 +142,7 @@ fn decode_hash_or_base64(value: &str, key: &str) -> [u8; 32] {
 }
 
 fn normalize_hex_or_base64_bytes(value: &str, key: &str) -> String {
-    if value.starts_with("0x") {
-        let raw = &value[2..];
+    if let Some(raw) = value.strip_prefix("0x") {
         if raw.is_empty()
             || !raw.len().is_multiple_of(2)
             || !raw
@@ -378,9 +386,7 @@ fn allowlist_to_config(allowlist: &SccpRouteAllowlistReadinessV1) -> SccpRouteAl
     }
 }
 
-fn main() {
-    let args = parse_args();
-
+fn maybe_emit_parameter_json_input(args: &BTreeMap<String, String>) -> bool {
     if let Some(path) = args.get("parameter-json-in") {
         let text = fs::read_to_string(path).unwrap_or_else(|error| {
             eprintln!("failed to read --parameter-json-in {path}: {error}");
@@ -397,28 +403,32 @@ fn main() {
                 .expect("SCCP lane-material parameter must serialize");
             println!("{parameter_json}");
         }
-        return;
+        return true;
     }
 
+    false
+}
+
+fn ton_source_material_from_args(args: &BTreeMap<String, String>) -> SccpSourceVerifierMaterialV1 {
     let material = sccp_ton_mainnet_source_verifier_material_with_hashes_and_shard_state_v1(
         decode_hex::<32>(
-            &required(&args, "source-trust-anchor-hash"),
+            &required(args, "source-trust-anchor-hash"),
             "source-trust-anchor-hash",
         ),
         decode_hex::<32>(
-            &required(&args, "consensus-verifier-hash"),
+            &required(args, "consensus-verifier-hash"),
             "consensus-verifier-hash",
         ),
         decode_hex::<32>(
-            &required(&args, "message-inclusion-verifier-hash"),
+            &required(args, "message-inclusion-verifier-hash"),
             "message-inclusion-verifier-hash",
         ),
         decode_hex::<32>(
-            &required(&args, "source-state-verifier-hash"),
+            &required(args, "source-state-verifier-hash"),
             "source-state-verifier-hash",
         ),
         decode_hex::<32>(
-            &required(&args, "finality-policy-hash"),
+            &required(args, "finality-policy-hash"),
             "finality-policy-hash",
         ),
     )
@@ -432,126 +442,153 @@ fn main() {
         eprintln!("TON source verifier material is not production-ready");
         process::exit(1);
     }
+    material
+}
 
+fn ton_source_adapter_deployment_from_args(
+    args: &BTreeMap<String, String>,
+    material: &SccpSourceVerifierMaterialV1,
+) -> SccpSourceAdapterEngineDeploymentV1 {
     let deployment_receipt_hash = decode_hex::<32>(
-        &required(&args, "deployment-receipt-hash"),
+        &required(args, "deployment-receipt-hash"),
         "deployment-receipt-hash",
     );
-    let deployment = build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
-        &material,
+    build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+        material,
         deployment_receipt_hash,
         [0x26; 32],
         [0x27; 32],
         [0x28; 32],
     )
-    .expect("TON source adapter deployment material must be ready");
+    .expect("TON source adapter deployment material must be ready")
+}
 
-    let ton_last_transaction_lt = require_positive_decimal(
-        required(&args, "ton-last-transaction-lt"),
-        "ton-last-transaction-lt",
-    );
-    let ton_last_transaction_hash = decode_hash_or_base64(
-        &required(&args, "ton-last-transaction-hash"),
-        "ton-last-transaction-hash",
-    );
-    let ton_verifier_code_boc = normalize_hex_or_base64_bytes(
-        &required(&args, "ton-verifier-code-boc"),
-        "ton-verifier-code-boc",
-    );
-    let rollout = sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
-        required(&args, "verifier-address"),
-        required(&args, "verifier-code-hash"),
-        h256(&decode_hex::<32>(
-            &required(&args, "ton-account-state-hash"),
-            "ton-account-state-hash",
-        )),
-        ton_last_transaction_lt.clone(),
-        h256(&ton_last_transaction_hash),
-        ton_verifier_code_boc,
+fn ton_destination_rollout_from_args(
+    args: &BTreeMap<String, String>,
+    account_state_hash: &[u8; 32],
+    last_transaction_lt: &str,
+    last_transaction_hash: &[u8; 32],
+) -> SccpDestinationRolloutV1 {
+    sccp_ton_mainnet_destination_rollout_with_live_evidence_v1(
+        required(args, "verifier-address"),
+        required(args, "verifier-code-hash"),
+        h256(account_state_hash),
+        last_transaction_lt.to_owned(),
+        h256(last_transaction_hash),
+        normalize_hex_or_base64_bytes(
+            &required(args, "ton-verifier-code-boc"),
+            "ton-verifier-code-boc",
+        ),
     )
-    .expect("TON destination rollout must be production-ready");
+    .expect("TON destination rollout must be production-ready")
+}
 
-    let destination_binding_hash = decode_hex::<32>(
+fn rollout_destination_binding_hash(rollout: &SccpDestinationRolloutV1) -> [u8; 32] {
+    decode_hex::<32>(
         rollout
             .destination_binding_hash
             .as_deref()
             .expect("destination binding hash"),
         "destination-binding-hash",
-    );
-    let source_material_hash = sccp_source_verifier_material_hash(&material);
-    let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&deployment);
+    )
+}
+
+fn ton_allowlist_from_args(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+    rollout: &SccpDestinationRolloutV1,
+    inputs: TonAllowlistInputs,
+) -> SccpRouteAllowlistReadinessV1 {
     let allowlist = sccp_profiled_route_allowlist_for_lane_evidence_v1(
         SCCP_DOMAIN_TON,
-        &material,
-        &deployment,
-        &rollout,
+        material,
+        deployment,
+        rollout,
     )
     .expect("TON route allowlist lane evidence must be ready");
-    let allowlist = sccp_ton_route_allowlist_with_lane_canary_evidence_v1(
+    sccp_ton_route_allowlist_with_lane_canary_evidence_v1(
         allowlist,
-        &rollout,
-        destination_binding_hash,
-        source_material_hash,
-        source_deployment_hash,
-        decode_hex::<32>(
-            &required(&args, "ton-account-state-hash"),
-            "ton-account-state-hash",
-        ),
-        ton_last_transaction_lt,
-        ton_last_transaction_hash,
+        rollout,
+        inputs.destination_binding_hash,
+        inputs.source_material_hash,
+        inputs.source_deployment_hash,
+        inputs.account_state_hash,
+        inputs.last_transaction_lt,
+        inputs.last_transaction_hash,
     )
-    .expect("TON route canary evidence must bind to lane materials");
+    .expect("TON route canary evidence must bind to lane materials")
+}
 
+fn ensure_ton_lane_readiness(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+    rollout: &SccpDestinationRolloutV1,
+    allowlist: &SccpRouteAllowlistReadinessV1,
+) {
     let readiness = sccp_lane_production_readiness_with_deployment_materials_for_domain(
         SCCP_DOMAIN_TON,
-        &material,
-        &deployment,
-        &rollout,
-        &allowlist,
+        material,
+        deployment,
+        rollout,
+        allowlist,
     )
     .expect("TON lane readiness must be derivable");
     if !readiness.production_ready {
         eprintln!("TON lane is not production-ready: {:?}", readiness.blockers);
         process::exit(1);
     }
+}
 
-    let payload = SccpOnChainLaneMaterialsV1 {
+fn lane_payload(
+    material: &SccpSourceVerifierMaterialV1,
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+    rollout: &SccpDestinationRolloutV1,
+    allowlist: &SccpRouteAllowlistReadinessV1,
+) -> SccpOnChainLaneMaterialsV1 {
+    SccpOnChainLaneMaterialsV1 {
         version: 1,
-        sccp_source_verifier_materials: vec![material_to_config(&material)],
-        sccp_source_adapter_engine_deployments: vec![deployment_to_config(&material, &deployment)],
-        sccp_destination_rollouts: vec![rollout_to_config(&rollout)],
-        sccp_route_allowlists: vec![allowlist_to_config(&allowlist)],
-    };
-
-    if args.contains_key("--summary") {
-        eprintln!("source_material_hash={}", h256(&source_material_hash));
-        eprintln!(
-            "source_adapter_deployment_hash={}",
-            h256(&source_deployment_hash)
-        );
-        eprintln!(
-            "destination_binding_hash={}",
-            rollout
-                .destination_binding_hash
-                .as_deref()
-                .unwrap_or_default()
-        );
-        eprintln!(
-            "route_allowlist_hash={}",
-            allowlist
-                .route_allowlist_hash
-                .as_deref()
-                .unwrap_or_default()
-        );
-        eprintln!(
-            "route_canary_evidence_hash={}",
-            allowlist
-                .route_canary_evidence_hash
-                .as_deref()
-                .unwrap_or_default()
-        );
+        sccp_source_verifier_materials: vec![material_to_config(material)],
+        sccp_source_adapter_engine_deployments: vec![deployment_to_config(material, deployment)],
+        sccp_destination_rollouts: vec![rollout_to_config(rollout)],
+        sccp_route_allowlists: vec![allowlist_to_config(allowlist)],
     }
+}
 
+fn emit_summary(
+    source_material_hash: &[u8; 32],
+    source_deployment_hash: &[u8; 32],
+    rollout: &SccpDestinationRolloutV1,
+    allowlist: &SccpRouteAllowlistReadinessV1,
+) {
+    eprintln!("source_material_hash={}", h256(source_material_hash));
+    eprintln!(
+        "source_adapter_deployment_hash={}",
+        h256(source_deployment_hash)
+    );
+    eprintln!(
+        "destination_binding_hash={}",
+        rollout
+            .destination_binding_hash
+            .as_deref()
+            .unwrap_or_default()
+    );
+    eprintln!(
+        "route_allowlist_hash={}",
+        allowlist
+            .route_allowlist_hash
+            .as_deref()
+            .unwrap_or_default()
+    );
+    eprintln!(
+        "route_canary_evidence_hash={}",
+        allowlist
+            .route_canary_evidence_hash
+            .as_deref()
+            .unwrap_or_default()
+    );
+}
+
+fn emit_lane_payload(args: &BTreeMap<String, String>, payload: SccpOnChainLaneMaterialsV1) {
     if args.contains_key("--instruction-base64") {
         let id = CustomParameterId::new(
             "sccp_lane_materials_v1"
@@ -568,4 +605,57 @@ fn main() {
             .expect("SCCP on-chain lane material payload must serialize");
         println!("{{\"Custom\":{{\"id\":\"sccp_lane_materials_v1\",\"payload\":{payload_json}}}}}");
     }
+}
+
+fn main() {
+    let args = parse_args();
+    if maybe_emit_parameter_json_input(&args) {
+        return;
+    }
+
+    let material = ton_source_material_from_args(&args);
+    let deployment = ton_source_adapter_deployment_from_args(&args, &material);
+    let account_state_hash = decode_hex::<32>(
+        &required(&args, "ton-account-state-hash"),
+        "ton-account-state-hash",
+    );
+    let last_transaction_lt = require_positive_decimal(
+        required(&args, "ton-last-transaction-lt"),
+        "ton-last-transaction-lt",
+    );
+    let last_transaction_hash = decode_hash_or_base64(
+        &required(&args, "ton-last-transaction-hash"),
+        "ton-last-transaction-hash",
+    );
+    let rollout = ton_destination_rollout_from_args(
+        &args,
+        &account_state_hash,
+        &last_transaction_lt,
+        &last_transaction_hash,
+    );
+    let destination_binding_hash = rollout_destination_binding_hash(&rollout);
+    let source_material_hash = sccp_source_verifier_material_hash(&material);
+    let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&deployment);
+    let allowlist_inputs = TonAllowlistInputs {
+        destination_binding_hash,
+        source_material_hash,
+        source_deployment_hash,
+        account_state_hash,
+        last_transaction_lt,
+        last_transaction_hash,
+    };
+    let allowlist = ton_allowlist_from_args(&material, &deployment, &rollout, allowlist_inputs);
+    ensure_ton_lane_readiness(&material, &deployment, &rollout, &allowlist);
+
+    if args.contains_key("--summary") {
+        emit_summary(
+            &source_material_hash,
+            &source_deployment_hash,
+            &rollout,
+            &allowlist,
+        );
+    }
+
+    let payload = lane_payload(&material, &deployment, &rollout, &allowlist);
+    emit_lane_payload(&args, payload);
 }

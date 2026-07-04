@@ -88,14 +88,35 @@ mod checked_consensus_signing_tests {
     use iroha_data_model::{ChainId, block::BlockHeader, peer::PeerId};
 
     use super::{
-        PERMISSIONED_TAG, VoteSignatureError, merge_signature_valid, network_topology::Topology,
-        try_sign_consensus_preimage, vote_signature_check,
+        PERMISSIONED_TAG, VoteSignatureError, consensus::vote_preimage, merge_signature_valid,
+        network_topology::Topology, try_sign_consensus_preimage, vote_signature_check,
     };
 
     fn checked_bls_keypair() -> KeyPair {
         KeyPair::try_from_seed(vec![0x43; 32], Algorithm::BlsNormal)
             .expect("derive consensus BLS fixture key")
     }
+
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x44; 32], Algorithm::Ed25519)
+            .expect("derive consensus Ed25519 fixture key")
+    }
+
+    fn checked_mldsa_keypair() -> KeyPair {
+        KeyPair::try_from_seed(b"sumeragi-main-loop-mldsa".to_vec(), Algorithm::MlDsa)
+            .expect("derive consensus ML-DSA fixture key")
+    }
+
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
 
     #[test]
     fn consensus_preimage_checked_signature_verifies() {
@@ -106,7 +127,8 @@ mod checked_consensus_signing_tests {
         let payload = try_sign_consensus_preimage(keypair.private_key(), preimage)
             .expect("checked consensus signature");
 
-        Signature::from_bytes(&payload)
+        Signature::try_from_bytes(&payload)
+            .expect("checked consensus preimage signature fixture")
             .verify(keypair.public_key(), preimage)
             .expect("signature verifies");
     }
@@ -140,6 +162,103 @@ mod checked_consensus_signing_tests {
     }
 
     #[test]
+    fn vote_signature_check_rejects_malformed_ed25519_signature_r() {
+        let chain: ChainId = "vote-malformed-ed25519-r-helper".parse().expect("chain id");
+        let keypair = checked_ed25519_keypair();
+        let topology = Topology::new(vec![PeerId::new(keypair.public_key().clone())]);
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x45; Hash::LENGTH]));
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([1_u8; Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+        let valid_signature = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("checked Ed25519 vote signature");
+        valid_signature
+            .verify(keypair.public_key(), &preimage)
+            .expect("checked Ed25519 vote signature verifies");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut malformed = valid_signature.payload().to_vec();
+            malformed[..replacement_r.len()].copy_from_slice(&replacement_r);
+            vote.bls_sig = malformed;
+
+            assert_eq!(
+                vote_signature_check(&vote, &topology, &chain, PERMISSIONED_TAG),
+                Err(VoteSignatureError::SignatureInvalid),
+                "{label} Ed25519 vote signature R must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn vote_signature_check_rejects_malformed_mldsa_signature_lengths() {
+        let chain: ChainId = "vote-malformed-mldsa-length-helper"
+            .parse()
+            .expect("chain id");
+        let keypair = checked_mldsa_keypair();
+        let topology = Topology::new(vec![PeerId::new(keypair.public_key().clone())]);
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([1_u8; Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+        let valid_signature = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("checked ML-DSA vote signature")
+            .payload()
+            .to_vec();
+        vote.bls_sig = valid_signature.clone();
+        vote_signature_check(&vote, &topology, &chain, PERMISSIONED_TAG)
+            .expect("valid ML-DSA vote signature verifies");
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x46);
+                payload
+            }),
+        ] {
+            vote.bls_sig = replacement_signature;
+
+            assert_eq!(
+                vote_signature_check(&vote, &topology, &chain, PERMISSIONED_TAG),
+                Err(VoteSignatureError::SignatureInvalid),
+                "{label} ML-DSA vote signature length must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn merge_signature_valid_rejects_all_zero_signature_material() {
         let keypair = checked_bls_keypair();
         let peer = PeerId::new(keypair.public_key().clone());
@@ -152,6 +271,84 @@ mod checked_consensus_signing_tests {
         };
 
         assert!(!merge_signature_valid(&peer, &signature));
+    }
+
+    #[test]
+    fn merge_signature_valid_rejects_malformed_ed25519_signature_r() {
+        let keypair = checked_ed25519_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let message_digest = Hash::prehashed([0x49; Hash::LENGTH]);
+        let valid_signature = Signature::try_new(keypair.private_key(), message_digest.as_ref())
+            .expect("checked Ed25519 merge signature");
+        valid_signature
+            .verify(keypair.public_key(), message_digest.as_ref())
+            .expect("checked Ed25519 merge signature verifies");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut malformed = valid_signature.payload().to_vec();
+            malformed[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let signature = super::MergeCommitteeSignature {
+                epoch_id: 0,
+                view: 0,
+                signer: 0,
+                message_digest,
+                bls_sig: malformed,
+            };
+
+            assert!(
+                !merge_signature_valid(&peer, &signature),
+                "{label} Ed25519 merge signature R must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_signature_valid_rejects_malformed_mldsa_signature_lengths() {
+        let keypair = checked_mldsa_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let message_digest = Hash::prehashed([0x4A; Hash::LENGTH]);
+        let valid_signature = Signature::try_new(keypair.private_key(), message_digest.as_ref())
+            .expect("checked ML-DSA merge signature")
+            .payload()
+            .to_vec();
+        assert!(merge_signature_valid(
+            &peer,
+            &super::MergeCommitteeSignature {
+                epoch_id: 0,
+                view: 0,
+                signer: 0,
+                message_digest,
+                bls_sig: valid_signature.clone(),
+            }
+        ));
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x4A);
+                payload
+            }),
+        ] {
+            let signature = super::MergeCommitteeSignature {
+                epoch_id: 0,
+                view: 0,
+                signer: 0,
+                message_digest,
+                bls_sig: replacement_signature,
+            };
+
+            assert!(
+                !merge_signature_valid(&peer, &signature),
+                "{label} ML-DSA merge signature length must be rejected"
+            );
+        }
     }
 }
 
@@ -3548,18 +3745,34 @@ pub(super) fn vote_signature_check(
     if vote.bls_sig.is_empty() {
         return Err(VoteSignatureError::SignatureInvalid);
     }
-    let bls_signature = Signature::try_from_bytes(&vote.bls_sig)
-        .map_err(|_| VoteSignatureError::SignatureInvalid)?;
-    bls_signature
+    let signature = match peer.public_key().try_algorithm() {
+        Ok(iroha_crypto::Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(&vote.bls_sig)
+        }
+        Ok(iroha_crypto::Algorithm::MlDsa) => iroha_crypto::mldsa65_parse_signature(&vote.bls_sig),
+        Ok(_) => Signature::try_from_bytes(&vote.bls_sig).map_err(iroha_crypto::Error::from),
+        Err(_) => return Err(VoteSignatureError::SignatureInvalid),
+    }
+    .map_err(|_| VoteSignatureError::SignatureInvalid)?;
+    signature
         .verify(peer.public_key(), &preimage)
         .map_err(|_| VoteSignatureError::SignatureInvalid)
 }
 
 fn merge_signature_valid(peer: &PeerId, signature: &MergeCommitteeSignature) -> bool {
-    let Ok(bls_signature) = Signature::try_from_bytes(&signature.bls_sig) else {
+    let Ok(parsed_signature) = (match peer.public_key().try_algorithm() {
+        Ok(iroha_crypto::Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(&signature.bls_sig)
+        }
+        Ok(iroha_crypto::Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(&signature.bls_sig)
+        }
+        Ok(_) => Signature::try_from_bytes(&signature.bls_sig).map_err(iroha_crypto::Error::from),
+        Err(_) => return false,
+    }) else {
         return false;
     };
-    bls_signature
+    parsed_signature
         .verify(peer.public_key(), signature.message_digest.as_ref())
         .is_ok()
 }

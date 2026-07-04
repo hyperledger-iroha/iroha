@@ -418,7 +418,8 @@ mod tests {
             proof_digest: Some(Hash::prehashed([0x55; 32])),
             retention_class: RetentionClass::default(),
             storage_ticket: StorageTicketId::new([0x66; 32]),
-            acknowledgement_sig: Signature::from_bytes(&[0x77; 64]),
+            acknowledgement_sig: Signature::try_from_bytes(&[0x77; 64])
+                .expect("checked data-model DA commitment acknowledgement signature fixture"),
         }
     }
 
@@ -460,7 +461,8 @@ mod tests {
                 record.client_blob_id = BlobDigest::new([0x10 + tag; 32]);
                 record.manifest_hash = ManifestDigest::new([0x20 + tag; 32]);
                 record.storage_ticket = StorageTicketId::new([0x30 + tag; 32]);
-                record.acknowledgement_sig = Signature::from_bytes(&[0x40 + tag; 64]);
+                record.acknowledgement_sig = Signature::try_from_bytes(&[0x40 + tag; 64])
+                    .expect("checked data-model DA commitment acknowledgement signature fixture");
                 record
             })
             .collect();

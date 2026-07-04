@@ -3478,6 +3478,9 @@ private enum ToriiIdentifierReceiptVerifier {
                 String(format: "resolverPublicKey uses unsupported multihash code 0x%X.", functionCode)
             )
         }
+        if algorithm == .ed25519, !Ed25519PublicKeyAdmission.isValidPublicKey(payload) {
+            throw ToriiClientError.invalidPayload("resolverPublicKey is not a valid Ed25519 public key.")
+        }
         return ParsedPublicKey(algorithm: algorithm, publicKey: payload)
     }
 
@@ -3509,6 +3512,12 @@ private enum ToriiIdentifierReceiptVerifier {
         case .ed25519:
             guard #available(macOS 10.15, iOS 13.0, *) else {
                 throw ToriiClientError.invalidPayload("Ed25519 receipt verification requires iOS 13/macOS 10.15.")
+            }
+            guard Ed25519SignatureAdmission.isValidSignature(signature) else {
+                return false
+            }
+            guard Ed25519PublicKeyAdmission.isValidPublicKey(publicKey) else {
+                throw ToriiClientError.invalidPayload("resolverPublicKey is not a valid Ed25519 public key.")
             }
             let ed25519Key: Curve25519.Signing.PublicKey
             do {
@@ -3547,6 +3556,9 @@ private enum ToriiIdentifierReceiptVerifier {
             }
             throw ToriiClientError.invalidPayload("SM2 receipt verification is unavailable.")
         case .mlDsa:
+            guard let suite = inferMlDsaSuite(publicKey: publicKey, signature: signature) else {
+                return false
+            }
             if let verified = NoritoNativeBridge.shared.verifyDetached(
                 algorithm: .mlDsa,
                 publicKey: publicKey,
@@ -3555,13 +3567,12 @@ private enum ToriiIdentifierReceiptVerifier {
             ) {
                 return verified
             }
-            guard let suite = inferMlDsaSuite(publicKey: publicKey, signature: signature),
-                  let verified = NoritoNativeBridge.shared.mldsaVerify(
-                    suiteId: suite.rawValue,
-                    publicKey: publicKey,
-                    message: message,
-                    signature: signature
-                  ) else {
+            guard let verified = NoritoNativeBridge.shared.mldsaVerify(
+                suiteId: suite.rawValue,
+                publicKey: publicKey,
+                message: message,
+                signature: signature
+            ) else {
                 throw ToriiClientError.invalidPayload("ML-DSA receipt verification is unavailable.")
             }
             return verified
@@ -3582,9 +3593,7 @@ private enum ToriiIdentifierReceiptVerifier {
 
     private static func inferMlDsaSuite(publicKey: Data, signature: Data) -> MlDsaSuite? {
         for suite in MlDsaSuite.allCases {
-            guard let params = NoritoNativeBridge.shared.mldsaParameters(suiteId: suite.rawValue) else {
-                continue
-            }
+            let params = suite.parameters()
             if publicKey.count == params.publicKeyLength, signature.count == params.signatureLength {
                 return suite
             }

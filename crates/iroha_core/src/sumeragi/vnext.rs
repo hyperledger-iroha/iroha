@@ -1772,7 +1772,8 @@ mod tests {
         let preimage = vote
             .signing_preimage(&chain, crate::sumeragi::consensus::PERMISSIONED_TAG)
             .expect("rechain vote preimage");
-        let signature = Signature::from_bytes(&vote.signature);
+        let signature = Signature::try_from_bytes(&vote.signature)
+            .expect("checked rechain vote signature fixture");
         signature
             .verify(keypairs[0].public_key(), &preimage)
             .expect("checked rechain vote signature verifies");
@@ -1811,7 +1812,8 @@ mod tests {
         let preimage = vote
             .signing_preimage(&chain, crate::sumeragi::consensus::PERMISSIONED_TAG)
             .expect("view-change vote preimage");
-        let signature = Signature::from_bytes(&vote.signature);
+        let signature = Signature::try_from_bytes(&vote.signature)
+            .expect("checked view-change vote signature fixture");
         signature
             .verify(keypair.public_key(), &preimage)
             .expect("checked view-change vote signature verifies");

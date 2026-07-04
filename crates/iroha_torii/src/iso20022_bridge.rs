@@ -12266,6 +12266,23 @@ mod tests {
         embed_ocsp_response: bool,
         signing_time: &str,
     ) -> GeneratedOcspSignedPayload {
+        for _ in 0..128 {
+            if let Some(payload) = try_signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+                response_status,
+                embed_ocsp_response,
+                signing_time,
+            ) {
+                return payload;
+            }
+        }
+        panic!("generated OCSP X.509 fixture must satisfy low-S certificate signature policy")
+    }
+
+    fn try_signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+        response_status: TestOcspResponseStatus,
+        embed_ocsp_response: bool,
+        signing_time: &str,
+    ) -> Option<GeneratedOcspSignedPayload> {
         let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
         let mut issuer_params =
             CertificateParams::new(vec!["ocsp-issuer.example".to_owned()]).expect("issuer params");
@@ -12299,6 +12316,13 @@ mod tests {
         let leaf_cert = leaf_params
             .signed_by(&leaf_key, &issuer)
             .expect("leaf certificate");
+        if !generated_x509_certificate_signatures_are_accepted(
+            leaf_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            None,
+        ) {
+            return None;
+        }
 
         let response_der = test_ocsp_response_der(
             leaf_cert.der().as_ref(),
@@ -12322,16 +12346,33 @@ mod tests {
             signing_time,
         );
 
-        GeneratedOcspSignedPayload {
+        Some(GeneratedOcspSignedPayload {
             payload: signed_payload.payload,
             trust_anchor_pin: signed_payload.issuer_sha256,
             response_der_base64,
-        }
+        })
     }
 
     fn signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(
         include_responder_certificate: bool,
     ) -> GeneratedOcspSignedPayload {
+        for _ in 0..128 {
+            if let Some(payload) =
+                try_signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(
+                    include_responder_certificate,
+                )
+            {
+                return payload;
+            }
+        }
+        panic!(
+            "generated delegated OCSP X.509 fixture must satisfy low-S certificate signature policy"
+        )
+    }
+
+    fn try_signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(
+        include_responder_certificate: bool,
+    ) -> Option<GeneratedOcspSignedPayload> {
         let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
         let mut issuer_params =
             CertificateParams::new(vec!["delegated-ocsp-issuer.example".to_owned()])
@@ -12388,6 +12429,13 @@ mod tests {
         let responder_cert = responder_params
             .signed_by(&responder_key, &issuer)
             .expect("responder certificate");
+        if !generated_x509_certificate_signatures_are_accepted(
+            leaf_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            Some(responder_cert.der().as_ref()),
+        ) {
+            return None;
+        }
 
         let response_der = test_ocsp_response_der(
             leaf_cert.der().as_ref(),
@@ -12406,11 +12454,36 @@ mod tests {
             XML_SIGNATURE_TEST_SIGNING_TIME,
         );
 
-        GeneratedOcspSignedPayload {
+        Some(GeneratedOcspSignedPayload {
             payload: signed_payload.payload,
             trust_anchor_pin: signed_payload.issuer_sha256,
             response_der_base64,
+        })
+    }
+
+    fn generated_x509_certificate_signatures_are_accepted(
+        leaf_der: &[u8],
+        issuer_der: &[u8],
+        responder_der: Option<&[u8]>,
+    ) -> bool {
+        let Ok(leaf) = parse_x509_certificate_der(leaf_der) else {
+            return false;
+        };
+        let Ok(issuer) = parse_x509_certificate_der(issuer_der) else {
+            return false;
+        };
+        if verify_x509_certificate_signature(&leaf, &issuer).is_err()
+            || verify_x509_certificate_signature(&issuer, &issuer).is_err()
+        {
+            return false;
         }
+        if let Some(responder_der) = responder_der {
+            let Ok(responder) = parse_x509_certificate_der(responder_der) else {
+                return false;
+            };
+            return verify_x509_certificate_signature(&responder, &issuer).is_ok();
+        }
+        true
     }
 
     fn test_ocsp_response_der(

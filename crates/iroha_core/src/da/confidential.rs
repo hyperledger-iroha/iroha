@@ -144,7 +144,8 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new(ticket),
-            Signature::from_bytes(&[0x22; 64]),
+            Signature::try_from_bytes(&[0x22; 64])
+                .expect("checked core confidential DA acknowledgement signature fixture"),
         )
     }
 

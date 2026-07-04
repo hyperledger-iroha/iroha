@@ -2608,7 +2608,7 @@ mod measured_bytes_impls {
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
             ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
-            RuntimeUpgradeProposal,
+            RuntimeUpgradeProposal, SccpRouteManifestProposal,
         },
         ipfs::IpfsPath,
         isi::governance::CouncilDerivationKind,
@@ -3640,6 +3640,14 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for SccpRouteManifestProposal {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<SccpRouteManifestProposal>();
+            total = total.saturating_add(norito::codec::Encode::encode(&self.manifest).len());
+            total
+        }
+    }
+
     impl MeasuredBytes for ProposalKind {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProposalKind>();
@@ -3648,6 +3656,9 @@ mod measured_bytes_impls {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
                 ProposalKind::RuntimeUpgrade(payload) => {
+                    total = total.saturating_add(payload.measured_bytes_extra());
+                }
+                ProposalKind::SccpRouteManifest(payload) => {
                     total = total.saturating_add(payload.measured_bytes_extra());
                 }
             }

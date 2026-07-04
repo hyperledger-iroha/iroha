@@ -110,6 +110,48 @@ test("published SCCP package excludes the removed legacy lane", () => {
   }
 });
 
+test("published SCCP package excludes legacy native EVM parity schema exports", () => {
+  const declarations = fs.readFileSync(
+    new URL("../index.d.ts", import.meta.url),
+    "utf8",
+  );
+  const legacySchemaExportPattern =
+    /SCCP_(?:ETH|BSC_(?:TESTNET|MAINNET))_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1/u;
+  const exportNames = [
+    ...Object.keys(rootExports),
+    ...Object.keys(sccpExports),
+  ].sort();
+
+  assert.equal(
+    exportNames.some((name) => legacySchemaExportPattern.test(name)),
+    false,
+  );
+  assert.doesNotMatch(declarations, legacySchemaExportPattern);
+  assert.doesNotMatch(
+    declarations,
+    /cross-sdk-fixture-parity-v1/u,
+  );
+});
+
+test("published SCCP package excludes placeholder source-chain proof builders", () => {
+  const declarations = fs.readFileSync(
+    new URL("../index.d.ts", import.meta.url),
+    "utf8",
+  );
+  const exportNames = [
+    ...Object.keys(rootExports),
+    ...Object.keys(sccpExports),
+  ].sort();
+  const placeholderBuilderPattern =
+    /(?:buildBscPlaceholderSourceChainProofEnvelope|buildTonTestnetPlaceholderSourceChainProofEnvelope|BscPlaceholderSourceChainProofEnvelope|TonTestnetPlaceholderSourceChainProofEnvelope)/u;
+
+  assert.equal(
+    exportNames.some((name) => placeholderBuilderPattern.test(name)),
+    false,
+  );
+  assert.doesNotMatch(declarations, placeholderBuilderPattern);
+});
+
 test("published TypeScript declarations constrain TAIRA XOR TRON settlement defaults", () => {
   const declarations = fs.readFileSync(
     new URL("../index.d.ts", import.meta.url),

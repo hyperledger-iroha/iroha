@@ -114,6 +114,20 @@ class HostileImportedScalar:
         raise AssertionError("secret-token imported TON metadata was stringified")
 
 
+class HostileExpectedPinScalar:
+    def __str__(self):
+        raise AssertionError("secret-token TON expected pin was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON expected pin was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON expected pin was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TON expected pin was compared")
+
+
 def fake_ton_opener(
     module,
     *,
@@ -1330,6 +1344,81 @@ def test_live_ton_evidence_rejects_non_string_imported_metadata_without_stringif
             assert exc.__suppress_context__ is True
         else:
             raise AssertionError(f"non-string TON live {field} metadata was accepted")
+
+
+def test_live_ton_summary_rejects_hostile_expected_pins_without_hooks():
+    module = load_live_module()
+    fake = fake_ton_opener(module)
+    live = module.collect_live_evidence(
+        "https://toncenter.example",
+        verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+        opener=fake.opener,
+        timeout=3.0,
+    )
+
+    cases = (
+        (
+            "expected_destination_binding_hash",
+            HostileExpectedPinScalar(),
+            "--expected-destination-binding-hash must be bytes",
+        ),
+        (
+            "expected_destination_binding_hash",
+            b"\x00" * 32,
+            "--expected-destination-binding-hash must not be zero",
+        ),
+        (
+            "expected_destination_binding_hash",
+            b"\x11" * 31,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+        (
+            "expected_verifier_code_hash",
+            HostileExpectedPinScalar(),
+            "--expected-verifier-code-hash must be bytes",
+        ),
+        (
+            "expected_verifier_code_hash",
+            b"\x00" * 32,
+            "--expected-verifier-code-hash must not be zero",
+        ),
+        (
+            "expected_verifier_code_hash",
+            b"\x11" * 31,
+            "--expected-verifier-code-hash must be 32 bytes",
+        ),
+        (
+            "expected_account_state_hash",
+            HostileExpectedPinScalar(),
+            "--expected-account-state-hash must be bytes",
+        ),
+        (
+            "expected_account_state_hash",
+            b"\x00" * 32,
+            "--expected-account-state-hash must not be zero",
+        ),
+        (
+            "expected_account_state_hash",
+            b"\x11" * 31,
+            "--expected-account-state-hash must be 32 bytes",
+        ),
+    )
+    for field, forged_value, expected_message in cases:
+        args = live_args(
+            module,
+            code_hash=fake.code_hash,
+            account_state_hash=fake.account_state_hash,
+        )
+        setattr(args, field, forged_value)
+        try:
+            module._summary(args, live)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(f"hostile TON expected pin {field} was accepted")
 
 
 def test_live_ton_evidence_rejects_code_hash_drift():

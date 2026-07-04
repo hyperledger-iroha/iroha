@@ -10,7 +10,7 @@ use base64::{
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
 };
 use iroha_config::parameters::actual;
-use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
@@ -2518,6 +2518,24 @@ fn decode_signature_base64(
     checked_ed25519_signature_from_bytes(&bytes).map_err(|_| validation(code, message))
 }
 
+fn decode_signature_base64_for_public_key(
+    raw: &str,
+    public_key: &PublicKey,
+    code: &'static str,
+    message: &'static str,
+) -> Result<Signature, Error> {
+    let bytes = decode_canonical_base64(raw, "signature_base64", code)?;
+    match public_key.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            checked_ed25519_signature_from_bytes(&bytes).map_err(|_| validation(code, message))
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(&bytes).map_err(|_| validation(code, message))
+        }
+        _ => Signature::try_from_bytes(&bytes).map_err(|_| validation(code, message)),
+    }
+}
+
 fn checked_ed25519_signature_from_bytes(signature: &[u8]) -> Result<Signature, ()> {
     iroha_crypto::ed25519_parse_signature(signature).map_err(|_| ())
 }
@@ -3117,7 +3135,8 @@ fn verify_json_signature(
 ) -> Result<(), Error> {
     let bytes =
         json::to_vec(payload).map_err(|source| Error::SerializationFailure { context, source })?;
-    let signature = decode_signature_base64(signature_base64, code, message)?;
+    let signature =
+        decode_signature_base64_for_public_key(signature_base64, public_key, code, message)?;
     signature
         .verify(public_key, &bytes)
         .map_err(|_| validation(code, message))
@@ -3197,9 +3216,13 @@ mod tests {
         key
     }
 
-    fn checked_seed_keypair(seed: u8) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+    fn checked_seed_keypair_with_algorithm(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("generate checked offline v2 issuer fixture keypair")
+    }
+
+    fn checked_seed_keypair(seed: u8) -> KeyPair {
+        checked_seed_keypair_with_algorithm(seed, Algorithm::Ed25519)
     }
 
     fn checked_signature(key_pair: &KeyPair, message: &[u8]) -> Signature {
@@ -3708,6 +3731,100 @@ mod tests {
                 )),
                 "OFFLINE_V2_SIGNATURE_INVALID",
                 "{label} Ed25519 signature R must fail at base64 admission"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_json_signature_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let key_pair = checked_seed_keypair(0x43);
+        let payload = json_object(vec![(
+            "kind",
+            string_value("offline-v2-json-ed25519-r-admission"),
+        )]);
+        let payload_bytes = json::to_vec(&payload).expect("offline v2 JSON signing payload");
+        let valid_signature = checked_signature(&key_pair, &payload_bytes);
+        verify_json_signature(
+            key_pair.public_key(),
+            &payload,
+            &BASE64_STANDARD.encode(valid_signature.payload()),
+            "offline_v2_json_signature_test",
+            "OFFLINE_V2_SIGNATURE_INVALID",
+            "Offline Notes V2 signature_base64 is invalid.",
+        )
+        .expect("valid offline v2 JSON signature verifies before mutation");
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed = valid_signature.payload().to_vec();
+            malformed[..replacement_r.len()].copy_from_slice(&replacement_r);
+
+            assert_eq!(
+                validation_code(verify_json_signature(
+                    key_pair.public_key(),
+                    &payload,
+                    &BASE64_STANDARD.encode(malformed),
+                    "offline_v2_json_signature_test",
+                    "OFFLINE_V2_SIGNATURE_INVALID",
+                    "Offline Notes V2 signature_base64 is invalid.",
+                )),
+                "OFFLINE_V2_SIGNATURE_INVALID",
+                "{label} Ed25519 signature R must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_json_signature_rejects_malformed_mldsa_signature_lengths() {
+        let key_pair = checked_seed_keypair_with_algorithm(0x45, Algorithm::MlDsa);
+        let payload = json_object(vec![(
+            "kind",
+            string_value("offline-v2-json-mldsa-admission"),
+        )]);
+        let payload_bytes = json::to_vec(&payload).expect("offline v2 JSON signing payload");
+        let valid_signature = checked_signature(&key_pair, &payload_bytes);
+        verify_json_signature(
+            key_pair.public_key(),
+            &payload,
+            &BASE64_STANDARD.encode(valid_signature.payload()),
+            "offline_v2_json_signature_test",
+            "OFFLINE_V2_SIGNATURE_INVALID",
+            "Offline Notes V2 signature_base64 is invalid.",
+        )
+        .expect("valid offline v2 JSON ML-DSA signature verifies before mutation");
+
+        let mut extended = valid_signature.payload().to_vec();
+        extended.push(0);
+        for (label, malformed) in [
+            (
+                "truncated",
+                valid_signature.payload()[..valid_signature.payload().len() - 1].to_vec(),
+            ),
+            ("extended", extended),
+        ] {
+            assert_eq!(
+                validation_code(verify_json_signature(
+                    key_pair.public_key(),
+                    &payload,
+                    &BASE64_STANDARD.encode(malformed),
+                    "offline_v2_json_signature_test",
+                    "OFFLINE_V2_SIGNATURE_INVALID",
+                    "Offline Notes V2 signature_base64 is invalid.",
+                )),
+                "OFFLINE_V2_SIGNATURE_INVALID",
+                "{label} ML-DSA signature length must fail closed"
             );
         }
     }

@@ -6935,119 +6935,151 @@ mod tests {
         assert!(!contents.contains("Localnet app authority / escrow account"));
     }
 
+    fn da_rbc_localnet_options(build_line: BuildLine, out_dir: PathBuf) -> LocalnetOptions {
+        let consensus_mode = if build_line.is_iroha3() {
+            SumeragiConsensusMode::Npos
+        } else {
+            SumeragiConsensusMode::Permissioned
+        };
+        LocalnetOptions {
+            build_line,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(2).expect("non-zero"),
+            seed: Some(format!("da-rbc-{build_line:?}")),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 19090,
+            base_p2p_port: 23347,
+            out_dir,
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        }
+    }
+
+    fn generated_peer_da_settings(out_dir: &Path) -> (Option<bool>, Option<u8>, Option<u16>) {
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(out_dir.join("peer0.toml")).expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+        let sumeragi = peer_cfg
+            .get("sumeragi")
+            .and_then(toml::Value::as_table)
+            .expect("sumeragi table");
+        let da_enabled = sumeragi
+            .get("da")
+            .and_then(toml::Value::as_table)
+            .and_then(|da| da.get("enabled"))
+            .and_then(toml::Value::as_bool);
+        let redundant = sumeragi
+            .get("collectors")
+            .and_then(toml::Value::as_table)
+            .and_then(|collectors| collectors.get("redundant_send_r"))
+            .and_then(toml::Value::as_integer)
+            .and_then(|value| u8::try_from(value).ok());
+        let collectors_k = sumeragi
+            .get("collectors")
+            .and_then(toml::Value::as_table)
+            .and_then(|collectors| collectors.get("k"))
+            .and_then(toml::Value::as_integer)
+            .and_then(|value| u16::try_from(value).ok());
+        (da_enabled, redundant, collectors_k)
+    }
+
+    fn expected_da_rbc_settings(peers: NonZeroU16, da_enabled: bool) -> (Option<u8>, Option<u16>) {
+        if da_enabled {
+            let collectors_k = u16::try_from(commit_quorum_from_len(usize::from(peers.get())))
+                .expect("localnet quorum fits u16");
+            (Some(default_redundant_send_r(peers)), Some(collectors_k))
+        } else {
+            (None, None)
+        }
+    }
+
+    fn assert_generated_peer_da_rbc_settings(
+        actual: (Option<bool>, Option<u8>, Option<u16>),
+        expected_enabled: bool,
+        expected_redundant: Option<u8>,
+        expected_collectors_k: Option<u16>,
+    ) {
+        assert_eq!(
+            actual.0,
+            Some(expected_enabled),
+            "peer config should reflect build line"
+        );
+        assert_eq!(
+            actual.1, expected_redundant,
+            "localnet redundant send should track DA policy"
+        );
+        assert_eq!(
+            actual.2, expected_collectors_k,
+            "DA-enabled NPoS localnet collectors should track commit quorum"
+        );
+    }
+
+    fn assert_generated_genesis_da_rbc_settings(
+        out_dir: &Path,
+        expected_enabled: bool,
+        expected_redundant: Option<u8>,
+        expected_collectors_k: Option<u16>,
+    ) {
+        let manifest = genesis_json_from_path(&out_dir.join("genesis.json"));
+        let params = genesis_parameters(&manifest);
+        assert_eq!(
+            params.sumeragi().da_enabled(),
+            expected_enabled,
+            "genesis da_enabled should track build line"
+        );
+        let expected_redundant = expected_redundant.unwrap_or_else(|| {
+            Parameters::default()
+                .sumeragi()
+                .collectors_redundant_send_r()
+        });
+        assert_eq!(
+            params.sumeragi().collectors_redundant_send_r(),
+            expected_redundant,
+            "genesis redundant send should track DA policy"
+        );
+        if let Some(expected_collectors_k) = expected_collectors_k {
+            assert_eq!(
+                params.sumeragi().collectors_k(),
+                expected_collectors_k,
+                "genesis collectors_k should track DA collector policy"
+            );
+        }
+    }
+
+    fn assert_build_line_da_rbc_artifacts(build_line: BuildLine, expected_enabled: bool) {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = da_rbc_localnet_options(build_line, temp.path().to_path_buf());
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let (expected_redundant, expected_collectors_k) =
+            expected_da_rbc_settings(opts.peers, expected_enabled);
+        assert_generated_peer_da_rbc_settings(
+            generated_peer_da_settings(temp.path()),
+            expected_enabled,
+            expected_redundant,
+            expected_collectors_k,
+        );
+        assert_generated_genesis_da_rbc_settings(
+            temp.path(),
+            expected_enabled,
+            expected_redundant,
+            expected_collectors_k,
+        );
+    }
+
     #[test]
     fn build_line_controls_da_rbc_in_generated_artifacts() {
-        fn assert_for_line(build_line: BuildLine, expected: bool) {
-            let temp = tempfile::tempdir().expect("tmp dir");
-            let consensus_mode = if build_line.is_iroha3() {
-                SumeragiConsensusMode::Npos
-            } else {
-                SumeragiConsensusMode::Permissioned
-            };
-            let opts = LocalnetOptions {
-                build_line,
-                sora_profile: None,
-                perf_profile: None,
-                peers: NonZeroU16::new(2).expect("non-zero"),
-                seed: Some(format!("da-rbc-{build_line:?}")),
-                bind_host: DEFAULT_BIND_HOST.to_owned(),
-                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
-                base_api_port: 19090,
-                base_p2p_port: 23347,
-                out_dir: temp.path().to_path_buf(),
-                extra_accounts: 0,
-                assets: Vec::new(),
-                block_time_ms: None,
-                commit_time_ms: None,
-                redundant_send_r: None,
-                consensus_mode,
-                next_consensus_mode: None,
-                mode_activation_height: None,
-            };
-
-            generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-                .expect("generate localnet files");
-
-            let peer_cfg: toml::Value = toml::from_str(
-                &fs::read_to_string(temp.path().join("peer0.toml"))
-                    .expect("read generated peer config"),
-            )
-            .expect("parse peer config");
-            let sumeragi = peer_cfg
-                .get("sumeragi")
-                .and_then(toml::Value::as_table)
-                .expect("sumeragi table");
-            assert_eq!(
-                sumeragi
-                    .get("da")
-                    .and_then(toml::Value::as_table)
-                    .and_then(|da| da.get("enabled"))
-                    .and_then(toml::Value::as_bool),
-                Some(expected),
-                "peer config should reflect build line"
-            );
-            let redundant = sumeragi
-                .get("collectors")
-                .and_then(toml::Value::as_table)
-                .and_then(|collectors| collectors.get("redundant_send_r"))
-                .and_then(toml::Value::as_integer)
-                .and_then(|value| u8::try_from(value).ok());
-            let collectors_k = sumeragi
-                .get("collectors")
-                .and_then(toml::Value::as_table)
-                .and_then(|collectors| collectors.get("k"))
-                .and_then(toml::Value::as_integer)
-                .and_then(|value| u16::try_from(value).ok());
-            let expected_redundant = if expected {
-                Some(default_redundant_send_r(opts.peers))
-            } else {
-                None
-            };
-            let expected_collectors_k = if expected {
-                Some(
-                    u16::try_from(commit_quorum_from_len(usize::from(opts.peers.get())))
-                        .expect("localnet quorum fits u16"),
-                )
-            } else {
-                None
-            };
-            assert_eq!(
-                redundant, expected_redundant,
-                "localnet redundant send should track DA policy"
-            );
-            assert_eq!(
-                collectors_k, expected_collectors_k,
-                "DA-enabled NPoS localnet collectors should track commit quorum"
-            );
-
-            let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
-            let params = genesis_parameters(&manifest);
-            assert_eq!(
-                params.sumeragi().da_enabled(),
-                expected,
-                "genesis da_enabled should track build line"
-            );
-            let expected_redundant = expected_redundant.unwrap_or_else(|| {
-                Parameters::default()
-                    .sumeragi()
-                    .collectors_redundant_send_r()
-            });
-            assert_eq!(
-                params.sumeragi().collectors_redundant_send_r(),
-                expected_redundant,
-                "genesis redundant send should track DA policy"
-            );
-            if let Some(expected_collectors_k) = expected_collectors_k {
-                assert_eq!(
-                    params.sumeragi().collectors_k(),
-                    expected_collectors_k,
-                    "genesis collectors_k should track DA collector policy"
-                );
-            }
-        }
-
-        assert_for_line(BuildLine::Iroha2, false);
-        assert_for_line(BuildLine::Iroha3, true);
+        assert_build_line_da_rbc_artifacts(BuildLine::Iroha2, false);
+        assert_build_line_da_rbc_artifacts(BuildLine::Iroha3, true);
     }
 
     #[test]

@@ -34,6 +34,20 @@ def load_evidence_module():
     return module
 
 
+class HostileExpectedRecordHash:
+    def __str__(self):
+        raise AssertionError("secret-token TON expected record hash was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON expected record hash was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON expected record hash was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TON expected record hash was compared")
+
+
 def ton_args(module):
     return SimpleNamespace(
         source_domain=4,
@@ -815,6 +829,86 @@ def test_ton_cli_json_summary_and_toml_output(capsys):
         assert exc.code == 2
     else:
         raise AssertionError("TON source TOML rendered without full light-client evidence")
+
+
+def test_ton_source_state_rejects_hostile_expected_record_hashes_without_hooks():
+    module = load_evidence_module()
+    cases = (
+        (
+            "expected_source_verifier_material_hash",
+            HostileExpectedRecordHash,
+            "--expected-source-verifier-material-hash must be bytes",
+            module._require_expected_record_hashes,
+        ),
+        (
+            "expected_source_verifier_material_hash",
+            lambda: b"\x00" * 32,
+            "--expected-source-verifier-material-hash must not be zero",
+            module._require_expected_record_hashes,
+        ),
+        (
+            "expected_source_verifier_material_hash",
+            lambda: b"\x11" * 31,
+            "--expected-source-verifier-material-hash must be 32 bytes",
+            module._require_expected_record_hashes,
+        ),
+        (
+            "expected_source_adapter_engine_deployment_hash",
+            HostileExpectedRecordHash,
+            "--expected-source-adapter-engine-deployment-hash must be bytes",
+            module._require_expected_record_hashes,
+        ),
+        (
+            "expected_source_adapter_engine_deployment_hash",
+            lambda: b"\x00" * 32,
+            "--expected-source-adapter-engine-deployment-hash must not be zero",
+            module._require_expected_record_hashes,
+        ),
+        (
+            "expected_source_adapter_engine_deployment_hash",
+            lambda: b"\x11" * 31,
+            "--expected-source-adapter-engine-deployment-hash must be 32 bytes",
+            module._require_expected_record_hashes,
+        ),
+        (
+            "expected_full_light_client_gate_hash",
+            HostileExpectedRecordHash,
+            "--expected-full-light-client-gate-hash must be bytes",
+            module._require_full_light_client_evidence_consistency,
+        ),
+        (
+            "expected_full_light_client_gate_hash",
+            lambda: b"\x00" * 32,
+            "--expected-full-light-client-gate-hash must not be zero",
+            module._require_full_light_client_evidence_consistency,
+        ),
+        (
+            "expected_full_light_client_gate_hash",
+            lambda: b"\x11" * 31,
+            "--expected-full-light-client-gate-hash must be 32 bytes",
+            module._require_full_light_client_evidence_consistency,
+        ),
+    )
+
+    for field, make_value, expected_error, direct_action in cases:
+        for action_name, action in (
+            ("_json_summary", module._json_summary),
+            (direct_action.__name__, direct_action),
+        ):
+            args = ton_args(module)
+            setattr(args, field, make_value())
+
+            try:
+                action(args)
+            except ValueError as exc:
+                message = str(exc)
+                assert expected_error in message
+                assert "secret-token" not in message
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    f"TON source {action_name} accepted malformed {field}"
+                )
 
 
 def test_ton_cli_full_light_client_audit_hash(capsys):
