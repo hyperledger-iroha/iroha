@@ -45,8 +45,11 @@ aliasing, and source-envelope header drift before FastPQ batch construction.
 Kotlin/JVM and Java Android EVM/TRON proof-request helpers now mirror the
 SORA-origin Nexus finality binding by decoding `NexusBridgeFinalityProofV1` from
 bundle finality bytes and rejecting opaque or public-input-drifted finality
-proofs before local proving. Source-message and ETH SSZ Merkle inclusion proofs
-now also reject non-canonical high-bit leaf indexes that would otherwise
+proofs before local proving. TON proof requests now also reject diagnostic
+zero/zero source-adapter deployment bindings, wrong-source deployment bindings,
+and self-consistent proof-result requests whose cached deployment-binding hash
+does not match the binding object before local proving. Source-message and ETH
+SSZ Merkle inclusion proofs now also reject non-canonical high-bit leaf indexes that would otherwise
 reconstruct the same root after unused index bits are shifted away, and ETH
 source-adapter preflight now rejects stale or non-fixed-depth execution payload
 branches before checked transcript encoding. BSC source-adapter preflight now
@@ -172,7 +175,11 @@ and config hash exactly before constructing governed source hashes. TRON
 full-TOML metadata annotations now use exact parsed comment values for source
 bridge, destination verifier, and route-canary copied metadata before rendering,
 and route-canary collection helpers parse copied destination verifier metadata
-exactly before event matching or used-message-proof checks. TRON optional live
+exactly before event matching or used-message-proof checks. TRON route-canary
+evidence-hash reconstruction now also parses accepted transaction,
+trigger-call, and verifier address metadata through exact summary parsers
+instead of `str(...)`, with hostile non-string regressions pinned for
+collection and replay verification. TRON optional live
 hex namespace helpers now also reject non-string route, witness-seal, and
 receipt-proof argument values before parser dispatch, keeping fixture/runtime
 callers inside the same no-stringification boundary as copied metadata. Inline
@@ -187,10 +194,20 @@ transition entries. EVM destination-live runtime namespace inputs now also
 validate optional bytes32 hashes and route-canary integer pins before RPC, so
 direct callers cannot smuggle non-bytes or hostile objects into expected
 network, destination-binding, route-allowlist, source-record, or route-canary
-evidence arguments. EVM source-live runtime namespace inputs now mirror that
-pre-RPC bytes32 validation for expected source bridge code hashes, deployment
-transaction pins, source component hashes, adapter verifier keys, deployment
-receipt hashes, and expected source-record hashes. EVM receipt-proof direct
+evidence arguments. EVM route-canary accepted-event and submit-call transcript
+hash reconstruction now also parses event and call-summary hashes through exact
+string metadata gates, with hostile non-string regressions pinned before
+route-canary evidence hashes can be derived; receipt block number, log index,
+target domain, and proof version/domain scalars use exact integer gates with
+hostile coercion regressions. Collected EVM route-canary transaction summaries
+are now revalidated through the same exact hex and integer helpers before
+offline/full-TOML arguments are generated, so imported or post-collector hostile
+metadata cannot run string or integer coercion hooks. EVM source-live runtime
+namespace inputs now mirror that pre-RPC bytes32 validation for expected source
+bridge code hashes, deployment transaction pins, source component hashes,
+adapter verifier keys, deployment receipt hashes, and expected source-record
+hashes.
+EVM receipt-proof direct
 collector inputs now validate transaction hashes, source bridge addresses,
 receipt-only mode, and explicit expected chain ids before RPC, so malformed
 namespace values cannot trigger provider calls or be stringified into receipt
@@ -425,7 +442,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   rejection for externally supplied Ed25519 signatures, Swift identifier-receipt
   Ed25519 verification rejects short, all-zero, small-order-`R`, and
   noncanonical-`R` signature material plus all-zero, small-order, and
-  noncanonical resolver public keys before CryptoKit verification, and SoraFS
+  noncanonical resolver public keys before CryptoKit verification, the shared
+  Swift offline Ed25519 helper rejects the same weak or noncanonical public-key
+  encodings before CryptoKit verification, and SoraFS
   orchestrator Taikai cache admission envelopes and gossip messages now pin
   small-order and noncanonical `R` rejection before custom protocol signature
   verification,
@@ -10827,7 +10846,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   the explicit zero/zero diagnostic fixture path hashable. The Rust, JS,
   Python, Swift, Kotlin/JVM, and Java Android proof-request SDK tests must all
   cover deployment-only, receipt-only, and equal deployment/receipt replay
-  cases, with the proof-request bundle inventory pinning those markers.
+  cases, with the proof-request bundle inventory pinning the SDK markers as
+  well as the Rust request-admission markers.
   Python, JavaScript, Swift, Kotlin/JVM, and Java Android proof-request,
   message-bundle, and source-proof hex inputs also reject `0X` prefixes and
   uppercase byte aliases for public-input hashes, statement hashes, optional
@@ -10930,11 +10950,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   SCCP logs. The release-readiness and bundle-verifier inventory tests now
   remove that Rust marker directly and fail the gate, so duplicate-log coverage
   cannot be satisfied only by the Python receipt-context script tests.
-- SCCP Solana UI prover requests must stay deployment-bound: JavaScript,
+- SCCP TON and Solana UI prover requests must stay deployment-bound: JavaScript,
   Python, Swift, Kotlin, and Java Android request builders reject zero/zero
   source-adapter deployment bindings, while the low-level binding normalizers
   keep zero/zero available only for diagnostic fixtures and canonical hashing
-  checks.
+  checks, and strict release inventory now pins those SDK guards.
 - SCCP JavaScript EVM-family and TRON Groth16 proof request builders must keep
   the canonical bundle gate aligned with Python and Rust: source and dist
   normalizers reject arbitrary bundle bytes, public-input drift, missing
@@ -19100,6 +19120,9 @@ digest-bound pending-XSD source probe summaries for reviewed
   Formal workflow header key inventories must stay exact, so `run-name`,
   duplicate `env`, or other unreviewed top-level controls cannot change proof
   metadata or inherited workflow behavior.
+  Formal workflow full top-level key inventories must stay exact, so
+  post-`jobs` `permissions`, `defaults`, duplicate `jobs`, or other late
+  top-level controls cannot bypass the header-only proof workflow guards.
   Formal workflow trigger event inventories must stay exact, so extra `push`,
   `pull_request_target`, or inline trigger forms cannot run checked proof jobs
   outside the reviewed PR and scheduled/manual surfaces.
@@ -19119,6 +19142,22 @@ digest-bound pending-XSD source probe summaries for reviewed
   workflow environment.
   Formal workflow top-level env bindings must stay exact, so approved inherited
   PR CI variables cannot change values while keeping the same keys.
+  Formal workflow step-name inventories must stay exact, so GitHub proof
+  transcript labels cannot drift while the underlying checked actions and proof
+  commands remain pinned.
+  Formal workflow job key inventories must stay exact, so checked proof jobs
+  cannot gain job-level metadata, outputs, concurrency, or duplicate `steps`
+  blocks while runner, timeout, and command guards still pass.
+  Formal workflow step key inventories must stay exact, so checked proof steps
+  cannot gain `id` metadata or other step-level fields while the reviewed
+  names, actions, inputs, and commands remain unchanged.
+  Formal workflow checked job declarations must stay singular, so PR and
+  nightly formal evidence cannot disappear or be shadowed by duplicate
+  `sumeragi_formal` or `frontier-nightly` declarations while unrelated PR jobs
+  remain allowed.
+  Formal nightly workflow job inventory must stay exact, so scheduled/manual
+  formal evidence cannot gain unrelated reporting, publishing, or status jobs
+  beside `frontier-nightly`.
   Workflow Apalache install and toolchain version pins must come from active
   commands, so comments and step names cannot satisfy the pinned model-checker
   install contract.

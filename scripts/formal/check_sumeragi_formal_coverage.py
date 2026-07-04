@@ -1376,6 +1376,13 @@ FORMAL_WORKFLOW_JOB_NAMES = (
     (NIGHTLY_WORKFLOW, ("frontier-nightly",)),
 )
 FORMAL_WORKFLOW_ALLOWED_JOB_NAMES = dict(FORMAL_WORKFLOW_JOB_NAMES)
+FORMAL_WORKFLOW_CHECKED_JOB_OCCURRENCE_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", ("sumeragi_formal",)),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("frontier-nightly",)),
+)
+FORMAL_WORKFLOW_JOB_INVENTORY_CONTRACTS = (
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("frontier-nightly",)),
+)
 FORMAL_WORKFLOW_NAME_CONTRACTS = (
     (PR_WORKFLOW, "PR formal workflow", "Pull Request CI"),
     (NIGHTLY_WORKFLOW, "nightly formal workflow", "Nightly Sumeragi Formal"),
@@ -1383,6 +1390,10 @@ FORMAL_WORKFLOW_NAME_CONTRACTS = (
 FORMAL_WORKFLOW_HEADER_KEY_CONTRACTS = (
     (PR_WORKFLOW, "PR formal workflow", ("name", "on", "concurrency", "env")),
     (NIGHTLY_WORKFLOW, "nightly formal workflow", ("name", "on", "concurrency")),
+)
+FORMAL_WORKFLOW_TOP_LEVEL_KEY_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", ("name", "on", "concurrency", "env", "jobs")),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("name", "on", "concurrency", "jobs")),
 )
 FORMAL_WORKFLOW_PROOF_COMMAND_FRAGMENTS = (
     FORMAL_APALACHE_VERSION_COMMAND,
@@ -1696,12 +1707,18 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Formal workflow triggers must keep the checked PR and scheduled/manual surfaces",
     "Formal workflow names must stay exact",
     "Formal workflow header key inventories must stay exact",
+    "Formal workflow full top-level key inventories must stay exact",
     "Formal workflow trigger event inventories must stay exact",
     "Formal workflow path filters must keep the reviewed ignored-path set",
     "Formal workflow concurrency must keep reviewed cancellation behavior",
     "Formal workflow headers must not set defaults or token permissions",
     "Formal workflow top-level env keys must stay reviewed",
     "Formal workflow top-level env bindings must stay exact",
+    "Formal workflow step-name inventories must stay exact",
+    "Formal workflow job key inventories must stay exact",
+    "Formal workflow step key inventories must stay exact",
+    "Formal workflow checked job declarations must stay singular",
+    "Formal nightly workflow job inventory must stay exact",
     "Workflow Apalache install and toolchain version pins must come from active commands",
     "Formal workflows must verify the pinned Apalache binary before running proof jobs",
     "Formal baseline script must verify the pinned Apalache binary after coverage and before proof jobs",
@@ -2186,9 +2203,82 @@ FORMAL_WORKFLOW_ACTION_CONTRACTS = (
         ),
     ),
 )
+FORMAL_WORKFLOW_UNNAMED_STEP = "<unnamed step>"
+FORMAL_WORKFLOW_STEP_NAME_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        (
+            FORMAL_WORKFLOW_UNNAMED_STEP,
+            FORMAL_WORKFLOW_UNNAMED_STEP,
+            "Install pinned Apalache",
+            "Apalache version",
+            "Sumeragi formal model checks (fast + deep)",
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        (
+            FORMAL_WORKFLOW_UNNAMED_STEP,
+            FORMAL_WORKFLOW_UNNAMED_STEP,
+            "Install pinned Apalache",
+            "Apalache version",
+            "Sumeragi formal CI baseline",
+            "Sumeragi frontier nightly formal check",
+            "Formal docs metadata report",
+            "Upload formal docs metadata report",
+        ),
+    ),
+)
+FORMAL_WORKFLOW_STEP_KEY_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        (
+            ("uses",),
+            ("uses", "with"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "run"),
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        (
+            ("uses",),
+            ("uses", "with"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "run"),
+            ("name", "if", "uses", "with"),
+        ),
+    ),
+)
 FORMAL_WORKFLOW_SETUP_ACTIONS = (
     "actions/checkout@v4",
     "actions/setup-java@v4",
+)
+FORMAL_WORKFLOW_JOB_KEY_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        ("runs-on", "timeout-minutes", "steps"),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        ("runs-on", "timeout-minutes", "steps"),
+    ),
 )
 FORMAL_WORKFLOW_REQUIRED_RUNNER = "ubuntu-latest"
 FORMAL_WORKFLOW_TIMEOUT_CONTRACTS = (
@@ -21916,6 +22006,35 @@ def workflow_job_lines(
     return lines
 
 
+def workflow_top_level_job_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow job keys from the jobs block."""
+
+    jobs: list[tuple[int, str]] = []
+    in_jobs = False
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_jobs = top_level_key == "jobs"
+            continue
+        if not in_jobs:
+            continue
+        job_key = workflow_mapping_key(line, 2)
+        if job_key is not None:
+            jobs.append((line_number, job_key))
+    return jobs
+
+
+def workflow_job_key_lines(path: Path, job_name: str) -> list[tuple[int, str]]:
+    """Return top-level keys from a named workflow job."""
+
+    keys: list[tuple[int, str]] = []
+    for line_number, line in workflow_job_lines(path, (job_name,)):
+        key = workflow_mapping_key(line, 4)
+        if key is not None:
+            keys.append((line_number, key))
+    return keys
+
+
 def workflow_header_lines(path: Path) -> list[tuple[int, str]]:
     """Return raw workflow lines before the top-level jobs block."""
 
@@ -21955,6 +22074,17 @@ def workflow_header_top_level_key_lines(path: Path) -> list[tuple[int, str]]:
 
     keys: list[tuple[int, str]] = []
     for line_number, line in workflow_header_lines(path):
+        key = workflow_mapping_key(line, 0)
+        if key is not None:
+            keys.append((line_number, key))
+    return keys
+
+
+def workflow_top_level_key_lines(path: Path) -> list[tuple[int, str]]:
+    """Return all top-level workflow mapping keys in file order."""
+
+    keys: list[tuple[int, str]] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
         key = workflow_mapping_key(line, 0)
         if key is not None:
             keys.append((line_number, key))
@@ -22322,6 +22452,43 @@ def workflow_step_run_commands(
     return commands
 
 
+def workflow_step_names(step_lines: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """Return every explicit workflow step name, or an unnamed sentinel."""
+
+    names: list[tuple[int, str]] = []
+    for line_number, line in step_lines:
+        if not (line.startswith("      -") or re.match(r"^        \S", line)):
+            continue
+        name_value = workflow_field_value(
+            workflow_step_field_text(line.strip()),
+            "name",
+        )
+        if name_value is not None:
+            names.append((line_number, yaml_scalar_text(name_value)))
+    if names:
+        return names
+    return [(step_lines[0][0], FORMAL_WORKFLOW_UNNAMED_STEP)]
+
+
+def workflow_step_top_level_key_lines(
+    step_lines: list[tuple[int, str]],
+) -> list[tuple[int, str]]:
+    """Return top-level keys from a workflow step."""
+
+    keys: list[tuple[int, str]] = []
+    for line_number, line in step_lines:
+        if line.startswith("      -"):
+            field_text = workflow_step_field_text(line.strip())
+        elif re.match(r"^        \S", line):
+            field_text = line.strip()
+        else:
+            continue
+        key_match = re.match(r"^([A-Za-z][A-Za-z0-9_-]*)\s*:", field_text)
+        if key_match is not None:
+            keys.append((line_number, key_match.group(1)))
+    return keys
+
+
 def workflow_step_with_inputs(
     step_lines: list[tuple[int, str]]
 ) -> list[tuple[int, str]]:
@@ -22579,6 +22746,70 @@ def formal_workflow_run_inventory_errors(
     return errors
 
 
+def formal_workflow_job_inventory_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_JOB_INVENTORY_CONTRACTS,
+) -> list[str]:
+    """Return errors when dedicated formal workflow job inventories drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_jobs in contracts:
+        job_lines = workflow_top_level_job_lines(path)
+        actual_jobs = tuple(job for _, job in job_lines)
+        if actual_jobs == expected_jobs:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {job}" for line_number, job in job_lines]
+            )
+            if job_lines
+            else " no workflow jobs"
+        )
+        expected_summary = "\n" + format_items(list(expected_jobs))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact workflow job "
+            f"inventory:{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_checked_job_occurrence_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_CHECKED_JOB_OCCURRENCE_CONTRACTS,
+) -> list[str]:
+    """Return errors when checked formal workflow jobs are missing or duplicated."""
+
+    errors: list[str] = []
+    for path, owner, expected_jobs in contracts:
+        job_lines = workflow_top_level_job_lines(path)
+        for expected_job in expected_jobs:
+            matching_lines = [
+                (line_number, job)
+                for line_number, job in job_lines
+                if job == expected_job
+            ]
+            if len(matching_lines) == 1:
+                continue
+            actual_summary = (
+                "\n"
+                + format_items(
+                    [f"{line_number}: {job}" for line_number, job in matching_lines]
+                )
+                if matching_lines
+                else " no declarations"
+            )
+            errors.append(
+                f"{owner} {display_path(path)} must declare checked job "
+                f"{expected_job} exactly once; found:{actual_summary}"
+            )
+    return errors
+
+
 def formal_workflow_name_errors(
     contracts: tuple[
         tuple[Path, str, str],
@@ -22633,6 +22864,36 @@ def formal_workflow_header_key_errors(
         expected_summary = "\n" + format_items(list(expected_keys))
         errors.append(
             f"{owner} {display_path(path)} must keep exact top-level header keys:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_top_level_key_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_TOP_LEVEL_KEY_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow full-file top-level keys drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_keys in contracts:
+        key_lines = workflow_top_level_key_lines(path)
+        actual_keys = tuple(key for _, key in key_lines)
+        if actual_keys == expected_keys:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {key}" for line_number, key in key_lines]
+            )
+            if key_lines
+            else " no top-level keys"
+        )
+        expected_summary = "\n" + format_items(list(expected_keys))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact full top-level keys:"
             f"{expected_summary}; found:{actual_summary}"
         )
     return errors
@@ -22921,6 +23182,87 @@ def formal_workflow_action_inventory_errors(
     return errors
 
 
+def formal_workflow_step_name_inventory_errors(
+    contracts: tuple[
+        tuple[Path, tuple[str, ...], str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_STEP_NAME_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow step names drift."""
+
+    errors: list[str] = []
+    for path, job_names, owner, expected_names in contracts:
+        name_lines = [
+            (line_number, name)
+            for step_lines in workflow_job_step_lines(path, job_names)
+            for line_number, name in workflow_step_names(step_lines)
+        ]
+        actual_names = tuple(name for _, name in name_lines)
+        if actual_names == expected_names:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {name}" for line_number, name in name_lines]
+            )
+            if name_lines
+            else " no workflow steps"
+        )
+        expected_summary = "\n" + format_items(list(expected_names))
+        errors.append(
+            f"{owner} {display_path(path)} must use exact step-name inventory:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def workflow_step_key_summary(keys: tuple[str, ...]) -> str:
+    """Return a readable key sequence for one workflow step."""
+
+    return " -> ".join(keys) if keys else "<no step keys>"
+
+
+def formal_workflow_step_key_inventory_errors(
+    contracts: tuple[
+        tuple[Path, tuple[str, ...], str, tuple[tuple[str, ...], ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_STEP_KEY_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow step key inventories drift."""
+
+    errors: list[str] = []
+    for path, job_names, owner, expected_steps in contracts:
+        step_key_lines = [
+            (
+                step_lines[0][0],
+                tuple(key for _, key in workflow_step_top_level_key_lines(step_lines)),
+            )
+            for step_lines in workflow_job_step_lines(path, job_names)
+        ]
+        actual_steps = tuple(keys for _, keys in step_key_lines)
+        if actual_steps == expected_steps:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [
+                    f"{line_number}: {workflow_step_key_summary(keys)}"
+                    for line_number, keys in step_key_lines
+                ]
+            )
+            if step_key_lines
+            else " no workflow steps"
+        )
+        expected_summary = "\n" + format_items(
+            [workflow_step_key_summary(keys) for keys in expected_steps]
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must use exact step-key inventory:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
 def formal_workflow_action_input_errors(
     workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
 ) -> list[str]:
@@ -22988,6 +23330,38 @@ def formal_workflow_setup_action_control_errors(
                     f"action {action_text!r} at line {action_line} must not set "
                     f"{control_field}: {line.strip()}"
                 )
+    return errors
+
+
+def formal_workflow_job_key_inventory_errors(
+    contracts: tuple[
+        tuple[Path, tuple[str, ...], str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_JOB_KEY_CONTRACTS,
+) -> list[str]:
+    """Return errors when checked formal workflow job keys drift."""
+
+    errors: list[str] = []
+    for path, job_names, owner, expected_keys in contracts:
+        for job_name in job_names:
+            key_lines = workflow_job_key_lines(path, job_name)
+            actual_keys = tuple(key for _, key in key_lines)
+            if actual_keys == expected_keys:
+                continue
+            actual_summary = (
+                "\n"
+                + format_items(
+                    [f"{line_number}: {key}" for line_number, key in key_lines]
+                )
+                if key_lines
+                else " no checked job keys"
+            )
+            expected_summary = "\n" + format_items(list(expected_keys))
+            errors.append(
+                f"{owner} {display_path(path)} checked job {job_name} must "
+                f"keep exact job key inventory:{expected_summary}; "
+                f"found:{actual_summary}"
+            )
     return errors
 
 
@@ -25749,8 +26123,15 @@ def main() -> int:
     formal_workflow_run_inventory_mismatches = (
         formal_workflow_run_inventory_errors()
     )
+    formal_workflow_job_inventory_mismatches = formal_workflow_job_inventory_errors()
+    formal_workflow_checked_job_occurrence_mismatches = (
+        formal_workflow_checked_job_occurrence_errors()
+    )
     formal_workflow_name_mismatches = formal_workflow_name_errors()
     formal_workflow_header_key_mismatches = formal_workflow_header_key_errors()
+    formal_workflow_top_level_key_mismatches = (
+        formal_workflow_top_level_key_errors()
+    )
     formal_workflow_trigger_mismatches = formal_workflow_trigger_errors()
     formal_workflow_on_event_mismatches = formal_workflow_on_event_errors()
     formal_workflow_paths_ignore_mismatches = formal_workflow_paths_ignore_errors()
@@ -25766,9 +26147,18 @@ def main() -> int:
     formal_workflow_action_inventory_mismatches = (
         formal_workflow_action_inventory_errors()
     )
+    formal_workflow_step_name_inventory_mismatches = (
+        formal_workflow_step_name_inventory_errors()
+    )
+    formal_workflow_step_key_inventory_mismatches = (
+        formal_workflow_step_key_inventory_errors()
+    )
     formal_workflow_action_input_mismatches = formal_workflow_action_input_errors()
     formal_workflow_setup_action_control_mismatches = (
         formal_workflow_setup_action_control_errors()
+    )
+    formal_workflow_job_key_inventory_mismatches = (
+        formal_workflow_job_key_inventory_errors()
     )
     formal_workflow_runner_label_mismatches = formal_workflow_runner_label_errors()
     formal_workflow_timeout_mismatches = formal_workflow_timeout_errors()
@@ -26364,6 +26754,16 @@ def main() -> int:
             "Sumeragi formal workflow run command inventory drifted:\n"
             + format_items(formal_workflow_run_inventory_mismatches)
         )
+    if formal_workflow_job_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow job inventory drifted:\n"
+            + format_items(formal_workflow_job_inventory_mismatches)
+        )
+    if formal_workflow_checked_job_occurrence_mismatches:
+        errors.append(
+            "Sumeragi formal workflow checked job declarations drifted:\n"
+            + format_items(formal_workflow_checked_job_occurrence_mismatches)
+        )
     if formal_workflow_name_mismatches:
         errors.append(
             "Sumeragi formal workflow names drifted:\n"
@@ -26373,6 +26773,11 @@ def main() -> int:
         errors.append(
             "Sumeragi formal workflow header key inventory drifted:\n"
             + format_items(formal_workflow_header_key_mismatches)
+        )
+    if formal_workflow_top_level_key_mismatches:
+        errors.append(
+            "Sumeragi formal workflow full top-level key inventory drifted:\n"
+            + format_items(formal_workflow_top_level_key_mismatches)
         )
     if formal_workflow_trigger_mismatches:
         errors.append(
@@ -26419,6 +26824,16 @@ def main() -> int:
             "Sumeragi formal workflow action inventory drifted:\n"
             + format_items(formal_workflow_action_inventory_mismatches)
         )
+    if formal_workflow_step_name_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow step-name inventory drifted:\n"
+            + format_items(formal_workflow_step_name_inventory_mismatches)
+        )
+    if formal_workflow_step_key_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow step-key inventory drifted:\n"
+            + format_items(formal_workflow_step_key_inventory_mismatches)
+        )
     if formal_workflow_action_input_mismatches:
         errors.append(
             "Sumeragi formal workflow action inputs changed proof environment:\n"
@@ -26428,6 +26843,11 @@ def main() -> int:
         errors.append(
             "Sumeragi formal workflow setup actions can be skipped or masked:\n"
             + format_items(formal_workflow_setup_action_control_mismatches)
+        )
+    if formal_workflow_job_key_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow job key inventory drifted:\n"
+            + format_items(formal_workflow_job_key_inventory_mismatches)
         )
     if formal_workflow_runner_label_mismatches:
         errors.append(

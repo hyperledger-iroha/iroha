@@ -106,9 +106,12 @@ drift before FastPQ batch construction. Kotlin/JVM and Java Android EVM/TRON
 proof-request helpers now mirror the SORA-origin Nexus finality binding by
 decoding `NexusBridgeFinalityProofV1` from bundle finality bytes and rejecting
 opaque or public-input-drifted finality proofs before local proving.
-Source-message and ETH SSZ Merkle inclusion proofs now reject non-canonical
-high-bit leaf indexes that would otherwise reconstruct the same root after
-unused index bits are shifted away, and ETH source-adapter preflight now rejects stale or
+TON proof requests now also reject diagnostic zero/zero source-adapter
+deployment bindings, wrong-source deployment bindings, and self-consistent
+proof-result requests whose cached deployment-binding hash does not match the
+binding object before local proving. Source-message and ETH SSZ Merkle inclusion
+proofs now reject non-canonical high-bit leaf indexes that would otherwise
+reconstruct the same root after unused index bits are shifted away, and ETH source-adapter preflight now rejects stale or
 non-fixed-depth execution payload branches before checked transcript encoding.
 BSC source-adapter preflight now rejects high-S or otherwise non-canonical
 validator-set seal signatures for both active and transition seals before
@@ -248,7 +251,11 @@ and config hash exactly before constructing governed source hashes. TRON
 full-TOML metadata annotations now use exact parsed comment values for source
 bridge, destination verifier, and route-canary copied metadata before rendering,
 and route-canary collection helpers parse copied destination verifier metadata
-exactly before event matching or used-message-proof checks. TRON optional live
+exactly before event matching or used-message-proof checks. TRON route-canary
+evidence-hash reconstruction now also parses accepted transaction,
+trigger-call, and verifier address metadata through exact summary parsers
+instead of `str(...)`, with hostile non-string regressions pinned for
+collection and replay verification. TRON optional live
 hex argument helpers now also reject non-string namespace values before
 delegating to bytes32 or blob parsers, so fixture or runtime callers cannot
 stringify hostile objects into route, witness-seal, or receipt-proof arguments.
@@ -268,11 +275,20 @@ pinning that no operator scalar text is stringified. EVM destination-live
 runtime namespace inputs now also validate optional bytes32 hashes and
 route-canary integer pins before RPC, so direct callers cannot smuggle
 non-bytes or hostile objects into expected-network, destination-binding,
-route-allowlist, source-record, or route-canary evidence arguments.
-EVM source-live runtime namespace inputs now apply the same pre-RPC bytes32
-validation to expected source bridge code hashes, deployment transaction pins,
-source component hashes, adapter verifier keys, deployment receipt hashes, and
-expected source-record hashes before live source bridge evidence collection.
+route-allowlist, source-record, or route-canary evidence arguments. EVM
+route-canary accepted-event and submit-call transcript hash reconstruction now
+also parses event and call-summary hashes through exact string metadata gates,
+with hostile non-string regressions pinned before route-canary evidence hashes
+can be derived; receipt block number, log index, target domain, and proof
+version/domain scalars use exact integer gates with hostile coercion
+regressions. Collected EVM route-canary transaction summaries are now
+revalidated through the same exact hex and integer helpers before
+offline/full-TOML arguments are generated, so imported or post-collector hostile
+metadata cannot run string or integer coercion hooks. EVM source-live runtime
+namespace inputs now apply the same pre-RPC bytes32 validation to expected
+source bridge code hashes, deployment transaction pins, source component hashes,
+adapter verifier keys, deployment receipt hashes,
+and expected source-record hashes before live source bridge evidence collection.
 EVM receipt-proof direct collector inputs now validate transaction hashes,
 source bridge addresses, receipt-only mode, and explicit expected chain ids
 before RPC, so malformed namespace values cannot trigger provider calls or be
@@ -1528,7 +1544,8 @@ binding hashes now pin unpaired deployment/receipt rejection and
 deployment-hash-as-receipt replay rejection while retaining the explicit
 zero/zero diagnostic fixture path; the JS, Python, Swift, Kotlin/JVM, and Java
 Android proof-request SDK tests now mirror the Rust receipt-only negative so SDK
-parity cannot silently cover only one unpaired direction.
+parity cannot silently cover only one unpaired direction, and the strict
+proof-request bundle/source-proof inventory now pins those SDK parity markers.
 Deployment-derived Rust bindings now require the full standalone deployment
 descriptor shape first, so malformed TON full-light-client audit descriptors,
 receipt/VK replay, or adapter verifier-key drift cannot mint proof-request
