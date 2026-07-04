@@ -8237,8 +8237,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `probes[].delivery_id` inventory, require reviewed
   `ai-prescreen-notification-delivery-*` labels without non-production markers,
   require unique dedup keys bound to each reviewed delivery ID, and require
-  shipped `commit`/`reveal` actions plus non-empty case, round, and juror
-  identifiers. Transparency publication artifacts bind `probe_count`,
+  shipped `submit_commit`/`submit_reveal` actions plus non-empty case, round,
+  and juror identifiers. Transparency publication artifacts bind `probe_count`,
   `passed_probe_count`, and `source_entry_probe_count` to the unique canonical
   `probes[].source_kind` inventory, so malformed or duplicate delivery rows or
   duplicate/unknown source-entry probe rows cannot inflate readiness.

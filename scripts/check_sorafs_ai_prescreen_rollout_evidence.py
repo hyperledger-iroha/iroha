@@ -109,7 +109,7 @@ NOTIFICATION_DELIVERY_LABEL_ERROR = (
     "`ai-prescreen-notification-delivery-name`"
 )
 NOTIFICATION_DEDUP_PREFIX = "sorafs-moderation-juror:"
-ALLOWED_NOTIFICATION_ACTIONS = ("commit", "reveal")
+ALLOWED_NOTIFICATION_ACTIONS = ("submit_commit", "submit_reveal")
 GOVERNANCE_EDGE_LABEL_PATTERN = re.compile(
     r"^ai-prescreen-governance-edge-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )

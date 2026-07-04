@@ -19195,10 +19195,11 @@ mod tests {
                 SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
                 SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
                 SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
-                SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot,
-                SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
-                SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
-                SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropStatus,
+                SumeragiPendingRbcStatus, SumeragiProposalGateStatus, SumeragiQcEntry,
+                SumeragiQcSnapshot, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
+                SumeragiRbcStoreStatus, SumeragiStatusWire, SumeragiV1StatusWire,
+                SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+                SumeragiVoteValidationDropStatus,
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
@@ -19560,6 +19561,7 @@ mod tests {
                 drop_unsolicited_share_blocks_total: 4,
             },
             pacemaker_backpressure_deferrals_total: 6,
+            proposal_gate: SumeragiProposalGateStatus::default(),
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -23135,6 +23137,7 @@ mod tests {
             peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
             block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
             pacemaker_backpressure_deferrals_total: 0,
+            proposal_gate: SumeragiProposalGateStatus::default(),
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -23574,6 +23577,7 @@ mod tests {
                 ..Default::default()
             },
             pacemaker_backpressure_deferrals_total: 6,
+            proposal_gate: SumeragiProposalGateStatus::default(),
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
