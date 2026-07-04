@@ -33,18 +33,32 @@ import sys
 from pathlib import Path
 
 output_path = None
+gas_asset_id = None
+skip_faucet = False
 args = sys.argv[1:]
 for index, value in enumerate(args):
     if value == "--output-config" and index + 1 < len(args):
         output_path = args[index + 1]
-        break
+    elif value == "--gas-asset-id" and index + 1 < len(args):
+        gas_asset_id = args[index + 1]
+    elif value == "--skip-faucet":
+        skip_faucet = True
 
 if output_path is None:
     raise SystemExit("missing --output-config")
 
 state_dir = os.environ.get("MOCK_STATE_DIR")
 if state_dir:
-    Path(state_dir, "bootstrap_seen").write_text("1\n", encoding="utf-8")
+    state = Path(state_dir)
+    state.joinpath("bootstrap_seen").write_text("1\n", encoding="utf-8")
+    if gas_asset_id is not None:
+        state.joinpath("bootstrap_gas_asset_seen").write_text(
+            gas_asset_id + "\n", encoding="utf-8"
+        )
+    if skip_faucet:
+        state.joinpath("bootstrap_skip_faucet_seen").write_text(
+            "1\n", encoding="utf-8"
+        )
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
@@ -178,6 +192,8 @@ case "${method} ${url}" in
       body='{"commit_qc":{"height":707,"validator_set_len":3},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":707}}'
     elif [[ "$scenario" == "sumeragi_canonical_behind" ]]; then
       body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":706}}'
+    elif [[ "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
+      body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":708,"phase":"prepare","view":42,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":708,"view":42},"worker_loop":{"stage":"idle"},"view_change_causes":{"last_cause":"missing_qc"},"tx_queue":{"depth":1,"capacity":20000,"saturated_by_age":true,"oldest_queued_age_ms":30000},"pending_rbc":{"sessions":0}}'
     else
       body='{"commit_qc":{"height":707,"validator_set_len":4},"highest_qc":{"height":707},"locked_qc":{"height":707},"canonical":{"height":707}}'
     fi
@@ -455,6 +471,8 @@ run_implicit_bootstrap_success_case() {
 
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test -f "${root}/state/bootstrap_seen"
+  grep -q '6TEAJqbb8oEPmLncoNiMRbLEK6tw' "${root}/state/bootstrap_gas_asset_seen"
+  test -f "${root}/state/bootstrap_skip_faucet_seen"
   test -f "${root}/state/submit_seen"
   test -f "${root}/state/gas_asset_seen"
   test -f "$config_path"
@@ -724,6 +742,9 @@ run_expected_preflight_failure_case \
 run_expected_preflight_failure_case \
   sumeragi_canonical_behind \
   'sumeragi/status canonical height 706 is behind commit QC height 707'
+run_expected_preflight_failure_case \
+  sumeragi_idle_high_view_missing_qc \
+  'sumeragi/status reports a finality fault'
 run_expected_numeric_argument_failure_case \
   'DECLARED_CAPACITY_GIB must be a positive integer' \
   --declared-capacity-gib 0
@@ -739,6 +760,9 @@ run_expected_numeric_failure_case \
 run_expected_numeric_failure_case \
   'CAPACITY_STATE_RECHECK_DELAY_SECONDS must be a non-negative integer' \
   env CAPACITY_STATE_RECHECK_ATTEMPTS=2 CAPACITY_STATE_RECHECK_DELAY_SECONDS=-1
+run_expected_numeric_failure_case \
+  'ROLLOUT_CANARY_SKIP_FAUCET must be auto, 1, 0, true, false, yes, or no' \
+  env ROLLOUT_CANARY_SKIP_FAUCET=maybe CAPACITY_STATE_RECHECK_ATTEMPTS=2 CAPACITY_STATE_RECHECK_DELAY_SECONDS=0
 run_expected_numeric_argument_failure_case \
   'SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS must be a positive integer' \
   --curl-connect-timeout-seconds 0

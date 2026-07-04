@@ -158,6 +158,8 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/stat
     body='{"commit_qc_height":9532,"highest_qc_height":6544,"locked_qc_height":9532,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":null},"worker_loop":{"stage":"idle"}}'
   elif [[ "$scenario" == "sumeragi_locked_qc_behind_commit" ]]; then
     body='{"commit_qc_height":9532,"highest_qc_height":9532,"locked_qc_height":6544,"commit_qc_validator_set_len":4,"view_change_causes":{"last_cause":null},"worker_loop":{"stage":"idle"}}'
+  elif [[ "$scenario" == "sumeragi_idle_high_view_missing_qc" ]]; then
+    body='{"commit_qc_height":707,"highest_qc_height":707,"locked_qc_height":707,"commit_qc_validator_set_len":4,"canonical":{"height":708,"phase":"prepare","view":42,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":708,"view":42},"pending_rbc":{"sessions":0},"view_change_causes":{"last_cause":"missing_qc"},"tx_queue":{"depth":1,"capacity":20000,"saturated_by_age":true,"oldest_queued_age_ms":30000},"worker_loop":{"stage":"idle"}}'
   else
     body='{"commit_qc_height":707,"highest_qc_height":708,"locked_qc_height":708,"commit_qc_validator_set_len":4,"canonical":{"height":707,"pending_finality":null,"rbc_status":"disabled"},"membership":{"height":707},"pending_rbc":{"sessions":0,"entries":[]},"view_change_causes":{"last_cause":"missing_qc"},"worker_loop":{"stage":"idle"}}'
   fi
@@ -313,6 +315,7 @@ run_case status_build_sha_too_short '/status build git SHA 490dac is not a 7 to 
 run_case status_build_sha_mismatch '/status build git SHA 94dcbf7c28 does not match expected 490dacc' '' '490dacc'
 run_case sumeragi_highest_qc_behind_commit '/v1/sumeragi/status highest QC height 6544 is behind commit QC height 9532'
 run_case sumeragi_locked_qc_behind_commit '/v1/sumeragi/status locked QC height 6544 is behind commit QC height 9532'
+run_case sumeragi_idle_high_view_missing_qc '/v1/sumeragi/status reports a finality fault'
 run_case post_canary_sumeragi_missing_validator_set '/v1/sumeragi/status still did not publish a healthy commit QC snapshot after the signed write canary' 'reported an empty commit validator set'
 
 root="$(mktemp -d)"

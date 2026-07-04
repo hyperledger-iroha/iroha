@@ -105,10 +105,14 @@ config rather than wrapper-local defaults:
   dispatch table.
 - `check_sorafs_rollout_mock_test.sh`: local mock regression suite for the
   SoraFS rollout smoke, covering read-only mode, implicit bootstrap, explicit
-  signer-config preservation, faucet retry, stale-validator dispatch errors,
-  capacity-state visibility failures, `/status` and Sumeragi commit-QC health
-  failures, and bounded HTTP timeout controls without mutating public Taira
-  state.
+  signer-config preservation, sponsored bootstrap, faucet retry,
+  stale-validator dispatch errors, capacity-state visibility failures,
+  `/status` and Sumeragi commit-QC/finality health failures, and bounded HTTP
+  timeout controls without mutating public Taira state.
+- `clear_volatile_consensus_state.sh`: operator recovery helper for the
+  one-block-ahead Sumeragi stall class; it quarantines only volatile
+  `queue_plan_journal*` and `rbc_sessions` state, archives peer logs, and can
+  restart a digest-pinned runtime after an explicit `--apply`.
 - `verify_soraswap_rollout.sh`: post-upgrade wrapper that first runs the local
   `iroha_core` SoraSwap deploy-route router regression and three-hop nested
   transfer authority canary, then runs the public MCP canary, the SoraFS capacity canary, the SoraSwap
@@ -582,9 +586,12 @@ submits the first post-genesis write, and then re-checks `/status` plus
 `/v1/sumeragi/status` strictly after that write lands.
 
 The rollout script now also requires `/v1/sumeragi/status` to show at least 4
-validators in the commit QC set. If it fails that check, rebuild the validator
-configs from the shared roster before debugging ingress or MCP. It also
-verifies that the same direct node serves:
+validators in the commit QC set and rejects stalled one-block-ahead finality
+states where `membership.height > commit_qc.height`, the worker is idle or
+waiting on RBC, and the node is reporting missing-QC/quorum-timeout symptoms.
+If it fails that check, rebuild the validator configs from the shared roster or
+clear volatile consensus state before debugging ingress or MCP. It also verifies
+that the same direct node serves:
 
 - `/v1/sccp/capabilities`
 - `/v1/sccp/manifests`
@@ -600,15 +607,16 @@ signer. Start from `taira-canary-client.example.toml`, not
 `defaults/client.toml`: the generic repo client uses the zero chain id and is
 not valid for Taira. If the configured file is missing or still contains the
 placeholder authority, the rollout scripts now generate a fresh keypair,
-onboard the account on public Taira, solve the faucet puzzle, claim starter
-funds, and rewrite `/run/secrets/taira-canary-client.toml` automatically before
-retrying the signed ping. If alias onboarding is unavailable but the public
-faucet is healthy, the bootstrap falls back to faucet account registration so
-the signed write canary can still prove the public transaction path. The signed
-ping attaches Taira's accepted XOR gas asset metadata by default; pass
-`--gas-asset-id ""` only against a network that does not enforce pipeline gas
-metadata. Keep the populated canary config out of the repo and out of shell
-history where possible.
+onboard the account on public Taira, and write a runtime-only config
+automatically before the signed ping. With the default Taira XOR gas asset
+configured, bootstrap passes the same gas asset to onboarding and skips faucet
+funding by default, so the write canary proves the sponsored-fee path directly
+instead of depending on faucet finality first. Set
+`ROLLOUT_CANARY_SKIP_FAUCET=0` only when intentionally validating an
+unsponsored/faucet-funded network. The signed ping attaches Taira's accepted XOR
+gas asset metadata by default; pass `--gas-asset-id ""` only against a network
+that does not enforce pipeline gas metadata. Keep the populated canary config
+out of the repo and out of shell history where possible.
 
 If the script fails with `route_unavailable`, treat that as a deployment or
 topology failure, not an app-level validation issue: the public Torii ingress is
@@ -685,7 +693,20 @@ shows signals such as `membership.height > commit_qc.height`,
 report that the queried public Torii finality path appears stalled. Unless you
 also have validator-side access, describe that as a public-node or
 public-finality-path observation rather than proof that the full validator set
-is down.
+is down. With validator-shell access, use the checked-in recovery helper from
+the Taira host and pin the runtime digest before restarting, for example:
+
+```bash
+bash configs/soranexus/taira/clear_volatile_consensus_state.sh \
+  --dist /Users/administrator/dev/iroha/dist/taira-localnet \
+  --runtime-bin /Users/administrator/dev/iroha-build-taira-latest/target/release/irohad \
+  --expected-runtime-sha <64-hex-sha256> \
+  --start \
+  --apply
+```
+
+Run it without `--apply` first to inspect the planned stop/quarantine/archive
+operations. The script intentionally leaves durable ledger storage in place.
 
 ## Governance mode
 
@@ -1022,10 +1043,11 @@ From `../iroha2-block-explorer-web`:
    - when you are validating edge-local SNI before public DNS or TLS is fully
      live, pin the public host to the edge IP explicitly:
      `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org --resolve-host taira.sora.org:443:127.0.0.1 --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
-  - the public check now defaults to
-    `/run/secrets/taira-canary-client.toml` and auto-bootstraps it when the
-    file is missing or still contains placeholders, unless you explicitly opt
-    into read-only mode with `--skip-write-canary`
+   - the public check auto-bootstraps a runtime-only canary config when
+    `--write-config` is omitted, preferring `/run/secrets` only when that
+    directory is writable and otherwise using the local temp directory; when
+    the default Taira gas asset is configured, bootstrap skips faucet and uses
+    sponsored gas unless you set `ROLLOUT_CANARY_SKIP_FAUCET=0`
 7. Verify that SNI now serves the correct cert for each host and that MCP,
    Connect, and CID-host routing still work through the public edge:
    - `curl -vI https://taira.sora.org`

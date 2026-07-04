@@ -16,6 +16,7 @@ ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 ROLLOUT_CANARY_GAS_ASSET_ID="${ROLLOUT_CANARY_GAS_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
 POST_CANARY_STATUS_RECHECK_ATTEMPTS="${POST_CANARY_STATUS_RECHECK_ATTEMPTS:-10}"
 POST_CANARY_STATUS_RECHECK_DELAY_SECONDS="${POST_CANARY_STATUS_RECHECK_DELAY_SECONDS:-2}"
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
@@ -75,12 +76,14 @@ For final public rollout, use a runtime-only canary signer config. When
 `--write-config` is omitted, the script bootstraps a runtime-only canary config
 automatically, preferring `/run/secrets/taira-canary-client.toml` when that
 directory is writable and otherwise falling back to `${TMPDIR:-/tmp}`. It
-onboards a fresh ordinary account on Taira and attempts an initial faucet claim
-before the signed write canary. The write canary attaches Taira's accepted XOR
-gas asset metadata by default and still retries the faucet lane on
-`Failed to find asset` so a saturated queue does not require manual signer
-preparation. Use `--gas-asset-id ""` only against networks that do not require
-pipeline gas metadata. Use `--skip-write-canary` only for read-only validation.
+onboards a fresh ordinary account on Taira and, when a gas asset is configured,
+passes that asset to onboarding and skips faucet funding by default. The write
+canary attaches Taira's accepted XOR gas asset metadata by default and still
+retries the faucet lane on `Failed to find asset` so a saturated queue does not
+require manual signer preparation. Set `ROLLOUT_CANARY_SKIP_FAUCET=0` to require
+an initial faucet claim. Use `--gas-asset-id ""` only against networks that do
+not require pipeline gas metadata. Use `--skip-write-canary` only for read-only
+validation.
 
 When `--iroha-bin` is omitted, the script first reuses a repo-local
 `bin/iroha`, `target/debug/iroha`, or `target/release/iroha` if present, and
@@ -110,6 +113,24 @@ default_write_config_path() {
 
   local temp_root="${TMPDIR:-/tmp}"
   printf '%s\n' "${temp_root%/}/taira-canary-client.toml"
+}
+
+should_skip_canary_faucet() {
+  case "$ROLLOUT_CANARY_SKIP_FAUCET" in
+    auto|"")
+      [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]
+      ;;
+    1|true|TRUE|yes|YES)
+      return 0
+      ;;
+    0|false|FALSE|no|NO)
+      return 1
+      ;;
+    *)
+      echo "ROLLOUT_CANARY_SKIP_FAUCET must be auto, 1, 0, true, false, yes, or no" >&2
+      exit 1
+      ;;
+  esac
 }
 
 while [[ $# -gt 0 ]]; do
@@ -727,6 +748,14 @@ canonical_height = first_int(
 canonical_phase = str(
     dig(payload, "canonical", "phase") or payload.get("canonical_phase") or ""
 ).strip().lower()
+canonical_view = first_int(
+    payload.get("canonical_view"),
+    dig(payload, "canonical", "view"),
+    dig(payload, "membership", "view"),
+)
+worker_stage = str(
+    dig(payload, "worker_loop", "stage") or payload.get("worker_stage") or ""
+).strip().lower()
 canonical_pending_finality_published = has_path(payload, "canonical", "pending_finality") or (
     "canonical_pending_finality" in payload
 )
@@ -882,8 +911,15 @@ if (
         and highest_qc_height == commit_qc_height
         and locked_qc_height == commit_qc_height
     )
+    stalled_one_ahead_idle = (
+        one_ahead_prepare
+        and worker_stage == "idle"
+        and canonical_view is not None
+        and canonical_view > 1
+    )
     if (
         one_ahead_prepare
+        and not stalled_one_ahead_idle
         and not pending_finality_present
         and not rbc_waiting
         and (pending_rbc_sessions in (None, 0))
@@ -909,6 +945,8 @@ if (
             if canonical_rbc_status
             else ""
         )
+        worker_text = f", worker_stage={worker_stage!r}" if worker_stage else ""
+        view_text = f", canonical_view={canonical_view!r}" if canonical_view is not None else ""
         phase_text = f", phase={canonical_phase!r}" if canonical_phase else ""
         print(
             f"{label}: /v1/sumeragi/status reports a finality fault "
@@ -918,7 +956,7 @@ if (
             f"saturated_by_count={tx_queue_saturated_by_count!r}, "
             f"saturated_by_age={tx_queue_saturated_by_age!r}, "
             f"oldest_queued_age_ms={tx_queue_oldest_queued_age_ms!r}"
-            f"{phase_text}{pending_finality_text}{rbc_text}{pending_rbc_text}",
+            f"{phase_text}{worker_text}{view_text}{pending_finality_text}{rbc_text}{pending_rbc_text}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1292,6 +1330,12 @@ ensure_write_canary_config() {
 
   if [[ -n "$IROHA_BIN" ]]; then
     bootstrap_cmd+=(--iroha-bin "$IROHA_BIN")
+  fi
+  if [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]; then
+    bootstrap_cmd+=(--gas-asset-id "$ROLLOUT_CANARY_GAS_ASSET_ID")
+  fi
+  if should_skip_canary_faucet; then
+    bootstrap_cmd+=(--skip-faucet)
   fi
 
   echo "==> canary bootstrap: ${WRITE_CONFIG}" >&2
