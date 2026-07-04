@@ -1236,10 +1236,20 @@ fn reconcile_snapshot_hashes_with_kura(
         iroha_logger::warn!(
             "Snapshot has incorrect latest block hash, discarding changes made by this block"
         );
+        let rollback_height = height.saturating_sub(1);
+        let latest_header_after_rollback = NonZeroUsize::new(rollback_height)
+            .and_then(|height| kura.get_block(height))
+            .map(|block| block.header().clone());
         state
             .block_and_revert(kura_block.header())
             .commit()
             .map_err(TryReadError::StateCommit)?;
+        state.revert_latest_block_metadata_for_snapshot_reconcile(latest_header_after_rollback);
+        let rollback_height = u64::try_from(rollback_height)
+            .map_err(crate::kura::Error::from)
+            .map_err(TryReadError::Kura)?;
+        kura.prune_to_height(rollback_height)
+            .map_err(TryReadError::Kura)?;
     }
 
     Ok(())

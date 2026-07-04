@@ -3098,7 +3098,7 @@ pub struct Nexus {
 impl Default for Nexus {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: defaults::nexus::ENABLED,
             storage: NexusStorage::default(),
             staking: NexusStaking::default(),
             fees: NexusFees::default(),

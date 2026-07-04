@@ -17,9 +17,11 @@ fn print_record(kind: &str, version: u32) -> Result<(), String> {
             "vk_unshield",
             confidential_v2::confidential_unshield_v3_vk_record("vk_unshield", version)?,
         ),
-        _ => return Err(
-            "usage: confidential_v2_vk_json <transfer|unshield|unshield-v3> <version>".into(),
-        ),
+        _ => {
+            return Err(
+                "usage: confidential_v2_vk_json <transfer|unshield|unshield-v3> <version>".into(),
+            );
+        }
     };
     let key = record
         .key

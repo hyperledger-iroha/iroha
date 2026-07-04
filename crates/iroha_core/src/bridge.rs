@@ -176,6 +176,19 @@ pub(crate) struct ValidatedRecordedSccpMessage {
     pub commitment: SccpHubCommitmentV1,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordedSccpPayloadEncoding {
+    Canonical,
+    LowerHexAlias,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordedSccpMessageCandidate {
+    instruction_index: usize,
+    validated: ValidatedRecordedSccpMessage,
+    encoding: RecordedSccpPayloadEncoding,
+}
+
 /// Failure while validating a recorded outbound SCCP message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RecordedSccpMessageValidationError {
@@ -201,11 +214,28 @@ pub(crate) fn decode_recorded_sccp_payload_bytes(payload_bytes: &[u8]) -> Option
     iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload)
 }
 
-pub(crate) fn validate_recorded_sccp_message_payload_bytes(
+pub(crate) fn decode_lowercase_hex_sccp_payload_alias(
     payload_bytes: &[u8],
+) -> Option<SccpPayloadV1> {
+    let payload_text = std::str::from_utf8(payload_bytes).ok()?;
+    let hex_text = payload_text.strip_prefix("0x").unwrap_or(payload_text);
+    if hex_text.is_empty() || !hex_text.len().is_multiple_of(2) {
+        return None;
+    }
+    if !hex_text
+        .as_bytes()
+        .iter()
+        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return None;
+    }
+    let payload = hex::decode(hex_text).ok()?;
+    decode_recorded_sccp_payload_bytes(&payload)
+}
+
+fn validate_recorded_sccp_payload(
+    payload: SccpPayloadV1,
 ) -> Result<ValidatedRecordedSccpMessage, RecordedSccpMessageValidationError> {
-    let payload = decode_recorded_sccp_payload_bytes(payload_bytes)
-        .ok_or(RecordedSccpMessageValidationError::InvalidPayload)?;
     let source_domain = iroha_sccp::sccp_message_source_domain(&payload);
     if source_domain != iroha_sccp::SCCP_DOMAIN_SORA {
         return Err(RecordedSccpMessageValidationError::NonSoraSource { source_domain });
@@ -217,6 +247,30 @@ pub(crate) fn validate_recorded_sccp_message_payload_bytes(
         commitment: iroha_sccp::hub_commitment_from_sccp_payload(&payload),
         payload,
     })
+}
+
+pub(crate) fn validate_recorded_sccp_message_payload_bytes(
+    payload_bytes: &[u8],
+) -> Result<ValidatedRecordedSccpMessage, RecordedSccpMessageValidationError> {
+    let payload = decode_recorded_sccp_payload_bytes(payload_bytes)
+        .ok_or(RecordedSccpMessageValidationError::InvalidPayload)?;
+    validate_recorded_sccp_payload(payload)
+}
+
+fn validate_recorded_sccp_message_payload_bytes_for_block_collection(
+    payload_bytes: &[u8],
+) -> Result<
+    (ValidatedRecordedSccpMessage, RecordedSccpPayloadEncoding),
+    RecordedSccpMessageValidationError,
+> {
+    if let Some(payload) = decode_recorded_sccp_payload_bytes(payload_bytes) {
+        return validate_recorded_sccp_payload(payload)
+            .map(|validated| (validated, RecordedSccpPayloadEncoding::Canonical));
+    }
+    let payload = decode_lowercase_hex_sccp_payload_alias(payload_bytes)
+        .ok_or(RecordedSccpMessageValidationError::InvalidPayload)?;
+    validate_recorded_sccp_payload(payload)
+        .map(|validated| (validated, RecordedSccpPayloadEncoding::LowerHexAlias))
 }
 
 pub(crate) fn sccp_outbound_message_key(payload: &SccpPayloadV1) -> SccpOutboundMessageKey {
@@ -580,6 +634,35 @@ fn collect_sccp_messages_from_executable<F>(
     }
 }
 
+fn sccp_message_candidates_from_executable(
+    executable: &Executable,
+) -> Vec<RecordedSccpMessageCandidate> {
+    let Executable::IvmProved(proved) = executable else {
+        return Vec::new();
+    };
+
+    proved
+        .overlay
+        .iter()
+        .enumerate()
+        .filter_map(|(instruction_index, instruction)| {
+            let record = recorded_sccp_message_instruction(instruction)?;
+            let Ok((validated, encoding)) =
+                validate_recorded_sccp_message_payload_bytes_for_block_collection(
+                    &record.payload_bytes,
+                )
+            else {
+                return None;
+            };
+            Some(RecordedSccpMessageCandidate {
+                instruction_index,
+                validated,
+                encoding,
+            })
+        })
+        .collect()
+}
+
 /// Extract all SCCP message records from accepted signed entrypoints.
 pub fn collect_sccp_messages_from_accepted_transactions(
     transactions: &[AcceptedTransaction<'_>],
@@ -640,6 +723,7 @@ where
 }
 
 /// Extract SCCP message records from one accepted signed entrypoint without deduplicating them.
+#[cfg(test)]
 pub(crate) fn collect_sccp_messages_from_accepted_transaction(
     tx_index: usize,
     transaction: &AcceptedTransaction<'_>,
@@ -665,6 +749,8 @@ fn collect_sccp_messages_from_signed_block_with_deduplication(
 ) -> Vec<RecordedSccpMessage> {
     let mut messages = Vec::new();
     let mut seen = BTreeSet::new();
+    let mut canonical_keys = BTreeSet::new();
+    let mut entrypoint_candidates = Vec::new();
     for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
@@ -676,14 +762,37 @@ fn collect_sccp_messages_from_signed_block_with_deduplication(
         if !entrypoint_has_successful_or_pending_result(block, entrypoint_index) {
             continue;
         }
-        collect_sccp_messages_from_executable(
-            entrypoint_index,
-            transaction.instructions(),
-            &mut seen,
-            &|_| false,
-            deduplicate,
-            &mut messages,
+        let candidates = sccp_message_candidates_from_executable(transaction.instructions());
+        canonical_keys.extend(
+            candidates
+                .iter()
+                .filter(|candidate| candidate.encoding == RecordedSccpPayloadEncoding::Canonical)
+                .map(|candidate| candidate.validated.key.clone()),
         );
+        entrypoint_candidates.push((entrypoint_index, candidates));
+    }
+
+    for (tx_index, candidates) in entrypoint_candidates {
+        for candidate in candidates {
+            let key = candidate.validated.key.clone();
+            if candidate.encoding == RecordedSccpPayloadEncoding::LowerHexAlias
+                && canonical_keys.contains(&key)
+            {
+                continue;
+            }
+            if deduplicate {
+                if seen.contains(&key) {
+                    continue;
+                }
+                seen.insert(key);
+            }
+            messages.push(RecordedSccpMessage {
+                tx_index,
+                instruction_index: candidate.instruction_index,
+                commitment: candidate.validated.commitment,
+                payload: candidate.validated.payload,
+            });
+        }
     }
     messages
 }

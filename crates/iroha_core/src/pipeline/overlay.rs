@@ -526,6 +526,7 @@ fn decode_taira_xor_sccp_record(
     };
 
     let payload = crate::bridge::decode_recorded_sccp_payload_bytes(&record.payload_bytes)
+        .or_else(|| crate::bridge::decode_lowercase_hex_sccp_payload_alias(&record.payload_bytes))
         .ok_or_else(|| sccp_admission_error("record payload bytes could not be decoded"))?;
     if !iroha_sccp::verify_sccp_payload_structure(&payload) {
         return Err(sccp_admission_error(
@@ -2680,10 +2681,7 @@ mod tests {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: SCCP_TAIRA_TRON_XOR_ROUTE_ID.to_vec(),
         });
-        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = payload else {
-            unreachable!("TAIRA XOR test payload is always a transfer");
-        };
-        iroha_sccp::canonical_transfer_payload_bytes(&transfer)
+        iroha_sccp::canonical_sccp_payload_bytes(&payload)
     }
 
     fn taira_tron_xor_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
@@ -2717,10 +2715,7 @@ mod tests {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID.to_vec(),
         });
-        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = payload else {
-            unreachable!("TAIRA XOR test payload is always a transfer");
-        };
-        iroha_sccp::canonical_transfer_payload_bytes(&transfer)
+        iroha_sccp::canonical_sccp_payload_bytes(&payload)
     }
 
     fn taira_bsc_xor_record_instruction(sender: &AccountId, amount: u128) -> InstructionBox {
@@ -2849,6 +2844,9 @@ mod tests {
             0,
         ));
         let mut tx = block.transaction();
+        tx.current_lane_id = Some(iroha_data_model::nexus::LaneId::SINGLE);
+        tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
         let overlay = TxOverlay::from_ivm_proved_instructions(vec![sccp_record_instruction()]);
 
         overlay
@@ -2868,6 +2866,9 @@ mod tests {
             0,
         ));
         let mut tx = block.transaction();
+        tx.current_lane_id = Some(iroha_data_model::nexus::LaneId::SINGLE);
+        tx.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
+        tx.world.current_dataspace_id = Some(iroha_data_model::nexus::DataSpaceId::UNIVERSAL);
         let malformed = TxOverlay::from_ivm_proved_instructions(vec![InstructionBox::from(
             iroha_data_model::isi::bridge::RecordSccpMessage::new(vec![0xFF]),
         )]);

@@ -41651,7 +41651,7 @@ mod kagemusha_folded_real_prover_tests {
                 &record_bundle,
                 &[0xFE],
                 current_note.clone(),
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
                 &output_vk,
                 None,
             )
@@ -41670,7 +41670,7 @@ mod kagemusha_folded_real_prover_tests {
                 &record_bundle,
                 &[0xFE],
                 current_note.clone(),
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
                 &output_vk,
                 None,
                 1,
@@ -41686,7 +41686,7 @@ mod kagemusha_folded_real_prover_tests {
                 &record_bundle,
                 &[0xFE],
                 current_note.clone(),
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
                 &output_vk,
                 None,
                 2,
@@ -41704,7 +41704,7 @@ mod kagemusha_folded_real_prover_tests {
                 &record_bundle,
                 &[0xFE],
                 current_note,
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_CIRCUIT_ID,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_CIRCUIT_ID,
                 &output_vk,
                 None,
                 4,
@@ -48091,7 +48091,7 @@ mod kagemusha_folded_real_prover_tests {
         .expect_err("reserved recursive aggregation mode must reject before proving");
 
         assert!(
-            err.contains("requires ABI-7 recursive compact-token admission"),
+            err.contains("recursive compact mode requires recursive compact-token admission"),
             "unexpected error: {err}"
         );
     }
