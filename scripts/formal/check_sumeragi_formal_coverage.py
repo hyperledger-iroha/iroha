@@ -1756,6 +1756,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "top-level Sumeragi proof CFGs must remain unconstrained",
     "CFGs must define exactly one behavior surface",
     "CFGs must check TypeInvariant and a semantic proof target",
+    "CFG normalized proof-target inventories must stay duplicate-free",
     "CFG operator references must resolve to zero-arity non-trivial targets",
     "CFG operator references must be duplicate-free and role-disjoint",
     "CFG filenames must belong to inferred owning modules",
@@ -4964,7 +4965,8 @@ def cfg_check_operator_kinds(path: Path) -> tuple[dict[str, str], list[str]]:
     """Return proof-check operators and their normalized CFG check kind."""
     references, errors = cfg_operator_references(path)
     operator_kinds: dict[str, str] = {}
-    for _, directive, operator in references:
+    operator_lines: dict[str, tuple[str, int]] = {}
+    for line_number, directive, operator in references:
         if directive not in CFG_CHECK_DIRECTIVES:
             continue
         kind = (
@@ -4972,6 +4974,24 @@ def cfg_check_operator_kinds(path: Path) -> tuple[dict[str, str], list[str]]:
             if directive in {"INVARIANT", "INVARIANTS"}
             else "PROPERTY"
         )
+        previous = operator_lines.get(operator)
+        if previous is not None:
+            previous_kind, previous_line = previous
+            if previous_kind == kind:
+                errors.append(
+                    f"{display_path(path)}:{line_number} repeats {kind} "
+                    f"check {operator} first declared at line {previous_line}; "
+                    "CFG proof targets must be duplicate-free"
+                )
+            else:
+                errors.append(
+                    f"{display_path(path)}:{line_number} references {kind} "
+                    f"check {operator}, but line {previous_line} already "
+                    f"references it as {previous_kind}; CFG proof targets "
+                    "must not be both INVARIANT and PROPERTY"
+                )
+            continue
+        operator_lines[operator] = (kind, line_number)
         operator_kinds[operator] = kind
     return operator_kinds, errors
 

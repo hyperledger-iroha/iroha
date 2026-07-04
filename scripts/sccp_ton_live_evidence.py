@@ -597,41 +597,93 @@ def _offline_args_from_summary(
     live: dict[str, Any],
     summary: dict[str, Any],
 ) -> list[str]:
+    account_status = _exact_live_string(live, "account_status", label="account_status")
+    if account_status != "active":
+        raise ValueError("TON live account status metadata must be active") from None
     offline = [
         "--verifier-contract-address",
-        str(live["verifier_contract_address"]),
+        _exact_live_string(
+            live,
+            "verifier_contract_address",
+            label="verifier_contract_address",
+        ),
         "--verifier-code-hash",
-        str(live["verifier_code_hash"]),
+        _hex(
+            _parse_hex32(
+                _exact_live_string(
+                    live,
+                    "verifier_code_hash",
+                    label="verifier_code_hash",
+                ),
+                label="verifier_code_hash",
+            )
+        ),
+        "--verifier-code-boc-base64",
+        _exact_live_string(live, "code_boc_base64", label="code_boc_base64"),
     ]
-    code_boc_base64 = live.get("code_boc_base64")
-    if isinstance(code_boc_base64, str) and code_boc_base64:
-        if code_boc_base64 != code_boc_base64.strip():
-            raise ValueError("code_boc_base64 must be an exact non-empty string")
-        offline.extend(["--verifier-code-boc-base64", code_boc_base64])
     offline.extend(
         [
             "--account-status",
-            str(live["account_status"]),
+            account_status,
             "--account-state-hash",
-            str(live["account_state_hash"]),
+            _hex(
+                _parse_hex32(
+                    _exact_live_string(
+                        live,
+                        "account_state_hash",
+                        label="account_state_hash",
+                    ),
+                    label="account_state_hash",
+                )
+            ),
             "--last-transaction-lt",
-            str(live["last_transaction_lt"]),
+            _positive_decimal(
+                live.get("last_transaction_lt"),
+                label="last_transaction_lt",
+            ),
             "--last-transaction-hash",
-            str(live["last_transaction_hash"]),
+            _hex(
+                _parse_hex32(
+                    _exact_live_string(
+                        live,
+                        "last_transaction_hash",
+                        label="last_transaction_hash",
+                    ),
+                    label="last_transaction_hash",
+                )
+            ),
         ]
     )
     if summary.get("expected_destination_binding_hash_matches") is True:
         offline.extend(
             [
                 "--expected-destination-binding-hash",
-                str(summary["destination_binding_hash"]),
+                _hex(
+                    _parse_hex32(
+                        _exact_live_string(
+                            summary,
+                            "destination_binding_hash",
+                            label="destination binding hash",
+                        ),
+                        label="destination binding hash",
+                    )
+                ),
             ]
         )
     if "route_allowlist_hash" in summary:
         offline.extend(
             [
                 "--route-allowlist-hash",
-                str(summary["route_allowlist_hash"]),
+                _hex(
+                    _parse_hex32(
+                        _exact_live_string(
+                            summary,
+                            "route_allowlist_hash",
+                            label="route allowlist hash",
+                        ),
+                        label="route allowlist hash",
+                    )
+                ),
                 "--source-verifier-material-hash",
                 _hex(args.source_verifier_material_hash),
                 "--source-adapter-engine-deployment-hash",
@@ -643,7 +695,16 @@ def _offline_args_from_summary(
             offline.extend(
                 [
                     "--route-canary-evidence-hash",
-                    str(route_canary["evidence_hash"]),
+                    _hex(
+                        _parse_hex32(
+                            _exact_live_string(
+                                route_canary,
+                                "evidence_hash",
+                                label="route canary evidence hash",
+                            ),
+                            label="route canary evidence hash",
+                        )
+                    ),
                 ]
             )
     return offline

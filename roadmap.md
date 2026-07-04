@@ -220,6 +220,14 @@ comparison, so hostile scalar equality hooks cannot mark live evidence ready or
 leak into drift diagnostics. TON live expected pins now mirror that boundary for
 destination-binding, verifier-code, and account-state hashes before summary
 comparison or TOML readiness can open.
+Solana live generated offline arguments now also revalidate copied summary
+destination-binding, route-allowlist, and route-canary evidence hashes through
+exact string/hex helpers before argument emission, so hostile copied summaries
+cannot be stringified into generated TOML arguments.
+TON live generated offline arguments now mirror that exactness for copied
+destination-binding, route-allowlist, and route-canary evidence hashes, and
+also reparse emitted live account hashes and logical time before argument
+emission.
 ETH/BSC source-bridge expected source verifier material and source-adapter
 deployment record hashes now normalize before summary comparison and TOML
 readiness, so hostile equality hooks cannot mark direct source records ready.

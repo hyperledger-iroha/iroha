@@ -461,6 +461,14 @@ bridge/component hashes, bridge addresses, expected chain IDs, and block tags,
 rejecting hostile non-string values before any string-like hook can run. The
 Python Solana live CLI parser helpers now apply the same exact-string boundary
 to verifier program ids, ProgramData slot pins, and bytes32 evidence hashes.
+Solana live generated offline arguments now revalidate copied summary
+destination-binding, route-allowlist, and route-canary evidence hashes through
+exact string/hex helpers before argument emission, with hostile copied-summary
+regressions pinned in the release inventory.
+TON live generated offline arguments now mirror that boundary for copied
+destination-binding, route-allowlist, and route-canary evidence hashes, and
+also reparse emitted live account hashes and logical time before argument
+emission.
 The Python TON live CLI parser helpers now apply that boundary to verifier raw
 addresses and bytes32 evidence hashes before delegated TON parser helpers can
 run string-like hooks. The Python TRON live CLI parser helpers now apply the
