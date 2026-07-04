@@ -80,6 +80,16 @@ def blocked_schema_source(message_id="barr.001.001.01"):
     }
 
 
+def known_blocked_schema_source(message_id="pacs.002.001.12"):
+    metadata = VERIFIER.KNOWN_BLOCKED_SCHEMA_SOURCE_METADATA[message_id]
+    return {
+        "message_def_id": message_id,
+        "source": dict(metadata["source"]),
+        "reason": "Public candidate carries redistribution restrictions.",
+        "restriction_markers": list(metadata["restriction_markers"]),
+    }
+
+
 def pending_schema_source(message_id="barr.001.001.01"):
     return {
         "message_def_id": message_id,
@@ -483,21 +493,17 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     VERIFIER._parse_canonical_json_float(value)
                 self.assertNotIn(value, str(caught.exception))
 
-    def test_checked_in_pending_schema_sources_are_exact_metadata_pinned(self):
+    def test_checked_in_manifest_has_no_pending_schema_sources(self):
         manifest = json.loads(VERIFIER.DEFAULT_MANIFEST.read_text(encoding="utf-8"))
         pending_entries = manifest["pending_schema_sources"]
-        pending_ids = {entry["message_def_id"] for entry in pending_entries}
 
-        self.assertEqual(
-            pending_ids,
-            set(VERIFIER.KNOWN_PENDING_SCHEMA_SOURCE_METADATA),
-        )
-        for entry in pending_entries:
-            message_def_id = entry["message_def_id"]
-            self.assertEqual(
-                entry["source"],
-                VERIFIER.KNOWN_PENDING_SCHEMA_SOURCE_METADATA[message_def_id],
-            )
+        self.assertEqual(pending_entries, [])
+
+    def test_checked_in_manifest_has_no_blocked_schema_sources(self):
+        manifest = json.loads(VERIFIER.DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+        blocked_entries = manifest["blocked_schema_sources"]
+
+        self.assertEqual(blocked_entries, [])
 
     def test_json_arrays_are_count_bounded_without_echo(self):
         items = [None] * (VERIFIER.MAX_JSON_ARRAY_ITEMS + 1)
@@ -2665,7 +2671,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     ):
                         VERIFIER._read_regular_file(path, max_bytes=limit)
 
-    def test_checked_in_manifest_passes_and_records_reviewed_gaps(self):
+    def test_checked_in_manifest_passes_with_schema_backed_release_scope(self):
         with tempfile.TemporaryDirectory() as raw_root:
             summary_out = Path(raw_root) / "summary.json"
             summary_out.write_text('{"stale": true}\n' + ("x" * 4096), encoding="utf-8")
@@ -2685,7 +2691,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             summary = json.loads(stdout)
             self.assertEqual(summary["version"], VERIFIER.SUMMARY_VERSION)
             self.assertEqual(summary["verified_schemas"], 7)
-            self.assertEqual(summary["verified_fixtures"], 11)
+            self.assertEqual(summary["verified_fixtures"], 7)
             self.assertEqual(summary["schema_backed_fixtures"], 7)
             self.assertEqual(
                 summary["manifest_sha256"],
@@ -2699,35 +2705,11 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     ).read_bytes()
                 ),
             )
-            self.assertEqual(len(summary["missing_schema_fixtures"]), 4)
-            missing_schema_ids = sorted(
-                entry["message_def_id"] for entry in summary["missing_schema_fixtures"]
-            )
-            self.assertIn("colr.012.001.05", missing_schema_ids)
-            self.assertNotIn("colr.007.001.08", missing_schema_ids)
-            self.assertEqual(summary["blocked_schema_source_count"], 3)
-            self.assertEqual(
-                sorted(
-                    entry["message_def_id"] for entry in summary["blocked_schema_sources"]
-                ),
-                ["pacs.002.001.12", "pacs.008.001.10", "pacs.009.001.10"],
-            )
-            self.assertEqual(summary["pending_schema_source_count"], 8)
-            self.assertEqual(
-                sorted(
-                    entry["message_def_id"] for entry in summary["pending_schema_sources"]
-                ),
-                [
-                    "colr.012.001.05",
-                    "sese.023.001.09",
-                    "sese.023.001.11",
-                    "sese.024.001.09",
-                    "sese.024.001.10",
-                    "sese.025.001.08",
-                    "sese.025.001.10",
-                    "sese.025.001.11",
-                ],
-            )
+            self.assertEqual(summary["missing_schema_fixtures"], [])
+            self.assertEqual(summary["blocked_schema_source_count"], 0)
+            self.assertEqual(summary["blocked_schema_sources"], [])
+            self.assertEqual(summary["pending_schema_source_count"], 0)
+            self.assertEqual(summary["pending_schema_sources"], [])
             self.assertEqual(summary["schema_only_entries"], [])
             self.assertEqual(json.loads(summary_out.read_text(encoding="utf-8")), summary)
             self.assertEqual(summary_out.stat().st_mode & 0o077, 0)
@@ -3231,22 +3213,27 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertIn("must not be a symlink", stderr)
 
-    def test_strict_flags_reject_current_reviewed_gaps(self):
+    def test_strict_flags_accept_checked_in_schema_backed_release_scope(self):
         manifest = str(REPO_ROOT / "fixtures" / "iso20022" / "xsd" / "fixture_manifest.json")
 
-        rc, _stdout, stderr = run_verify(
+        rc, stdout, stderr = run_verify(
             [
                 "--manifest",
                 manifest,
                 "--profile-catalog",
                 str(VERIFIER.DEFAULT_PROFILE_CATALOG),
                 "--require-schema-backed-fixtures",
+                "--require-profile-schema-backed-versions",
             ]
         )
-        self.assertEqual(rc, 2)
-        self.assertIn("not schema-backed", stderr)
+        self.assertEqual(rc, 0, stderr)
+        summary = json.loads(stdout)
+        self.assertEqual(summary["missing_schema_fixtures"], [])
+        self.assertEqual(summary["missing_profile_schema_versions"], [])
+        self.assertEqual(summary["profile_checked_versions"], 31)
+        self.assertEqual(summary["profile_schema_backed_versions"], 31)
 
-        rc, _stdout, stderr = run_verify(
+        rc, stdout, stderr = run_verify(
             [
                 "--manifest",
                 manifest,
@@ -3256,7 +3243,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             ]
         )
         self.assertEqual(rc, 0, stderr)
-        summary = json.loads(_stdout)
+        summary = json.loads(stdout)
         self.assertEqual(summary["schema_only_entries"], [])
 
     def test_strict_reviewed_gap_failures_do_not_echo_reason_text(self):
@@ -4075,7 +4062,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             }
         ]
         cases.append((bad_policy_oid, "dotted numeric OID"))
-        overlapping_public_pins = [
+        stale_trust_pin_alias = [
             {
                 "id": "minimal-profile",
                 "signature_public_key_sha256_pins": ["1" * 64],
@@ -4091,8 +4078,28 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         ]
         cases.append(
             (
-                overlapping_public_pins,
-                "signature_public_key_sha256_pins/trusted_public_key_sha256",
+                stale_trust_pin_alias,
+                "contains unknown keys",
+            )
+        )
+        overlapping_public_anchor_pins = [
+            {
+                "id": "minimal-profile",
+                "signature_public_key_sha256_pins": ["1" * 64],
+                "x509_trust_anchor_sha256_pins": ["1" * 64],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                    }
+                ],
+            }
+        ]
+        cases.append(
+            (
+                overlapping_public_anchor_pins,
+                "public-key/certificate SHA-256 pins",
             )
         )
         overlapping_revoked_pins = [
@@ -4668,7 +4675,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertNotIn("token=", stderr)
             self.assertNotIn("xsd-duplicate-secret", stderr)
 
-    def test_checked_in_profile_catalog_records_advertised_schema_gaps(self):
+    def test_checked_in_profile_catalog_is_schema_backed(self):
         with tempfile.TemporaryDirectory() as raw_root:
             summary_out = Path(raw_root) / "summary.json"
             profile_catalog = VERIFIER.DEFAULT_PROFILE_CATALOG
@@ -4694,98 +4701,14 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 entry["message_def_id"]
                 for entry in summary["missing_profile_schema_versions"]
             }
+            self.assertEqual(missing_ids, set())
             self.assertNotIn("pacs.004.001.09", missing_ids)
-            self.assertIn("pacs.002.001.12", missing_ids)
+            self.assertNotIn("pacs.002.001.12", missing_ids)
             self.assertNotIn("camt.056.001.09", missing_ids)
-            self.assertGreater(summary["profile_checked_versions"], 0)
-            self.assertGreater(summary["profile_schema_backed_versions"], 0)
+            self.assertEqual(summary["profile_checked_versions"], 31)
             self.assertEqual(summary["profile_schema_backed_versions"], 31)
-            self.assertEqual(len(summary["missing_profile_schema_versions"]), 24)
-            self.assertEqual(
-                summary["missing_profile_schema_message_ids"],
-                [
-                    {
-                        "message_def_id": "colr.012.001.05",
-                        "profile_version_count": 2,
-                        "reviewed_missing_schema_fixture": True,
-                        "reviewed_schema_only": False,
-                        "blocked_source": False,
-                        "pending_source": True,
-                    },
-                    {
-                        "message_def_id": "pacs.002.001.12",
-                        "profile_version_count": 4,
-                        "reviewed_missing_schema_fixture": False,
-                        "reviewed_schema_only": False,
-                        "blocked_source": True,
-                        "pending_source": False,
-                    },
-                    {
-                        "message_def_id": "pacs.008.001.10",
-                        "profile_version_count": 3,
-                        "reviewed_missing_schema_fixture": False,
-                        "reviewed_schema_only": False,
-                        "blocked_source": True,
-                        "pending_source": False,
-                    },
-                    {
-                        "message_def_id": "pacs.009.001.10",
-                        "profile_version_count": 3,
-                        "reviewed_missing_schema_fixture": False,
-                        "reviewed_schema_only": False,
-                        "blocked_source": True,
-                        "pending_source": False,
-                    },
-                    {
-                        "message_def_id": "sese.023.001.09",
-                        "profile_version_count": 1,
-                        "reviewed_missing_schema_fixture": False,
-                        "reviewed_schema_only": False,
-                        "blocked_source": False,
-                        "pending_source": True,
-                    },
-                    {
-                        "message_def_id": "sese.023.001.11",
-                        "profile_version_count": 2,
-                        "reviewed_missing_schema_fixture": True,
-                        "reviewed_schema_only": False,
-                        "blocked_source": False,
-                        "pending_source": True,
-                    },
-                    {
-                        "message_def_id": "sese.024.001.09",
-                        "profile_version_count": 2,
-                        "reviewed_missing_schema_fixture": False,
-                        "reviewed_schema_only": False,
-                        "blocked_source": False,
-                        "pending_source": True,
-                    },
-                    {
-                        "message_def_id": "sese.024.001.10",
-                        "profile_version_count": 2,
-                        "reviewed_missing_schema_fixture": True,
-                        "reviewed_schema_only": False,
-                        "blocked_source": False,
-                        "pending_source": True,
-                    },
-                    {
-                        "message_def_id": "sese.025.001.08",
-                        "profile_version_count": 2,
-                        "reviewed_missing_schema_fixture": False,
-                        "reviewed_schema_only": False,
-                        "blocked_source": False,
-                        "pending_source": True,
-                    },
-                    {
-                        "message_def_id": "sese.025.001.10",
-                        "profile_version_count": 3,
-                        "reviewed_missing_schema_fixture": False,
-                        "reviewed_schema_only": False,
-                        "blocked_source": False,
-                        "pending_source": True,
-                    },
-                ],
-            )
+            self.assertEqual(summary["missing_profile_schema_versions"], [])
+            self.assertEqual(summary["missing_profile_schema_message_ids"], [])
             self.assertEqual(summary["unreviewed_profile_schema_message_id_count"], 0)
             self.assertEqual(summary["unreviewed_profile_schema_message_ids"], [])
 
@@ -7125,6 +7048,48 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             (
                 copyright_only_marker,
                 "restriction_markers must include a redistribution restriction marker",
+            )
+        )
+
+        known_blocked_source_drift = minimal_manifest()
+        known_blocked_source_drift["blocked_schema_sources"] = [
+            known_blocked_schema_source("pacs.002.001.12")
+        ]
+        known_blocked_source_drift["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/hyperledger/iroha"
+        cases.append(
+            (
+                known_blocked_source_drift,
+                "source.repository must match known restricted blocked-source metadata",
+            )
+        )
+
+        known_blocked_marker_drift = minimal_manifest()
+        known_blocked_marker_drift["blocked_schema_sources"] = [
+            known_blocked_schema_source("pacs.002.001.12")
+        ]
+        known_blocked_marker_drift["blocked_schema_sources"][0][
+            "restriction_markers"
+        ] = ["licensed-product-redistribution-agreement"]
+        cases.append(
+            (
+                known_blocked_marker_drift,
+                "restriction_markers must match known restricted blocked-source metadata",
+            )
+        )
+
+        pending_source_relabelled_as_blocked = minimal_manifest()
+        pending_source_relabelled_as_blocked["blocked_schema_sources"] = [
+            blocked_schema_source("sese.023.001.09")
+        ]
+        pending_source_relabelled_as_blocked["blocked_schema_sources"][0]["source"][
+            "path"
+        ] = "xsd/sese.023.001.09.xsd"
+        cases.append(
+            (
+                pending_source_relabelled_as_blocked,
+                "official pending ISO source evidence, not blocked-source evidence",
             )
         )
 

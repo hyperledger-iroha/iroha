@@ -52,7 +52,7 @@ Norito ↔ ISO 20022 körpüsünün mesajları yaymazdan əvvəl yerinə yetirm
     yoxdur, aydın `Prtry` etiketləri olan mülkiyyət identifikatorları daşıyın və metadata BIC daxil edin.[^iso_cr]
 - **Məskunlaşma yeri / məkan** → məkan üçün **MIC** və CSD üçün **BIC**.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` və `colr.007` (girovun idarə edilməsi)
+##### `colr.010` / `.011` / `.012` (girovun idarə edilməsi)
 
 - `sese.*` (ISIN-ə üstünlük verilir) ilə eyni alət qaydalarına əməl edin.
 - Tərəflər defolt olaraq **BIC**-dən istifadə edirlər; **LEI**, sxemin ifşa etdiyi yerdə məqbuldur.[^swift_bic]
@@ -227,7 +227,7 @@ iroha app settlement dvp \
   --iso-xml-out sese023_preview.xml
 ```
 
-### Repo Girov Əvəzetmə → `colr.007`| Repo sahəsi / kontekst | ISO 20022 yolu | Qeydlər |
+### Repo Girov Əvəzetmə → `colr.012`| Repo sahəsi / kontekst | ISO 20022 yolu | Qeydlər |
 |------------------------------------------------|----------------------------------|-------|
 | `agreement_id` (`RepoIsi` / `ReverseRepoIsi`) | `OblgtnId` | Repo müqaviləsi identifikatoru |
 | Girov əvəzedicisi Tx identifikatoru | `TxId` | Əvəzetmə başına yaradılan |

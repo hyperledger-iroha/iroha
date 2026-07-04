@@ -1,8 +1,9 @@
 import { normalizeIban } from "./identifiers.js";
 import { createValidationError, ValidationErrorCode } from "./validationError.js";
 
-const PACS008_NAMESPACE = "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10";
-const PACS009_NAMESPACE = "urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10";
+const ISO20022_XSD_NAMESPACE_PREFIX = "urn:iso:std:iso:20022:tech:xsd:";
+const DEFAULT_PACS009_MESSAGE_DEFINITION_ID = "pacs.009.001.08";
+const PACS008_NAMESPACE = "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08";
 const CAMT052_NAMESPACE = "urn:iso:std:iso:20022:tech:xsd:camt.052.001.08";
 const CAMT056_NAMESPACE = "urn:iso:std:iso:20022:tech:xsd:camt.056.001.08";
 
@@ -145,7 +146,7 @@ export function buildPacs009Message(options) {
     "businessMessageId",
   );
   const messageDefinitionId = requirePacs009MessageDefinitionId(
-    opts.messageDefinitionId ?? "pacs.009.001.10",
+    opts.messageDefinitionId ?? DEFAULT_PACS009_MESSAGE_DEFINITION_ID,
     "messageDefinitionId",
   );
   const instructionId = requireMax35Text(opts.instructionId, "instructionId");
@@ -196,7 +197,7 @@ export function buildPacs009Message(options) {
     : "";
 
   return [
-    `<Document xmlns="${PACS009_NAMESPACE}">`,
+    `<Document xmlns="${namespaceForMessageDefinitionId(messageDefinitionId)}">`,
     "  <FICdtTrf>",
     `    ${groupHeader}`,
     "    <CdtTrfTxInf>",
@@ -220,6 +221,10 @@ export function buildPacs009Message(options) {
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function namespaceForMessageDefinitionId(messageDefinitionId) {
+  return `${ISO20022_XSD_NAMESPACE_PREFIX}${messageDefinitionId}`;
 }
 
 /**
@@ -260,7 +265,7 @@ export function buildSamplePacs009Message(options = {}) {
   return buildPacs009Message({
     messageId: `sample-${sample.suffix}-msg`,
     businessMessageId: `sample-${sample.suffix}-biz`,
-    messageDefinitionId: "pacs.009.001.10",
+    messageDefinitionId: "pacs.009.001.08",
     creationDateTime: sample.creationDateTime,
     instructionId: `sample-${sample.suffix}-instr`,
     transactionId: `sample-${sample.suffix}-tx`,
@@ -920,7 +925,7 @@ function requirePacs009MessageDefinitionId(value, label) {
   if (!PACS009_MESSAGE_DEFINITION_REGEX.test(normalized)) {
     fail(
       ValidationErrorCode.INVALID_STRING,
-      `${label} must match pacs.009.<variant> (for example pacs.009.001.10)`,
+      `${label} must match pacs.009.<variant> (for example pacs.009.001.08)`,
       label,
     );
   }

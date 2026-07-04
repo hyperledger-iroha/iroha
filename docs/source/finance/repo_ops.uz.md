@@ -751,7 +751,7 @@ xeshlarni yoki voqea oqimlarini qayta yaratish uchun skrambles.
   testlar yangi matritsa siyosatini qamrab oladi.
 - **ISO 20022 xaritalash:** ISO konvertlarini yaratish yoki tashqi moslashtirishda
   tizimlarida hujjatlashtirilgan maydon xaritasini qayta ishlating
-  `docs/source/finance/settlement_iso_mapping.md` (`colr.007`, `sese.023`,
+  `docs/source/finance/settlement_iso_mapping.md` (`colr.012`, `sese.023`,
   `sese.025`) shuning uchun Norito foydali yuk va ISO tasdiqlari sinxronlashtiriladi.
 
 ## 5. Operatsion nazorat ro'yxatlari

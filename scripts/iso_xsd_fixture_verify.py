@@ -401,6 +401,50 @@ KNOWN_PENDING_SCHEMA_SOURCE_METADATA = {
         "submitting_organisation": "SWIFT",
     },
 }
+KNOWN_BLOCKED_SCHEMA_SOURCE_METADATA = {
+    "pacs.002.001.12": {
+        "source": {
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+            "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+            "path": "XSDtoGo/xsd/pacs.002.001.12.xsd",
+            "sha256": "92630b81604db82429006f6898455ddb3700dce0584ae909d7863dba8a3ce3bb",
+        },
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+            "no-public-distribution-right",
+            "exclusive-swift-property",
+        ],
+    },
+    "pacs.008.001.10": {
+        "source": {
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+            "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+            "path": "XSDtoGo/xsd/pacs.008.001.10.xsd",
+            "sha256": "f0105110928868142f496740303413d213fc182161391134f424f7271295d986",
+        },
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+            "no-public-distribution-right",
+            "exclusive-swift-property",
+        ],
+    },
+    "pacs.009.001.10": {
+        "source": {
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+            "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+            "path": "XSDtoGo/xsd/pacs.009.001.10.xsd",
+            "sha256": "cd3ae758c3694f9ac7b5a0fb6d208eb21b6e3be7f57882cca62a8c60915899af",
+        },
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+            "no-public-distribution-right",
+            "exclusive-swift-property",
+        ],
+    },
+}
 ISO_SCHEMA_CATALOGUE_PATHS = {
     "/iso-20022-message-definitions",
     "/catalogue-messages/iso-20022-messages-archive",
@@ -426,9 +470,7 @@ PROFILE_CATALOG_PROFILE_KEYS = {
     "rail",
     "embedded_signature_policy",
     "signature_public_key_sha256_pins",
-    "trusted_public_key_sha256",
     "x509_trust_anchor_sha256_pins",
-    "trusted_certificate_sha256",
     "revoked_certificate_sha256",
     "x509_required_certificate_policy_oids",
     "x509_require_crl_revocation_check",
@@ -2151,28 +2193,16 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
             f"{label}.embedded_signature_policy has unknown policy"
         )
     public_pins = _optional_sha256_list(profile, "signature_public_key_sha256_pins", label)
-    legacy_public_pins = _optional_sha256_list(profile, "trusted_public_key_sha256", label)
-    _reject_sha256_overlap(
-        public_pins,
-        legacy_public_pins,
-        f"{label}.signature_public_key_sha256_pins/trusted_public_key_sha256",
-    )
     anchor_pins = _optional_sha256_list(profile, "x509_trust_anchor_sha256_pins", label)
-    legacy_anchor_pins = _optional_sha256_list(profile, "trusted_certificate_sha256", label)
-    _reject_sha256_overlap(
-        anchor_pins,
-        legacy_anchor_pins,
-        f"{label}.x509_trust_anchor_sha256_pins/trusted_certificate_sha256",
-    )
     revoked_pins = _optional_sha256_list(profile, "revoked_certificate_sha256", label)
     _reject_sha256_overlap(
-        anchor_pins + legacy_anchor_pins,
+        anchor_pins,
         revoked_pins,
         f"{label}.trusted/revoked certificate pins",
     )
     _reject_sha256_overlap(
-        public_pins + legacy_public_pins,
-        anchor_pins + legacy_anchor_pins + revoked_pins,
+        public_pins,
+        anchor_pins + revoked_pins,
         f"{label}.public-key/certificate SHA-256 pins",
     )
     _optional_oid_list(profile, "x509_required_certificate_policy_oids", label)
@@ -2186,9 +2216,7 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
     )
     _reject_sha256_overlap(
         public_pins
-        + legacy_public_pins
         + anchor_pins
-        + legacy_anchor_pins
         + revoked_pins,
         _base64_der_sha256_values(crls + ocsp_responses),
         f"{label}.trust pin/revocation DER SHA-256 roles",
@@ -2201,7 +2229,7 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
         raise FixtureManifestError(
             f"{label}.x509_ocsp_response_der_base64 must not be empty when OCSP revocation is required"
         )
-    if policy == "require-verified" and not (public_pins or legacy_public_pins or anchor_pins or legacy_anchor_pins):
+    if policy == "require-verified" and not (public_pins or anchor_pins):
         raise FixtureManifestError(
             f"{label} uses require-verified but has no public-key or X.509 trust pins"
         )
@@ -2405,6 +2433,33 @@ def _validate_source_commit(raw: str, label: str) -> str:
     return raw
 
 
+def _validate_known_blocked_schema_source_metadata(
+    message_def_id: str,
+    source: dict[str, str],
+    restriction_markers: list[str],
+    label: str,
+) -> None:
+    """Validate exact audited metadata for first-release blocked sources."""
+
+    if message_def_id in KNOWN_PENDING_SCHEMA_SOURCE_METADATA:
+        raise FixtureManifestError(
+            f"{label}.message_def_id is tracked as official pending ISO source evidence, not blocked-source evidence"
+        )
+    expected = KNOWN_BLOCKED_SCHEMA_SOURCE_METADATA.get(message_def_id)
+    if expected is None:
+        return
+    expected_source = expected["source"]
+    for key, expected_value in expected_source.items():
+        if source[key] != expected_value:
+            raise FixtureManifestError(
+                f"{label}.source.{key} must match known restricted blocked-source metadata"
+            )
+    if restriction_markers != expected["restriction_markers"]:
+        raise FixtureManifestError(
+            f"{label}.restriction_markers must match known restricted blocked-source metadata"
+        )
+
+
 def _verify_schema_source(
     value: Any,
     label: str,
@@ -2507,15 +2562,22 @@ def _verify_blocked_schema_source(value: Any, label: str) -> dict[str, Any]:
         raise FixtureManifestError(
             f"{label}.restriction_markers must include a redistribution restriction marker"
         )
+    normalized_source = {
+        "repository": repository,
+        "commit": commit,
+        "path": source_path,
+        "sha256": source_sha256,
+    }
+    _validate_known_blocked_schema_source_metadata(
+        message_def_id,
+        normalized_source,
+        markers,
+        label,
+    )
 
     return {
         "message_def_id": message_def_id,
-        "source": {
-            "repository": repository,
-            "commit": commit,
-            "path": source_path,
-            "sha256": source_sha256,
-        },
+        "source": normalized_source,
         "reason": reason,
         "restriction_markers": markers,
     }

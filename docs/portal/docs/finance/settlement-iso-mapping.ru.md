@@ -61,7 +61,7 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
     absent, carry proprietary IDs with clear `Prtry` labels and include BIC in metadata.[^iso_cr]
 - **Place of settlement / venue** → **MIC** for the venue and **BIC** for the CSD.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` and `colr.007` (collateral management)
+##### `colr.010` / `.011` / `.012` (collateral management)
 
 - Follow the same instrument rules as `sese.*` (ISIN preferred).
 - Parties use **BIC** by default; **LEI** is acceptable where the schema exposes it.[^swift_bic]
@@ -221,7 +221,7 @@ status (e.g., `ConfSts = ACCP`) rather than the PvP “purpose”.
 | `plan.atomicity` status (`ConfSts`)           | `ConfSts`                 | `ACCP` when matched; bridge emits failure codes on rejection |
 | Counterparty identifiers                      | `AddtlInf` JSON           | Current bridge serialises full AccountId/BIC tuples in metadata |
 
-### Repo Collateral Substitution → `colr.007`
+### Repo Collateral Substitution → `colr.012`
 
 | Repo field / context                            | ISO 20022 path                     | Notes |
 |-------------------------------------------------|-----------------------------------|-------|

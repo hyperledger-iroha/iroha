@@ -133,7 +133,7 @@ async fn offline_v2_readiness_is_mounted_and_legacy_routes_are_absent() {
     assert!(body.contains(
         "\"offline_kagemusha_recursive_compact_circuit_id\":\"kagemusha-recursive-compact-v1\""
     ));
-    assert!(body.contains("\"offline_kagemusha_recursive_compact_artifacts_available\":false"));
+    assert!(body.contains("\"offline_kagemusha_recursive_compact_artifacts_available\":true"));
     for field in [
         "offline_note_v2",
         "offline_one_use_keys",

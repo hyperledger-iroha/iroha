@@ -6221,8 +6221,8 @@ async fn handler_offline_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
-    let offline_kagemusha_recursive_compact_artifacts = false;
+    let offline_kagemusha_recursive_compact_artifacts =
+        offline_kagemusha_recursive_compact_available;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -6255,8 +6255,8 @@ async fn handler_offline_v2_note_readiness(
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
     let offline_kagemusha_recursive_compact_available = offline.kagemusha_enabled;
-    // Mobile artifact archives are served and gated by Core API, not this readiness endpoint.
-    let offline_kagemusha_recursive_compact_artifacts = false;
+    let offline_kagemusha_recursive_compact_artifacts =
+        offline_kagemusha_recursive_compact_available;
     json_ok(json_object([
         json_entry("offline_telemetry", true),
         json_entry(
@@ -31568,25 +31568,6 @@ async fn handler_iso_sese025_submit(
     .await
 }
 
-async fn handler_iso_colr007_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    handler_iso_lifecycle_submit(
-        app,
-        headers,
-        query,
-        remote,
-        body,
-        "colr.007",
-        "v1/iso20022/colr007",
-    )
-    .await
-}
-
 async fn handler_iso_colr012_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -38334,7 +38315,6 @@ impl Torii {
                 .route("/v1/iso20022/sese023", post(handler_iso_sese023_submit))
                 .route("/v1/iso20022/sese024", post(handler_iso_sese024_submit))
                 .route("/v1/iso20022/sese025", post(handler_iso_sese025_submit))
-                .route("/v1/iso20022/colr007", post(handler_iso_colr007_submit))
                 .route("/v1/iso20022/colr012", post(handler_iso_colr012_submit))
                 .route("/v1/iso20022/status/{msg_id}", get(handler_iso_status))
                 .route("/v1/iso20022/messages/{msg_id}", get(handler_iso_status))

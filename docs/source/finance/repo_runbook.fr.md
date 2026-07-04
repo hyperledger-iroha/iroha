@@ -161,7 +161,7 @@ iroha --config client.toml --output \
 * Les invocations CLI émettent aujourd'hui des métadonnées d'instruction vides ; utiliser les assistants Python au niveau du règlement
   les métadonnées doivent être jointes.
 * Voir [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) pour le mappage de champ ISO 20022 qui
-  soutient ces instructions (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
+  soutient ces instructions (`sese.023`, `sese.025`, `colr.012`, `pacs.009`, `camt.054`).
 * Transmettez `--iso-xml-out <path>` pour que la CLI émette un aperçu XML canonique aux côtés du Norito.
   instruction; le fichier suit le mappage ci-dessus (`sese.023` pour DvP, `sese.025` pour PvP`). Associez le
   indicateur avec `--iso-reference-crosswalk <path>` afin que la CLI vérifie `--delivery-instrument-id` par rapport au

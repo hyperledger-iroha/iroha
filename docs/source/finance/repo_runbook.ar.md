@@ -161,7 +161,7 @@ iroha --config client.toml --output \
 * تُصدر استدعاءات واجهة سطر الأوامر (CLI) بيانات تعريف تعليمات فارغة اليوم؛ استخدم مساعدي Python عند مستوى التسوية
   يجب إرفاق البيانات الوصفية.
 * راجع [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) للتعرف على تعيين حقل ISO 20022 الذي
-  يدعم هذه التعليمات (`sese.023`، `sese.025`، `colr.007`، `pacs.009`، `camt.054`).
+  يدعم هذه التعليمات (`sese.023`، `sese.025`، `colr.012`، `pacs.009`، `camt.054`).
 * قم بتمرير `--iso-xml-out <path>` حتى تقوم واجهة سطر الأوامر (CLI) بإصدار معاينة XML أساسية إلى جانب Norito
   تعليمات؛ يتبع الملف التعيين أعلاه (`sese.023` لـ DvP، `sese.025` لـ PvP`). إقران
   ضع علامة على `--iso-reference-crosswalk <path>` حتى تتحقق واجهة سطر الأوامر (CLI) من `--delivery-instrument-id` مقابل

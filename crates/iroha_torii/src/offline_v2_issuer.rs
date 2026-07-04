@@ -33,6 +33,7 @@ use crate::{AppState, Error, SharedAppState, app_auth, json_ok, routing};
 const ENDPOINT_KEYS_REFILL: &str = "v1/offline/v2/keys/refill";
 const ENDPOINT_NOTES_ISSUE: &str = "v1/offline/v2/notes/issue";
 const ENDPOINT_NOTES_REDEEM: &str = "v1/offline/v2/notes/redeem";
+const ENDPOINT_AUDIT: &str = "v1/offline/v2/audit";
 const PATH_KEYS_REFILL: &str = "/v1/offline/v2/keys/refill";
 const PATH_NOTES_ISSUE: &str = "/v1/offline/v2/notes/issue";
 const PATH_NOTES_REDEEM: &str = "/v1/offline/v2/notes/redeem";
@@ -564,11 +565,59 @@ pub(crate) async fn handle_audit(
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<AxResponse, Error> {
-    let _ = (app, method, uri, headers, body);
-    Err(validation(
-        "OFFLINE_V2_AUDIT_RETIRED",
-        "Classic Offline Notes V2 audit is retired; use Kagemusha payment flows.",
-    ))
+    let _issuer = require_issuer(&app)?;
+    let parsed = parse_and_authorize(
+        app.as_ref(),
+        method,
+        uri,
+        headers,
+        body.as_ref(),
+        ENDPOINT_AUDIT,
+    )?;
+    let accepted_receipt_ids = accepted_audit_receipt_ids(&parsed.value)?;
+    json_ok(json_object(vec![
+        ("operation_id", string_value(parsed.operation_id)),
+        ("accepted_receipt_ids", Value::Array(accepted_receipt_ids)),
+    ]))
+}
+
+fn accepted_audit_receipt_ids(value: &Value) -> Result<Vec<Value>, Error> {
+    let Some(receipts) = value.get("receipts") else {
+        return Ok(Vec::new());
+    };
+    let Some(items) = receipts.as_array() else {
+        return Err(validation(
+            "OFFLINE_V2_AUDIT_RECEIPT_INVALID",
+            "Offline Notes V2 audit receipts must be an array.",
+        ));
+    };
+    let mut accepted = Vec::new();
+    for item in items {
+        if !item.is_object() {
+            return Err(validation(
+                "OFFLINE_V2_AUDIT_RECEIPT_INVALID",
+                "Offline Notes V2 audit receipt entries must be objects.",
+            ));
+        }
+        if let Some(id) = optional_exact_protocol_string(
+            item,
+            "id",
+            "OFFLINE_V2_AUDIT_RECEIPT_INVALID",
+            "Offline Notes V2 audit receipt",
+        )? {
+            accepted.push(string_value(id));
+            continue;
+        }
+        if let Some(id) = optional_exact_protocol_string(
+            item,
+            "receipt_id",
+            "OFFLINE_V2_AUDIT_RECEIPT_INVALID",
+            "Offline Notes V2 audit receipt",
+        )? {
+            accepted.push(string_value(id));
+        }
+    }
+    Ok(accepted)
 }
 
 fn require_issuer(app: &AppState) -> Result<Arc<OfflineV2IssuerRuntime>, Error> {
@@ -6400,5 +6449,90 @@ mod tests {
             wallet_commitment
         );
         assert_ne!(wallet_commitment.to_string(), chain_commitment);
+    }
+
+    #[test]
+    fn audit_receipt_ids_accept_id_and_receipt_id_aliases() {
+        let request = json_object(vec![(
+            "receipts",
+            Value::Array(vec![
+                json_object(vec![("id", string_value("receipt-1"))]),
+                json_object(vec![("receipt_id", string_value("receipt-2"))]),
+                json_object(vec![("memo", string_value("ignored"))]),
+            ]),
+        )]);
+        let accepted =
+            accepted_audit_receipt_ids(&request).expect("audit receipt ids should parse");
+
+        assert_eq!(
+            accepted
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>(),
+            vec!["receipt-1", "receipt-2"]
+        );
+    }
+
+    #[test]
+    fn audit_receipt_ids_reject_whitespace_padded_ids() {
+        let request = json_object(vec![(
+            "receipts",
+            Value::Array(vec![json_object(vec![("id", string_value(" receipt-1"))])]),
+        )]);
+
+        assert_eq!(
+            validation_code(accepted_audit_receipt_ids(&request)),
+            "OFFLINE_V2_AUDIT_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn audit_receipt_ids_allow_missing_receipts() {
+        let request = json_object(vec![("operation_id", string_value("operation-1"))]);
+
+        assert!(
+            accepted_audit_receipt_ids(&request)
+                .expect("missing receipts should be accepted")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn audit_receipt_ids_reject_non_array_receipts() {
+        let request = json_object(vec![("receipts", string_value("receipt-1"))]);
+
+        assert_eq!(
+            validation_code(accepted_audit_receipt_ids(&request)),
+            "OFFLINE_V2_AUDIT_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn audit_receipt_ids_reject_non_object_entries() {
+        let request = json_object(vec![(
+            "receipts",
+            Value::Array(vec![string_value("receipt-1")]),
+        )]);
+
+        assert_eq!(
+            validation_code(accepted_audit_receipt_ids(&request)),
+            "OFFLINE_V2_AUDIT_RECEIPT_INVALID"
+        );
+    }
+
+    #[test]
+    fn audit_receipt_ids_reject_non_string_id_aliases() {
+        let request = json_object(vec![(
+            "receipts",
+            Value::Array(vec![json_object(vec![(
+                "receipt_id",
+                Value::Number(1_u64.into()),
+            )])]),
+        )]);
+
+        assert_eq!(
+            validation_code(accepted_audit_receipt_ids(&request)),
+            "OFFLINE_V2_AUDIT_RECEIPT_INVALID"
+        );
     }
 }

@@ -70,7 +70,6 @@ NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_VERSION = 1
-LEGACY_MESSAGE_TYPES = {"colr.007"}
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MAX_RAIL_MESSAGE_ID_CHARS = 128
@@ -150,7 +149,6 @@ SECRET_VALUE_PATTERNS = [
 CLI_OPTION_FLAGS = {
     "--allow-default-profile",
     "--allow-insecure-http",
-    "--allow-legacy-colr007",
     "--bearer-token-file",
     "--dry-run",
     "--inbox-dir",
@@ -173,7 +171,6 @@ ENDPOINTS = {
     "sese.023": "sese023",
     "sese.024": "sese024",
     "sese.025": "sese025",
-    "colr.007": "colr007",
     "colr.012": "colr012",
 }
 
@@ -520,7 +517,6 @@ def _require_policy_booleans(args: argparse.Namespace) -> None:
         ("dry_run", "--dry-run"),
         ("allow_insecure_http", "--allow-insecure-http"),
         ("allow_default_profile", "--allow-default-profile"),
-        ("allow_legacy_colr007", "--allow-legacy-colr007"),
     ):
         setattr(args, attr, _required_cli_bool(getattr(args, attr, None), label))
 
@@ -1444,7 +1440,6 @@ def verify_message_file(
     *,
     max_payload_bytes: int,
     allow_default_profile: bool,
-    allow_legacy_colr007: bool,
 ) -> GatewayMessage:
     """Verify a gateway XML payload and its sidecar metadata."""
 
@@ -1500,11 +1495,6 @@ def verify_message_file(
         raise AdapterError(f"{sidecar_label} message_type must be lowercase ISO family id")
     if message_type not in ENDPOINTS:
         raise AdapterError(f"{sidecar_label} has unsupported message_type")
-    if message_type in LEGACY_MESSAGE_TYPES and not allow_legacy_colr007:
-        raise AdapterError(
-            f"{sidecar_label} uses legacy message_type; "
-            "use colr.012 for production collateral substitution confirmations"
-        )
 
     profile_present = "profile" in sidecar
     if not profile_present:
@@ -2339,13 +2329,6 @@ def _reject_unused_local_overrides(
         raise AdapterError(
             "--allow-default-profile requires at least one sidecar without profile"
         )
-    if args.allow_legacy_colr007 and not any(
-        message.message_type in LEGACY_MESSAGE_TYPES for message in messages
-    ):
-        raise AdapterError(
-            "--allow-legacy-colr007 requires at least one legacy colr.007 message"
-        )
-
 
 def run(args: argparse.Namespace) -> int:
     args = _require_plain_namespace(args)
@@ -2417,7 +2400,6 @@ def run(args: argparse.Namespace) -> int:
             path,
             max_payload_bytes=max_payload_bytes,
             allow_default_profile=args.allow_default_profile,
-            allow_legacy_colr007=args.allow_legacy_colr007,
         )
         for path in paths
     ]
@@ -2502,11 +2484,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow sidecars without profile and let Torii use its default profile.",
     )
     parser.add_argument(
-        "--allow-legacy-colr007",
-        action="store_true",
-        help="Allow legacy local colr.007 collateral-substitution file drops; production should use colr.012.",
-    )
-    parser.add_argument(
         "--allow-insecure-http",
         action="store_true",
         help="Allow http:// Torii URLs for local tests; production should use HTTPS.",
@@ -2562,7 +2539,6 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "--allow-default-profile",
                 "--allow-insecure-http",
-                "--allow-legacy-colr007",
                 "--dry-run",
             },
         )

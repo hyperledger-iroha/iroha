@@ -7813,10 +7813,6 @@ pub struct IsoBridgeProfile {
     pub x509_require_ocsp_revocation_check: bool,
     /// Base64 DER OCSP responses accepted as rail-profile revocation material.
     pub x509_ocsp_response_der_base64: Vec<String>,
-    /// Backward-compatible SHA-256 pins of raw XMLDSig public keys accepted by this profile.
-    pub trusted_public_key_sha256: Vec<String>,
-    /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
-    pub trusted_certificate_sha256: Vec<String>,
     /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
     pub revoked_certificate_sha256: Vec<String>,
     /// Required reference datasets for this profile.

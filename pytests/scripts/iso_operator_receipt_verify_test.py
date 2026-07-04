@@ -321,7 +321,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     rail_receipt(root),
                     root / "receipt.json",
                     require_source_files=True,
-                    allow_legacy_colr007=False,
                     allow_default_profile=False,
                     display_label="receipt",
                 ),
@@ -334,7 +333,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     rail_receipt(root),
                     root / "receipt.json",
                     require_source_files=False,
-                    allow_legacy_colr007=False,
                     allow_default_profile=False,
                     display_label="receipt",
                 ),
@@ -470,7 +468,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     rail_receipt(root),
                     root / "receipt.json",
                     require_source_files=False,
-                    allow_legacy_colr007=False,
                     allow_default_profile=False,
                     display_label="receipt",
                 ),
@@ -1994,7 +1991,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             )
             self.assertFalse(summary["allow_failed"])
             self.assertTrue(summary["allow_insecure_http"])
-            self.assertFalse(summary["allow_legacy_colr007"])
             self.assertFalse(summary["allow_default_profile"])
             self.assertTrue(summary["require_source_files"])
             self.assertEqual(len(summary["receipts"]), 2)
@@ -2113,10 +2109,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 (
                     ["--allow-insecure-http"],
                     "--allow-insecure-http requires at least one http:// or local/private receipt endpoint",
-                ),
-                (
-                    ["--allow-legacy-colr007"],
-                    "--allow-legacy-colr007 requires at least one rail receipt with legacy colr.007 message_type",
                 ),
                 (
                     ["--allow-default-profile"],
@@ -2709,7 +2701,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         receipt_dir=[],
                         allow_failed=False,
                         allow_insecure_http=True,
-                        allow_legacy_colr007=False,
                         allow_default_profile=False,
                         require_source_files=False,
                     )
@@ -2729,7 +2720,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("allow_failed", missing, "--allow-failed must be a boolean"),
             ("allow_failed", "false", "--allow-failed must be a boolean"),
             ("allow_insecure_http", "true", "--allow-insecure-http must be a boolean"),
-            ("allow_legacy_colr007", 1, "--allow-legacy-colr007 must be a boolean"),
             ("allow_default_profile", None, "--allow-default-profile must be a boolean"),
             ("require_source_files", "yes", "--require-source-files must be a boolean"),
         )
@@ -2742,7 +2732,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         receipt_dir=[],
                         allow_failed=False,
                         allow_insecure_http=True,
-                        allow_legacy_colr007=False,
                         allow_default_profile=False,
                         require_source_files=False,
                     )
@@ -2794,7 +2783,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         receipt_dir=[],
                         allow_failed=False,
                         allow_insecure_http=True,
-                        allow_legacy_colr007=False,
                         allow_default_profile=False,
                         require_source_files=False,
                     )
@@ -2847,7 +2835,6 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                             receipt_dir=[],
                             allow_failed=False,
                             allow_insecure_http=True,
-                            allow_legacy_colr007=False,
                             allow_default_profile=False,
                             require_source_files=False,
                         )
@@ -6172,15 +6159,10 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn("checked-in ISO XML fixtures", stderr)
 
-    def test_legacy_colr007_rail_receipts_require_explicit_local_override(self):
+    def test_colr007_rail_receipts_are_unsupported(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
-            rail_test.write_message(
-                inbox,
-                message_type="colr.007",
-                profile="securities-csd",
-                payload=b"<Document><CollSbstitnConf/></Document>",
-            )
+            rail_test.write_message(inbox)
             with rail_test.capture_server() as (base_url, _requests):
                 self.assertEqual(
                     rail_test.run_main(
@@ -6190,33 +6172,37 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                             "--torii-base-url",
                             base_url,
                             "--allow-insecure-http",
-                            "--allow-legacy-colr007",
                         ]
                     )[0],
                     0,
                 )
             receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update({"message_type": "colr.007"}),
+            )
 
             rc, _stdout, stderr = run_verify(
                 ["--receipt", str(receipt), "--allow-insecure-http"]
             )
             self.assertEqual(rc, 2)
-            self.assertIn("legacy rail message_type", stderr)
+            self.assertIn("unsupported rail message_type", stderr)
             self.assertNotIn("colr.007", stderr)
 
-            rc, stdout, stderr = run_verify(
-                [
-                    "--receipt",
-                    str(receipt),
-                    "--allow-insecure-http",
-                    "--allow-legacy-colr007",
-                    "--require-source-files",
-                ]
-            )
-            self.assertEqual(rc, 0, stderr)
-            summary = json.loads(stdout)
-            self.assertTrue(summary["allow_legacy_colr007"])
-            self.assertEqual(summary["receipts"][0]["message_type"], "colr.007")
+            stderr_buffer = io.StringIO()
+            with contextlib.redirect_stderr(stderr_buffer):
+                with self.assertRaises(SystemExit) as caught:
+                    VERIFIER.main(
+                        [
+                            "--receipt",
+                            str(receipt),
+                            "--allow-insecure-http",
+                            "--allow-legacy-colr007",
+                        ]
+                    )
+            self.assertEqual(caught.exception.code, 2)
+            stderr = stderr_buffer.getvalue()
+            self.assertIn("unrecognized arguments: --allow-legacy-colr007", stderr)
 
     def test_default_profile_rail_receipts_require_explicit_local_override(self):
         with tempfile.TemporaryDirectory() as raw_inbox:

@@ -751,7 +751,7 @@ hashesን ወይም የክስተት ዥረቶችን እንደገና ለመፍጠ
   ፈተናዎች አዲሱን የማትሪክስ ፖሊሲ ይሸፍናሉ.
 - ** ISO 20022 ካርታ ስራ፡** የ ISO ፖስታዎችን ሲገነቡ ወይም ውጫዊውን ሲያስታርቁ
   ሲስተሞች፣ በመስክ ላይ ያለውን ካርታ እንደገና ይጠቀሙ
-  `docs/source/finance/settlement_iso_mapping.md` (`colr.007`፣ `sese.023`፣
+  `docs/source/finance/settlement_iso_mapping.md` (`colr.012`፣ `sese.023`፣
   `sese.025`) ስለዚህ የ Norito ክፍያ እና የ ISO ማረጋገጫዎች እንደተመሳሰሉ ይቆያሉ።
 
 ## 5. የተግባር ማረጋገጫ ዝርዝሮች
