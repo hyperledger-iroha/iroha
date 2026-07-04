@@ -56,7 +56,7 @@ obligaciones que el puente Norito ↔ ISO 20022 debe hacer cumplir antes de emi
     ausente, lleve identificaciones de propiedad con etiquetas `Prtry` claras e incluya BIC en los metadatos.[^iso_cr]
 - **Lugar de liquidación/sede** → **MIC** para la sede y **BIC** para el CSD.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` y `colr.007` (gestión de garantías)
+##### `colr.010` / `.011` / `.012` (gestión de garantías)
 
 - Siga las mismas reglas del instrumento que `sese.*` (se prefiere ISIN).
 - Las partes utilizan **BIC** de forma predeterminada; **LEI** es aceptable donde el esquema lo expone.[^swift_bic]
@@ -198,7 +198,7 @@ estado (por ejemplo, `ConfSts = ACCP`) en lugar del "propósito" de PvP.
 | Estado `plan.atomicity` (`ConfSts`) | `ConfSts` | `ACCP` cuando coincide; puente emite códigos de falla al ser rechazado |
 | Identificadores de contraparte | `AddtlInf` JSON | El puente actual serializa tuplas AccountId/BIC completas en metadatos |
 
-### Sustitución de garantía de repositorio → `colr.007`| Campo/contexto de repositorio | Ruta ISO 20022 | Notas |
+### Sustitución de garantía de repositorio → `colr.012`| Campo/contexto de repositorio | Ruta ISO 20022 | Notas |
 |-------------------------------------------------|-----------------------------------|-------|
 | `agreement_id` (`RepoIsi` / `ReverseRepoIsi`) | `OblgtnId` | Identificador de contrato de repositorio |
 | Identificador Tx de sustitución de garantía | `TxId` | Generado por sustitución |

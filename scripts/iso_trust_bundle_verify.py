@@ -241,9 +241,7 @@ TOP_LEVEL_KEYS = {
     "source",
     "embedded_signature_policy",
     "signature_public_key_sha256_pins",
-    "trusted_public_key_sha256",
     "x509_trust_anchor_sha256_pins",
-    "trusted_certificate_sha256",
     "x509_trust_anchors",
     "revoked_certificate_sha256",
     "revoked_certificates",
@@ -2208,9 +2206,7 @@ def verify_bundle(
         )
 
     raw_public_pins = _sha256_list(bundle, "signature_public_key_sha256_pins", label)
-    legacy_public_pins = _sha256_list(bundle, "trusted_public_key_sha256", label)
     anchor_pin_values = _sha256_list(bundle, "x509_trust_anchor_sha256_pins", label)
-    legacy_anchor_pin_values = _sha256_list(bundle, "trusted_certificate_sha256", label)
     revoked_pin_values = _sha256_list(bundle, "revoked_certificate_sha256", label)
     policy_oids = _oid_list(bundle, "x509_required_certificate_policy_oids", label)
 
@@ -2248,43 +2244,24 @@ def verify_bundle(
         [entry["sha256"] for entry in trust_anchors],
         f"{label}.x509_trust_anchor_sha256_pins",
     )
-    trusted_certificate_sha256 = _merge_unique(
-        legacy_anchor_pin_values,
-        [],
-        f"{label}.trusted_certificate_sha256",
-    )
     revoked_certificate_sha256 = _merge_unique(
         revoked_pin_values,
         [entry["sha256"] for entry in revoked_certificates],
         f"{label}.revoked_certificate_sha256",
     )
     _reject_overlap(
-        raw_public_pins,
-        legacy_public_pins,
-        f"{label}.signature_public_key_sha256_pins/trusted_public_key_sha256",
-    )
-    _reject_overlap(
         x509_trust_anchor_sha256_pins,
-        trusted_certificate_sha256,
-        f"{label}.x509_trust_anchor_sha256_pins/trusted_certificate_sha256",
-    )
-    _reject_overlap(
-        x509_trust_anchor_sha256_pins + trusted_certificate_sha256,
         revoked_certificate_sha256,
         f"{label}.trusted/revoked certificate pins",
     )
     _reject_overlap(
-        raw_public_pins + legacy_public_pins,
-        x509_trust_anchor_sha256_pins
-        + trusted_certificate_sha256
-        + revoked_certificate_sha256,
+        raw_public_pins,
+        x509_trust_anchor_sha256_pins + revoked_certificate_sha256,
         f"{label}.public-key/certificate SHA-256 pins",
     )
     _reject_overlap(
         raw_public_pins
-        + legacy_public_pins
         + x509_trust_anchor_sha256_pins
-        + trusted_certificate_sha256
         + revoked_certificate_sha256,
         [entry["sha256"] for entry in crls]
         + [entry["sha256"] for entry in ocsp_responses],
@@ -2299,9 +2276,7 @@ def verify_bundle(
         raise TrustBundleError(f"{label} requires OCSP revocation checking but has no x509_ocsp_responses")
     if policy == REQUIRE_VERIFIED and not (
         raw_public_pins
-        or legacy_public_pins
         or x509_trust_anchor_sha256_pins
-        or trusted_certificate_sha256
     ):
         raise TrustBundleError(f"{label} has require-verified policy but no trust pins")
 
@@ -2311,9 +2286,7 @@ def verify_bundle(
         "rail": rail,
         "embedded_signature_policy": policy,
         "signature_public_key_sha256_pins": raw_public_pins,
-        "trusted_public_key_sha256": legacy_public_pins,
         "x509_trust_anchor_sha256_pins": x509_trust_anchor_sha256_pins,
-        "trusted_certificate_sha256": trusted_certificate_sha256,
         "revoked_certificate_sha256": revoked_certificate_sha256,
         "x509_required_certificate_policy_oids": policy_oids,
         "x509_require_crl_revocation_check": crl_required,
@@ -2322,9 +2295,8 @@ def verify_bundle(
         "x509_ocsp_response_der_base64": ocsp_values,
     }
     material_summary = {
-        "signature_public_key_pin_count": len(raw_public_pins) + len(legacy_public_pins),
-        "x509_trust_anchor_pin_count": len(x509_trust_anchor_sha256_pins)
-        + len(trusted_certificate_sha256),
+        "signature_public_key_pin_count": len(raw_public_pins),
+        "x509_trust_anchor_pin_count": len(x509_trust_anchor_sha256_pins),
         "revoked_certificate_pin_count": len(revoked_certificate_sha256),
         "x509_crl_count": len(crls),
         "x509_ocsp_response_count": len(ocsp_responses),

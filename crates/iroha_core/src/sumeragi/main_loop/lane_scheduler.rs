@@ -380,7 +380,7 @@ pub(super) fn schedule_proposal_batch(
     Ok(schedule)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct LaneAcceptedWork {
     dataspace_id: DataSpaceId,
     candidate_indices: Vec<usize>,

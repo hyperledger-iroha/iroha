@@ -17078,6 +17078,31 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `sese.024`, `sese.025`, and `colr.012` payment, securities, and collateral
   lifecycle XML, duplicate-free fail-closed profile version and required-BizSvc
   allowlists in runtime and profile-catalog evidence preflight,
+  exact runtime binding across BAH/body `MsgDefIdr` values and XML
+  namespace-scope-resolved `Document` plus immediate payload-root XSD
+  namespaces with the `urn:iso:std:iso:20022:tech:xsd:` prefix, so forged
+  concrete MDR-version drift, namespace suffix spoofing, unqualified roots,
+  prefixed namespace spoofing, and payload-root namespace rebinding fail before
+  profile admission while valid default or prefixed ISO roots still flow to
+  profile allowlists when declarations are internally consistent, exact
+  real-XML closing-tag matching that rejects mismatched, extra, attributed, and
+  unclosed tags before field extraction, fail-closed attribute parsing that
+  rejects unquoted, unterminated, malformed trailing, empty-name, unsupported
+  name, and duplicate attributes before namespace resolution, XML text and
+  attribute value decoding for predefined and numeric character references with
+  fail-closed unknown, unterminated, invalid numeric, raw invalid XML-character,
+  and raw attribute less-than cases, buffered simple-content text that preserves
+  chunks split by comments or processing instructions, mixed-content rejection,
+  single-root enforcement, deliberate special-markup handling that accepts
+  well-formed comments/XML declarations but rejects malformed comments,
+  malformed processing instructions, CDATA, `DOCTYPE`, and other declarations,
+  supported-QName validation for elements, attributes, namespace declarations,
+  and processing-instruction targets before local-name matching, strict internal
+  `<ISO20022>` wrapper parsing for exact root/field tags, exact
+  message/path/encoding attributes, supported encodings, canonical field-path
+  shapes, and no ignored non-root or nested field markup, JavaScript
+  `pacs.009` builder
+  namespace derivation from the validated `messageDefinitionId`,
   duplicate-free profile/reference/message-profile config,
   trimmed non-empty profile config literals, duplicate-free trimmed
   trust/revocation material config, CRL/OCSP DER-shape evidence preflight,
@@ -17146,14 +17171,17 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   message-definition IDs before accepting archived summaries, and archived XSD
   summaries bind a direct raw-derived unreviewed unique profile-message gap
   count/list that readiness rechecks before emitting production blockers; the
-  checked-in manifest now records official ISO pending-source evidence,
-  including exact direct XSD download URLs, for the remaining
-  securities/collateral profile-only gaps, so current repository summaries
-  report zero unreviewed unique profile-message gaps while strict schema-backed
-  closure still fails; direct verification and readiness replay now pin those
-  known pending message definitions to their exact recorded ISO catalogue URLs,
+  first-release checked-in manifest and embedded default profile catalog now
+  advertise only schema-backed concrete message definitions, so current
+  repository summaries report zero missing profile schema versions while
+  retaining synthetic reviewed-gap tests for pending/blocked evidence replay;
+  direct verification and readiness replay still pin known pending message
+  definitions to their exact recorded ISO catalogue URLs,
   direct download URLs, download type, message names, and submitting
-  organisations; pending direct download URLs must be unique within each summary
+  organisations, and also pin first-release blocked public candidates to their
+  audited source provenance plus restriction-marker list while rejecting blocked
+  rows for definitions already tracked as official pending ISO sources;
+  pending direct download URLs must be unique within each summary
   and across archived summary replay, pending official ISO catalogue/download
   URLs must not contain percent escapes, archive catalogue URLs must use
   canonical raw `page=<nonzero decimal>` queries, and pending source message
@@ -17183,9 +17211,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   1xx/2xx/3xx HTTP response with positive bounded sample bytes and
   `looks_like_xsd=false`, and reserves `reachable` pending-probe status for
   real 2xx responses with positive bounded bytes and an anchored,
-  namespace-bound XML Schema root opening tag, not just an XML declaration or
-  embedded marker, while redirect-class XSD-looking samples fail closed as
-  `NetworkError` evidence without archived samples,
+  namespace-bound XML Schema root opening tag whose `targetNamespace` matches
+  `urn:iso:std:iso:20022:tech:xsd:<message_def_id>`, not just an XML
+  declaration, embedded marker, or generic schema root, while redirect-class
+  or wrong-target XSD-looking samples fail closed as non-production evidence,
   while malformed status metadata, malformed status accessor failures, opener
   or response context failures, zero-byte success responses, malformed non-byte
   read output, and stream read failures normalize to `NetworkError` without
@@ -17217,9 +17246,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   evidence is emitted.
   All checked-in
   XSDs now
-  have standalone XML fixtures that pass XML schema validation, and remaining
-  MDR/XSD work is locating redistributable official packages and making the
-  strict schema-backed and profile-version release flags pass. Blocked public
+  have standalone XML fixtures that pass XML schema validation, and the
+  checked-in default profile scope passes the strict schema-backed and
+  profile-version release flags. Remaining MDR/XSD work is locating
+  redistributable official packages before expanding default profiles with
+  additional concrete payment, securities, and collateral lifecycle versions. Blocked public
   XSD candidate evidence now must carry at least one explicit redistribution or
   public-distribution restriction marker, and checked-in XSD preflight
   normalizes license-header whitespace and zero-width format characters before
@@ -17229,10 +17260,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   catalogue/download URL and message-name provenance only, with byte-stable
   percent-free bounded official URLs, canonical raw archive page queries, unique
   direct download URLs, and unique canonical message-name version suffixes bound
-  to the `message_def_id`, and never substitutes for checked-in XSD bytes. The legacy
-  `colr.007` collateral parser and
-  route are now local-compatibility only; operator receipt/evidence/readiness
-  gates reject the explicit `--allow-legacy-colr007` override for production. An
+  to the `message_def_id`, and never substitutes for checked-in XSD bytes. The
+  retired `colr.007` collateral parser and route are no longer part of the
+  first-release runtime surface; operator receipt/evidence/readiness gates
+  reject retired rail receipts and stale legacy summary fields with no override. An
   aggregate ISO production-readiness rollup now requires explicit expected
   provider/environment context, non-empty strict XSD proof, operator evidence
   summaries, and digest-bound direct receipt-archive verification with
@@ -17242,11 +17273,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   overrides and with real provider evidence. Default-profile rail canary
   evidence must also carry an explicit `--default-rail-profile` binding so
   `profile=null` receipts prove trust coverage for the configured fallback,
-  and custom-profile canary receipts must use a message family covered by the
-  matched trust profile's rail
-  profile instead of relying on an implicit Torii default, and production
-  readiness replays that binding against compact trust profiles before the
-  aggregate can pass. Trust-bundle verifier summaries now canonicalize raw
+  and custom-profile canary/archive receipts must use a message family covered
+  by the matched trust profile's schema-backed first-release rail family
+  instead of relying on an implicit Torii default or runtime-only lifecycle
+  endpoint, and production readiness replays that binding against compact trust
+  profiles before the aggregate can pass. Trust-bundle verifier summaries now canonicalize raw
   bundle, DER-material, pin, and OID list order, direct evidence replay rejects
   digest-correct raw trust-summary reordering, and final readiness blocks
   digest-correct compact trust DER proof reordering. Canary command planning
@@ -17418,7 +17449,7 @@ digest-bound pending-XSD source probe summaries for reviewed
 					  `response_body_sha256`) and normalizes failed, mismatched,
 					  incomplete, or malformed triplets to `"unsupported"` before
 					  final readiness output,
-					  normalizes local-only legacy rail message types and
+					  normalizes retired rail message types and
 					  default-profile fallback `profile=null` receipt values, plus
 					  `endpoint_requires_insecure_http=true` markers, to
 					  `"unsupported"` before final readiness output,
@@ -17444,7 +17475,7 @@ digest-bound pending-XSD source probe summaries for reviewed
 				  and live
 				  adapter local diagnostic
 				  flags now reject unused `--allow-insecure-http`,
-				  `--allow-default-profile`, `--allow-legacy-colr007`, and
+				  `--allow-default-profile`, and
 				  notary `--allow-missing-record-sources` before dry-run summaries
 				  network delivery, or receipt output; a
 	  read-only receipt verifier now gates those receipts for canary use and emits
@@ -17452,7 +17483,7 @@ digest-bound pending-XSD source probe summaries for reviewed
 	  rejecting all-zero raw receipt self-digest placeholders and
 	  non-boolean direct policy flags before selector discovery,
 	  rejecting unused local verifier overrides for failed receipts, insecure/local
-	  endpoints, legacy `colr.007`, and missing rail profiles,
+	  endpoints, and missing rail profiles,
 		  closing raw receipt and notary source schemas including duplicate-free nested audit records,
 		  complete audit-index record key sets,
 			  complete persisted record/context/metadata/history key sets for source replay and
@@ -17862,9 +17893,10 @@ digest-bound pending-XSD source probe summaries for reviewed
 		  `--allow-plan-only` override
 		  unless at least one canary summary records `plan_only=true`, rejects
 		  `--allow-partial-canary` unless at least one canary summary is missing
-			  a rail or notary stage, rejects unused legacy/default-profile receipt
-			  overrides unless compact rail receipts actually carry legacy
-			  `colr.007` or missing profile evidence, rejects unused
+			  a rail or notary stage, rejects unused default-profile receipt
+			  overrides unless compact rail receipts actually carry missing
+			  profile evidence, rejects stale retired `colr.007` receipt-summary fields,
+			  and rejects unused
 			  record-only/synthetic/missing-source trust overrides unless compact
 			  trust summaries carry the corresponding diagnostic trust material,
 			  binds compact record-only and insecure-source trust policy flags to
@@ -17879,9 +17911,9 @@ digest-bound pending-XSD source probe summaries for reviewed
 			  `endpoint_requires_insecure_http` evidence, requires executed
 			  rail/notary child commands to carry the matching
 			  `--allow-insecure-http` flag plus matching compact receipt-kind
-			  endpoint evidence, requires executed rail default-profile and
-			  legacy `colr.007` commands to carry matching compact rail receipt
-			  evidence for the same diagnostic condition, requires executed
+			  endpoint evidence, requires executed rail default-profile commands
+			  to carry matching compact rail receipt evidence for the same
+			  diagnostic condition, requires executed
 			  rail/notary stage names to match compact `receipt_kind` evidence so
 			  partial canaries cannot borrow receipts from absent stages, scopes
 			  verify-stage `--receipt-dir` values to the recorded rail/notary stages
@@ -17891,7 +17923,7 @@ digest-bound pending-XSD source probe summaries for reviewed
 			  canary verify-stage
 			  receipt-verifier command flags to captured receipt-verifier JSON policy
 			  booleans, with production-readiness replay rejecting compact
-			  failed-receipt, insecure-HTTP endpoint, legacy `colr.007`, and
+			  failed-receipt, insecure-HTTP endpoint, stale retired `colr.007`, and
 			  default-profile policy flags that contain no matching receipt entry,
 			  rejects the canary-stage-only diagnostic
 		  override when direct `--receipt` or `--receipt-dir` archive inputs are

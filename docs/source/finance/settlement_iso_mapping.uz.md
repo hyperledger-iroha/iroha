@@ -52,7 +52,7 @@ Norito ↔ ISO 20022 ko'prigi xabarlarni chiqarishdan oldin bajarilishi kerak b
     yoʻq boʻlsa, aniq `Prtry` yorliqlari boʻlgan xususiy identifikatorlarni olib yuring va metamaʼlumotlarga BIC kiriting.[^iso_cr]
 - **Hisoblash joyi/joyi** → joy uchun **MIC** va CSD uchun **BIC**.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` va `colr.007` (garovni boshqarish)
+##### `colr.010` / `.011` / `.012` (garovni boshqarish)
 
 - `sese.*` bilan bir xil asbob qoidalariga rioya qiling (ISIN afzal).
 - Tomonlar sukut bo'yicha **BIC** dan foydalanadilar; **LEI**, agar sxema ko‘rsatsa, qabul qilinadi.[^swift_bic]
@@ -227,7 +227,7 @@ iroha app settlement dvp \
   --iso-xml-out sese023_preview.xml
 ```
 
-### Repo garovini almashtirish → `colr.007`| Repo maydoni / kontekst | ISO 20022 yoʻli | Eslatmalar |
+### Repo garovini almashtirish → `colr.012`| Repo maydoni / kontekst | ISO 20022 yoʻli | Eslatmalar |
 |------------------------------------------------|----------------------------------|-------|
 | `agreement_id` (`RepoIsi` / `ReverseRepoIsi`) | `OblgtnId` | Repo shartnomasi identifikatori |
 | Garovni almashtirish Tx identifikatori | `TxId` | Har bir almashtirish uchun yaratilgan |

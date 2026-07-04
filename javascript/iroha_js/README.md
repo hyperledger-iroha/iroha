@@ -2054,7 +2054,7 @@ through the Torii bridge:
 
 ```js
 const xml = `<?xml version="1.0" encoding="UTF-8"?>
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10">
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
   <!-- ... -->
 </Document>`;
 
@@ -2175,7 +2175,7 @@ const camt056 = buildCamt056Message({
   debtorAgent: { bic: "ALPHGB2L" },
   creditorAgent: { bic: "OMEGGB2L" },
   originalMessageId: "pacs008-ffe5",
-  originalMessageNameId: "pacs.008.001.10",
+  originalMessageNameId: "pacs.008.001.08",
   interbankSettlementAmount: { currency: "USD", value: "5000.00" },
   interbankSettlementDate: "2026-03-05",
   originalInstructionId: "instr-ffe5",
@@ -2252,8 +2252,9 @@ Accounts may also carry proxy aliases (for example, phone-number or email handle
 alongside the IBAN, enforcing `Max2048Text` for the identifier and requiring either a 1-4
 character type code or a proprietary label (but not both).
 `buildPacs009Message` reuses the instruction id as both `MsgId` and `BizMsgIdr` when no explicit
-message identifiers are provided and defaults `MsgDefIdr` to `pacs.009.001.10`, matching the
-bridge’s canonical profile.
+message identifiers are provided and defaults `MsgDefIdr` to `pacs.009.001.08`, matching the
+bridge’s canonical profile. When callers override `messageDefinitionId`, the helper uses the same
+concrete value for both `MsgDefIdr` and the `Document` XSD namespace.
 The `pacs.009` helper defaults `Purp` to `SECU` (the securities funding category purpose) but
 accepts any valid ISO code when callers intentionally emit non-securities transfers; invalid
 values still throw before submission so PvP funding flows stay aligned with the mapping guide

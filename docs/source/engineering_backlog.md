@@ -6981,8 +6981,8 @@ redistributable schemas, and official trust/revocation bundles.
   `colr.012.001.05`, the checked-in `colr.012` fixture validates through the
   generic profile and is durably keyed by `colr.012:<TxId>`, and the XSD
   manifest tracks the remaining official `colr.012.001.05` schema gap. The
-  older `colr.007` parser/route remains as a legacy local compatibility path,
-  not the production default; operator evidence must not rely on it.
+  older `colr.007` parser/route is retired and remains only as negative fixture
+  coverage; operator evidence must not rely on it.
 - Completed 2026-06-01: broadened live-profile mismatch and lifecycle
   transition coverage. Swift CBPR+ validation now has negative tests for
   unsupported message-definition versions and business services, while
@@ -7005,10 +7005,12 @@ redistributable schemas, and official trust/revocation bundles.
   whose namespace and `Document` child root are asserted against the checked-in
   XSD, with a root-drift negative case proving mismatched MDR roots fail before
   profile admission.
-- Completed 2026-06-01: kept backward-compatible `trusted_public_key_sha256`
-  and `trusted_certificate_sha256` profile aliases while normalizing them into
-  the stricter `signature_public_key_sha256_pins` and
-  `x509_trust_anchor_sha256_pins` verifier inputs.
+- Completed 2026-06-01; tightened for first release on 2026-07-04: ISO bridge
+  profiles accept only the explicit `signature_public_key_sha256_pins` and
+  `x509_trust_anchor_sha256_pins` verifier inputs. Stale
+  `trusted_public_key_sha256` and `trusted_certificate_sha256` aliases are
+  malformed input in runtime config, fixture preflight, trust-bundle summaries,
+  and operator evidence.
 - Completed 2026-06-04: bound durable ISO message JSON records to a
   deterministic `record_sha256` digest. Persisted records now carry a versioned
   digest over the record body, and reload rejects missing, malformed, or
@@ -7115,12 +7117,11 @@ redistributable schemas, and official trust/revocation bundles.
 				  profile IDs, rejects sidecar `rail_message_id` values that are longer
 				  than 128 characters or are not canonical ASCII rail-message identifiers,
 				  rejects unknown sidecar fields, bounds sidecar JSON before parsing,
-				  rejects legacy `colr.007`
-		  drops unless `--allow-legacy-colr007`
-		  is set for local diagnostics, rejects unused `--allow-insecure-http`,
-		  `--allow-default-profile`, and `--allow-legacy-colr007` flags unless
-		  the validated Torii URL or sidecars actually require the corresponding
-		  local diagnostic policy, requires bearer-token files to be regular
+					  rejects retired `colr.007`
+			  drops with no local override path, rejects unused `--allow-insecure-http`
+			  and `--allow-default-profile` flags unless
+			  the validated Torii URL or sidecars actually require the corresponding
+			  local diagnostic policy, requires bearer-token files to be regular
 	  non-symlink inputs capped at 8 KiB before decoding to exact UTF-8 values
 	  with no surrounding whitespace, embedded whitespace, or control
 	  characters, rejects symlinked XML payload or sidecar files, rejects
@@ -7187,10 +7188,10 @@ redistributable schemas, and official trust/revocation bundles.
 	  `sidecar_path` values that carry whitespace, control characters,
 			  leading dashes, leading-dash path segments, backslashes, semicolon path
 			  parameters, empty path segments, or dot/parent path segments, requires raw
-			  `--allow-failed`, `--allow-insecure-http`,
-			  `--allow-legacy-colr007`, and `--allow-default-profile` verifier
-			  overrides to match failed receipts, HTTP/local endpoints, legacy
-			  `colr.007`, or missing rail profiles before emitting the summary,
+				  `--allow-failed`, `--allow-insecure-http`, and
+				  `--allow-default-profile` verifier
+				  overrides to match failed receipts, HTTP/local endpoints, or
+				  missing rail profiles before emitting the summary,
 			  and records version-2 compact
 			  `endpoint_requires_insecure_http` evidence per receipt so replay can
 			  bind insecure-HTTP policy without carrying raw endpoint URLs, while
@@ -7216,9 +7217,9 @@ redistributable schemas, and official trust/revocation bundles.
   positive notary record counts before publication and during source-file or
   production-evidence replay,
   Torii reload clean-string enforcement, filename/message-id binding, symlink-free regular-file-only
-  record directory/loading, symlink-free durable-output directories, and a 1 MiB Torii
-  persisted-record persist/reload cap, rejects legacy `colr.007` rail
-  source files unless `--allow-legacy-colr007` is set for local diagnostics,
+	  record directory/loading, symlink-free durable-output directories, and a 1 MiB Torii
+	  persisted-record persist/reload cap, rejects retired `colr.007` rail
+	  source files with no local override path,
   rejects symlinked receipt archive directories before discovery, rejects
   repeated receipt paths or copied receipts with duplicate `receipt_sha256` values, and
   emits a digest-bound verifier summary with per-receipt file paths,
@@ -7357,9 +7358,9 @@ redistributable schemas, and official trust/revocation bundles.
 			  `--allow-plan-only` unless at least one canary summary records
 			  `plan_only=true`, and rejects `--allow-partial-canary` unless at
 			  least one canary summary is missing a rail or notary stage,
-				  rejects unused legacy/default-profile receipt overrides unless
-				  compact rail receipts actually carry legacy `colr.007` or missing
-					  profile evidence, and rejects unused record-only/synthetic/missing-source
+					  rejects stale legacy summary fields and unused default-profile receipt overrides unless
+					  compact rail receipts actually carry missing
+						  profile evidence, and rejects unused record-only/synthetic/missing-source
 					  trust overrides unless compact trust summaries carry the
 					  corresponding diagnostic trust material, binds compact
 					  record-only and insecure-source trust policy flags to actual
@@ -7378,7 +7379,7 @@ redistributable schemas, and official trust/revocation bundles.
 					  the diagnostic override, executed rail/notary child commands
 					  carrying the matching `--allow-insecure-http` flag plus
 					  matching compact receipt-kind endpoint evidence,
-					  executed rail default-profile and legacy `colr.007` commands
+					  executed rail default-profile commands
 					  carrying matching compact rail receipt evidence for the same
 					  diagnostic condition, with default-profile rail receipts also
 					  naming `--default-rail-profile` so trust coverage is checked for
@@ -7410,8 +7411,8 @@ redistributable schemas, and official trust/revocation bundles.
 					  requiring the matching summary flag, and binds canary
 					  verify-stage receipt-verifier command
 				  flags to the captured receipt-verifier JSON policy booleans,
-				  mirrors failed-receipt, insecure-HTTP endpoint, legacy
-				  `colr.007`, and default-profile policy bindings in
+					  mirrors failed-receipt, insecure-HTTP endpoint, stale retired
+					  `colr.007`, and default-profile policy bindings in
 				  production-readiness compact evidence replay, including
 				  resolving compact `profile=null` rail receipts through
 				  `policy.default_rail_profile` before trust-profile coverage is
@@ -7534,7 +7535,7 @@ redistributable schemas, and official trust/revocation bundles.
 	  or are hard-linked, symlink, or non-regular targets, then atomically replaces targets from owner-private
 	  descriptor-checked temporary files with bounded digest-derived names,
   rejects plan-only or dry-run canaries, insecure HTTP evidence,
-  default-profile fallbacks, legacy `colr.007` local overrides, unredacted
+	  default-profile fallbacks, stale retired `colr.007` summary fields, unredacted
 		  bearer-token paths, secret-looking child output, smuggled, whitespace-bearing,
 		  empty-port, malformed-port, non-canonical-host, invalid-host-label, overlong-url,
 		  overlong-host, percent-escape,
@@ -7647,8 +7648,8 @@ redistributable schemas, and official trust/revocation bundles.
   digests reused across canary summaries, all-zero compact receipt digest
   placeholders, failed or status-mismatched compact
   canary/archive receipt entries, stripped or cross-kind compact receipt
-  metadata, archive/canary compact receipt status, endpoint-policy evidence, or metadata drift for the
-  same receipt digest, legacy `colr.007` local overrides,
+	  metadata, archive/canary compact receipt status, endpoint-policy evidence, or metadata drift for the
+	  same receipt digest, stale retired `colr.007` summary fields,
   canary/trust/receipt/profile material replayed across evidence summaries,
   omitted XSD strict flags,
   XSD summaries produced without XML schema validation,

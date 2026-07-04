@@ -1420,6 +1420,13 @@ struct TransactionDataspaceTarget {
     participants: BTreeSet<DataSpaceId>,
 }
 
+struct SameTransactionMultisigProposalTarget {
+    account: AccountId,
+    instructions_hash: HashOf<Vec<InstructionBox>>,
+    dataspace_id: Option<DataSpaceId>,
+    requires_universal_coordinator: bool,
+}
+
 fn merge_transaction_target_dataspace(
     target: &mut TransactionDataspaceTarget,
     candidate: Option<DataSpaceId>,
@@ -1501,23 +1508,45 @@ fn transaction_dataspace_routing_target_info(
 
     match executable {
         Executable::Instructions(instructions) => {
+            let instruction_refs = instructions.iter().collect::<Vec<_>>();
+            let same_transaction_multisig_proposals = same_transaction_multisig_proposal_targets(
+                &instruction_refs,
+                dataspace_catalog,
+                state_view,
+            );
             for instruction in instructions {
-                let instruction_target = instruction_transaction_dataspace_target(
-                    &**instruction,
-                    dataspace_catalog,
-                    state_view,
+                let same_transaction_approve_target =
+                    same_transaction_multisig_approve_route_target(
+                        &same_transaction_multisig_proposals,
+                        &**instruction,
+                    );
+                let instruction_target = same_transaction_approve_target.map_or_else(
+                    || {
+                        instruction_transaction_dataspace_target(
+                            &**instruction,
+                            dataspace_catalog,
+                            state_view,
+                        )
+                    },
+                    |target| target.dataspace_id,
                 );
                 merge_transaction_target_dataspace(
                     &mut target,
                     instruction_target,
                     reject_cross_dataspace,
                 )?;
+                let requires_universal_coordinator = same_transaction_approve_target.map_or_else(
+                    || {
+                        instruction_transaction_target_requires_universal_coordinator(
+                            &**instruction,
+                            dataspace_catalog,
+                            state_view,
+                        )
+                    },
+                    |target| target.requires_universal_coordinator,
+                );
                 if instruction_target == Some(DataSpaceId::UNIVERSAL)
-                    && instruction_transaction_target_requires_universal_coordinator(
-                        &**instruction,
-                        dataspace_catalog,
-                        state_view,
-                    )
+                    && requires_universal_coordinator
                 {
                     target.coordinator_route = true;
                 }
@@ -1566,25 +1595,49 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
 
     match executable {
         Executable::Instructions(instructions) => {
-            for instruction in instructions {
-                let instruction_target = instruction_transaction_dataspace_target_with_world(
-                    &**instruction,
+            let instruction_refs = instructions.iter().collect::<Vec<_>>();
+            let same_transaction_multisig_proposals =
+                same_transaction_multisig_proposal_targets_with_world(
+                    &instruction_refs,
                     dataspace_catalog,
                     world,
                     ledger_time_ms,
+                );
+            for instruction in instructions {
+                let same_transaction_approve_target =
+                    same_transaction_multisig_approve_route_target(
+                        &same_transaction_multisig_proposals,
+                        &**instruction,
+                    );
+                let instruction_target = same_transaction_approve_target.map_or_else(
+                    || {
+                        instruction_transaction_dataspace_target_with_world(
+                            &**instruction,
+                            dataspace_catalog,
+                            world,
+                            ledger_time_ms,
+                        )
+                    },
+                    |target| target.dataspace_id,
                 );
                 merge_transaction_target_dataspace(
                     &mut target,
                     instruction_target,
                     reject_cross_dataspace,
                 )?;
+                let requires_universal_coordinator = same_transaction_approve_target.map_or_else(
+                    || {
+                        instruction_transaction_target_requires_universal_coordinator_with_world(
+                            &**instruction,
+                            dataspace_catalog,
+                            world,
+                            ledger_time_ms,
+                        )
+                    },
+                    |target| target.requires_universal_coordinator,
+                );
                 if instruction_target == Some(DataSpaceId::UNIVERSAL)
-                    && instruction_transaction_target_requires_universal_coordinator_with_world(
-                        &**instruction,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
+                    && requires_universal_coordinator
                 {
                     target.coordinator_route = true;
                 }
@@ -2839,6 +2892,97 @@ fn multisig_proposal_state<W: WorldReadOnly>(
     let key = multisig_proposal_state_key(multisig_account, instructions_hash);
     let bytes = world.smart_contract_state().get(&key)?;
     norito::decode_from_bytes::<MultisigProposalState>(bytes).ok()
+}
+
+fn same_transaction_multisig_proposal_targets(
+    instructions: &[&InstructionBox],
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    state_view: Option<&StateView<'_>>,
+) -> Vec<SameTransactionMultisigProposalTarget> {
+    instructions
+        .iter()
+        .copied()
+        .filter_map(|instruction| match multisig_instruction(&**instruction)? {
+            MultisigInstructionBox::Propose(propose) => {
+                let dataspace_id = multisig_propose_transaction_dataspace_target(
+                    &propose,
+                    dataspace_catalog,
+                    state_view,
+                );
+                let requires_universal_coordinator = propose.instructions.iter().any(|nested| {
+                    instruction_transaction_target_requires_universal_coordinator(
+                        &**nested,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                });
+                Some(SameTransactionMultisigProposalTarget {
+                    account: propose.account,
+                    instructions_hash: HashOf::new(&propose.instructions),
+                    dataspace_id,
+                    requires_universal_coordinator,
+                })
+            }
+            MultisigInstructionBox::Approve(_)
+            | MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_) => None,
+        })
+        .collect()
+}
+
+fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
+    instructions: &[&InstructionBox],
+    dataspace_catalog: Option<&DataSpaceCatalog>,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) -> Vec<SameTransactionMultisigProposalTarget> {
+    instructions
+        .iter()
+        .copied()
+        .filter_map(|instruction| match multisig_instruction(&**instruction)? {
+            MultisigInstructionBox::Propose(propose) => {
+                let dataspace_id = multisig_propose_transaction_dataspace_target_with_world(
+                    &propose,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                );
+                let requires_universal_coordinator = propose.instructions.iter().any(|nested| {
+                    instruction_transaction_target_requires_universal_coordinator_with_world(
+                        &**nested,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                });
+                Some(SameTransactionMultisigProposalTarget {
+                    account: propose.account,
+                    instructions_hash: HashOf::new(&propose.instructions),
+                    dataspace_id,
+                    requires_universal_coordinator,
+                })
+            }
+            MultisigInstructionBox::Approve(_)
+            | MultisigInstructionBox::Register(_)
+            | MultisigInstructionBox::Cancel(_) => None,
+        })
+        .collect()
+}
+
+fn same_transaction_multisig_approve_route_target<'a>(
+    proposals: &'a [SameTransactionMultisigProposalTarget],
+    instruction: &dyn Instruction,
+) -> Option<&'a SameTransactionMultisigProposalTarget> {
+    let approve = match multisig_instruction(instruction)? {
+        MultisigInstructionBox::Approve(approve) => approve,
+        MultisigInstructionBox::Propose(_)
+        | MultisigInstructionBox::Register(_)
+        | MultisigInstructionBox::Cancel(_) => return None,
+    };
+    proposals.iter().find(|proposal| {
+        proposal.account == approve.account
+            && proposal.instructions_hash == approve.instructions_hash
+    })
 }
 
 fn multisig_propose_transaction_dataspace_target(
@@ -15935,6 +16079,61 @@ mod tests {
                 state.view().world(),
             )
             .expect("validation plan should use the embedded write dataspace"),
+            expected_plan
+        );
+    }
+
+    #[test]
+    fn multisig_same_transaction_approve_uses_sibling_proposal_route() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (multisig_id, _) = gen_account_in("wonderland");
+        let (target_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(2);
+        let catalog = dataspace_catalog(&[(dataspace_id, "restricted")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::UNIVERSAL,
+            rules: Vec::new(),
+        };
+        let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
+        let proposed = vec![InstructionBox::from(Register::account(
+            Account::new(target_id).with_label(Some(account_alias("retail@restricted", &catalog))),
+        ))];
+        let proposal_hash = HashOf::new(&proposed);
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![
+                InstructionBox::from(MultisigPropose::new(multisig_id.clone(), proposed, None)),
+                InstructionBox::from(MultisigApprove::new(multisig_id.clone(), proposal_hash)),
+            ],
+        );
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
+        let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
+        state.nexus.write().lane_catalog = lane_catalog;
+        let expected_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
+
+        assert_eq!(
+            router
+                .try_route_plan_with_view(&tx, &state.view())
+                .expect("same-transaction approval should use the sibling proposal route"),
+            expected_plan
+        );
+        assert_eq!(
+            evaluate_policy_plan_with_catalog_and_world(
+                &policy,
+                router.lane_catalog.as_ref(),
+                &state.view().nexus().dataspace_catalog,
+                &tx,
+                state.view().world(),
+            )
+            .expect("validation plan should use the sibling proposal route"),
             expected_plan
         );
     }

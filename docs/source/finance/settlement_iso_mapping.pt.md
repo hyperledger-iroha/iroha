@@ -52,7 +52,7 @@ obrigações que a ponte Norito ↔ ISO 20022 deve cumprir antes de emitir mens
     ausente, carregue IDs proprietários com rótulos `Prtry` claros e inclua BIC nos metadados.[^iso_cr]
 - **Local de liquidação/local** → **MIC** para o local e **BIC** para o CSD.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` e `colr.007` (gestão de garantias)
+##### `colr.010` / `.011` / `.012` (gestão de garantias)
 
 - Siga as mesmas regras do instrumento `sese.*` (preferencialmente ISIN).
 - As partes usam **BIC** por padrão; **LEI** é aceitável onde o esquema o expõe.[^swift_bic]
@@ -227,7 +227,7 @@ iroha app settlement dvp \
   --iso-xml-out sese023_preview.xml
 ```
 
-### Substituição de garantia de recompra → `colr.007`| Campo / contexto do repositório | Caminho ISO 20022 | Notas |
+### Substituição de garantia de recompra → `colr.012`| Campo / contexto do repositório | Caminho ISO 20022 | Notas |
 |-------------------------------------------------|-----------------------------------|-------|
 | `agreement_id` (`RepoIsi` / `ReverseRepoIsi`) | `OblgtnId` | Identificador do contrato de recompra |
 | Substituição de garantias Identificador Tx | `TxId` | Gerado por substituição |

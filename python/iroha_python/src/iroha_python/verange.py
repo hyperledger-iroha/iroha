@@ -10,6 +10,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from norito.crc64 import crc64
+from norito import header as norito_header
+from norito.varint import decode_varint
 
 VERANGE_BACKEND = "stark/fri/sha256-goldilocks"
 VERANGE_CIRCUIT_ID = "stark/fri/sha256-goldilocks:verange_transparent_range_v1"
@@ -30,6 +32,10 @@ VERANGE_COMMITMENT_SCHEMES = frozenset(
 DEFAULT_PRIVACY_MAX_PROOF_BYTES = 64 * 1024 * 1024
 DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES = 1024 * 1024
 DEFAULT_PRIVACY_MAX_AUX_BYTES = 64 * 1024
+_CRC64_MASK = 0xFFFF_FFFF_FFFF_FFFF
+_CRC64_XZ_POLY = 0xC96C_5795_D787_0F42
+_CRC64_XZ_TABLE: tuple[int, ...] | None = None
+_OPEN_VERIFY_SUPPORTED_LAYOUT_FLAGS = norito_header.COMPACT_LEN
 
 _OPEN_VERIFY_SCHEMA_HASH = hashlib.sha256(
     b"norito:v1:type-name\0iroha_data_model::zk::OpenVerifyEnvelope"
@@ -115,6 +121,35 @@ _BACKEND_TAGS = {
 }
 _BACKEND_NAMES_BY_TAG = {value[0]: value[1] for value in _BACKEND_TAGS.values()}
 _MISSING = object()
+
+
+def _crc64_xz_table() -> tuple[int, ...]:
+    global _CRC64_XZ_TABLE
+    if _CRC64_XZ_TABLE is None:
+        table: list[int] = []
+        for byte in range(256):
+            crc = byte
+            for _ in range(8):
+                if crc & 1:
+                    crc = (crc >> 1) ^ _CRC64_XZ_POLY
+                else:
+                    crc >>= 1
+            table.append(crc & _CRC64_MASK)
+        _CRC64_XZ_TABLE = tuple(table)
+    return _CRC64_XZ_TABLE
+
+
+def _crc64_xz(payload: bytes) -> int:
+    crc = _CRC64_MASK
+    table = _crc64_xz_table()
+    for byte in payload:
+        index = (crc ^ byte) & 0xFF
+        crc = (table[index] ^ (crc >> 8)) & _CRC64_MASK
+    return crc ^ _CRC64_MASK
+
+
+def _crc64_matches(payload: bytes, expected: int) -> bool:
+    return expected in {crc64(payload), _crc64_xz(payload)}
 
 __all__ = [
     "VERANGE_BACKEND",
@@ -872,11 +907,23 @@ def _encode_field(payload: bytes) -> bytes:
     return len(payload).to_bytes(8, "little") + payload
 
 
-def _read_field(payload: bytes, offset: int, context: str) -> tuple[bytes, int]:
-    if offset + 8 > len(payload):
-        raise ValueError(f"{context} is truncated")
-    length = int.from_bytes(payload[offset : offset + 8], "little")
-    offset += 8
+def _read_field(
+    payload: bytes,
+    offset: int,
+    context: str,
+    *,
+    compact_len: bool = False,
+) -> tuple[bytes, int]:
+    if compact_len:
+        try:
+            length, offset = decode_varint(payload, offset)
+        except ValueError as exc:
+            raise ValueError(f"{context} is truncated") from exc
+    else:
+        if offset + 8 > len(payload):
+            raise ValueError(f"{context} is truncated")
+        length = int.from_bytes(payload[offset : offset + 8], "little")
+        offset += 8
     end = offset + length
     if end > len(payload):
         raise ValueError(f"{context} length exceeds available bytes")
@@ -956,7 +1003,7 @@ def _frame_open_verify_payload(payload: bytes) -> bytes:
             _OPEN_VERIFY_SCHEMA_HASH,
             b"\x00",
             len(payload).to_bytes(8, "little"),
-            crc64(payload).to_bytes(8, "little"),
+            _crc64_xz(payload).to_bytes(8, "little"),
             b"\x00",
             payload,
         ]
@@ -1124,17 +1171,33 @@ def _decode_privacy_proof_envelope_internal(
     payload_length = int.from_bytes(data[23:31], "little")
     expected_crc = int.from_bytes(data[31:39], "little")
     flags = data[39]
-    if flags != 0:
+    if flags & ~_OPEN_VERIFY_SUPPORTED_LAYOUT_FLAGS:
         raise ValueError("privacyProofEnvelope uses unsupported layout flags")
-    payload = data[40:]
-    if len(payload) != payload_length:
+    try:
+        norito_header.validate_flags(flags)
+    except Exception as exc:
+        raise ValueError("privacyProofEnvelope uses unsupported layout flags") from exc
+    body = data[40:]
+    if len(body) < payload_length:
         raise ValueError("privacyProofEnvelope payload length mismatch")
-    if crc64(payload) != expected_crc:
+    padding_len = len(body) - payload_length
+    if padding_len > norito_header.MAX_HEADER_PADDING:
+        raise ValueError("privacyProofEnvelope payload length mismatch")
+    if padding_len and any(byte != 0 for byte in body[:padding_len]):
+        raise ValueError("privacyProofEnvelope payload length mismatch")
+    payload = body[padding_len:]
+    if not _crc64_matches(payload, expected_crc):
         raise ValueError("privacyProofEnvelope CRC64 mismatch")
+    compact_len = bool(flags & norito_header.COMPACT_LEN)
     fields: dict[str, bytes] = {}
     offset = 0
     for name in ("backend", "circuit_id", "vk_hash", "public_inputs", "proof_bytes", "aux"):
-        fields[name], offset = _read_field(payload, offset, f"privacyProofEnvelope.{name}")
+        fields[name], offset = _read_field(
+            payload,
+            offset,
+            f"privacyProofEnvelope.{name}",
+            compact_len=compact_len,
+        )
     if offset != len(payload):
         raise ValueError("privacyProofEnvelope has trailing payload bytes")
     if len(fields["backend"]) != 4:
@@ -1149,11 +1212,21 @@ def _decode_privacy_proof_envelope_internal(
         raise ValueError("privacyProofEnvelope.vk_hash must contain exactly 32 bytes")
     if all(byte == 0 for byte in fields["vk_hash"]):
         raise ValueError("privacyProofEnvelope.vk_hash must be nonzero")
-    circuit_id, end = _read_field(fields["circuit_id"], 0, "privacyProofEnvelope.circuit_id")
+    circuit_id, end = _read_field(
+        fields["circuit_id"],
+        0,
+        "privacyProofEnvelope.circuit_id",
+        compact_len=compact_len,
+    )
     if end != len(fields["circuit_id"]):
         raise ValueError("privacyProofEnvelope.circuit_id has trailing bytes")
     for field in ("public_inputs", "proof_bytes", "aux"):
-        inner, end = _read_field(fields[field], 0, f"privacyProofEnvelope.{field}")
+        inner, end = _read_field(
+            fields[field],
+            0,
+            f"privacyProofEnvelope.{field}",
+            compact_len=False,
+        )
         if end != len(fields[field]):
             raise ValueError(f"privacyProofEnvelope.{field} has trailing bytes")
         if field != "aux" and not inner:

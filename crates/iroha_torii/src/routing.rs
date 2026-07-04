@@ -5561,6 +5561,8 @@ pub struct ZkMerklePathGetResponseDto {
     pub frontier_len: u32,
     /// Fixed confidential-v2 tree depth.
     pub tree_depth: u32,
+    /// Inclusion path for the next padded zero leaf at `frontier_len`.
+    pub next_zero_path: Option<ZkMerklePathDto>,
     /// Paths returned in the same order as the request commitments.
     pub paths: Vec<ZkMerklePathDto>,
 }
@@ -16292,10 +16294,43 @@ pub async fn handle_v1_zk_merkle_path(
     })?;
     let tree_depth = u32::try_from(iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2)
         .map_err(|_| zk_query_conversion_error("tree depth does not fit in the response schema"))?;
+    let next_zero_path = if st.commitments.len()
+        < iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2
+    {
+        let leaf_index = st.commitments.len();
+        let path = iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(
+            &st.commitments,
+            leaf_index,
+        )
+        .map_err(|err| {
+            zk_query_conversion_error(format!(
+                "failed to compute next zero-leaf path at index {leaf_index}: {err}"
+            ))
+        })?;
+        if path.root != root {
+            return Err(zk_query_conversion_error(
+                "computed next zero-leaf path root does not match current frontier root",
+            ));
+        }
+        let leaf_index = u32::try_from(leaf_index).map_err(|_| {
+            zk_query_conversion_error("next zero-leaf index does not fit in the response schema")
+        })?;
+        Some(ZkMerklePathDto {
+            commitment: hex::encode([0u8; 32]),
+            leaf_index,
+            siblings: path.siblings.iter().map(hex::encode).collect(),
+            directions: path.directions.clone(),
+            witness_nodes: path.witness_nodes.iter().map(hex::encode).collect(),
+            root: hex::encode(path.root),
+        })
+    } else {
+        None
+    };
     let resp = ZkMerklePathGetResponseDto {
         root: hex::encode(root),
         frontier_len,
         tree_depth,
+        next_zero_path,
         paths,
     };
     let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
@@ -17679,6 +17714,18 @@ mod zk_roots_selector_tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(payload.paths[0].root, hex::encode(expected.root));
+        let next_zero_path = payload
+            .next_zero_path
+            .as_ref()
+            .expect("next zero path should be present");
+        assert_eq!(next_zero_path.commitment, hex::encode([0u8; 32]));
+        assert_eq!(next_zero_path.leaf_index, commitments.len() as u32);
+        let expected_zero = iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(
+            &commitments,
+            commitments.len(),
+        )
+        .expect("expected next zero path");
+        assert_eq!(next_zero_path.root, hex::encode(expected_zero.root));
     }
 
     #[tokio::test]
@@ -17723,6 +17770,14 @@ mod zk_roots_selector_tests {
         assert_eq!(payload.frontier_len, 1);
         assert_eq!(payload.paths.len(), 1);
         assert_eq!(payload.paths[0].leaf_index, 0);
+        assert_eq!(
+            payload
+                .next_zero_path
+                .as_ref()
+                .expect("next zero path")
+                .leaf_index,
+            1
+        );
     }
 
     #[tokio::test]
@@ -17758,6 +17813,14 @@ mod zk_roots_selector_tests {
             norito::json::from_slice(&bytes).expect("json response payload");
         assert_eq!(payload.root, hex::encode(root));
         assert!(payload.paths.is_empty());
+        assert_eq!(
+            payload
+                .next_zero_path
+                .as_ref()
+                .expect("next zero path")
+                .leaf_index,
+            commitments.len() as u32
+        );
     }
 
     #[tokio::test]

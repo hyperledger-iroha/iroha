@@ -15648,6 +15648,23 @@ def check_javascript(texts, errors):
             f"{relative} append output selector alias boundary",
             errors,
         )
+        require_not_regex(
+            texts,
+            relative,
+            r"outputProofCircuitId === undefined[\s\S]{0,160}return \"\"",
+            f"{relative} append output selector must not collapse missing selectors",
+            errors,
+        )
+        require_contains(
+            texts,
+            relative,
+            (
+                "export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {",
+                "return outputProofCircuitId;",
+            ),
+            f"{relative} append output selector normalizer exactness",
+            errors,
+        )
 
     for relative in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js"):
         require_contains(
@@ -19486,6 +19503,24 @@ def check_python(texts, errors):
         wrapper,
         r"output_proof_circuit_id: str \| None = None",
         "Python append request must require an explicit output proof circuit id",
+        errors,
+    )
+    require_not_regex(
+        texts,
+        wrapper,
+        r"if output_proof_circuit_id in \(None, \"\"\):\s*return \"\"",
+        "Python append output selector normalizer must not collapse missing selectors",
+        errors,
+    )
+    require_contains(
+        texts,
+        wrapper,
+        (
+            "def normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(",
+            ") -> str | None:",
+            "return output_proof_circuit_id",
+        ),
+        "Python append output selector normalizer exactness",
         errors,
     )
     require_contains(

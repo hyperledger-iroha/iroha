@@ -1,12 +1,10 @@
-//! Basic scaffolding for ISO 20022 message handling opcodes.
+//! ISO 20022 message handling opcodes and bridge parser support.
 //!
-//! The real implementation will rely on generated schema information for every
-//! ISO 20022 message type.  For now we keep the design deliberately simple so
-//! that other parts of the VM can start integrating with the API.  The
-//! functions below maintain a very small in-memory *stack* of messages which
-//! allows opcodes like `MSG_CLONE` to duplicate the current message.  This keeps
-//! the API lightweight while still letting tests and prototypes exercise opcode
-//! behaviour without bringing in heavy dependencies or parsing logic.
+//! The module keeps a compact in-memory message stack for IVM opcodes while
+//! providing deterministic XML and key-value parsing for the ISO bridge. XML
+//! payloads are bound to their declared ISO message definition through
+//! `MsgDefIdr` and `Document` XSD namespaces before schema-table validation is
+//! applied.
 
 use core::fmt;
 use std::{
@@ -261,7 +259,7 @@ fn clear_validation_failure() {
 fn schema_for(message_type: &str) -> Option<&'static MessageSchema> {
     match canonical_message_type(message_type).as_ref() {
         "head.001" => Some(&HEAD001_SCHEMA),
-        "colr.007" | "colr.012" => Some(&COLR007_SCHEMA),
+        "colr.012" => Some(&COLR012_SCHEMA),
         "pacs.008" => Some(&PACS008_SCHEMA),
         "pacs.002" => Some(&PACS002_SCHEMA),
         "pacs.004" => Some(&PACS004_SCHEMA),
@@ -1502,7 +1500,7 @@ const SESE025_SCHEMA: MessageSchema = MessageSchema {
     aliases: SESE025_ALIASES,
 };
 
-const COLR007_FIELDS: &[FieldSpec] = &[
+const COLR012_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("TxId", FieldKind::Text),
     FieldSpec::required("OblgtnId", FieldKind::Text),
     FieldSpec::required("Substitution/OriginalAmt", FieldKind::Amount),
@@ -1523,7 +1521,7 @@ const COLR007_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("Substitution/ReasonCd", FieldKind::Text),
 ];
 
-const COLR007_ALIASES: &[AliasSpec] = &[
+const COLR012_ALIASES: &[AliasSpec] = &[
     AliasSpec {
         alias: "Document/CollSbstitnConf/TxId",
         canonical: "TxId",
@@ -1582,9 +1580,9 @@ const COLR007_ALIASES: &[AliasSpec] = &[
     },
 ];
 
-const COLR007_SCHEMA: MessageSchema = MessageSchema {
-    fields: COLR007_FIELDS,
-    aliases: COLR007_ALIASES,
+const COLR012_SCHEMA: MessageSchema = MessageSchema {
+    fields: COLR012_FIELDS,
+    aliases: COLR012_ALIASES,
 };
 
 /// Errors that can occur when preparing or sending ISO 20022 messages.
@@ -2057,11 +2055,8 @@ pub mod norito_schemas {
     }
 
     /// Norito schema for collateral substitution confirmations.
-    ///
-    /// The supported production message family is `colr.012`; the legacy
-    /// `colr.007` helper remains accepted for existing local fixtures.
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-    pub struct Colr007 {
+    pub struct Colr012 {
         pub tx_id: String,
         pub obligation_id: String,
         pub original_amount: String,
@@ -2076,10 +2071,10 @@ pub mod norito_schemas {
         pub reason_code: Option<String>,
     }
 
-    impl Colr007 {
+    impl Colr012 {
         /// Populate the VM stack with a substitution confirmation.
         pub fn apply_to_stack(&self) {
-            msg_create("colr.007");
+            msg_create("colr.012");
             msg_set("TxId", self.tx_id.as_bytes());
             msg_set("OblgtnId", self.obligation_id.as_bytes());
             msg_set("Substitution/OriginalAmt", self.original_amount.as_bytes());
@@ -3214,16 +3209,18 @@ fn serialize_xml(message: &IsoMessage, schema: Option<&'static MessageSchema>) -
     for (key, value, _) in collect_fields_in_order(message, schema) {
         let path = escape_xml_attr(key);
         if let Ok(text) = core::str::from_utf8(value) {
-            let escaped = escape_xml_text(text);
-            let _ = write!(out, "<Field path=\"{path}\">{escaped}</Field>");
-        } else {
-            let encoded = encode_base64(value);
-            let encoded_str = String::from_utf8(encoded).unwrap_or_default();
-            let _ = write!(
-                out,
-                "<Field path=\"{path}\" encoding=\"base64\">{encoded_str}</Field>"
-            );
+            if contains_only_xml_characters(text) {
+                let escaped = escape_xml_text(text);
+                let _ = write!(out, "<Field path=\"{path}\">{escaped}</Field>");
+                continue;
+            }
         }
+        let encoded = encode_base64(value);
+        let encoded_str = String::from_utf8(encoded).unwrap_or_default();
+        let _ = write!(
+            out,
+            "<Field path=\"{path}\" encoding=\"base64\">{encoded_str}</Field>"
+        );
     }
     out.extend_from_slice(b"</ISO20022>");
     out
@@ -3237,13 +3234,130 @@ fn local_name(name: &str) -> &str {
     name.rsplit(':').next().unwrap_or(name)
 }
 
+const ISO_20022_XSD_NAMESPACE_PREFIX: &str = "urn:iso:std:iso:20022:tech:xsd:";
+
 fn message_type_from_namespace(ns: &str) -> Option<String> {
-    ns.rsplit(':').next().map(|s| s.to_owned())
+    ns.strip_prefix(ISO_20022_XSD_NAMESPACE_PREFIX)
+        .filter(|message_type| !message_type.is_empty())
+        .map(str::to_owned)
+}
+
+fn namespace_bindings(attrs: &[(String, String)]) -> Vec<(String, String)> {
+    attrs
+        .iter()
+        .filter_map(|(name, value)| {
+            if name == "xmlns" {
+                Some(("".to_owned(), value.to_owned()))
+            } else {
+                name.strip_prefix("xmlns:")
+                    .map(|prefix| (prefix.to_owned(), value.to_owned()))
+            }
+        })
+        .collect()
+}
+
+fn namespace_uri_for_prefix<'a>(
+    prefix: &str,
+    attrs: &'a [(String, String)],
+    namespace_scopes: &'a [Vec<(String, String)>],
+) -> Option<&'a str> {
+    if prefix == "xml" {
+        return Some("http://www.w3.org/XML/1998/namespace");
+    }
+    attrs
+        .iter()
+        .rev()
+        .find_map(|(name, value)| {
+            if prefix.is_empty() && name == "xmlns" {
+                Some(value.as_str())
+            } else if let Some(bound_prefix) = name.strip_prefix("xmlns:") {
+                (bound_prefix == prefix).then_some(value.as_str())
+            } else {
+                None
+            }
+        })
+        .or_else(|| {
+            namespace_scopes.iter().rev().find_map(|scope| {
+                scope.iter().rev().find_map(|(bound_prefix, value)| {
+                    (bound_prefix == prefix).then_some(value.as_str())
+                })
+            })
+        })
+}
+
+fn element_namespace_uri<'a>(
+    name: &str,
+    attrs: &'a [(String, String)],
+    namespace_scopes: &'a [Vec<(String, String)>],
+) -> Result<Option<&'a str>, MsgError> {
+    if let Some((prefix, local)) = name.split_once(':') {
+        if prefix.is_empty() || local.is_empty() {
+            return Err(MsgError::InvalidFormat);
+        }
+        return namespace_uri_for_prefix(prefix, attrs, namespace_scopes)
+            .map(Some)
+            .ok_or(MsgError::InvalidFormat);
+    }
+    Ok(namespace_uri_for_prefix("", attrs, namespace_scopes))
+}
+
+fn is_versioned_message_definition_id(message_type: &str) -> bool {
+    let mut parts = message_type.split('.');
+    let (Some(_business_area), Some(number), Some(variant), Some(version)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    parts.next().is_none()
+        && number.len() == 3
+        && variant.len() == 3
+        && version.len() == 2
+        && number.chars().all(|c| c.is_ascii_digit())
+        && variant.chars().all(|c| c.is_ascii_digit())
+        && version.chars().all(|c| c.is_ascii_digit())
+}
+
+fn declared_message_definitions_match(first: &str, second: &str) -> bool {
+    if is_versioned_message_definition_id(first) || is_versioned_message_definition_id(second) {
+        first.eq_ignore_ascii_case(second)
+    } else {
+        canonical_message_type(first)
+            .as_ref()
+            .eq_ignore_ascii_case(canonical_message_type(second).as_ref())
+    }
+}
+
+fn requested_message_matches_declaration(requested: &str, declared: &str) -> bool {
+    if is_versioned_message_definition_id(requested) {
+        requested.eq_ignore_ascii_case(declared)
+    } else {
+        canonical_message_type(requested)
+            .as_ref()
+            .eq_ignore_ascii_case(canonical_message_type(declared).as_ref())
+    }
+}
+
+fn observe_declared_message_type(
+    declared_message_type: &mut Option<String>,
+    candidate: &str,
+) -> Result<(), MsgError> {
+    let candidate = candidate.trim();
+    if candidate.is_empty() {
+        return Err(MsgError::InvalidFormat);
+    }
+    if let Some(declared) = declared_message_type.as_deref() {
+        if !declared_message_definitions_match(declared, candidate) {
+            return Err(MsgError::UnknownMessageType);
+        }
+    } else {
+        *declared_message_type = Some(candidate.to_owned());
+    }
+    Ok(())
 }
 
 fn document_root_matches_message(message_type: &str, root: &str) -> Option<bool> {
     Some(match canonical_message_type(message_type).as_ref() {
-        "colr.007" | "colr.012" => root == "CollSbstitnConf",
+        "colr.012" => root == "CollSbstitnConf",
         "pacs.002" => root == "FIToFIPmtStsRpt",
         "pacs.004" => root == "PmtRtr",
         "pacs.007" => root == "FIToFIPmtRvsl",
@@ -3339,72 +3453,144 @@ fn find_tag_end(bytes: &[u8], start: usize) -> Option<usize> {
     None
 }
 
-fn parse_attributes(tag_body: &str) -> Vec<(String, String)> {
+fn supported_xml_comment_end(text: &str, start: usize) -> Result<usize, MsgError> {
+    let Some(body_start) = text[start..].strip_prefix("<!--").map(|_| start + 4) else {
+        return Err(MsgError::InvalidFormat);
+    };
+    let Some(comment_end) = text[body_start..]
+        .find("-->")
+        .map(|offset| body_start + offset)
+    else {
+        return Err(MsgError::InvalidFormat);
+    };
+    let body = &text[body_start..comment_end];
+    if body.contains("--") || body.ends_with('-') {
+        return Err(MsgError::InvalidFormat);
+    }
+    Ok(comment_end + 3)
+}
+
+fn supported_processing_instruction_end(text: &str, start: usize) -> Result<usize, MsgError> {
+    let Some(body_start) = text[start..].strip_prefix("<?").map(|_| start + 2) else {
+        return Err(MsgError::InvalidFormat);
+    };
+    let Some(pi_end) = text[body_start..]
+        .find("?>")
+        .map(|offset| body_start + offset)
+    else {
+        return Err(MsgError::InvalidFormat);
+    };
+    let body = &text[body_start..pi_end];
+    if body.is_empty() || body.chars().next().is_some_and(char::is_whitespace) {
+        return Err(MsgError::InvalidFormat);
+    }
+    let target = body
+        .split(char::is_whitespace)
+        .next()
+        .ok_or(MsgError::InvalidFormat)?;
+    if !is_supported_xml_name(target) {
+        return Err(MsgError::InvalidFormat);
+    }
+    Ok(pi_end + 2)
+}
+
+fn supported_special_xml_markup_end(text: &str, start: usize) -> Result<Option<usize>, MsgError> {
+    if text[start..].starts_with("<!--") {
+        return supported_xml_comment_end(text, start).map(Some);
+    }
+    if text[start..].starts_with("<?") {
+        return supported_processing_instruction_end(text, start).map(Some);
+    }
+    if text[start..].starts_with("<!") {
+        return Err(MsgError::InvalidFormat);
+    }
+    Ok(None)
+}
+
+fn parse_attributes(tag_body: &str) -> Result<Vec<(String, String)>, MsgError> {
     let mut attrs = Vec::new();
     let mut cursor = tag_body.trim();
     if let Some((_, rest)) = cursor.split_once(char::is_whitespace) {
         cursor = rest.trim();
     } else {
-        return attrs;
+        return Ok(attrs);
     }
     if cursor.ends_with('/') {
         cursor = cursor.trim_end_matches('/').trim_end();
     }
     while !cursor.is_empty() {
-        let Some(eq_idx) = cursor.find('=') else {
-            break;
-        };
-        let name = cursor[..eq_idx].trim().to_owned();
-        let mut remainder = cursor[eq_idx + 1..].trim_start();
-        if remainder.is_empty() {
-            break;
+        let name_end = cursor
+            .find(|c: char| c.is_whitespace() || c == '=')
+            .unwrap_or(cursor.len());
+        if name_end == 0 {
+            return Err(MsgError::InvalidFormat);
         }
-        let (value, consumed) = if remainder.starts_with('"') || remainder.starts_with('\'') {
-            let quote = remainder.as_bytes()[0] as char;
-            remainder = &remainder[1..];
-            let Some(end_idx) = remainder.find(quote) else {
-                break;
-            };
-            (&remainder[..end_idx], end_idx + 1)
-        } else {
-            let end_idx = remainder
-                .find(char::is_whitespace)
-                .unwrap_or(remainder.len());
-            (&remainder[..end_idx], end_idx)
+        let name = &cursor[..name_end];
+        if !is_supported_xml_attribute_name(name)
+            || attrs.iter().any(|(attr_name, _)| attr_name == name)
+        {
+            return Err(MsgError::InvalidFormat);
+        }
+        let mut remainder = cursor[name_end..].trim_start();
+        if !remainder.starts_with('=') {
+            return Err(MsgError::InvalidFormat);
+        }
+        remainder = remainder[1..].trim_start();
+        let Some(quote) = remainder.chars().next() else {
+            return Err(MsgError::InvalidFormat);
         };
-        attrs.push((name, value.to_owned()));
-        remainder = remainder.get(consumed..).unwrap_or("").trim_start();
-        cursor = remainder;
+        if quote != '"' && quote != '\'' {
+            return Err(MsgError::InvalidFormat);
+        }
+        let value_start = quote.len_utf8();
+        let value_remainder = &remainder[value_start..];
+        let Some(value_end) = value_remainder.find(quote) else {
+            return Err(MsgError::InvalidFormat);
+        };
+        let value = &value_remainder[..value_end];
+        if value.contains('<') {
+            return Err(MsgError::InvalidFormat);
+        }
+        attrs.push((name.to_owned(), unescape_xml_text(value)?));
+        let consumed = value_start + value_end + quote.len_utf8();
+        cursor = remainder[consumed..].trim_start();
     }
-    attrs
+    Ok(attrs)
 }
 
-fn attr_value<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
-    let bytes = tag.as_bytes();
-    let name_bytes = name.as_bytes();
-    let mut i = 0;
-    while i + name_bytes.len() + 2 < bytes.len() {
-        if &bytes[i..i + name_bytes.len()] == name_bytes
-            && bytes[i + name_bytes.len()] == b'='
-            && bytes[i + name_bytes.len() + 1] == b'"'
-        {
-            let mut end = i + name_bytes.len() + 2;
-            while end < bytes.len() && bytes[end] != b'"' {
-                end += 1;
-            }
-            if end < bytes.len() {
-                return tag.get(i + name_bytes.len() + 2..end);
-            } else {
-                return None;
-            }
-        }
-        i += 1;
+fn is_supported_xml_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+}
+
+fn is_supported_xml_qname(name: &str) -> bool {
+    if name.matches(':').count() > 1 {
+        return false;
     }
-    None
+    if let Some((prefix, local)) = name.split_once(':') {
+        is_supported_xml_name(prefix) && is_supported_xml_name(local) && prefix != "xmlns"
+    } else {
+        is_supported_xml_name(name)
+    }
+}
+
+fn is_supported_xml_attribute_name(name: &str) -> bool {
+    if name == "xmlns" {
+        return true;
+    }
+    if let Some(prefix) = name.strip_prefix("xmlns:") {
+        return is_supported_xml_name(prefix) && !matches!(prefix, "xml" | "xmlns");
+    }
+    is_supported_xml_qname(name)
 }
 
 fn unescape_xml_text(input: &str) -> Result<String, MsgError> {
     if !input.contains('&') {
+        ensure_xml_characters(input)?;
         return Ok(input.to_owned());
     }
     let mut out = String::with_capacity(input.len());
@@ -3423,11 +3609,188 @@ fn unescape_xml_text(input: &str) -> Result<String, MsgError> {
             "gt" => out.push('>'),
             "quot" => out.push('"'),
             "apos" => out.push('\''),
-            _ => return Err(MsgError::InvalidFormat),
+            _ => out.push(decode_xml_character_reference(entity)?),
         }
     }
     out.push_str(remainder);
+    ensure_xml_characters(&out)?;
     Ok(out)
+}
+
+fn decode_xml_character_reference(entity: &str) -> Result<char, MsgError> {
+    let (digits, radix) = if let Some(digits) = entity
+        .strip_prefix("#x")
+        .or_else(|| entity.strip_prefix("#X"))
+    {
+        (digits, 16_u32)
+    } else if let Some(digits) = entity.strip_prefix('#') {
+        (digits, 10_u32)
+    } else {
+        return Err(MsgError::InvalidFormat);
+    };
+    if digits.is_empty() {
+        return Err(MsgError::InvalidFormat);
+    }
+    let mut value = 0_u32;
+    for byte in digits.bytes() {
+        let digit = match byte {
+            b'0'..=b'9' => u32::from(byte - b'0'),
+            b'a'..=b'f' if radix == 16 => u32::from(byte - b'a' + 10),
+            b'A'..=b'F' if radix == 16 => u32::from(byte - b'A' + 10),
+            _ => return Err(MsgError::InvalidFormat),
+        };
+        if digit >= radix {
+            return Err(MsgError::InvalidFormat);
+        }
+        value = value
+            .checked_mul(radix)
+            .and_then(|acc| acc.checked_add(digit))
+            .ok_or(MsgError::InvalidFormat)?;
+    }
+    let ch = char::from_u32(value).ok_or(MsgError::InvalidFormat)?;
+    if is_xml_character(ch) {
+        Ok(ch)
+    } else {
+        Err(MsgError::InvalidFormat)
+    }
+}
+
+fn is_xml_character(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF
+    )
+}
+
+fn contains_only_xml_characters(input: &str) -> bool {
+    input.chars().all(is_xml_character)
+}
+
+fn ensure_xml_characters(input: &str) -> Result<(), MsgError> {
+    if contains_only_xml_characters(input) {
+        Ok(())
+    } else {
+        Err(MsgError::InvalidFormat)
+    }
+}
+
+fn buffer_real_iso20022_text(
+    stack: &[String],
+    path: &str,
+    raw_text: &str,
+    element_child_counts: &[usize],
+    text_buffers: &mut HashMap<String, String>,
+) -> Result<(), MsgError> {
+    if raw_text.trim().is_empty() {
+        return Ok(());
+    }
+    if element_child_counts.last().copied().unwrap_or_default() != 0 {
+        return Err(MsgError::InvalidFormat);
+    }
+    let value = unescape_xml_text(raw_text)?;
+    text_buffers
+        .entry(path.to_owned())
+        .or_default()
+        .push_str(&value);
+    let _ = stack;
+    Ok(())
+}
+
+fn flush_real_iso20022_text(
+    stack: &[String],
+    declared_message_type: &mut Option<String>,
+    path: &str,
+    text_buffers: &mut HashMap<String, String>,
+) -> Result<(), MsgError> {
+    let Some(value) = text_buffers.remove(path) else {
+        return Ok(());
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    if stack
+        .last()
+        .is_some_and(|last| local_name(last) == "MsgDefIdr")
+    {
+        observe_declared_message_type(declared_message_type, trimmed)?;
+    }
+    msg_set(path, trimmed.as_bytes());
+    Ok(())
+}
+
+fn parsed_attr_value<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    attrs
+        .iter()
+        .find_map(|(attr_name, value)| (attr_name == name).then_some(value.as_str()))
+}
+
+fn parse_named_opening_attributes(
+    raw_tag: &str,
+    expected_name: &str,
+) -> Result<Vec<(String, String)>, MsgError> {
+    let tag_body = raw_tag.trim();
+    if tag_body.ends_with('/') {
+        return Err(MsgError::InvalidFormat);
+    }
+    let (name_part, _) = tag_body
+        .split_once(char::is_whitespace)
+        .unwrap_or((tag_body, ""));
+    if name_part != expected_name || !is_supported_xml_qname(name_part) {
+        return Err(MsgError::InvalidFormat);
+    }
+    parse_attributes(tag_body)
+}
+
+fn reject_unexpected_attrs(
+    attrs: &[(String, String)],
+    allowed: &[&str],
+    label: &'static str,
+) -> Result<(), MsgError> {
+    if attrs
+        .iter()
+        .any(|(name, _)| !allowed.iter().any(|allowed_name| allowed_name == name))
+    {
+        return Err(MsgError::InvalidFormat);
+    }
+    if allowed.iter().any(|name| {
+        attrs
+            .iter()
+            .filter(|(attr_name, _)| attr_name == name)
+            .count()
+            > 1
+    }) {
+        return Err(MsgError::InvalidFormat);
+    }
+    let _ = label;
+    Ok(())
+}
+
+fn is_supported_internal_field_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.split('/').all(|segment| {
+            if segment.is_empty() {
+                return false;
+            }
+            if let Some(attribute_name) = segment.strip_prefix('@') {
+                return is_supported_xml_name(attribute_name);
+            }
+            let (name, index) = if let Some(index_start) = segment.find('[') {
+                if !segment.ends_with(']') {
+                    return false;
+                }
+                (
+                    &segment[..index_start],
+                    Some(&segment[index_start + 1..segment.len() - 1]),
+                )
+            } else {
+                (segment, None)
+            };
+            is_supported_xml_name(name)
+                && index.is_none_or(|idx| {
+                    idx == "*" || !idx.is_empty() && idx.bytes().all(|b| b.is_ascii_digit())
+                })
+        })
 }
 
 fn parse_key_values(message_type: &str, text: &str) {
@@ -3446,12 +3809,17 @@ fn parse_key_values(message_type: &str, text: &str) {
 
 fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
     let mut stack: Vec<String> = Vec::new();
+    let mut qname_stack: Vec<String> = Vec::new();
     let mut skip_stack: Vec<bool> = Vec::new();
+    let mut element_child_counts: Vec<usize> = Vec::new();
     let mut skip_depth = 0usize;
     let repeating_bases = repeating_bases_for(message_type);
     let mut repeat_counters: HashMap<String, usize> = HashMap::new();
     let mut declared_message_type: Option<String> = None;
     let mut document_root_seen = false;
+    let mut top_level_root_seen = false;
+    let mut namespace_scopes: Vec<Vec<(String, String)>> = Vec::new();
+    let mut text_buffers: HashMap<String, String> = HashMap::new();
 
     let mut idx = 0usize;
     let bytes = text.as_bytes();
@@ -3465,16 +3833,15 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                 if skip_depth == 0
                     && let Some(path) = current_path(&stack)
                 {
-                    let trimmed = tail.trim();
-                    if !trimmed.is_empty() {
-                        if stack
-                            .last()
-                            .is_some_and(|last| local_name(last) == "MsgDefIdr")
-                        {
-                            declared_message_type.get_or_insert_with(|| trimmed.to_owned());
-                        }
-                        msg_set(&path, trimmed.as_bytes());
-                    }
+                    buffer_real_iso20022_text(
+                        &stack,
+                        &path,
+                        tail,
+                        &element_child_counts,
+                        &mut text_buffers,
+                    )?;
+                } else if skip_depth == 0 && !tail.trim().is_empty() {
+                    return Err(MsgError::InvalidFormat);
                 }
                 break;
             }
@@ -3482,17 +3849,20 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         if next_lt > idx && skip_depth == 0 {
             let body = &text[idx..next_lt];
             if let Some(path) = current_path(&stack) {
-                let trimmed = body.trim();
-                if !trimmed.is_empty() {
-                    if stack
-                        .last()
-                        .is_some_and(|last| local_name(last) == "MsgDefIdr")
-                    {
-                        declared_message_type.get_or_insert_with(|| trimmed.to_owned());
-                    }
-                    msg_set(&path, trimmed.as_bytes());
-                }
+                buffer_real_iso20022_text(
+                    &stack,
+                    &path,
+                    body,
+                    &element_child_counts,
+                    &mut text_buffers,
+                )?;
+            } else if !body.trim().is_empty() {
+                return Err(MsgError::InvalidFormat);
             }
+        }
+        if let Some(special_end) = supported_special_xml_markup_end(text, next_lt)? {
+            idx = special_end;
+            continue;
         }
         let Some(tag_end) = find_tag_end(bytes, next_lt + 1) else {
             return Err(MsgError::InvalidFormat);
@@ -3501,12 +3871,20 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         idx = tag_end + 1;
 
         let tag = raw_tag.trim();
-        if tag.starts_with("!--") || tag.starts_with("?") {
-            continue;
+        if tag.starts_with('?') || tag.starts_with('!') {
+            return Err(MsgError::InvalidFormat);
         }
         let closing = tag.starts_with('/');
         let tag_body = if closing {
-            tag.trim_start_matches('/').trim()
+            let closing_body = tag.strip_prefix('/').ok_or(MsgError::InvalidFormat)?;
+            if closing_body.chars().next().is_some_and(char::is_whitespace) {
+                return Err(MsgError::InvalidFormat);
+            }
+            let closing_body = closing_body.trim();
+            if closing_body.is_empty() || closing_body.chars().any(char::is_whitespace) {
+                return Err(MsgError::InvalidFormat);
+            }
+            closing_body
         } else {
             tag
         };
@@ -3520,28 +3898,78 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         let (name_part, _) = tag_body
             .split_once(char::is_whitespace)
             .unwrap_or((tag_body, ""));
+        if !is_supported_xml_qname(name_part) {
+            return Err(MsgError::InvalidFormat);
+        }
         let lname = local_name(name_part);
 
         if closing {
+            let Some(opened) = qname_stack.pop() else {
+                return Err(MsgError::InvalidFormat);
+            };
+            if opened != name_part {
+                return Err(MsgError::InvalidFormat);
+            }
             if let Some(skipped) = skip_stack.pop()
                 && skipped
                 && skip_depth > 0
             {
                 skip_depth -= 1;
             }
+            if skip_depth == 0
+                && let Some(path) = current_path(&stack)
+            {
+                flush_real_iso20022_text(
+                    &stack,
+                    &mut declared_message_type,
+                    &path,
+                    &mut text_buffers,
+                )?;
+            }
             stack.pop();
+            element_child_counts.pop();
+            namespace_scopes.pop();
             continue;
         }
 
-        let attrs = parse_attributes(tag_body);
+        let attrs = parse_attributes(tag_body)?;
+        if skip_depth == 0 && stack.is_empty() {
+            if top_level_root_seen {
+                return Err(MsgError::InvalidFormat);
+            }
+            top_level_root_seen = true;
+        }
+        let current_namespace_bindings = namespace_bindings(&attrs);
         let parent_is_document = skip_depth == 0
             && stack
                 .last()
                 .is_some_and(|parent| local_name(parent) == "Document");
+        let is_skipped = should_skip_element(lname);
+        let element_namespace = if skip_depth == 0 && !is_skipped {
+            element_namespace_uri(name_part, &attrs, &namespace_scopes)?
+        } else {
+            None
+        };
+        if skip_depth == 0 && lname == "Document" {
+            let Some(namespace) = element_namespace else {
+                return Err(MsgError::UnknownMessageType);
+            };
+            let Some(mt) = message_type_from_namespace(namespace) else {
+                return Err(MsgError::UnknownMessageType);
+            };
+            observe_declared_message_type(&mut declared_message_type, &mt)?;
+        }
         if parent_is_document
             && !should_skip_element(lname)
             && let Some(matches) = document_root_matches_message(message_type, lname)
         {
+            let Some(namespace) = element_namespace else {
+                return Err(MsgError::UnknownMessageType);
+            };
+            let Some(mt) = message_type_from_namespace(namespace) else {
+                return Err(MsgError::UnknownMessageType);
+            };
+            observe_declared_message_type(&mut declared_message_type, &mt)?;
             if !matches {
                 return Err(MsgError::UnknownMessageType);
             }
@@ -3559,9 +3987,24 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             element_name = format!("{lname}[{counter}]");
             *counter += 1;
         }
+        if skip_depth == 0
+            && let Some(parent_path) = current_path(&stack)
+        {
+            if text_buffers
+                .get(&parent_path)
+                .is_some_and(|text| !text.trim().is_empty())
+            {
+                return Err(MsgError::InvalidFormat);
+            }
+            if let Some(child_count) = element_child_counts.last_mut() {
+                *child_count += 1;
+            }
+        }
         stack.push(element_name.clone());
+        qname_stack.push(name_part.to_owned());
+        element_child_counts.push(0);
+        namespace_scopes.push(current_namespace_bindings);
 
-        let is_skipped = should_skip_element(lname);
         if is_skipped && skip_depth == 0 {
             // Track that a signature subtree was present while deliberately ignoring its contents.
             if let Some(path) = current_path(&stack) {
@@ -3575,15 +4018,6 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         }
 
         if skip_depth == 0 {
-            if lname == "Document" {
-                for (attr_name, value) in &attrs {
-                    if attr_name == "xmlns"
-                        && let Some(mt) = message_type_from_namespace(value)
-                    {
-                        declared_message_type.get_or_insert(mt);
-                    }
-                }
-            }
             if let Some(path) = current_path(&stack) {
                 for (attr_name, value) in &attrs {
                     if attr_name.starts_with("xmlns") {
@@ -3603,13 +4037,19 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                 skip_depth -= 1;
             }
             stack.pop();
+            qname_stack.pop();
+            element_child_counts.pop();
+            namespace_scopes.pop();
         }
     }
 
+    if !qname_stack.is_empty() {
+        return Err(MsgError::InvalidFormat);
+    }
+
     if let Some(declared) = declared_message_type {
-        let canonical_declared = canonical_message_type(&declared);
-        let canonical_requested = canonical_message_type(message_type);
-        if canonical_requested != "head.001" && canonical_declared != canonical_requested {
+        let requested_head = canonical_message_type(message_type) == "head.001";
+        if !requested_head && !requested_message_matches_declaration(message_type, &declared) {
             return Err(MsgError::UnknownMessageType);
         }
     }
@@ -3621,36 +4061,56 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
 
 fn parse_xml_into_current(message_type: &str, text: &str) -> Result<(), MsgError> {
     let trimmed = text.trim();
-    let start = trimmed.find("<ISO20022").ok_or(MsgError::InvalidFormat)?;
-    let after_start = &trimmed[start..];
-    let tag_end = after_start.find('>').ok_or(MsgError::InvalidFormat)?;
-    let tag = &after_start[..tag_end];
-    let declared = attr_value(tag, "message").ok_or(MsgError::InvalidFormat)?;
+    if !trimmed.starts_with("<ISO20022") {
+        return Err(MsgError::InvalidFormat);
+    }
+    let tag_end = find_tag_end(trimmed.as_bytes(), 1).ok_or(MsgError::InvalidFormat)?;
+    let root_attrs = parse_named_opening_attributes(&trimmed[1..tag_end], "ISO20022")?;
+    reject_unexpected_attrs(&root_attrs, &["message"], "ISO20022")?;
+    let declared = parsed_attr_value(&root_attrs, "message").ok_or(MsgError::InvalidFormat)?;
     if declared != message_type {
         return Err(MsgError::UnknownMessageType);
     }
-    let cursor = &after_start[tag_end + 1..];
-    if let Some(close_idx) = cursor.find("</ISO20022>") {
-        let mut fields = &cursor[..close_idx];
-        while let Some(field_idx) = fields.find("<Field") {
-            fields = &fields[field_idx + "<Field".len()..];
-            let field_tag_end = fields.find('>').ok_or(MsgError::InvalidFormat)?;
-            let field_tag = &fields[..field_tag_end];
-            fields = &fields[field_tag_end + 1..];
-            let path = attr_value(field_tag, "path").ok_or(MsgError::InvalidFormat)?;
-            let encoding = attr_value(field_tag, "encoding");
-            let end_idx = fields.find("</Field>").ok_or(MsgError::InvalidFormat)?;
-            let value_text = fields[..end_idx].trim();
-            fields = &fields[end_idx + "</Field>".len()..];
-            let value = if encoding == Some("base64") {
-                decode_base64(value_text.as_bytes()).ok_or(MsgError::InvalidFormat)?
-            } else {
-                unescape_xml_text(value_text)?.into_bytes()
-            };
-            msg_set(path, &value);
-        }
-    } else {
+    let cursor = &trimmed[tag_end + 1..];
+    let close_idx = cursor.find("</ISO20022>").ok_or(MsgError::InvalidFormat)?;
+    if !cursor[close_idx + "</ISO20022>".len()..].trim().is_empty() {
         return Err(MsgError::InvalidFormat);
+    }
+    let mut fields = &cursor[..close_idx];
+    loop {
+        fields = fields.trim_start();
+        if fields.is_empty() {
+            break;
+        }
+        if !fields.starts_with("<Field") {
+            return Err(MsgError::InvalidFormat);
+        }
+        let field_tag_end = find_tag_end(fields.as_bytes(), 1).ok_or(MsgError::InvalidFormat)?;
+        let field_attrs = parse_named_opening_attributes(&fields[1..field_tag_end], "Field")?;
+        reject_unexpected_attrs(&field_attrs, &["path", "encoding"], "Field")?;
+        let path = parsed_attr_value(&field_attrs, "path").ok_or(MsgError::InvalidFormat)?;
+        if !is_supported_internal_field_path(path) {
+            return Err(MsgError::InvalidFormat);
+        }
+        let encoding = parsed_attr_value(&field_attrs, "encoding");
+        if let Some(encoding) = encoding
+            && encoding != "base64"
+        {
+            return Err(MsgError::InvalidFormat);
+        }
+        fields = &fields[field_tag_end + 1..];
+        let end_idx = fields.find("</Field>").ok_or(MsgError::InvalidFormat)?;
+        let value_text = fields[..end_idx].trim();
+        fields = &fields[end_idx + "</Field>".len()..];
+        let value = if encoding == Some("base64") {
+            decode_base64(value_text.as_bytes()).ok_or(MsgError::InvalidFormat)?
+        } else {
+            if value_text.contains('<') || value_text.contains("]]>") {
+                return Err(MsgError::InvalidFormat);
+            }
+            unescape_xml_text(value_text)?.into_bytes()
+        };
+        msg_set(path, &value);
     }
     Ok(())
 }
@@ -3957,10 +4417,9 @@ pub fn msg_clear() {
 
 /// Parse raw data into an ISO 20022 message.
 ///
-/// The temporary parser understands a very small "key=value" line oriented
-/// format so tests can interact with individual fields without pulling in a
-/// full XML stack. Lines that don't contain an `=` sign are ignored. Values
-/// are stored exactly as provided.
+/// The parser accepts deterministic internal `<ISO20022>` XML wrappers, real
+/// ISO 20022 XML payloads, and a compact `key=value` line-oriented format for
+/// tests. XML inputs fail closed on malformed structure before fields are stored.
 pub fn msg_parse(message_type: &str, data: &[u8]) -> Result<(), MsgError> {
     msg_create(message_type);
     let result = if looks_like_xml(data) {
@@ -4022,7 +4481,7 @@ pub fn msg_validate() -> bool {
                     }
                 }
             } else {
-                !m.fields.is_empty()
+                false
             }
         })
     })
@@ -4197,7 +4656,7 @@ mod tests {
     use norito::codec::{Decode, Encode};
 
     use super::{
-        norito_schemas::{Colr007, Linkage, Sese023, Sese025},
+        norito_schemas::{Colr012, Linkage, Sese023, Sese025},
         *,
     };
 
@@ -4393,7 +4852,7 @@ mod tests {
         msg_set("RsnCd", b"SETTLED");
     }
 
-    fn populate_colr007_minimal() {
+    fn populate_colr012_minimal() {
         msg_set("TxId", b"COLLATERAL-EXCHANGE-1");
         msg_set("OblgtnId", b"REPO-DAILY-1");
         msg_set("Substitution/OriginalAmt", b"1000000");
@@ -4478,8 +4937,8 @@ mod tests {
         }
     }
 
-    fn expected_colr007_schema() -> Colr007 {
-        Colr007 {
+    fn expected_colr012_schema() -> Colr012 {
+        Colr012 {
             tx_id: "COLR-FIXTURE-1".to_owned(),
             obligation_id: "REPO-123".to_owned(),
             original_amount: "1000000".to_owned(),
@@ -5477,7 +5936,6 @@ mod tests {
     #[test]
     fn iso_xsd_document_roots_cover_supported_xml_families() {
         for (message_type, root) in [
-            ("colr.007.001.08", "CollSbstitnConf"),
             ("colr.012.001.05", "CollSbstitnConf"),
             ("pacs.002.001.10", "FIToFIPmtStsRpt"),
             ("pacs.004.001.09", "PmtRtr"),
@@ -5534,6 +5992,552 @@ mod tests {
         let err = parse_message("pacs.002.001.10", xml.as_bytes())
             .expect_err("real pacs.002 XML must carry its XSD document root");
         assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_requested_version_drift() {
+        reset();
+        let err = parse_message("pacs.008.001.10", SAMPLE_PACS008_XML.as_bytes())
+            .expect_err("exact requested MDR version must match payload declarations");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_header_document_definition_drift() {
+        reset();
+        let xml = SAMPLE_PACS008_XML.replace(
+            "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08",
+            "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10",
+        );
+        let err = parse_message("pacs.008", xml.as_bytes())
+            .expect_err("BAH MsgDefIdr must match Document XSD namespace exactly");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_spoofed_document_namespace_suffix() {
+        reset();
+        let xml = SAMPLE_PACS008_XML.replace(
+            "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08",
+            "https://attacker.invalid/schema:pacs.008.001.08",
+        );
+        let err = parse_message("pacs.008", xml.as_bytes())
+            .expect_err("Document namespace must use the exact ISO 20022 XSD prefix");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_empty_document_namespace_definition() {
+        reset();
+        let xml = SAMPLE_PACS008_XML.replace(
+            "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08",
+            "urn:iso:std:iso:20022:tech:xsd:",
+        );
+        let err = parse_message("pacs.008", xml.as_bytes())
+            .expect_err("Document namespace must include a concrete message definition");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_unqualified_document_namespace() {
+        reset();
+        let xml = SAMPLE_PACS008_XML.replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+            "<Document>",
+        );
+        let err = parse_message("pacs.008", xml.as_bytes())
+            .expect_err("Document must be bound to the ISO 20022 XSD namespace");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_accepts_prefixed_iso_document_namespace() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML
+            .replace(
+                r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+                r#"<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            )
+            .replace("<FIToFIPmtStsRpt>", "<pacs:FIToFIPmtStsRpt>")
+            .replace("</FIToFIPmtStsRpt>", "</pacs:FIToFIPmtStsRpt>")
+            .replace("</Document>", "</pacs:Document>");
+        let parsed = parse_message("pacs.002", xml.as_bytes())
+            .expect("prefixed Document and payload root should resolve to ISO namespace");
+
+        assert_eq!(parsed.message_type(), "pacs.002");
+        assert_eq!(parsed.field_text("MsgId"), Some("ISO-PACS002-STATUS"));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_prefixed_document_namespace_spoofing() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML
+            .replace(
+                r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+                r#"<pacs:Document xmlns:pacs="https://attacker.invalid/schema:pacs.002.001.10">"#,
+            )
+            .replace("<FIToFIPmtStsRpt>", "<pacs:FIToFIPmtStsRpt>")
+            .replace("</FIToFIPmtStsRpt>", "</pacs:FIToFIPmtStsRpt>")
+            .replace("</Document>", "</pacs:Document>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("prefixed Document namespace must use the ISO XSD URI");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_payload_root_namespace_spoofing() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML
+            .replace(
+                "<FIToFIPmtStsRpt>",
+                r#"<evil:FIToFIPmtStsRpt xmlns:evil="https://attacker.invalid/schema:pacs.002.001.10">"#,
+            )
+            .replace("</FIToFIPmtStsRpt>", "</evil:FIToFIPmtStsRpt>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("Document payload root must resolve to the ISO XSD namespace");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_mismatched_closing_tag() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace("</GrpHdr>", "</WrongGrpHdr>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("mismatched closing tags must fail real ISO XML parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_extra_closing_tag() {
+        reset();
+        let xml = format!("{SAMPLE_PACS002_STATUS_XML}</Document>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("extra closing tags must fail real ISO XML parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_attributed_closing_tag() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace("</GrpHdr>", r#"</GrpHdr attr="x">"#);
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("closing tags with attributes must fail real ISO XML parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_unclosed_document_tag() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace("</Document>", "");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("unclosed Document tags must fail real ISO XML parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_accepts_single_quoted_namespace_attribute() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            r#"<Document xmlns='urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10'>"#,
+        );
+        let parsed = parse_message("pacs.002", xml.as_bytes())
+            .expect("single-quoted XML attributes are well-formed");
+
+        assert_eq!(parsed.message_type(), "pacs.002");
+        assert_eq!(parsed.field_text("MsgId"), Some("ISO-PACS002-STATUS"));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_unquoted_namespace_attribute() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            r#"<Document xmlns=urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10>"#,
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("unquoted XML namespace attributes must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_unterminated_attribute_value() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10>"#,
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("unterminated XML attributes must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_duplicate_namespace_attribute() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10" xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("duplicate XML attributes must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_malformed_trailing_attribute() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10" malformed>"#,
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("malformed trailing XML attributes must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_decodes_xml_entities_in_text_and_attributes() {
+        reset();
+        let xml = SAMPLE_PACS008_XML
+            .replace(
+                "<BizMsgIdr>ISO-SAMPLE-008</BizMsgIdr>",
+                "<BizMsgIdr>ISO&#45;SAMPLE&amp;008</BizMsgIdr>",
+            )
+            .replace(
+                r#"<IntrBkSttlmAmt Ccy="USD">1400.00</IntrBkSttlmAmt>"#,
+                r#"<IntrBkSttlmAmt Ccy="US&#68;">1400.00</IntrBkSttlmAmt>"#,
+            );
+        let parsed = parse_message("pacs.008", xml.as_bytes())
+            .expect("valid XML character references should parse");
+
+        assert_eq!(
+            parsed.field_text("AppHdr/BizMsgIdr"),
+            Some("ISO-SAMPLE&008")
+        );
+        assert_eq!(parsed.field_text("IntrBkSttlmCcy"), Some("USD"));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_unknown_xml_entity_reference() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            "<MsgId>ISO-PACS002-STATUS</MsgId>",
+            "<MsgId>ISO-&xxe;-STATUS</MsgId>",
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("unknown XML entities must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_unterminated_xml_entity_reference() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            "<MsgId>ISO-PACS002-STATUS</MsgId>",
+            "<MsgId>ISO&amp-PACS002-STATUS</MsgId>",
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("unterminated XML entities must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_invalid_numeric_xml_character_reference() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<IntrBkSttlmAmt Ccy="USD">1400</IntrBkSttlmAmt>"#,
+            r#"<IntrBkSttlmAmt Ccy="US&#x0;">1400</IntrBkSttlmAmt>"#,
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("invalid XML numeric character references must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_raw_invalid_xml_character_in_text() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            "<MsgId>ISO-PACS002-STATUS</MsgId>",
+            "<MsgId>ISO-\u{1}-STATUS</MsgId>",
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("raw invalid XML characters in text must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_raw_invalid_xml_character_in_attribute() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<IntrBkSttlmAmt Ccy="USD">1400</IntrBkSttlmAmt>"#,
+            "<IntrBkSttlmAmt Ccy=\"US\u{1}\">1400</IntrBkSttlmAmt>",
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("raw invalid XML characters in attributes must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_raw_less_than_in_attribute_value() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<IntrBkSttlmAmt Ccy="USD">1400</IntrBkSttlmAmt>"#,
+            r#"<IntrBkSttlmAmt Ccy="US<D">1400</IntrBkSttlmAmt>"#,
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("raw less-than characters in XML attributes must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_accepts_xml_declaration_and_well_formed_comment() {
+        reset();
+        let xml =
+            format!("<?xml version=\"1.0\"?>\n<!--valid comment-->\n{SAMPLE_PACS002_STATUS_XML}");
+        let parsed = parse_message("pacs.002", xml.as_bytes())
+            .expect("well-formed XML declaration and comments should parse");
+
+        assert_eq!(parsed.message_type(), "pacs.002");
+        assert_eq!(parsed.field_text("MsgId"), Some("ISO-PACS002-STATUS"));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_concatenates_text_split_by_comment() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            "<MsgId>ISO-PACS002-STATUS</MsgId>",
+            "<MsgId>ISO-<!--valid-->PACS002-STATUS</MsgId>",
+        );
+        let parsed = parse_message("pacs.002", xml.as_bytes())
+            .expect("comments inside simple content should not overwrite text chunks");
+
+        assert_eq!(parsed.field_text("MsgId"), Some("ISO-PACS002-STATUS"));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_text_before_child_element() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace("<GrpHdr>", "<GrpHdr>mixed");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("mixed content before child elements must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_text_after_child_element() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace("</MsgId>", "</MsgId>mixed");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("mixed content after child elements must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_content_outside_single_root() {
+        for (label, xml) in [
+            (
+                "extra leading root",
+                format!("<Ignored/>{SAMPLE_PACS002_STATUS_XML}"),
+            ),
+            (
+                "trailing text",
+                format!("{SAMPLE_PACS002_STATUS_XML}outside"),
+            ),
+        ] {
+            reset();
+            let err = match parse_message("pacs.002", xml.as_bytes()) {
+                Ok(_) => panic!("{label} outside the ISO XML root must fail parsing"),
+                Err(err) => err,
+            };
+
+            assert!(matches!(err, MsgError::InvalidFormat), "{label}: {err:?}");
+            assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+        }
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_unterminated_comment() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace("<GrpHdr>", "<!--unterminated><GrpHdr>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("unterminated comments must fail real ISO XML parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_malformed_comment_body() {
+        reset();
+        let xml = format!("<!--bad--comment-->\n{SAMPLE_PACS002_STATUS_XML}");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("comments containing double hyphen must fail real ISO XML parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_malformed_processing_instruction() {
+        reset();
+        let xml = format!("<?bad processing>\n{SAMPLE_PACS002_STATUS_XML}");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("unterminated processing instructions must fail real ISO XML parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_unsupported_doctype_declaration() {
+        reset();
+        let xml =
+            format!("<!DOCTYPE Document [<!ENTITY x \"boom\">]>\n{SAMPLE_PACS002_STATUS_XML}");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("DOCTYPE declarations must fail real ISO XML parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_unsupported_cdata_section() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            "<MsgId>ISO-PACS002-STATUS</MsgId>",
+            "<MsgId><![CDATA[ISO-PACS002-STATUS]]></MsgId>",
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("CDATA must fail real ISO XML parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_malformed_document_qname() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML
+            .replace(
+                r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+                r#"<pacs::Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            )
+            .replace("</Document>", "</pacs::Document>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("malformed Document QNames must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_malformed_payload_root_qname() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML
+            .replace(
+                "<FIToFIPmtStsRpt>",
+                r#"<pacs::FIToFIPmtStsRpt xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            )
+            .replace("</FIToFIPmtStsRpt>", "</pacs::FIToFIPmtStsRpt>");
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("malformed payload root QNames must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_malformed_namespace_declaration_name() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            r#"<pacs:Document xmlns::pacs="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("malformed namespace declaration names must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_rejects_invalid_element_name_start() {
+        reset();
+        let xml = SAMPLE_PACS002_STATUS_XML.replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+            r#"<1Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">"#,
+        );
+        let err = parse_message("pacs.002", xml.as_bytes())
+            .expect_err("unsupported XML element names must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+        assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+    }
+
+    #[test]
+    fn parse_real_iso20022_allows_canonical_family_request_with_consistent_version() {
+        reset();
+        let parsed = parse_message("pacs.008", SAMPLE_PACS008_XML.as_bytes())
+            .expect("canonical family requests defer exact MDR allowlists to profiles");
+
+        assert_eq!(parsed.message_type(), "pacs.008");
+        assert_eq!(
+            parsed.field_text("AppHdr/MsgDefIdr"),
+            Some("pacs.008.001.08")
+        );
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
 
@@ -6067,31 +7071,28 @@ mod tests {
     }
 
     #[test]
-    fn colr007_roundtrip_and_norito_snapshot() {
+    fn colr012_roundtrip_and_norito_snapshot() {
         reset();
-        let schema = expected_colr007_schema();
+        let schema = expected_colr012_schema();
         schema.apply_to_stack();
         assert!(msg_validate());
 
-        let xml = msg_serialize("XML").expect("serialize colr.007");
-        let parsed = parse_message("colr.007", &xml).expect("parse colr.007");
+        let xml = msg_serialize("XML").expect("serialize colr.012");
+        let parsed = parse_message("colr.012", &xml).expect("parse colr.012");
         assert_eq!(parsed.field_text("Substitution/Haircut"), Some("50"));
-        let materialized = Colr007::from_parsed(&parsed).expect("materialize colr.007 into schema");
+        let materialized = Colr012::from_parsed(&parsed).expect("materialize colr.012 into schema");
         assert_eq!(materialized, schema);
 
         let encoded = schema.encode();
         let mut cursor = encoded.as_slice();
-        let decoded = Colr007::decode(&mut cursor).expect("decode");
+        let decoded = Colr012::decode(&mut cursor).expect("decode");
         assert_eq!(schema, decoded);
     }
 
     #[test]
-    fn colr007_fixture_parses_into_schema() {
+    fn colr007_fixture_is_not_supported() {
         reset();
-        let parsed =
-            parse_message("colr.007", COLR007_FIXTURE.as_bytes()).expect("parse colr.007 fixture");
-        let schema = Colr007::from_parsed(&parsed).expect("materialize colr.007 from fixture");
-        assert_eq!(schema, expected_colr007_schema());
+        assert!(parse_message("colr.007", COLR007_FIXTURE.as_bytes()).is_err());
     }
 
     #[test]
@@ -6099,15 +7100,15 @@ mod tests {
         reset();
         let parsed =
             parse_message("colr.012", COLR012_FIXTURE.as_bytes()).expect("parse colr.012 fixture");
-        let schema = Colr007::from_parsed(&parsed).expect("materialize colr.012 from fixture");
-        assert_eq!(schema, expected_colr007_schema());
+        let schema = Colr012::from_parsed(&parsed).expect("materialize colr.012 from fixture");
+        assert_eq!(schema, expected_colr012_schema());
     }
 
     #[test]
-    fn colr007_rejects_unknown_type() {
+    fn colr012_rejects_unknown_type() {
         reset();
-        msg_create("colr.007");
-        populate_colr007_minimal();
+        msg_create("colr.012");
+        populate_colr012_minimal();
         msg_set("Substitution/Type", b"UNEXPECTED");
         assert!(!msg_validate());
     }
@@ -6129,18 +7130,18 @@ mod tests {
     }
 
     #[test]
-    fn versioned_colr007_supported() {
+    fn versioned_colr007_is_not_supported() {
         reset();
         msg_create("colr.007.001.08");
-        populate_colr007_minimal();
-        assert!(msg_validate());
+        populate_colr012_minimal();
+        assert!(!msg_validate());
     }
 
     #[test]
     fn versioned_colr012_supported() {
         reset();
         msg_create("colr.012.001.05");
-        populate_colr007_minimal();
+        populate_colr012_minimal();
         assert!(msg_validate());
     }
 
@@ -6264,6 +7265,102 @@ mod tests {
         let xml_str = String::from_utf8(xml).unwrap();
         assert!(xml_str.contains("<ISO20022"));
         assert!(xml_str.contains("CdtrAgt"));
+    }
+
+    #[test]
+    fn msg_parse_xml_wrapper_accepts_single_quoted_attributes() {
+        reset();
+        msg_parse(
+            "pacs.008",
+            b"<ISO20022 message='pacs.008'><Field path='MsgId'>1</Field></ISO20022>",
+        )
+        .expect("single-quoted internal XML wrapper attributes are well-formed");
+
+        assert_eq!(msg_get("MsgId").as_deref(), Some(b"1".as_slice()));
+    }
+
+    #[test]
+    fn msg_parse_xml_wrapper_rejects_malformed_attribute_and_tag_shapes() {
+        let cases: &[(&str, &[u8])] = &[
+            (
+                "message attribute substring",
+                br#"<ISO20022 xmessage="pacs.008"><Field path="MsgId">1</Field></ISO20022>"#,
+            ),
+            (
+                "path attribute substring",
+                br#"<ISO20022 message="pacs.008"><Field xpath="MsgId">1</Field></ISO20022>"#,
+            ),
+            (
+                "unknown root attribute",
+                br#"<ISO20022 message="pacs.008" extra="x"><Field path="MsgId">1</Field></ISO20022>"#,
+            ),
+            (
+                "unknown field attribute",
+                br#"<ISO20022 message="pacs.008"><Field path="MsgId" extra="x">1</Field></ISO20022>"#,
+            ),
+            (
+                "unsupported field encoding",
+                br#"<ISO20022 message="pacs.008"><Field path="MsgId" encoding="hex">31</Field></ISO20022>"#,
+            ),
+            (
+                "field element prefix match",
+                br#"<ISO20022 message="pacs.008"><Fieldx path="MsgId">1</Field></ISO20022>"#,
+            ),
+            (
+                "leading non-root markup",
+                br#"<Ignored/><ISO20022 message="pacs.008"></ISO20022>"#,
+            ),
+            (
+                "trailing non-root markup",
+                br#"<ISO20022 message="pacs.008"></ISO20022><Ignored/>"#,
+            ),
+            (
+                "entity-decoded invalid field path",
+                br#"<ISO20022 message="pacs.008"><Field path="Msg&lt;Id">1</Field></ISO20022>"#,
+            ),
+            (
+                "empty field index",
+                br#"<ISO20022 message="pacs.008"><Field path="TxInf[]">1</Field></ISO20022>"#,
+            ),
+            (
+                "self-closing field",
+                br#"<ISO20022 message="pacs.008"><Field path="MsgId"/></ISO20022>"#,
+            ),
+            (
+                "raw nested field markup",
+                br#"<ISO20022 message="pacs.008"><Field path="MsgId"><b>1</b></Field></ISO20022>"#,
+            ),
+        ];
+
+        for (label, xml) in cases {
+            reset();
+            let err = match msg_parse("pacs.008", xml) {
+                Ok(()) => panic!("{label} must fail internal XML wrapper parsing"),
+                Err(err) => err,
+            };
+            assert!(
+                matches!(err, MsgError::InvalidFormat),
+                "{label} returned {err:?}"
+            );
+            assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
+        }
+    }
+
+    #[test]
+    fn msg_serialize_xml_base64_encodes_utf8_that_is_not_xml_text() {
+        reset();
+        let msg_id = "bad-\u{1}-xml";
+        msg_create("pacs.008");
+        msg_set("MsgId", msg_id.as_bytes());
+
+        let xml = msg_serialize("XML").expect("XML serializes");
+        let xml_str = String::from_utf8(xml.clone()).expect("internal XML is UTF-8");
+        assert!(xml_str.contains(r#"<Field path="MsgId" encoding="base64">"#));
+        assert!(!xml_str.contains(msg_id));
+
+        reset();
+        msg_parse("pacs.008", &xml).expect("base64 internal XML parses");
+        assert_eq!(msg_get("MsgId").as_deref(), Some(msg_id.as_bytes()));
     }
 
     #[test]

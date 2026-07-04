@@ -16,6 +16,34 @@ const MAX_ISO4217_MINOR_UNITS: u8 = 4;
 const MAX_PROFILE_DER_BLOBS: usize = 8;
 const MAX_PROFILE_DER_BYTES: usize = 1024 * 1024;
 const OCSP_BASIC_RESPONSE_OID_DER: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01, 0x01];
+const PROFILE_KEYS: &[&str] = &[
+    "id",
+    "rail",
+    "embedded_signature_policy",
+    "signature_public_key_sha256_pins",
+    "x509_trust_anchor_sha256_pins",
+    "revoked_certificate_sha256",
+    "x509_required_certificate_policy_oids",
+    "x509_require_crl_revocation_check",
+    "x509_crl_der_base64",
+    "x509_require_ocsp_revocation_check",
+    "x509_ocsp_response_der_base64",
+    "required_reference_datasets",
+    "message_profiles",
+];
+const MESSAGE_PROFILE_KEYS: &[&str] = &[
+    "message_type",
+    "direction",
+    "versions",
+    "business_services",
+    "require_app_header",
+    "require_business_service",
+    "require_uetr",
+    "structured_address_mode",
+    "supplementary_data_max_bytes",
+    "amount_minor_units",
+];
+const AMOUNT_MINOR_UNITS_KEYS: &[&str] = &["currency", "minor_units"];
 
 /// Default profile used when Torii configuration does not select a rail.
 pub const DEFAULT_PROFILE_ID: &str = "generic-iso20022";
@@ -31,7 +59,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.008",
         "direction": "inbound",
-        "versions": ["pacs.008", "pacs.008.001.08", "pacs.008.001.10"],
+        "versions": ["pacs.008", "pacs.008.001.08"],
         "business_services": [],
         "require_app_header": false,
         "require_business_service": false,
@@ -51,7 +79,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.009",
         "direction": "inbound",
-        "versions": ["pacs.009", "pacs.009.001.08", "pacs.009.001.10"],
+        "versions": ["pacs.009", "pacs.009.001.08"],
         "business_services": [],
         "require_app_header": false,
         "require_business_service": false,
@@ -71,7 +99,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.002",
         "direction": "inbound",
-        "versions": ["pacs.002", "pacs.002.001.10", "pacs.002.001.12"],
+        "versions": ["pacs.002", "pacs.002.001.10"],
         "business_services": [],
         "require_app_header": false,
         "require_business_service": false,
@@ -103,54 +131,6 @@ const DEFAULT_PROFILES_JSON: &str = r#"
         "structured_address_mode": "permissive",
         "supplementary_data_max_bytes": 16384,
         "amount_minor_units": []
-      },
-      {
-        "message_type": "sese.023",
-        "direction": "inbound",
-        "versions": ["sese.023", "sese.023.001.09", "sese.023.001.11"],
-        "business_services": [],
-        "require_app_header": false,
-        "require_business_service": false,
-        "require_uetr": false,
-        "structured_address_mode": "permissive",
-        "supplementary_data_max_bytes": 16384,
-        "amount_minor_units": []
-      },
-      {
-        "message_type": "sese.024",
-        "direction": "inbound",
-        "versions": ["sese.024", "sese.024.001.09", "sese.024.001.10"],
-        "business_services": [],
-        "require_app_header": false,
-        "require_business_service": false,
-        "require_uetr": false,
-        "structured_address_mode": "permissive",
-        "supplementary_data_max_bytes": 16384,
-        "amount_minor_units": []
-      },
-      {
-        "message_type": "sese.025",
-        "direction": "inbound",
-        "versions": ["sese.025", "sese.025.001.08", "sese.025.001.10"],
-        "business_services": [],
-        "require_app_header": false,
-        "require_business_service": false,
-        "require_uetr": false,
-        "structured_address_mode": "permissive",
-        "supplementary_data_max_bytes": 16384,
-        "amount_minor_units": []
-      },
-      {
-        "message_type": "colr.012",
-        "direction": "inbound",
-        "versions": ["colr.012", "colr.012.001.05"],
-        "business_services": [],
-        "require_app_header": false,
-        "require_business_service": false,
-        "require_uetr": false,
-        "structured_address_mode": "permissive",
-        "supplementary_data_max_bytes": 16384,
-        "amount_minor_units": []
       }
     ]
   },
@@ -163,7 +143,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.008",
         "direction": "inbound",
-        "versions": ["pacs.008.001.08", "pacs.008.001.10"],
+        "versions": ["pacs.008.001.08"],
         "business_services": ["swift.cbprplus.02", "swift.cbprplus.03"],
         "require_app_header": true,
         "require_business_service": true,
@@ -183,7 +163,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.009",
         "direction": "inbound",
-        "versions": ["pacs.009.001.08", "pacs.009.001.10"],
+        "versions": ["pacs.009.001.08"],
         "business_services": ["swift.cbprplus.02", "swift.cbprplus.03"],
         "require_app_header": true,
         "require_business_service": true,
@@ -203,7 +183,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.002",
         "direction": "inbound",
-        "versions": ["pacs.002.001.10", "pacs.002.001.12"],
+        "versions": ["pacs.002.001.10"],
         "business_services": ["swift.cbprplus.02", "swift.cbprplus.03"],
         "require_app_header": true,
         "require_business_service": true,
@@ -319,7 +299,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.008",
         "direction": "inbound",
-        "versions": ["pacs.008.001.08", "pacs.008.001.10"],
+        "versions": ["pacs.008.001.08"],
         "business_services": ["sepa.sct.inst"],
         "require_app_header": true,
         "require_business_service": true,
@@ -333,7 +313,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.002",
         "direction": "inbound",
-        "versions": ["pacs.002.001.10", "pacs.002.001.12"],
+        "versions": ["pacs.002.001.10"],
         "business_services": ["sepa.sct.inst"],
         "require_app_header": true,
         "require_business_service": true,
@@ -377,7 +357,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.009",
         "direction": "inbound",
-        "versions": ["pacs.009.001.08", "pacs.009.001.10"],
+        "versions": ["pacs.009.001.08"],
         "business_services": ["securities.csd.cash"],
         "require_app_header": true,
         "require_business_service": true,
@@ -397,7 +377,7 @@ const DEFAULT_PROFILES_JSON: &str = r#"
       {
         "message_type": "pacs.002",
         "direction": "inbound",
-        "versions": ["pacs.002.001.10", "pacs.002.001.12"],
+        "versions": ["pacs.002.001.10"],
         "business_services": ["securities.csd.cash"],
         "require_app_header": true,
         "require_business_service": true,
@@ -427,66 +407,6 @@ const DEFAULT_PROFILES_JSON: &str = r#"
         "require_business_service": true,
         "require_uetr": false,
         "structured_address_mode": "require-structured",
-        "supplementary_data_max_bytes": 4096,
-        "amount_minor_units": []
-      },
-      {
-        "message_type": "sese.023",
-        "direction": "inbound",
-        "versions": ["sese.023.001.11"],
-        "business_services": ["securities.csd.settlement"],
-        "require_app_header": false,
-        "require_business_service": false,
-        "require_uetr": false,
-        "structured_address_mode": "permissive",
-        "supplementary_data_max_bytes": 4096,
-        "amount_minor_units": []
-      },
-      {
-        "message_type": "sese.024",
-        "direction": "inbound",
-        "versions": ["sese.024.001.09", "sese.024.001.10"],
-        "business_services": ["securities.csd.settlement"],
-        "require_app_header": false,
-        "require_business_service": false,
-        "require_uetr": false,
-        "structured_address_mode": "permissive",
-        "supplementary_data_max_bytes": 4096,
-        "amount_minor_units": []
-      },
-      {
-        "message_type": "sese.025",
-        "direction": "inbound",
-        "versions": ["sese.025.001.08", "sese.025.001.10"],
-        "business_services": ["securities.csd.settlement"],
-        "require_app_header": false,
-        "require_business_service": false,
-        "require_uetr": false,
-        "structured_address_mode": "permissive",
-        "supplementary_data_max_bytes": 4096,
-        "amount_minor_units": []
-      },
-      {
-        "message_type": "colr.012",
-        "direction": "inbound",
-        "versions": ["colr.012.001.05"],
-        "business_services": ["securities.csd.collateral"],
-        "require_app_header": false,
-        "require_business_service": false,
-        "require_uetr": false,
-        "structured_address_mode": "permissive",
-        "supplementary_data_max_bytes": 4096,
-        "amount_minor_units": []
-      },
-      {
-        "message_type": "sese.025",
-        "direction": "follow-up",
-        "versions": ["sese.025.001.10"],
-        "business_services": ["securities.csd.settlement"],
-        "require_app_header": false,
-        "require_business_service": false,
-        "require_uetr": false,
-        "structured_address_mode": "permissive",
         "supplementary_data_max_bytes": 4096,
         "amount_minor_units": []
       }
@@ -749,10 +669,6 @@ pub struct TradfiRailProfile {
     pub x509_require_ocsp_revocation_check: bool,
     /// Base64 DER OCSP responses accepted as rail-profile revocation material.
     pub x509_ocsp_response_der_base64: Vec<String>,
-    /// Backward-compatible accepted SHA-256 pins of raw XMLDSig P-256 public keys.
-    pub trusted_public_key_sha256: Vec<String>,
-    /// Backward-compatible accepted SHA-256 pins of DER-encoded XMLDSig X.509 trust anchors.
-    pub trusted_certificate_sha256: Vec<String>,
     /// Denied SHA-256 pins of DER-encoded XMLDSig X.509 certificates.
     pub revoked_certificate_sha256: Vec<String>,
     /// Datasets that must be loaded before accepting live-profile messages.
@@ -786,8 +702,6 @@ impl TradfiRailProfile {
     pub fn has_xml_signature_trust_anchors(&self) -> bool {
         !self.signature_public_key_sha256_pins.is_empty()
             || !self.x509_trust_anchor_sha256_pins.is_empty()
-            || !self.trusted_public_key_sha256.is_empty()
-            || !self.trusted_certificate_sha256.is_empty()
     }
 
     /// Returns `true` when the verified XMLDSig key material matches this profile's pins.
@@ -813,37 +727,41 @@ impl TradfiRailProfile {
         self.signature_public_key_sha256_pins
             .iter()
             .any(|pin| pin == public_key_sha256)
-            || self
-                .trusted_public_key_sha256
-                .iter()
-                .any(|pin| pin == public_key_sha256)
             || linked_trust_anchor_sha256.is_some_and(|digest| {
                 self.x509_trust_anchor_sha256_pins
                     .iter()
                     .any(|pin| pin == digest)
-                    || self
-                        .trusted_certificate_sha256
-                        .iter()
-                        .any(|pin| pin == digest)
             })
     }
 }
 
-fn append_unique_sha256_pins(
-    profile_id: &str,
-    target_field: &str,
-    target: &mut Vec<String>,
-    alias_field: &str,
-    aliases: &[String],
+fn reject_unknown_keys(
+    obj: &BTreeMap<String, Value>,
+    allowed: &[&str],
+    label: &str,
 ) -> Result<(), String> {
-    let mut seen = target.iter().cloned().collect::<BTreeSet<_>>();
-    for alias in aliases {
-        if !seen.insert(alias.clone()) {
+    for key in obj.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(format!("{label} contains unknown field `{key}`"));
+        }
+    }
+    Ok(())
+}
+
+fn reject_sha256_overlap(
+    profile_id: &str,
+    left_field: &str,
+    left: &[String],
+    right_field: &str,
+    right: &[String],
+) -> Result<(), String> {
+    let left_values = left.iter().collect::<BTreeSet<_>>();
+    for value in right {
+        if left_values.contains(value) {
             return Err(format!(
-                "profile `{profile_id}` fields `{target_field}` and `{alias_field}` must not overlap"
+                "profile `{profile_id}` fields `{left_field}` and `{right_field}` must not overlap"
             ));
         }
-        target.push(alias.clone());
     }
     Ok(())
 }
@@ -890,39 +808,43 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "profile entry must be an object".to_owned())?;
+    reject_unknown_keys(obj, PROFILE_KEYS, "profile entry")?;
     let id = required_trimmed_string(obj, "id")?;
     let rail = TradfiRail::parse(required_trimmed_string(obj, "rail")?)
         .ok_or_else(|| format!("profile `{id}` has unknown rail"))?;
     let embedded_signature_policy =
         EmbeddedSignaturePolicy::parse(required_trimmed_string(obj, "embedded_signature_policy")?)
             .ok_or_else(|| format!("profile `{id}` has unknown embedded signature policy"))?;
-    let trusted_public_key_sha256 =
-        canonical_sha256_pins(optional_string_array(obj, "trusted_public_key_sha256")?)?;
-    let trusted_certificate_sha256 =
-        canonical_sha256_pins(optional_string_array(obj, "trusted_certificate_sha256")?)?;
     let revoked_certificate_sha256 =
         canonical_sha256_pins(optional_string_array(obj, "revoked_certificate_sha256")?)?;
     let required_reference_datasets = parse_reference_dataset_requirements(
         id,
         optional_string_array(obj, "required_reference_datasets")?,
     )?;
-    let mut signature_public_key_sha256_pins =
+    let signature_public_key_sha256_pins =
         optional_sha256_pin_array(obj, "signature_public_key_sha256_pins", id)?;
-    append_unique_sha256_pins(
+    let x509_trust_anchor_sha256_pins =
+        optional_sha256_pin_array(obj, "x509_trust_anchor_sha256_pins", id)?;
+    reject_sha256_overlap(
         id,
         "signature_public_key_sha256_pins",
-        &mut signature_public_key_sha256_pins,
-        "trusted_public_key_sha256",
-        &trusted_public_key_sha256,
+        &signature_public_key_sha256_pins,
+        "x509_trust_anchor_sha256_pins",
+        &x509_trust_anchor_sha256_pins,
     )?;
-    let mut x509_trust_anchor_sha256_pins =
-        optional_sha256_pin_array(obj, "x509_trust_anchor_sha256_pins", id)?;
-    append_unique_sha256_pins(
+    reject_sha256_overlap(
         id,
         "x509_trust_anchor_sha256_pins",
-        &mut x509_trust_anchor_sha256_pins,
-        "trusted_certificate_sha256",
-        &trusted_certificate_sha256,
+        &x509_trust_anchor_sha256_pins,
+        "revoked_certificate_sha256",
+        &revoked_certificate_sha256,
+    )?;
+    reject_sha256_overlap(
+        id,
+        "signature_public_key_sha256_pins",
+        &signature_public_key_sha256_pins,
+        "revoked_certificate_sha256",
+        &revoked_certificate_sha256,
     )?;
     let x509_required_certificate_policy_oids =
         optional_oid_array(obj, "x509_required_certificate_policy_oids", id)?;
@@ -958,8 +880,6 @@ fn profile_from_value(value: &Value) -> Result<TradfiRailProfile, String> {
         x509_crl_der_base64,
         x509_require_ocsp_revocation_check,
         x509_ocsp_response_der_base64,
-        trusted_public_key_sha256,
-        trusted_certificate_sha256,
         revoked_certificate_sha256,
         required_reference_datasets,
         message_profiles,
@@ -1027,6 +947,7 @@ fn message_profile_from_value(value: &Value) -> Result<MessageProfile, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "message profile must be an object".to_owned())?;
+    reject_unknown_keys(obj, MESSAGE_PROFILE_KEYS, "message profile")?;
     let message_type = required_trimmed_string(obj, "message_type")?.to_owned();
     let direction = MessageDirection::parse(required_trimmed_string(obj, "direction")?)
         .ok_or_else(|| format!("message profile `{message_type}` has unknown direction"))?;
@@ -1125,6 +1046,7 @@ fn parse_minor_units(
         let obj = entry
             .as_object()
             .ok_or_else(|| "amount_minor_units entry must be an object".to_owned())?;
+        reject_unknown_keys(obj, AMOUNT_MINOR_UNITS_KEYS, "amount_minor_units entry")?;
         let currency = required_trimmed_string(obj, "currency")?.to_ascii_uppercase();
         if currency.len() != 3 || !currency.chars().all(|c| c.is_ascii_uppercase()) {
             return Err(format!(
@@ -1527,10 +1449,10 @@ mod tests {
         assert!(canonical_sha256_pins(vec!["ab".repeat(32)]).is_ok());
         for pin in ["AB".repeat(32), format!(" {}", "ab".repeat(32))] {
             let err = canonical_sha256_pins(vec![pin.clone()])
-                .expect_err("legacy XMLDSig trust pins must be canonical lowercase");
+                .expect_err("XMLDSig trust pins must be canonical lowercase");
             assert!(
                 err.contains("canonical lowercase"),
-                "unexpected legacy pin error for {pin:?}: {err}"
+                "unexpected pin error for {pin:?}: {err}"
             );
         }
 
@@ -1556,24 +1478,14 @@ mod tests {
     }
 
     #[test]
-    fn xml_signature_sha256_pin_aliases_must_not_overlap() {
+    fn xml_signature_legacy_pin_aliases_are_rejected() {
         let pin = "ab".repeat(32);
-        for (current_field, legacy_field) in [
-            (
-                "signature_public_key_sha256_pins",
-                "trusted_public_key_sha256",
-            ),
-            (
-                "x509_trust_anchor_sha256_pins",
-                "trusted_certificate_sha256",
-            ),
-        ] {
+        for legacy_field in ["trusted_public_key_sha256", "trusted_certificate_sha256"] {
             let profile_json = format!(
                 r#"{{
-                    "id": "alias-overlap-test",
+                    "id": "legacy-alias-test",
                     "rail": "generic-iso20022",
                     "embedded_signature_policy": "record-only",
-                    "{current_field}": ["{pin}"],
                     "{legacy_field}": ["{pin}"],
                     "message_profiles": [{{
                         "message_type": "pacs.008",
@@ -1584,11 +1496,53 @@ mod tests {
                 }}"#
             );
             let value: Value = json::from_json(&profile_json).expect("profile JSON");
+            let err =
+                profile_from_value(&value).expect_err("legacy trust-pin aliases must be rejected");
+            assert!(
+                err.contains("unknown field") && err.contains(legacy_field),
+                "unexpected stale alias error for {legacy_field}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn xml_signature_current_pin_roles_must_not_overlap() {
+        let pin = "ab".repeat(32);
+        for (left_field, right_field) in [
+            (
+                "signature_public_key_sha256_pins",
+                "x509_trust_anchor_sha256_pins",
+            ),
+            (
+                "signature_public_key_sha256_pins",
+                "revoked_certificate_sha256",
+            ),
+            (
+                "x509_trust_anchor_sha256_pins",
+                "revoked_certificate_sha256",
+            ),
+        ] {
+            let profile_json = format!(
+                r#"{{
+                    "id": "role-overlap-test",
+                    "rail": "generic-iso20022",
+                    "embedded_signature_policy": "record-only",
+                    "{left_field}": ["{pin}"],
+                    "{right_field}": ["{pin}"],
+                    "message_profiles": [{{
+                        "message_type": "pacs.008",
+                        "direction": "inbound",
+                        "versions": ["pacs.008"],
+                        "structured_address_mode": "permissive"
+                    }}]
+                }}"#
+            );
+            let value: Value = json::from_json(&profile_json).expect("profile JSON");
             let err = profile_from_value(&value)
-                .expect_err("overlapping current and legacy trust pins must fail");
+                .expect_err("overlapping current trust-pin roles must fail");
             assert!(
                 err.contains("must not overlap"),
-                "unexpected overlap error for {current_field}/{legacy_field}: {err}"
+                "unexpected overlap error for {left_field}/{right_field}: {err}"
             );
         }
     }
@@ -1807,9 +1761,8 @@ mod tests {
     #[test]
     fn xml_signature_key_pins_accept_terminal_certificate_digest() {
         let mut profile = default_profile("generic-iso20022").expect("profile");
-        profile.trusted_public_key_sha256 = vec!["aa".repeat(32)];
+        profile.signature_public_key_sha256_pins = vec!["aa".repeat(32)];
         profile.x509_trust_anchor_sha256_pins = vec!["ee".repeat(32)];
-        profile.trusted_certificate_sha256 = vec!["bb".repeat(32)];
         profile.revoked_certificate_sha256 = vec!["dd".repeat(32)];
 
         assert!(profile.accepts_xml_signature_key(&"aa".repeat(32), &[]));
@@ -1818,16 +1771,8 @@ mod tests {
                 .accepts_xml_signature_key(&"11".repeat(32), &["cc".repeat(32), "ee".repeat(32)])
         );
         assert!(
-            profile
-                .accepts_xml_signature_key(&"11".repeat(32), &["cc".repeat(32), "bb".repeat(32)])
-        );
-        assert!(
             !profile.accepts_xml_signature_key(&"11".repeat(32), &["ee".repeat(32)]),
             "X.509 trust-anchor pins require a linked issuer certificate beyond the leaf"
-        );
-        assert!(
-            !profile.accepts_xml_signature_key(&"11".repeat(32), &["bb".repeat(32)]),
-            "legacy certificate pins also require a linked terminal trust anchor"
         );
         assert!(
             !profile
@@ -2010,12 +1955,10 @@ mod tests {
     }
 
     #[test]
-    fn default_catalog_exposes_inbound_lifecycle_messages() {
+    fn default_catalog_exposes_schema_backed_inbound_messages() {
         let catalog = default_profile_catalog();
         let generic = &catalog["generic-iso20022"];
-        for message_type in [
-            "pacs.002", "pacs.004", "camt.056", "sese.023", "sese.024", "sese.025", "colr.012",
-        ] {
+        for message_type in ["pacs.002", "pacs.004", "camt.056"] {
             assert!(
                 generic
                     .message_profile(message_type, MessageDirection::Inbound)
@@ -2024,25 +1967,27 @@ mod tests {
             );
         }
         let securities = &catalog["securities-csd"];
-        assert!(
-            securities
-                .message_profile("sese.024", MessageDirection::Inbound)
-                .is_some()
-        );
-        assert!(
-            securities
-                .message_profile("sese.025", MessageDirection::Inbound)
-                .is_some()
-        );
-        assert!(
-            securities
-                .message_profile("colr.012", MessageDirection::Inbound)
-                .is_some()
-        );
-        assert!(
-            generic
-                .message_profile("colr.007", MessageDirection::Inbound)
-                .is_none()
-        );
+        for message_type in ["pacs.002", "pacs.004", "camt.056"] {
+            assert!(
+                securities
+                    .message_profile(message_type, MessageDirection::Inbound)
+                    .is_some(),
+                "securities profile missing schema-backed {message_type}"
+            );
+        }
+        for message_type in ["sese.023", "sese.024", "sese.025", "colr.012"] {
+            assert!(
+                generic
+                    .message_profile(message_type, MessageDirection::Inbound)
+                    .is_none(),
+                "generic profile must not expose non-schema-backed {message_type}"
+            );
+            assert!(
+                securities
+                    .message_profile(message_type, MessageDirection::Inbound)
+                    .is_none(),
+                "securities profile must not expose non-schema-backed {message_type}"
+            );
+        }
     }
 }

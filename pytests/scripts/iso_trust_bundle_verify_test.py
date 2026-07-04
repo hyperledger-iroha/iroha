@@ -114,9 +114,7 @@ def valid_bundle():
         },
         "embedded_signature_policy": "require-verified",
         "signature_public_key_sha256_pins": [],
-        "trusted_public_key_sha256": [],
         "x509_trust_anchor_sha256_pins": [],
-        "trusted_certificate_sha256": [],
         "x509_trust_anchors": [
             {
                 "label": "root-a",
@@ -2618,9 +2616,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
     def test_material_arrays_must_be_explicit(self):
         keys = (
             "signature_public_key_sha256_pins",
-            "trusted_public_key_sha256",
             "x509_trust_anchor_sha256_pins",
-            "trusted_certificate_sha256",
             "x509_trust_anchors",
             "revoked_certificate_sha256",
             "revoked_certificates",
@@ -3006,9 +3002,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
     def test_noncanonical_pin_and_all_zero_pin_are_rejected(self):
         for key in (
             "signature_public_key_sha256_pins",
-            "trusted_public_key_sha256",
             "x509_trust_anchor_sha256_pins",
-            "trusted_certificate_sha256",
             "revoked_certificate_sha256",
         ):
             for pin, message in (
@@ -3075,29 +3069,21 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertIn("trusted/revoked certificate pins", stderr)
             self.assertNotIn(der_digest(CERT_ONE_B64), stderr)
 
-    def test_legacy_and_current_pin_alias_conflicts_are_rejected(self):
+    def test_stale_pin_aliases_and_current_role_conflicts_are_rejected(self):
         for mutate, message in [
             (
-                lambda bundle: (
-                    bundle.update(
-                        {
-                            "signature_public_key_sha256_pins": ["1" * 64],
-                            "trusted_public_key_sha256": ["1" * 64],
-                        }
-                    )
+                lambda bundle: bundle.__setitem__(
+                    "trusted_public_key_sha256",
+                    ["1" * 64],
                 ),
-                "signature_public_key_sha256_pins/trusted_public_key_sha256",
+                "contains unknown keys",
             ),
             (
-                lambda bundle: (
-                    bundle.update(
-                        {
-                            "x509_trust_anchor_sha256_pins": ["2" * 64],
-                            "trusted_certificate_sha256": ["2" * 64],
-                        }
-                    )
+                lambda bundle: bundle.__setitem__(
+                    "trusted_certificate_sha256",
+                    ["2" * 64],
                 ),
-                "x509_trust_anchor_sha256_pins/trusted_certificate_sha256",
+                "contains unknown keys",
             ),
             (
                 lambda bundle: bundle.__setitem__(
@@ -3108,7 +3094,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ),
             (
                 lambda bundle: bundle.__setitem__(
-                    "trusted_public_key_sha256",
+                    "signature_public_key_sha256_pins",
                     [der_digest(CRL_B64)],
                 ),
                 "trust pin/revocation DER SHA-256 roles",

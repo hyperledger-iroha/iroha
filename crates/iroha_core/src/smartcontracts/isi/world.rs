@@ -10829,8 +10829,11 @@ pub mod isi {
         allow_shield: bool,
         allow_unshield: bool,
         vk_transfer: Option<iroha_data_model::proof::VerifyingKeyId>,
+        vk_transfer_commitment: Option<[u8; 32]>,
         vk_unshield: Option<iroha_data_model::proof::VerifyingKeyId>,
+        vk_unshield_commitment: Option<[u8; 32]>,
         vk_shield: Option<iroha_data_model::proof::VerifyingKeyId>,
+        vk_shield_commitment: Option<[u8; 32]>,
     }
 
     fn metadata_context_from_state(
@@ -10841,15 +10844,21 @@ pub mod isi {
                 allow_shield: false,
                 allow_unshield: false,
                 vk_transfer: None,
+                vk_transfer_commitment: None,
                 vk_unshield: None,
+                vk_unshield_commitment: None,
                 vk_shield: None,
+                vk_shield_commitment: None,
             },
             |st| PolicyMetadataContext {
                 allow_shield: st.allow_shield,
                 allow_unshield: st.allow_unshield,
                 vk_transfer: st.vk_transfer.as_ref().map(|binding| binding.id.clone()),
+                vk_transfer_commitment: st.vk_transfer.as_ref().map(|binding| binding.commitment),
                 vk_unshield: st.vk_unshield.as_ref().map(|binding| binding.id.clone()),
+                vk_unshield_commitment: st.vk_unshield.as_ref().map(|binding| binding.commitment),
                 vk_shield: st.vk_shield.as_ref().map(|binding| binding.id.clone()),
+                vk_shield_commitment: st.vk_shield.as_ref().map(|binding| binding.commitment),
             },
         )
     }
@@ -10884,10 +10893,34 @@ pub mod isi {
             vk_to_value(context.vk_transfer.clone()),
         );
         policy_map.insert(
+            "vk_transfer_commitment".into(),
+            context
+                .vk_transfer_commitment
+                .map_or(norito::json::native::Value::Null, |commitment| {
+                    norito::json::native::Value::from(hex::encode(commitment))
+                }),
+        );
+        policy_map.insert(
             "vk_unshield".into(),
             vk_to_value(context.vk_unshield.clone()),
         );
+        policy_map.insert(
+            "vk_unshield_commitment".into(),
+            context
+                .vk_unshield_commitment
+                .map_or(norito::json::native::Value::Null, |commitment| {
+                    norito::json::native::Value::from(hex::encode(commitment))
+                }),
+        );
         policy_map.insert("vk_shield".into(), vk_to_value(context.vk_shield.clone()));
+        policy_map.insert(
+            "vk_shield_commitment".into(),
+            context
+                .vk_shield_commitment
+                .map_or(norito::json::native::Value::Null, |commitment| {
+                    norito::json::native::Value::from(hex::encode(commitment))
+                }),
+        );
 
         let pending_value =
             policy
@@ -11248,8 +11281,15 @@ pub mod isi {
                 allow_shield: *self.allow_shield(),
                 allow_unshield: *self.allow_unshield(),
                 vk_transfer: self.vk_transfer().clone(),
+                vk_transfer_commitment: vk_transfer_binding
+                    .as_ref()
+                    .map(|binding| binding.commitment),
                 vk_unshield: self.vk_unshield().clone(),
+                vk_unshield_commitment: vk_unshield_binding
+                    .as_ref()
+                    .map(|binding| binding.commitment),
                 vk_shield: self.vk_shield().clone(),
+                vk_shield_commitment: vk_shield_binding.as_ref().map(|binding| binding.commitment),
             };
             persist_policy_metadata(
                 state_transaction,
@@ -11422,8 +11462,11 @@ pub mod isi {
                 allow_shield: false,
                 allow_unshield: false,
                 vk_transfer: Some(self.vk_transfer().clone()),
+                vk_transfer_commitment: st.vk_transfer.as_ref().map(|binding| binding.commitment),
                 vk_unshield: None,
+                vk_unshield_commitment: None,
                 vk_shield: None,
+                vk_shield_commitment: None,
             };
             persist_policy_metadata(
                 state_transaction,

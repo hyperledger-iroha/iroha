@@ -7,10 +7,11 @@ const OFFLINE_V2_ISSUER_SOURCE: &str = include_str!("../src/offline_v2_issuer.rs
 fn torii_legacy_offline_payment_handlers_are_retired() {
     assert!(OFFLINE_ISSUER_SOURCE.contains("OFFLINE_NOTE_ISSUE_RETIRED"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_V2_REDEEM_RETIRED"));
-    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("OFFLINE_V2_AUDIT_RETIRED"));
 
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("IssueOfflineNote::new"));
     assert!(OFFLINE_V2_ISSUER_SOURCE.contains("issued_note_commitment"));
+    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("accepted_audit_receipt_ids"));
+    assert!(OFFLINE_V2_ISSUER_SOURCE.contains("accepted_receipt_ids"));
 
     for v1_retired_symbol in ["IssueOfflineNote,", "IssueOfflineNote::new"] {
         assert!(
