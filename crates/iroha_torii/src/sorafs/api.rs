@@ -23241,6 +23241,28 @@ mod gateway_policy_violation_tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
+        for (label, signer_bytes) in [
+            ("all-zero", [0_u8; 32]),
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed_envelope = envelope.clone();
+            let signatures = malformed_envelope
+                .get_mut("signatures")
+                .and_then(Value::as_array_mut)
+                .expect("signature list");
+            let signature_entry = signatures
+                .first_mut()
+                .and_then(Value::as_object_mut)
+                .expect("signature entry");
+            signature_entry.insert("signer".into(), Value::from(hex::encode(signer_bytes)));
+            let malformed_encoded =
+                norito::json::to_vec(&Value::Object(malformed_envelope)).expect("json");
+            assert!(
+                !validate_manifest_envelope_bytes(&record, &malformed_encoded),
+                "{label} envelope signer key must fail before backend verification"
+            );
+        }
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),

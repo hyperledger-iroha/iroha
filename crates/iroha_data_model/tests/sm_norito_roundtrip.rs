@@ -31,7 +31,8 @@ mod tests {
     #[test]
     fn sm2_signature_norito_roundtrip() {
         let sig_bytes = hex::decode(SM2_SIG).expect("hex signature");
-        let signature = Signature::from_bytes(&sig_bytes);
+        let signature = Signature::try_from_bytes(&sig_bytes)
+            .expect("SM2 fixture signature must pass admission");
         let mut buf = Vec::new();
         norito::core::NoritoSerialize::serialize(&signature, &mut buf).expect("serialize sm2 sig");
         let (decoded, used) = <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&buf)

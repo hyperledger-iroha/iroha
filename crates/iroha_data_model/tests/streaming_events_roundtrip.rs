@@ -86,7 +86,8 @@ fn sample_ticket_envelope() -> TicketEnvelopeV1 {
         body,
         commitment,
         zk_proof: Vec::new(),
-        signature: Signature::from_bytes(&[0u8; 64]),
+        signature: Signature::try_from_bytes(&[0x42u8; 64])
+            .expect("nonzero streaming ticket signature fixture"),
         nullifier: [0xBB; 32],
     }
 }

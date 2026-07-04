@@ -196,7 +196,8 @@ mod tests {
             .verify(opening_signer.public_key(), &opening_payload)
             .expect("checked output-opening fixture signature verifies");
         let opening = RamLfeOutputOpening {
-            signature: Signature::from_bytes(opening_signature.payload()),
+            signature: Signature::try_from_bytes(opening_signature.payload())
+                .expect("checked output-opening fixture signature passes admission"),
             payload: opening_payload,
         };
         let payload = crate::identifier::IdentifierResolutionReceiptPayload {
@@ -228,9 +229,10 @@ mod tests {
             .expect("checked identifier receipt fixture signature verifies");
         IdentifierResolutionReceipt {
             payload,
-            attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(
-                signature.payload(),
-            )),
+            attestation: RamLfeReceiptAttestation::Signed(
+                Signature::try_from_bytes(signature.payload())
+                    .expect("checked identifier receipt fixture signature passes admission"),
+            ),
         }
     }
 

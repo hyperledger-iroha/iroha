@@ -3143,13 +3143,12 @@ fn malformed_sccp_transparent_bridge_proof_is_rejected() {
 }
 
 #[test]
-fn submit_sccp_inbound_message_rejects_unready_lane_even_if_config_allows() {
+fn submit_sccp_inbound_message_rejects_unready_lane() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let telemetry = StateTelemetry::default();
     let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
-    state.zk.sccp_allow_unready_transparent_proofs = true;
     state.zk.max_proof_size_bytes = 4 * 1024 * 1024;
 
     let exec = Executor::default();
@@ -3170,36 +3169,7 @@ fn submit_sccp_inbound_message_rejects_unready_lane_even_if_config_allows() {
 }
 
 #[test]
-fn submit_taira_tron_xor_diagnostic_inbound_message_accepts_when_config_allows() {
-    let world = iroha_core::state::World::new();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let telemetry = StateTelemetry::default();
-    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
-    state.zk.sccp_allow_unready_transparent_proofs = true;
-    state.zk.max_proof_size_bytes = 4 * 1024 * 1024;
-
-    let exec = Executor::default();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-
-    let proof = make_sccp_taira_tron_xor_diagnostic_message_bridge_proof(99);
-    let proof_id = bridge_proof_id(&proof);
-    let submit: InstructionBox =
-        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
-    exec.execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect("TAIRA/TRON XOR diagnostic proof accepted");
-    let rec = stx
-        .world
-        .proofs()
-        .get(&proof_id)
-        .expect("diagnostic proof recorded");
-    assert_eq!(rec.status, ProofStatus::Verified);
-}
-
-#[test]
-fn submit_taira_tron_xor_diagnostic_inbound_message_rejects_without_config_flag() {
+fn submit_taira_tron_xor_diagnostic_inbound_message_rejects() {
     let world = iroha_core::state::World::new();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -3217,7 +3187,35 @@ fn submit_taira_tron_xor_diagnostic_inbound_message_rejects_without_config_flag(
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
     let err = exec
         .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
-        .expect_err("diagnostic proof must require the unready SCCP flag");
+        .expect_err("diagnostic proofs must not bypass production source-adapter admission");
+    let message = format!("{err:?}");
+    assert!(
+        message.contains("production-ready source-chain proof adapter")
+            || message.contains("structural verification"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn submit_taira_tron_xor_diagnostic_inbound_message_rejects_structurally() {
+    let world = iroha_core::state::World::new();
+    let kura = Kura::blank_kura_for_testing();
+    let query_handle = LiveQueryStore::start_test();
+    let telemetry = StateTelemetry::default();
+    let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+    state.zk.max_proof_size_bytes = 4 * 1024 * 1024;
+
+    let exec = Executor::default();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let proof = make_sccp_taira_tron_xor_diagnostic_message_bridge_proof(99);
+    let submit: InstructionBox =
+        iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
+    let err = exec
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .expect_err("diagnostic proof must require production source-adapter admission");
     assert!(
         format!("{err:?}").contains("structural verification"),
         "unexpected error: {err:?}"

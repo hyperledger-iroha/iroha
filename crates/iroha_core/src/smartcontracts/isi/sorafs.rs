@@ -4896,6 +4896,72 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn approve_manifest_rejects_inert_or_malformed_ed25519_signer_key() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            content_length: default_content_length(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let stored_record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .clone();
+        let council_key = checked_ed25519_keypair();
+        let (envelope, _signature_hex) = build_envelope(&stored_record, &council_key);
+        let (_, signer_bytes) = council_key
+            .public_key()
+            .try_to_bytes()
+            .expect("council signer key bytes");
+        let signer_hex = hex::encode(signer_bytes);
+
+        for (label, malformed_signer) in [
+            ("all-zero", [0_u8; 32]),
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let malformed_signer_hex = hex::encode(malformed_signer);
+            let mut invalid_json =
+                String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
+            invalid_json = invalid_json.replacen(&signer_hex, &malformed_signer_hex, 1);
+
+            let approve = ApprovePinManifest {
+                digest: default_digest(),
+                approved_epoch: 7,
+                council_envelope: Some(invalid_json.into_bytes()),
+                council_envelope_digest: None,
+            };
+            let err = approve
+                .execute(&alice(), &mut stx)
+                .expect_err("approval must reject malformed signer public key material");
+            let message = match err {
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message),
+                ) => message,
+                other => panic!("unexpected error for {label} signer key: {other:?}"),
+            };
+            assert!(
+                message.contains("failed to parse council signer"),
+                "{label} signer key produced unexpected error message: {message}"
+            );
+        }
+    }
+
+    #[test]
     fn approve_manifest_rejects_malformed_ed25519_signature_r() {
         let state = make_state();
         let mut block = state.block(block_header());

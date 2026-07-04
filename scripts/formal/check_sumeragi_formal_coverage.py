@@ -13,8 +13,10 @@ from typing import Callable
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SPEC_DIR = ROOT_DIR / "docs" / "formal" / "sumeragi"
+WORKFLOW_DIR = ROOT_DIR / ".github" / "workflows"
 APALACHE_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_apalache.sh"
 TLC_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_tlc.sh"
+SUMERAGI_FAST_CFG = SPEC_DIR / "Sumeragi_fast.cfg"
 SUMERAGI_DEEP_CFG = SPEC_DIR / "Sumeragi_deep.cfg"
 SUMERAGI_TLC_FAST_CFG = SPEC_DIR / "Sumeragi_tlc_fast.cfg"
 SUMERAGI_ROOT_PROPERTY = "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope"
@@ -164,6 +166,9 @@ SUMERAGI_END_TO_END_SAFETY_ENVELOPE_CONJUNCT_CONTRACTS = {
     ),
 }
 SUMERAGI_TEMPORAL_ALWAYS_THEOREM_CONTRACTS = {
+    "SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope": (
+        "SumeragiConsensusCoreStateMatchesEnvelope"
+    ),
     "TimeoutTickGateNeverBypassesStalledProgress": "TimeoutTickGateMatchesStalledProgress",
     "ViewQuorumEvidenceNeverDiverges": "ViewEvidenceMatchesActiveView",
     "ViewEvidenceWitnessNeverTargetsZeroOrNewView": "ViewEvidenceWitnessRequiresNonzeroActiveView",
@@ -856,6 +861,448 @@ SUMERAGI_RBC_LIVE_EVIDENCE_CAUSALITY_ENVELOPE_CONJUNCT_CONTRACTS = {
         "RbcInvalidDigestNeverLeavesIdleOrCorruption",
     ),
 }
+SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS = (
+    "TlcByzantineDirectCommitCorridor",
+    "CommitImpliesHonestSupport",
+    "FinalityCertificateStackComplete",
+    "CommitDisablesByzantineCommitVote",
+    "ByzantineCommitVoteGateMatchesPrepareEvidence",
+    "ByzantineCommitVoteFinalityGateMatchesNextEvidence",
+    "ByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+    "RbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+    "RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+    "CommitEvidenceMatchesVoteCounters",
+    "VoteCountersRespectRosterBudgets",
+    "StakeSignedMatchesVoteCounters",
+    "NoCommitEvidenceBeforeCommit",
+)
+SUMERAGI_BYZANTINE_TOP_WAIT_CONJUNCTS = (
+    "RbcDeliveredWithoutFinalityHasNoCommitCertificate",
+    "RbcDeliveredWithoutFinalityWaitsForCommitEvidence",
+)
+SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS = {
+    "ByzantineDeliveredFirstTopExactness": SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS,
+    "ByzantineDeliveredFirstTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ByzantineDeliveredFirstTopExactness",
+    ),
+    "ByzantineVoteFirstTopExactness": (
+        *SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS,
+        *SUMERAGI_BYZANTINE_TOP_WAIT_CONJUNCTS,
+    ),
+    "ByzantineVoteFirstTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ByzantineVoteFirstTopExactness",
+    ),
+    "ByzantineDirectTopExactness": (
+        *SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS,
+        *SUMERAGI_BYZANTINE_TOP_WAIT_CONJUNCTS,
+    ),
+    "ByzantineDirectTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ByzantineDirectTopExactness",
+    ),
+    "ByzantineDirectTopCoversOrderedTopCorridors": (
+        "ByzantineDeliveredFirstTopExactness",
+        "ByzantineVoteFirstTopExactness",
+    ),
+}
+SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS = {
+    "ByzantineDirectTopCoversOrderedTopCorridors": "ByzantineDirectTopExactness",
+}
+SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS = {
+    "DirectCommitInterleavingExactness": (
+        "RbcEvidenceShape",
+        "VoteHandoffShape",
+        "CommitCertificateShape",
+        "BufferedVotesWaitForDelivery",
+        "DeliveredWithBufferedVotesCommits",
+    ),
+    "DirectCommitInterleavingCorrectnessEnvelope": (
+        "TypeInvariant",
+        "DirectCommitInterleavingExactness",
+    ),
+    "DirectCommitProgressSafetyEnvelope": (
+        "TypeInvariant",
+        "DirectCommitInterleavingExactness",
+    ),
+}
+SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS = {
+    "DirectDeliveredFirstCorridorExactness": (
+        "PhaseMatchesSpec",
+        "RbcStateMatchesSpec",
+        "RbcEvidenceMatchesSpec",
+        "VoteCountersMatchSpec",
+        "CommitEvidenceMatchesSpec",
+        "FinalityRequiresDeliveredQuorumAndStake",
+    ),
+    "DirectDeliveredFirstCorridorCorrectnessEnvelope": (
+        "TypeInvariant",
+        "DirectDeliveredFirstCorridorExactness",
+    ),
+    "DirectDeliveredFirstProgressSafetyEnvelope": (
+        "TypeInvariant",
+        "DirectDeliveredFirstCorridorExactness",
+    ),
+}
+SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS = {
+    "DirectVoteFirstCorridorExactness": (
+        "PhaseMatchesSpec",
+        "RbcStateMatchesSpec",
+        "RbcEvidenceMatchesSpec",
+        "VoteCountersMatchSpec",
+        "CommitEvidenceMatchesSpec",
+        "BufferedCommitWaitHasNoCertificate",
+        "FinalityRequiresBufferedVotesAndDelivery",
+    ),
+    "DirectVoteFirstCorridorCorrectnessEnvelope": (
+        "TypeInvariant",
+        "DirectVoteFirstCorridorExactness",
+    ),
+    "DirectVoteFirstProgressSafetyEnvelope": (
+        "TypeInvariant",
+        "DirectVoteFirstCorridorExactness",
+    ),
+}
+SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS = {
+    "ByzantineCommitInterleavingExactness": (
+        "RbcEvidenceShape",
+        "ProposedRoundInitializesRbc",
+        "VoteHandoffShape",
+        "CommitCertificateShape",
+        "BufferedVotesWaitForDelivery",
+        "DeliveredWithBufferedVotesCommits",
+    ),
+    "ByzantineCommitInterleavingCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ByzantineCommitInterleavingExactness",
+    ),
+    "ByzantineCommitProgressSafetyEnvelope": (
+        "TypeInvariant",
+        "ByzantineCommitInterleavingExactness",
+    ),
+}
+BYZANTINE_INTERLEAVING_EXTRA_EXACTNESS_CONJUNCTS = (
+    "ProposedRoundInitializesRbc",
+)
+SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS = (
+    (
+        "direct delivered-first",
+        SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS,
+        "DirectDeliveredFirstProgressSafetyEnvelope",
+        ("TypeInvariant", "DirectDeliveredFirstCorridorExactness"),
+    ),
+    (
+        "direct vote-first",
+        SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS,
+        "DirectVoteFirstProgressSafetyEnvelope",
+        ("TypeInvariant", "DirectVoteFirstCorridorExactness"),
+    ),
+    (
+        "direct interleaving",
+        SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        "DirectCommitProgressSafetyEnvelope",
+        ("TypeInvariant", "DirectCommitInterleavingExactness"),
+    ),
+    (
+        "Byzantine interleaving",
+        SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        "ByzantineCommitProgressSafetyEnvelope",
+        ("TypeInvariant", "ByzantineCommitInterleavingExactness"),
+    ),
+)
+SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS = {
+    "ProjectedByzantineDeliveredFirstTopExactness": (
+        "ProjectedTlcByzantineDirectCommitCorridor",
+        "ProjectedCommitImpliesHonestSupport",
+        "ProjectedFinalityCertificateStackComplete",
+        "ProjectedCommitDisablesByzantineCommitVote",
+        "ProjectedByzantineCommitVoteGateMatchesPrepareEvidence",
+        "ProjectedByzantineCommitVoteFinalityGateMatchesNextEvidence",
+        "ProjectedByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+        "ProjectedRbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+        "ProjectedRbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+        "ProjectedCommitEvidenceMatchesVoteCounters",
+        "ProjectedVoteCountersRespectRosterBudgets",
+        "ProjectedStakeSignedMatchesVoteCounters",
+        "ProjectedNoCommitEvidenceBeforeCommit",
+    ),
+    "ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ProjectedByzantineDeliveredFirstTopExactness",
+    ),
+    "ProjectedByzantineVoteFirstTopExactness": (
+        "ProjectedTlcByzantineDirectCommitCorridor",
+        "ProjectedCommitImpliesHonestSupport",
+        "ProjectedFinalityCertificateStackComplete",
+        "ProjectedCommitDisablesByzantineCommitVote",
+        "ProjectedByzantineCommitVoteGateMatchesPrepareEvidence",
+        "ProjectedByzantineCommitVoteFinalityGateMatchesNextEvidence",
+        "ProjectedByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+        "ProjectedRbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+        "ProjectedRbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+        "ProjectedCommitEvidenceMatchesVoteCounters",
+        "ProjectedVoteCountersRespectRosterBudgets",
+        "ProjectedStakeSignedMatchesVoteCounters",
+        "ProjectedNoCommitEvidenceBeforeCommit",
+        "ProjectedRbcDeliveredWithoutFinalityHasNoCommitCertificate",
+        "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence",
+    ),
+    "ProjectedByzantineVoteFirstTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ProjectedByzantineVoteFirstTopExactness",
+    ),
+    "ProjectedByzantineDirectTopExactness": (
+        "ProjectedTlcByzantineDirectCommitCorridor",
+        "ProjectedCommitImpliesHonestSupport",
+        "ProjectedFinalityCertificateStackComplete",
+        "ProjectedCommitDisablesByzantineCommitVote",
+        "ProjectedByzantineCommitVoteGateMatchesPrepareEvidence",
+        "ProjectedByzantineCommitVoteFinalityGateMatchesNextEvidence",
+        "ProjectedByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+        "ProjectedRbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+        "ProjectedRbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+        "ProjectedCommitEvidenceMatchesVoteCounters",
+        "ProjectedVoteCountersRespectRosterBudgets",
+        "ProjectedStakeSignedMatchesVoteCounters",
+        "ProjectedNoCommitEvidenceBeforeCommit",
+        "ProjectedRbcDeliveredWithoutFinalityHasNoCommitCertificate",
+        "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence",
+    ),
+    "ProjectedByzantineDirectTopCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ProjectedByzantineDirectTopExactness",
+    ),
+    "ProjectionBridgeCoversOrderedTopCorridors": (
+        "ProjectedByzantineDeliveredFirstTopExactness",
+        "ProjectedByzantineVoteFirstTopExactness",
+    ),
+    "ProjectionBridgeMatchesInterleavingCore": (
+        "RbcEvidenceShape",
+        "ProposedRoundInitializesRbc",
+        "VoteHandoffShape",
+        "CommitCertificateShape",
+        "BufferedVotesWaitForDelivery",
+        "DeliveredWithBufferedVotesCommits",
+    ),
+    "ProjectionBridgeMatchesInterleavingExactness": (
+        "ProjectedTlcByzantineDirectCommitCorridor",
+        "ProjectedCommitImpliesHonestSupport",
+        "ProjectedFinalityCertificateStackComplete",
+        "ProjectedCommitDisablesByzantineCommitVote",
+        "ProjectedByzantineCommitVoteGateMatchesPrepareEvidence",
+        "ProjectedByzantineCommitVoteFinalityGateMatchesNextEvidence",
+        "ProjectedByzantineCommitVotePendingGateMatchesMissingNextEvidence",
+        "ProjectedRbcDeliverFinalityGateMatchesBufferedCommitEvidence",
+        "ProjectedRbcDeliverPendingGateMatchesMissingBufferedCommitEvidence",
+        "ProjectedCommitEvidenceMatchesVoteCounters",
+        "ProjectedVoteCountersRespectRosterBudgets",
+        "ProjectedStakeSignedMatchesVoteCounters",
+        "ProjectedNoCommitEvidenceBeforeCommit",
+        "ProjectedRbcDeliveredWithoutFinalityHasNoCommitCertificate",
+        "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence",
+        "RbcEvidenceShape",
+        "ProposedRoundInitializesRbc",
+        "VoteHandoffShape",
+        "CommitCertificateShape",
+        "BufferedVotesWaitForDelivery",
+        "DeliveredWithBufferedVotesCommits",
+    ),
+    "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope": (
+        "TypeInvariant",
+        "ProjectionBridgeMatchesInterleavingExactness",
+    ),
+    "ProjectedCommitProgressSafetyEnvelope": (
+        "ProjectionBridgeCoversOrderedTopCorridors",
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope",
+    ),
+}
+SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS = (
+    "HonestPropose",
+    "PrepareVote",
+    "HonestCommitVote",
+    "ByzantineCommitVote",
+    "RbcChunk",
+    "RbcReady",
+    "RbcDeliver",
+)
+SUMERAGI_PROJECTED_COMMIT_PROGRESS_SPEC_CONJUNCT_CONTRACTS = {
+    "ProjectedCommitProgressSpec": (
+        "Init",
+        "ProjectedCommitProgressFairness",
+    ),
+}
+SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS = (
+    (
+        SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate.tla",
+        "DirectDeliveredFirstCorridorProgressSpec",
+        "DirectDeliveredFirstCorridorProgressFairness",
+        "[][DeliveredFirstPathNext]_vars",
+        ("DeliveredFirstPathAdvance",),
+        "direct delivered-first progress",
+    ),
+    (
+        SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate.tla",
+        "DirectVoteFirstCorridorProgressSpec",
+        "DirectVoteFirstCorridorProgressFairness",
+        "[][VoteFirstPathNext]_vars",
+        ("VoteFirstPathAdvance",),
+        "direct vote-first progress",
+    ),
+    (
+        SPEC_DIR / "SumeragiDirectCommitInterleavingGate.tla",
+        "DirectCommitInterleavingProgressSpec",
+        "DirectCommitInterleavingProgressFairness",
+        "[][Next]_vars",
+        (
+            "HonestPropose",
+            "PrepareVote",
+            "CommitVote",
+            "RbcChunk",
+            "RbcReady",
+            "RbcDeliver",
+        ),
+        "direct commit interleaving progress",
+    ),
+    (
+        SPEC_DIR / "SumeragiByzantineCommitInterleavingGate.tla",
+        "ByzantineCommitInterleavingProgressSpec",
+        "ByzantineCommitInterleavingProgressFairness",
+        "[][Next]_vars",
+        (
+            "HonestPropose",
+            "PrepareVote",
+            "HonestCommitVote",
+            "ByzantineCommitVote",
+            "RbcChunk",
+            "RbcReady",
+            "RbcDeliver",
+        ),
+        "Byzantine commit interleaving progress",
+    ),
+)
+SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS = (
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "Spec",
+        "Fairness",
+        "[][Next]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "HonestNewViewVote",
+            "RbcInit",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level Sumeragi spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "DirectCommitSpec",
+        "DirectCommitFairness",
+        "[][DirectCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcInit",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level direct commit spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "ByzantineDirectCommitSpec",
+        "DirectCommitFairness",
+        "[][ByzantineDirectCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcInit",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level Byzantine direct commit spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "ByzantineDeliveredFirstCommitSpec",
+        "DirectDeliveredFirstCommitFairness",
+        "[][ByzantineDeliveredFirstCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level Byzantine delivered-first commit spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "DirectDeliveredFirstCommitSpec",
+        "DirectDeliveredFirstCommitFairness",
+        "[][DirectDeliveredFirstCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level direct delivered-first commit spec",
+    ),
+    (
+        SPEC_DIR / "Sumeragi.tla",
+        "ByzantineVoteFirstCommitSpec",
+        "DirectVoteFirstCommitFairness",
+        "[][ByzantineVoteFirstCommitNext]_vars",
+        (
+            "HonestPropose",
+            "HonestPrepareVote",
+            "HonestCommitVote",
+            "RbcChunkGood",
+            "RbcReadyGood",
+            "RbcDeliverGood",
+        ),
+        "top-level Byzantine vote-first commit spec",
+    ),
+)
+SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS = {
+    "ProjectionBridgeCoversOrderedTopCorridors": "ProjectedByzantineDirectTopExactness",
+    "ProjectionBridgeMatchesInterleavingCore": "ProjectedByzantineDirectTopExactness",
+}
+SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACTS = {
+    "ByzantineDeliveredFirstTopExactness": (
+        "ProjectedByzantineDeliveredFirstTopExactness"
+    ),
+    "ByzantineDeliveredFirstTopCorrectnessEnvelope": (
+        "ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope"
+    ),
+    "ByzantineVoteFirstTopExactness": "ProjectedByzantineVoteFirstTopExactness",
+    "ByzantineVoteFirstTopCorrectnessEnvelope": (
+        "ProjectedByzantineVoteFirstTopCorrectnessEnvelope"
+    ),
+    "ByzantineDirectTopExactness": "ProjectedByzantineDirectTopExactness",
+    "ByzantineDirectTopCorrectnessEnvelope": (
+        "ProjectedByzantineDirectTopCorrectnessEnvelope"
+    ),
+    "ByzantineDirectTopCoversOrderedTopCorridors": (
+        "ProjectionBridgeCoversOrderedTopCorridors"
+    ),
+}
+SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCTS = {
+    "TypeInvariant": "TypeInvariant",
+}
 FAST_CI = ROOT_DIR / "ci" / "check_sumeragi_formal.sh"
 EXPECTED_FAILURE_CI = ROOT_DIR / "ci" / "check_sumeragi_formal_expected_failures.sh"
 PR_WORKFLOW = ROOT_DIR / ".github" / "workflows" / "pr.yml"
@@ -867,12 +1314,231 @@ FORMAL_BASELINE_COMMAND = "bash ci/check_sumeragi_formal.sh"
 FORMAL_EXPECTED_FAILURE_COMMAND = (
     "bash ci/check_sumeragi_formal_expected_failures.sh"
 )
+FORMAL_DOCS_METADATA_COMMAND = (
+    "python3 ci/check_docs_i18n_metadata.py --paths docs/formal "
+    "--json-out target/docs-i18n/formal-metadata.json"
+)
+FORMAL_BASELINE_SUCCESS_COMMAND = 'echo "[formal] sumeragi formal checks passed"'
+FORMAL_EXPECTED_FAILURE_SUCCESS_COMMAND = (
+    'echo "[formal] Sumeragi expected-failure checks behaved as expected"'
+)
+FORMAL_APALACHE_VERSION_COMMAND = (
+    "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version"
+)
 FRONTIER_NIGHTLY_COMMAND = (
     "bash scripts/formal/sumeragi_apalache.sh frontier-nightly"
 )
 APALACHE_COMMAND_PREFIX = "bash scripts/formal/sumeragi_apalache.sh"
 TLC_COMMAND_PREFIX = "bash scripts/formal/sumeragi_tlc.sh"
 INSTALL_APALACHE_COMMAND_PREFIX = "bash scripts/formal/install_apalache.sh"
+FORMAL_APALACHE_INSTALL_COMMAND = f"{INSTALL_APALACHE_COMMAND_PREFIX} 0.52.2"
+FORMAL_COMMAND_SHAPE_PATHS = (
+    FAST_CI,
+    EXPECTED_FAILURE_CI,
+    PR_WORKFLOW,
+    NIGHTLY_WORKFLOW,
+    README,
+)
+FORMAL_STRICT_SHELL_PATHS = (
+    FAST_CI,
+    EXPECTED_FAILURE_CI,
+    APALACHE_RUNNER,
+    TLC_RUNNER,
+    ROOT_DIR / "scripts" / "formal" / "install_apalache.sh",
+)
+FORMAL_LINEAR_CI_SCRIPT_PATHS = (
+    FAST_CI,
+    EXPECTED_FAILURE_CI,
+)
+FORMAL_CI_SINGLETON_COMMAND_CONTRACTS = (
+    (
+        FAST_CI,
+        "formal baseline script",
+        (
+            FORMAL_COVERAGE_COMMAND,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            FORMAL_EXPECTED_FAILURE_COMMAND,
+            FORMAL_BASELINE_SUCCESS_COMMAND,
+        ),
+    ),
+    (
+        EXPECTED_FAILURE_CI,
+        "formal expected-failure script",
+        (
+            FORMAL_COVERAGE_COMMAND,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            FORMAL_EXPECTED_FAILURE_SUCCESS_COMMAND,
+        ),
+    ),
+)
+FORMAL_WORKFLOW_JOB_NAMES = (
+    (PR_WORKFLOW, ("sumeragi_formal",)),
+    (NIGHTLY_WORKFLOW, ("frontier-nightly",)),
+)
+FORMAL_WORKFLOW_ALLOWED_JOB_NAMES = dict(FORMAL_WORKFLOW_JOB_NAMES)
+FORMAL_WORKFLOW_NAME_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", "Pull Request CI"),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", "Nightly Sumeragi Formal"),
+)
+FORMAL_WORKFLOW_HEADER_KEY_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", ("name", "on", "concurrency", "env")),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("name", "on", "concurrency")),
+)
+FORMAL_WORKFLOW_PROOF_COMMAND_FRAGMENTS = (
+    FORMAL_APALACHE_VERSION_COMMAND,
+    FORMAL_BASELINE_COMMAND,
+    FORMAL_EXPECTED_FAILURE_COMMAND,
+    APALACHE_COMMAND_PREFIX,
+    TLC_COMMAND_PREFIX,
+    INSTALL_APALACHE_COMMAND_PREFIX,
+)
+FORMAL_WORKFLOW_JOB_ENTRYPOINT_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        (
+            INSTALL_APALACHE_COMMAND_PREFIX,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            FORMAL_BASELINE_COMMAND,
+        ),
+        (
+            (INSTALL_APALACHE_COMMAND_PREFIX, FORMAL_APALACHE_VERSION_COMMAND),
+            (FORMAL_APALACHE_VERSION_COMMAND, FORMAL_BASELINE_COMMAND),
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        (
+            INSTALL_APALACHE_COMMAND_PREFIX,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            FORMAL_BASELINE_COMMAND,
+            FRONTIER_NIGHTLY_COMMAND,
+        ),
+        (
+            (INSTALL_APALACHE_COMMAND_PREFIX, FORMAL_APALACHE_VERSION_COMMAND),
+            (FORMAL_APALACHE_VERSION_COMMAND, FORMAL_BASELINE_COMMAND),
+            (FORMAL_BASELINE_COMMAND, FRONTIER_NIGHTLY_COMMAND),
+        ),
+    ),
+)
+FORMAL_WORKFLOW_RUN_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        (
+            FORMAL_APALACHE_INSTALL_COMMAND,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            FORMAL_BASELINE_COMMAND,
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        (
+            FORMAL_APALACHE_INSTALL_COMMAND,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            FORMAL_BASELINE_COMMAND,
+            FRONTIER_NIGHTLY_COMMAND,
+            FORMAL_DOCS_METADATA_COMMAND,
+        ),
+    ),
+)
+FORMAL_WORKFLOW_TRIGGER_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        "PR formal workflow",
+        (
+            "on:",
+            "  pull_request:",
+            "    branches: [main]",
+            "    paths_ignore:",
+            '      - ".github/workflows/publish*"',
+            '      - ".github/workflows/ci_image.yml"',
+            '      - "Dockerfile*"',
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        "nightly formal workflow",
+        (
+            "on:",
+            "  workflow_dispatch:",
+            "  schedule:",
+            '    - cron: "43 3 * * *"',
+        ),
+    ),
+)
+FORMAL_WORKFLOW_ON_EVENT_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", ("pull_request",)),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("workflow_dispatch", "schedule")),
+)
+FORMAL_WORKFLOW_PR_PATHS_IGNORE = (
+    ".github/workflows/publish*",
+    ".github/workflows/ci_image.yml",
+    "Dockerfile*",
+)
+FORMAL_WORKFLOW_PATHS_IGNORE_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", FORMAL_WORKFLOW_PR_PATHS_IGNORE),
+)
+FORMAL_WORKFLOW_CONCURRENCY_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        "PR formal workflow",
+        (
+            "concurrency:",
+            "  group: ${{ github.workflow }}-${{ github.ref }}",
+            "  cancel-in-progress: true",
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        "nightly formal workflow",
+        (
+            "concurrency:",
+            "  group: ${{ github.workflow }}-${{ github.ref }}",
+            "  cancel-in-progress: false",
+        ),
+    ),
+)
+FORMAL_WORKFLOW_FORBIDDEN_HEADER_FIELDS = ("defaults", "permissions")
+FORMAL_WORKFLOW_PR_HEADER_ENV_KEYS = (
+    "CARGO_TERM_COLOR",
+    "IROHA_CLI_DIR",
+    "DEFAULTS_DIR",
+    "WASM_TARGET_DIR",
+    "TEST_NETWORK_TMP_DIR",
+    "NEXTEST_PROFILE",
+)
+FORMAL_WORKFLOW_HEADER_ENV_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", FORMAL_WORKFLOW_PR_HEADER_ENV_KEYS),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ()),
+)
+FORMAL_WORKFLOW_PR_HEADER_ENV_BINDINGS = (
+    "CARGO_TERM_COLOR: always",
+    'IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"',
+    "DEFAULTS_DIR: defaults",
+    "WASM_TARGET_DIR: wasm/target/prebuilt",
+    "TEST_NETWORK_TMP_DIR: /tmp",
+    "NEXTEST_PROFILE: ci",
+)
+FORMAL_WORKFLOW_HEADER_ENV_BINDING_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        "PR formal workflow",
+        FORMAL_WORKFLOW_PR_HEADER_ENV_BINDINGS,
+    ),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ()),
+)
+FORMAL_PREFIX_MATCH_COMMANDS = (
+    APALACHE_COMMAND_PREFIX,
+    TLC_COMMAND_PREFIX,
+    INSTALL_APALACHE_COMMAND_PREFIX,
+)
 APALACHE_EXPECTED_FAILURE_SNIPPETS = (
     'if [[ "$expect_failure" == "1" ]]; then',
     'if [[ "$status" == "0" ]]; then',
@@ -891,6 +1557,10 @@ APALACHE_INVOCATION_SNIPPETS = (
     'check --length="$apalache_length" --config="$cfg_file" --run-dir="$run_dir" "$spec_file"',
     'check --length="$apalache_length" --config="$cfg_rel" --run-dir="$run_rel" "$spec_rel"',
 )
+APALACHE_PROOF_INVOCATION_RE = re.compile(
+    r'(?:"\$apalache_bin"|(?:^|\s)apalache-mc(?:\s|$)).*(?:\scheck\s|\stypecheck\s)'
+)
+TLC_PROOF_INVOCATION_RE = re.compile(r"(?:^|\s)java\b.*\btlc2\.TLC\b")
 TLC_INVOCATION_SNIPPETS = (
     'java ${TLC_JAVA_OPTS:-} -cp "$tlc_jar" tlc2.TLC',
     '-workers "$workers"',
@@ -898,14 +1568,33 @@ TLC_INVOCATION_SNIPPETS = (
     '-config "$cfg_file"',
     '"$module"',
 )
-APALACHE_ONLY_PR_MODES = {"deep"}
+APALACHE_ONLY_PR_MODES = {
+    "deep",
+    "byzantine-direct-top-fast",
+    "byzantine-delivered-first-top-fast",
+    "byzantine-vote-first-top-fast",
+}
+APALACHE_ONLY_BOUNDED_PR_MODE_EXCEPTIONS = {
+    "deep",
+}
 APALACHE_ONLY_PR_MODE_README_SNIPPETS = (
     "`deep` is intentionally Apalache-only in PR CI",
-    "Every other PR baseline mode must have both a TLC runner case and README command.",
+    "`byzantine-direct-top-fast` is Apalache-only in PR CI",
+    "`byzantine-delivered-first-top-fast` is Apalache-only in PR CI",
+    "`byzantine-vote-first-top-fast` is Apalache-only in PR CI",
+    "Every non-allowlisted PR baseline mode must have both a TLC runner case and README command.",
 )
-APALACHE_TYPECHECK_ONLY_MODES = {"fast"}
+APALACHE_TYPECHECK_ONLY_MODES = {
+    "fast",
+    "byzantine-direct-top-fast",
+    "byzantine-delivered-first-top-fast",
+    "byzantine-vote-first-top-fast",
+}
 APALACHE_TYPECHECK_ONLY_README_SNIPPETS = (
     "The Apalache `fast` mode is intentionally a monolithic-module typecheck smoke.",
+    "`byzantine-direct-top-fast` is a focused top-level `Sumeragi.tla`",
+    "`byzantine-delivered-first-top-fast` is a focused top-level `Sumeragi.tla`",
+    "`byzantine-vote-first-top-fast` is a focused top-level `Sumeragi.tla`",
 )
 FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Constants and variables share a single",
@@ -922,7 +1611,8 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "top-level proof-target operators",
     "be duplicate-free, use non-reserved static module identifiers",
     "be top-level",
-    "appear before declarations and definitions",
+    "EXTENDS entries must appear before declarations and definitions",
+    "INSTANCE entries must appear before operator definitions",
     "without `WITH` substitutions",
     "Malformed `EXTENDS`/`INSTANCE` starts are rejected",
     "No-separator `EXTENDS`/`INSTANCE` starts are rejected",
@@ -930,6 +1620,14 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "No-separator named `INSTANCE` aliases are rejected",
     "INSTANCE declarations must be non-LOCAL",
     "Local TLA dependency files are followed transitively",
+    "Every local TLA module must pass module validation",
+    "DirectCommitProgressSafetyEnvelope",
+    "DirectDeliveredFirstProgressSafetyEnvelope",
+    "DirectVoteFirstProgressSafetyEnvelope",
+    "ByzantineCommitProgressSafetyEnvelope",
+    "compares the source/projection Byzantine mutation suffix families",
+    "top/projection Byzantine direct-commit contracts stay aligned",
+    "projection bridge interleaving exactness composes projected direct-top and source core obligations",
     "same module-header, declaration, and assumption/proof guards",
     "Assumption/proof directive starts are rejected even when indented",
     "No-separator assumption/proof directive starts are rejected even when indented",
@@ -949,6 +1647,10 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Directive-prefixed CFG block entries remain valid",
     "Indented no-separator supported CFG directive starts are rejected",
     "Malformed CHECK_DEADLOCK starts are rejected",
+    "CFG directive surfaces must be globally well-formed",
+    "temporal CFGs keep CHECK_DEADLOCK FALSE",
+    "SPECIFICATION CFGs must set CHECK_DEADLOCK FALSE",
+    "non-temporal top-level Sumeragi CFGs must not bind CHECK_DEADLOCK",
     "Malformed CFG constant binding starts are rejected",
     "Top-level no-separator CFG constant binding starts are rejected",
     "Indented no-separator CFG constant binding directive starts are rejected",
@@ -968,6 +1670,112 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Non-named exactness conjuncts are rejected even when mixed",
     "Named exactness predicates must not hide generic correctness",
     "Transitive named exactness predicate chains must not hide generic correctness",
+    "pins the three top-level Byzantine CFG check surfaces",
+    "top-level Byzantine CFG constants pin quorum and fault envelopes",
+    "top-level sentinel CFG proof-check sets must remain exact",
+    "projection progress spec composes the named fairness aggregate",
+    "source progress specs compose their named fairness aggregates",
+    "top-level Sumeragi specs compose their named fairness aggregates",
+    "temporal CFGs bind their documented behavior operators",
+    "TLC runner constraint injections stay on documented singleton-or-empty families",
+    "The TLC runner must keep an empty top-level tlc_constraint default",
+    "Sumeragi formal proof commands must not set APALACHE_LENGTH",
+    "Sumeragi formal proof commands must not set toolchain override variables",
+    "CI, workflow, and README formal commands must use strict Apalache/TLC runner shapes",
+    "README formal runner commands must be standalone command lines",
+    "README formal runner commands must live in shell fenced code blocks",
+    "README shell fences containing formal runner commands must be closed",
+    "YAML `run:` formal commands are only accepted in workflow files",
+    "Workflow and baseline formal entrypoint commands must be active run/script lines",
+    "Workflow active command extraction must ignore block-scalar bodies",
+    "Formal preflight, sweep, and success ordering checks must use exact command lines",
+    "CI and workflow mode inventories must count only active direct runner commands",
+    "Active CI/workflow TLC modes must be supported by the TLC runner and documented by README TLC commands",
+    "Active CI/workflow TLC modes must be duplicate-free",
+    "Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands",
+    "Formal workflow triggers must keep the checked PR and scheduled/manual surfaces",
+    "Formal workflow names must stay exact",
+    "Formal workflow header key inventories must stay exact",
+    "Formal workflow trigger event inventories must stay exact",
+    "Formal workflow path filters must keep the reviewed ignored-path set",
+    "Formal workflow concurrency must keep reviewed cancellation behavior",
+    "Formal workflow headers must not set defaults or token permissions",
+    "Formal workflow top-level env keys must stay reviewed",
+    "Formal workflow top-level env bindings must stay exact",
+    "Workflow Apalache install and toolchain version pins must come from active commands",
+    "Formal workflows must verify the pinned Apalache binary before running proof jobs",
+    "Formal baseline script must verify the pinned Apalache binary after coverage and before proof jobs",
+    "Expected-failure script must verify coverage and the pinned Apalache binary before mutation proof jobs",
+    "Standalone expected-failure script must stay Apalache-only",
+    "Formal baseline script must run the expected-failure sweep after all positive Apalache and TLC proof commands",
+    "Formal baseline success marker must run after all proof and mutation evidence commands",
+    "Expected-failure success marker must run after all mutation evidence commands",
+    "Formal CI proof scripts must stay linear and free of shell control-flow blocks",
+    "Formal CI proof scripts must not contain here-documents",
+    "Formal CI proof scripts must not contain early exits or error-handling overrides",
+    "Formal CI proof scripts may contain only allowlisted direct evidence commands",
+    "Formal workflow proof jobs may contain only single-line allowlisted run commands",
+    "Formal workflow run steps must set `run` at most once and cannot combine `run` with `uses`",
+    "Formal workflow run inventories must match the checked proof jobs",
+    "Formal workflow proof jobs may use only allowlisted action steps",
+    "Formal workflow action steps must set `uses` at most once",
+    "Formal workflow action inventories must match the checked proof jobs",
+    "Formal workflow action inputs must match the pinned proof environment",
+    "Formal workflow setup action steps must not use conditionals, execution modifiers, or continue-on-error",
+    "Formal workflow proof jobs must use the pinned runner label",
+    "Formal workflow proof jobs must keep pinned timeout budgets",
+    "Formal workflow proof jobs must not use dependency or environment gates",
+    "Formal workflow proof jobs must not set job-level token permissions",
+    "Formal workflow proof entrypoints must stay inside the checked formal jobs",
+    "Formal workflow proof commands must not appear outside checked formal jobs in any workflow",
+    "Formal workflow job scoping must only recognize jobs under the top-level jobs block",
+    "Formal workflow job scoping must normalize top-level and job-name YAML key spacing",
+    "Formal workflow proof steps must not use job or step conditionals, execution modifiers, or continue-on-error",
+    "Formal workflow mode and toolchain inventories must stay scoped to checked formal jobs",
+    "Formal singleton evidence commands must appear at most once",
+    "Formal shell entrypoints must use `set -euo pipefail`",
+    "Apalache runner proof invocations must route through `run_with_expected_status`",
+    "TLC runner proof invocations must preserve the `PIPESTATUS[0]` status-capture contract",
+    "top-level Sumeragi proof CFGs must remain unconstrained",
+    "CFGs must define exactly one behavior surface",
+    "CFGs must check TypeInvariant and a semantic proof target",
+    "CFG operator references must resolve to zero-arity non-trivial targets",
+    "CFG operator references must be duplicate-free and role-disjoint",
+    "CFG filenames must belong to inferred owning modules",
+    "fast CFGs must use model-specific correctness envelopes",
+    "CFG proof-target shapes must preserve correctness-envelope/direct-exactness structure",
+    "CFG constant bindings must match owning module declarations",
+    "top-level Sumeragi CFG constants pin quorum and fault envelopes",
+    "top-level Sumeragi CFG constant sets must remain exact",
+    'clean temporal progress CFGs bind Bug = "none"',
+    "clean CFG mutation selectors must remain disabled",
+    "progress mutation CFGs bind Bug to their file suffix",
+    "safety mutation CFGs bind Bug to their file suffix",
+    "mutation CFGs must check INVARIANT TypeInvariant",
+    "mutation CFGs must check at least one non-TypeInvariant invariant/property",
+    "Mutation CFG semantic proof targets must resolve to zero-arity non-trivial",
+    "mutation CFGs bind the expected behavior surface",
+    "custom mutation INIT exceptions must stay live, necessary, and exact",
+    "quoted-string mutation CFG Bug constants match their file suffix",
+    "quoted mutation CFG Bug selectors must be used by reachable TLA Bug expressions",
+    "mutation CFGs use exactly one Bug selector style",
+    "mutation CFG Bug selector constants are duplicate-free",
+    "exact mutation CFG Bug selector values must be quoted or decimal",
+    "numeric mutation CFG Bug selectors use canonical decimal values",
+    "numeric mutation CFG Bug selectors must be positive",
+    "numeric mutation CFG Bug selectors must be used by reachable TLA Bug relations",
+    "numeric mutation CFG Bug selectors are unique per family",
+    "boolean mutation CFG selectors remain one-hot",
+    "boolean mutation CFG TRUE selectors match their file suffixes",
+    "boolean mutation CFG TRUE selectors are unique per family",
+    "boolean mutation CFG selectors must be declared by their TLA modules",
+    "boolean mutation CFG selectors bind every declared boolean selector",
+    "boolean mutation CFG selectors must be used by reachable TLA expressions",
+    "exact mutation CFG Bug selectors must be declared by their TLA modules",
+    "boolean selector exception tables must stay live, necessary, and exact",
+    "safety mutation CFGs bind INIT Init and NEXT Next",
+    'clean safety CFGs bind Bug = "none"',
+    "clean safety CFGs bind INIT Init and NEXT Next",
     "Transitive exactness predicate chains must not hide repeated helper conjuncts",
     "Unary-temporal exactness helper wrappers must not hide repeated helper conjuncts",
     "Unary-temporal exactness helper wrappers must not hide single-helper conjunct aliases",
@@ -1231,15 +2039,18 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Temporal vacuous-helper checks inspect static and structured operands",
     "Exactness and correctness-envelope conjunct references must resolve to zero-arity",
     "Transitive exactness predicate chains must also resolve through zero-arity",
+    "Apalache-only top-level corridor modes must stay typecheck-only unless listed as the bounded deep exception",
     "Every top-level Sumeragi property checked by the deep/TLC-fast configs must be reachable",
     "from `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` through zero-arity",
     "operator references",
     "Every non-TypeInvariant top-level Sumeragi invariant checked by the deep/TLC-fast configs must be reachable",
     "from `SumeragiConsensusCoreStateMatchesEnvelope` through zero-arity",
     "The consensus-core aggregate proof roots must keep their exact direct conjunct contracts",
+    "Aggregate proof root conjuncts must stay named zero-arity operators",
     "The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,",
     "`SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly",
     "The state+temporal, exactness, and fast roots keep their documented direct conjuncts",
+    "Sumeragi_fast.cfg pins the fast correctness envelope",
     "Every direct conjunct of `SumeragiConsensusCoreStateMatchesEnvelope` must be checked",
     "as a top-level deep/TLC-fast `INVARIANT`",
     "`SumeragiConsensusCoreStateMatchesEnvelope` must keep the documented state direct conjunct contract",
@@ -1252,11 +2063,13 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Reachable aggregate temporal property roots recursively use the same top-level `PROPERTY` coverage rule",
     "Finalized certificate retention names the Byzantine commit-vote closure property directly",
     "Root coverage checks require each selected deep/TLC-fast CFG to carry every protected conjunct independently",
+    "Top-level Apalache/TLC CFG proof checks must stay in parity",
     "Correctness-root reachability requires the root property in every selected deep/TLC-fast CFG",
     "Correctness-root direct TypeInvariant stays a top-level `INVARIANT` in every selected deep/TLC-fast CFG",
     "Correctness-root direct temporal obligations stay top-level `PROPERTY` checks in every selected deep/TLC-fast CFG",
     "`EventuallyCommit` must keep the direct `[] (gst => <> committed)` liveness shape with exact lowercase state-variable names",
     "`CommitNeverRevoked` must keep the direct `[] (committed => [] committed)` finality-latch monotonicity shape with exact lowercase state-variable names",
+    "`SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope` must keep the direct `[] SumeragiConsensusCoreStateMatchesEnvelope` wrapper shape",
     "Finality `AlwaysMatches` temporal wrappers must keep direct `[]` shapes over their matching zero-arity predicates",
     "`TimeoutTickGateNeverBypassesStalledProgress` must keep the direct `[] TimeoutTickGateMatchesStalledProgress` timeout-gate wrapper shape",
     "Pre-commit handoff `Never`/`Always` predicate wrappers must keep direct `[] Predicate` shapes over their documented zero-arity predicates",
@@ -1313,11 +2126,113 @@ TEMPORAL_CORRECTNESS_ENVELOPE_EXTRAS = {
 
 COMMAND_MODE_PATTERN = r"[A-Za-z0-9_.:/-]+"
 COMMAND_MODE_RE = re.compile(rf"^{COMMAND_MODE_PATTERN}$")
+README_FORMAL_COMMAND_FENCE_LANGUAGES = {"bash", "sh", "shell", "console"}
+FORMAL_CI_ALLOWED_EXACT_COMMANDS = (
+    "set -euo pipefail",
+    'repo_root="$(cd "$(dirname "$0")/.." && pwd)"',
+    'root_dir="$(cd "$(dirname "$0")/.." && pwd)"',
+    'cd "$repo_root"',
+    'cd "$root_dir"',
+    FORMAL_COVERAGE_COMMAND,
+    FORMAL_APALACHE_VERSION_COMMAND,
+    FORMAL_EXPECTED_FAILURE_COMMAND,
+    FORMAL_BASELINE_SUCCESS_COMMAND,
+    FORMAL_EXPECTED_FAILURE_SUCCESS_COMMAND,
+)
+FORMAL_CI_ALLOWED_PREFIX_COMMANDS = (
+    APALACHE_COMMAND_PREFIX,
+    TLC_COMMAND_PREFIX,
+)
+FORMAL_WORKFLOW_ALLOWED_EXACT_RUN_COMMANDS = (
+    FORMAL_APALACHE_VERSION_COMMAND,
+    FORMAL_BASELINE_COMMAND,
+    FORMAL_DOCS_METADATA_COMMAND,
+)
+FORMAL_WORKFLOW_ALLOWED_ACTIONS = (
+    "actions/checkout@v4",
+    "actions/setup-java@v4",
+    "actions/upload-artifact@v4",
+)
+FORMAL_WORKFLOW_ACTION_INPUTS = {
+    "actions/checkout@v4": (),
+    "actions/setup-java@v4": (
+        "distribution: temurin",
+        "java-version: '17'",
+    ),
+    "actions/upload-artifact@v4": (
+        "name: formal-docs-i18n-metadata-nightly",
+        "path: target/docs-i18n/formal-metadata.json",
+        "if-no-files-found: ignore",
+    ),
+}
+FORMAL_WORKFLOW_ACTION_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        (
+            "actions/checkout@v4",
+            "actions/setup-java@v4",
+        ),
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        (
+            "actions/checkout@v4",
+            "actions/setup-java@v4",
+            "actions/upload-artifact@v4",
+        ),
+    ),
+)
+FORMAL_WORKFLOW_SETUP_ACTIONS = (
+    "actions/checkout@v4",
+    "actions/setup-java@v4",
+)
+FORMAL_WORKFLOW_REQUIRED_RUNNER = "ubuntu-latest"
+FORMAL_WORKFLOW_TIMEOUT_CONTRACTS = (
+    (
+        PR_WORKFLOW,
+        ("sumeragi_formal",),
+        "PR formal workflow job",
+        "45",
+    ),
+    (
+        NIGHTLY_WORKFLOW,
+        ("frontier-nightly",),
+        "nightly formal workflow job",
+        "90",
+    ),
+)
+FORMAL_WORKFLOW_ALLOWED_PREFIX_RUN_COMMANDS = (
+    INSTALL_APALACHE_COMMAND_PREFIX,
+    APALACHE_COMMAND_PREFIX,
+    TLC_COMMAND_PREFIX,
+)
+FORMAL_APALACHE_LENGTH_OVERRIDE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])APALACHE_LENGTH\s*(?:=|:)"
+)
+FORMAL_TOOLCHAIN_OVERRIDE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(?:APALACHE_BIN|APALACHE_VERSION|"
+    r"APALACHE_DOCKER_IMAGE|TLC_JAR|TLA2TOOLS_JAR)\s*(?:=|:)"
+)
 APALACHE_COMMAND_RE = re.compile(
     rf"\b{re.escape(APALACHE_COMMAND_PREFIX)}\s+({COMMAND_MODE_PATTERN})"
 )
 TLC_COMMAND_RE = re.compile(
     rf"\b{re.escape(TLC_COMMAND_PREFIX)}\s+({COMMAND_MODE_PATTERN})"
+)
+SHELL_CONTROL_FLOW_LINE_RE = re.compile(
+    r"^(?:if\b|then\b|elif\b|else\b|fi\b|for\b|while\b|until\b|case\b|"
+    r"esac\b|select\b|do\b|done\b|function\b|[A-Za-z_][A-Za-z0-9_]*\s*"
+    r"\(\s*\)\s*\{|[{}]\s*$)"
+)
+SHELL_HEREDOC_LINE_RE = re.compile(
+    r"<<-?\s*['\"]?[A-Za-z_][A-Za-z0-9_]*['\"]?(?:\s|$)"
+)
+SHELL_REACHABILITY_OVERRIDE_LINE_RE = re.compile(
+    r"^(?:exit\b|return\b|exec\b|set\s+\+e\b|trap\b)"
 )
 CONFLICT_MARKER_RE = re.compile(r"^(?:<{7}|={7}|>{7})(?:\s|$)")
 CASE_LABEL_RE = re.compile(r"^  ([A-Za-z0-9_-]+(?:-\*)?)\)\s*$", re.MULTILINE)
@@ -1380,6 +2295,7 @@ def shell_mutation_candidate_re(*variables: str) -> re.Pattern[str]:
 PROOF_INPUT_MUTATION_RE = shell_mutation_candidate_re("spec_file", "cfg_file")
 EXPECT_FAILURE_MUTATION_RE = shell_mutation_candidate_re("expect_failure")
 TYPECHECK_ONLY_MUTATION_RE = shell_mutation_candidate_re("typecheck_only")
+TLC_CONSTRAINT_MUTATION_RE = shell_mutation_candidate_re("tlc_constraint")
 TLA_MODULE_RE = re.compile(
     r"^-{4}\s+MODULE\s+([A-Za-z_][A-Za-z0-9_]*)\s+-{4}\s*$"
 )
@@ -1641,9 +2557,11 @@ CFG_CONSTANT_BINDING_LINE_RE = re.compile(
 CFG_NESTED_CONSTANT_BINDING_RE = re.compile(
     r"(^|\s)([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|<-)"
 )
+TLA_WF_VARS_RE = re.compile(r"\bWF_vars\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)")
 CFG_CONSTANT_DIRECTIVES = {"CONSTANT", "CONSTANTS"}
 CFG_CHECK_DIRECTIVES = {"INVARIANT", "INVARIANTS", "PROPERTY", "PROPERTIES"}
 CFG_MISC_DIRECTIVES = {"CHECK_DEADLOCK"}
+CFG_BEHAVIOR_DIRECTIVES = {"SPECIFICATION", "INIT", "NEXT"}
 CFG_SINGLE_OPERATOR_DIRECTIVES = {
     "SPECIFICATION",
     "INIT",
@@ -1665,8 +2583,499 @@ CFG_ALLOWED_DIRECTIVE_PREFIXES = tuple(
 )
 CFG_NON_PROOF_OPERATOR_REFERENCES = {"vars"}
 TLC_SPECIFIC_MUTATION_CFG_PREFIXES = ("commit-roots-bug-",)
+TLC_SINGLETON_OR_EMPTY_CONSTRAINT = "TlcSingletonOrEmpty"
+TLC_SINGLETON_OR_EMPTY_CONSTRAINT_MODE_PREFIXES = (
+    "certified-fetch",
+    "engine-certificate-dispatch",
+    "engine-certificate-prefilter-state",
+    "frontier-gap-realign",
+    "kura-commit",
+    "missing-block-fetch",
+    "missing-block-hard-cap-cleanup",
+    "missing-block-hard-cap",
+    "missing-block-view-change",
+    "native-amx-attestation",
+    "native-amx-receipt",
+    "native-amx-routing-plan",
+    "npos-vrf",
+    "post-commit-cleanup",
+    "restart-replay",
+)
+SUMERAGI_TOP_LEVEL_CFG_REQUIRED_BEHAVIORS = (
+    (
+        SUMERAGI_FAST_CFG,
+        (("INIT", "Init"), ("NEXT", "Next")),
+        "top-level fast coverage",
+    ),
+    (
+        SUMERAGI_DEEP_CFG,
+        (("INIT", "Init"), ("NEXT", "Next")),
+        "top-level deep coverage",
+    ),
+    (
+        SUMERAGI_TLC_FAST_CFG,
+        (("SPECIFICATION", "Spec"),),
+        "top-level TLC fast coverage",
+    ),
+)
+SUMERAGI_TOP_LEVEL_CFG_REQUIRED_DEADLOCK_POLICIES = (
+    (
+        SUMERAGI_TLC_FAST_CFG,
+        "FALSE",
+        "top-level TLC fast coverage",
+    ),
+)
+SUMERAGI_FAST_CONSTANT_VALUES = (
+    ("N", "4"),
+    ("F", "1"),
+    ("CommitQuorum", "3"),
+    ("ViewQuorum", "3"),
+    ("StakeQuorum", "8"),
+    ("StakePerHonestVote", "3"),
+    ("StakePerByzVote", "1"),
+    ("MaxView", "4"),
+    ("MaxChunks", "2"),
+)
+SUMERAGI_DEEP_CONSTANT_VALUES = (
+    ("N", "7"),
+    ("F", "2"),
+    ("CommitQuorum", "5"),
+    ("ViewQuorum", "5"),
+    ("StakeQuorum", "16"),
+    ("StakePerHonestVote", "3"),
+    ("StakePerByzVote", "1"),
+    ("MaxView", "5"),
+    ("MaxChunks", "2"),
+)
+SUMERAGI_TOP_LEVEL_CFG_REQUIRED_CONSTANT_VALUES = (
+    (
+        SUMERAGI_FAST_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "top-level fast coverage",
+    ),
+    (
+        SUMERAGI_DEEP_CFG,
+        SUMERAGI_DEEP_CONSTANT_VALUES,
+        "top-level deep coverage",
+    ),
+    (
+        SUMERAGI_TLC_FAST_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "top-level TLC fast coverage",
+    ),
+)
+SUMERAGI_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("SumeragiConsensusCoreFastCorrectnessEnvelope", "INVARIANT"),
+)
+BYZANTINE_DELIVERED_FIRST_TOP_CFG = (
+    SPEC_DIR / "Sumeragi_byzantine_delivered_first_top_fast.cfg"
+)
+BYZANTINE_VOTE_FIRST_TOP_CFG = (
+    SPEC_DIR / "Sumeragi_byzantine_vote_first_top_fast.cfg"
+)
+BYZANTINE_DIRECT_TOP_CFG = SPEC_DIR / "Sumeragi_byzantine_direct_top_fast.cfg"
+BYZANTINE_TOP_CFG_REQUIRED_CHECKS = (
+    (
+        BYZANTINE_DELIVERED_FIRST_TOP_CFG,
+        (
+            ("TypeInvariant", "INVARIANT"),
+            ("TlcByzantineDirectCommitCorridor", "INVARIANT"),
+            ("ByzantineDeliveredFirstTopCorrectnessEnvelope", "INVARIANT"),
+        ),
+        "Byzantine delivered-first top coverage",
+    ),
+    (
+        BYZANTINE_VOTE_FIRST_TOP_CFG,
+        (
+            ("TypeInvariant", "INVARIANT"),
+            ("TlcByzantineDirectCommitCorridor", "INVARIANT"),
+            ("ByzantineVoteFirstTopCorrectnessEnvelope", "INVARIANT"),
+        ),
+        "Byzantine vote-first top coverage",
+    ),
+    (
+        BYZANTINE_DIRECT_TOP_CFG,
+        (
+            ("TypeInvariant", "INVARIANT"),
+            ("TlcByzantineDirectCommitCorridor", "INVARIANT"),
+            ("ByzantineDirectTopCorrectnessEnvelope", "INVARIANT"),
+            ("ByzantineDirectTopCoversOrderedTopCorridors", "INVARIANT"),
+        ),
+        "Byzantine direct top coverage",
+    ),
+)
+SUMERAGI_SENTINEL_TOP_LEVEL_CFG_EXACT_CHECKS = (
+    (
+        SUMERAGI_FAST_CFG,
+        SUMERAGI_FAST_CFG_REQUIRED_CHECKS,
+        "top-level fast sentinel coverage",
+    ),
+    *BYZANTINE_TOP_CFG_REQUIRED_CHECKS,
+)
+BYZANTINE_TOP_CFG_REQUIRED_BEHAVIORS = (
+    (
+        BYZANTINE_DELIVERED_FIRST_TOP_CFG,
+        (("INIT", "Init"), ("NEXT", "ByzantineDeliveredFirstCommitNext")),
+        "Byzantine delivered-first top coverage",
+    ),
+    (
+        BYZANTINE_VOTE_FIRST_TOP_CFG,
+        (("INIT", "Init"), ("NEXT", "ByzantineVoteFirstCommitNext")),
+        "Byzantine vote-first top coverage",
+    ),
+    (
+        BYZANTINE_DIRECT_TOP_CFG,
+        (("INIT", "Init"), ("NEXT", "ByzantineDirectCommitNext")),
+        "Byzantine direct top coverage",
+    ),
+)
+BYZANTINE_TOP_CFG_REQUIRED_BEHAVIOR_BY_NAME = {
+    cfg_path.name: (required_behavior, coverage_label)
+    for cfg_path, required_behavior, coverage_label in (
+        BYZANTINE_TOP_CFG_REQUIRED_BEHAVIORS
+    )
+}
+BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES = (
+    (
+        BYZANTINE_DELIVERED_FIRST_TOP_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "Byzantine delivered-first top coverage",
+    ),
+    (
+        BYZANTINE_VOTE_FIRST_TOP_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "Byzantine vote-first top coverage",
+    ),
+    (
+        BYZANTINE_DIRECT_TOP_CFG,
+        SUMERAGI_FAST_CONSTANT_VALUES,
+        "Byzantine direct top coverage",
+    ),
+)
+BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES_BY_NAME = {
+    cfg_path.name: (required_values, coverage_label)
+    for cfg_path, required_values, coverage_label in (
+        BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES
+    )
+}
+SUMERAGI_TOP_LEVEL_CFG_EXACT_CONSTANT_VALUES = (
+    SUMERAGI_TOP_LEVEL_CFG_REQUIRED_CONSTANT_VALUES
+    + BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES
+)
+SUMERAGI_TOP_LEVEL_CFG_FORBIDDEN_DEADLOCK_POLICIES = (
+    (SUMERAGI_FAST_CFG, "top-level fast coverage"),
+    (SUMERAGI_DEEP_CFG, "top-level deep coverage"),
+    (BYZANTINE_DELIVERED_FIRST_TOP_CFG, "Byzantine delivered-first top coverage"),
+    (BYZANTINE_VOTE_FIRST_TOP_CFG, "Byzantine vote-first top coverage"),
+    (BYZANTINE_DIRECT_TOP_CFG, "Byzantine direct top coverage"),
+)
+SUMERAGI_UNCONSTRAINED_TOP_LEVEL_CFGS = (
+    (SUMERAGI_FAST_CFG, "top-level fast coverage"),
+    (SUMERAGI_DEEP_CFG, "top-level deep coverage"),
+    (SUMERAGI_TLC_FAST_CFG, "top-level TLC fast coverage"),
+    (BYZANTINE_DELIVERED_FIRST_TOP_CFG, "Byzantine delivered-first top coverage"),
+    (BYZANTINE_VOTE_FIRST_TOP_CFG, "Byzantine vote-first top coverage"),
+    (BYZANTINE_DIRECT_TOP_CFG, "Byzantine direct top coverage"),
+)
+DIRECT_DELIVERED_FIRST_MUTATION_CFG_GLOB = (
+    "SumeragiDirectDeliveredFirstCorridorGate_bug_*.cfg"
+)
+DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectDeliveredFirstCorridorGate_bug_"
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiDirectDeliveredFirstCorridorGate_progress_bug_*.cfg"
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectDeliveredFirstCorridorGate_progress_bug_"
+)
+DIRECT_DELIVERED_FIRST_FAST_CFG = (
+    SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate_fast.cfg"
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate_progress.cfg"
+)
+DIRECT_DELIVERED_FIRST_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectDeliveredFirstCorridorExactness", "INVARIANT"),
+    ("DirectDeliveredFirstCorridorCorrectnessEnvelope", "INVARIANT"),
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectDeliveredFirstProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectDeliveredFirstFinalityStack", "PROPERTY"),
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectDeliveredFirstProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectDeliveredFirstFinalityStack", "PROPERTY"),
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "DirectDeliveredFirstCorridorProgressSpec"),
+)
+DIRECT_VOTE_FIRST_MUTATION_CFG_GLOB = (
+    "SumeragiDirectVoteFirstCorridorGate_bug_*.cfg"
+)
+DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectVoteFirstCorridorGate_bug_"
+)
+DIRECT_VOTE_FIRST_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiDirectVoteFirstCorridorGate_progress_bug_*.cfg"
+)
+DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectVoteFirstCorridorGate_progress_bug_"
+)
+DIRECT_VOTE_FIRST_FAST_CFG = (
+    SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate_fast.cfg"
+)
+DIRECT_VOTE_FIRST_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate_progress.cfg"
+)
+DIRECT_VOTE_FIRST_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectVoteFirstCorridorExactness", "INVARIANT"),
+    ("DirectVoteFirstCorridorCorrectnessEnvelope", "INVARIANT"),
+)
+DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectVoteFirstProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectVoteFirstFinalityStack", "PROPERTY"),
+)
+DIRECT_VOTE_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectVoteFirstProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectVoteFirstFinalityStack", "PROPERTY"),
+)
+DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "DirectVoteFirstCorridorProgressSpec"),
+)
+DIRECT_INTERLEAVING_MUTATION_CFG_GLOB = (
+    "SumeragiDirectCommitInterleavingGate_bug_*.cfg"
+)
+DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectCommitInterleavingGate_bug_"
+)
+DIRECT_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiDirectCommitInterleavingGate_progress_bug_*.cfg"
+)
+DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiDirectCommitInterleavingGate_progress_bug_"
+)
+DIRECT_INTERLEAVING_FAST_CFG = (
+    SPEC_DIR / "SumeragiDirectCommitInterleavingGate_fast.cfg"
+)
+DIRECT_INTERLEAVING_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiDirectCommitInterleavingGate_progress.cfg"
+)
+DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectCommitInterleavingExactness", "INVARIANT"),
+    ("DirectCommitInterleavingCorrectnessEnvelope", "INVARIANT"),
+)
+DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectCommitFinalityStack", "PROPERTY"),
+)
+DIRECT_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("DirectCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualDirectCommitFinalityStack", "PROPERTY"),
+)
+DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "DirectCommitInterleavingProgressSpec"),
+)
+BYZANTINE_INTERLEAVING_MUTATION_CFG_GLOB = (
+    "SumeragiByzantineCommitInterleavingGate_bug_*.cfg"
+)
+BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiByzantineCommitInterleavingGate_progress_bug_*.cfg"
+)
+BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX = (
+    "SumeragiByzantineCommitInterleavingGate_bug_"
+)
+BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiByzantineCommitInterleavingGate_progress_bug_"
+)
+BYZANTINE_INTERLEAVING_FAST_CFG = (
+    SPEC_DIR / "SumeragiByzantineCommitInterleavingGate_fast.cfg"
+)
+BYZANTINE_INTERLEAVING_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiByzantineCommitInterleavingGate_progress.cfg"
+)
+BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ByzantineCommitInterleavingExactness", "INVARIANT"),
+    ("ByzantineCommitInterleavingCorrectnessEnvelope", "INVARIANT"),
+)
+BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ByzantineCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualByzantineCommitFinalityStack", "PROPERTY"),
+)
+BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ByzantineCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualByzantineCommitFinalityStack", "PROPERTY"),
+)
+BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "ByzantineCommitInterleavingProgressSpec"),
+)
+DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset()
+DIRECT_VOTE_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
+    {
+        "commit_before_delivery",
+        "commit_evidence_before_delivery",
+        "phase_committed_before_delivery",
+    }
+)
+DIRECT_INTERLEAVING_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
+    {
+        "commit_before_delivery",
+        "commit_evidence_before_delivery",
+        "commit_quorum_under_counted",
+        "prepare_quorum_under_counted",
+        "stake_not_recorded",
+    }
+)
+SOURCE_SAFETY_MUTATION_CFG_REQUIRED_CHECKS = (
+    (
+        DIRECT_DELIVERED_FIRST_MUTATION_CFG_GLOB,
+        DIRECT_DELIVERED_FIRST_FAST_CFG_REQUIRED_CHECKS,
+        "direct delivered-first safety mutation coverage",
+    ),
+    (
+        DIRECT_VOTE_FIRST_MUTATION_CFG_GLOB,
+        DIRECT_VOTE_FIRST_FAST_CFG_REQUIRED_CHECKS,
+        "direct vote-first safety mutation coverage",
+    ),
+    (
+        DIRECT_INTERLEAVING_MUTATION_CFG_GLOB,
+        DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+        "direct interleaving safety mutation coverage",
+    ),
+    (
+        BYZANTINE_INTERLEAVING_MUTATION_CFG_GLOB,
+        BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+        "Byzantine interleaving safety mutation coverage",
+    ),
+)
+SAFETY_MUTATION_CFG_REQUIRED_BEHAVIOR = (
+    ("INIT", "Init"),
+    ("NEXT", "Next"),
+)
+CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR = (
+    ("INIT", "Init"),
+    ("NEXT", "Next"),
+)
+CLEAN_SAFETY_BUG_CONSTANT_VALUE = '"none"'
+PROJECTION_FAST_CFG = SPEC_DIR / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+PROJECTION_PROGRESS_CFG = (
+    SPEC_DIR / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+)
+PROJECTION_FAST_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ProjectedByzantineDeliveredFirstTopExactness", "INVARIANT"),
+    ("ProjectedByzantineDeliveredFirstTopCorrectnessEnvelope", "INVARIANT"),
+    ("ProjectedByzantineVoteFirstTopExactness", "INVARIANT"),
+    ("ProjectedByzantineVoteFirstTopCorrectnessEnvelope", "INVARIANT"),
+    ("ProjectedByzantineDirectTopExactness", "INVARIANT"),
+    ("ProjectedByzantineDirectTopCorrectnessEnvelope", "INVARIANT"),
+    ("ProjectionBridgeCoversOrderedTopCorridors", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingCore", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingExactness", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope", "INVARIANT"),
+)
+PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ProjectedCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualProjectedCommitFinalityStack", "PROPERTY"),
+)
+PROJECTION_MUTATION_CFG_GLOB = "SumeragiByzantineCommitProjectionGate_bug_*.cfg"
+PROJECTION_MUTATION_STEM_PREFIX = "SumeragiByzantineCommitProjectionGate_bug_"
+PROJECTION_MUTATION_BRIDGE_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ProjectedByzantineDirectTopExactness", "INVARIANT"),
+    ("ProjectedByzantineDirectTopCorrectnessEnvelope", "INVARIANT"),
+    ("ProjectionBridgeCoversOrderedTopCorridors", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingCore", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingExactness", "INVARIANT"),
+    ("ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope", "INVARIANT"),
+)
+PROJECTION_PROGRESS_MUTATION_CFG_GLOB = (
+    "SumeragiByzantineCommitProjectionGate_progress_bug_*.cfg"
+)
+PROJECTION_PROGRESS_MUTATION_STEM_PREFIX = (
+    "SumeragiByzantineCommitProjectionGate_progress_bug_"
+)
+PROJECTION_PROGRESS_MUTATION_REQUIRED_CHECKS = (
+    ("TypeInvariant", "INVARIANT"),
+    ("ProjectedCommitProgressSafetyEnvelope", "INVARIANT"),
+    ("EventualProjectedCommitFinalityStack", "PROPERTY"),
+)
+PROJECTION_PROGRESS_CFG_REQUIRED_BEHAVIOR = (
+    ("SPECIFICATION", "ProjectedCommitProgressSpec"),
+)
+CLEAN_PROGRESS_BUG_CONSTANT_VALUE = '"none"'
+BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
+    {
+        "byzantine_stake_over_counted",
+        "byzantine_vote_over_budget",
+        "commit_before_delivery",
+        "commit_evidence_before_delivery",
+        "honest_stake_not_recorded",
+        "prepare_quorum_under_counted",
+    }
+)
+MUTATION_CFG_CUSTOM_INIT_OPERATORS = {
+    "SumeragiFrontierRecovery_bug_future_reanchor_active_marker.cfg": (
+        "FutureReanchorActiveMarkerBugInit"
+    ),
+    "SumeragiFrontierRecovery_bug_future_reanchor_rotated.cfg": (
+        "FutureReanchorRotationBugInit"
+    ),
+    "SumeragiFrontierRecovery_bug_payload_recovery_owner.cfg": (
+        "PayloadRecoveryOwnerBugInit"
+    ),
+    "SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg": (
+        "QuorumRetransmitWindowCleanupBugInit"
+    ),
+    "SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg": (
+        "StaleRecoveryUnlockOwnerBugInit"
+    ),
+    "SumeragiFrontierRecovery_bug_view_bound_retransmit_evidence.cfg": (
+        "ViewBoundRetransmitEvidenceBugInit"
+    ),
+    "SumeragiFrontierRecovery_bug_zero_evidence_future_drop.cfg": (
+        "ZeroEvidenceFutureDropBugInit"
+    ),
+}
 FORMAL_FILE_SUFFIXES = {".cfg", ".tla"}
 TLA_MODULE_VALIDATION_MODE_MARKER = "__SUMERAGI_FORMAL_MODE__"
+TLA_STRING_LITERAL_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+TLA_BUG_IDENTIFIER_RE = re.compile(r"(?<![A-Za-z0-9_])Bug(?![A-Za-z0-9_])")
+TLA_BUG_EXPRESSION_CONTINUATION_RE = re.compile(
+    r"(?:\{|\(|\[|,|=|#|/=|\\in|\\notin|\\subseteq|\\union|\\cup|/\\|\\/|=>|<=>)\s*$"
+)
+TLA_NUMERIC_DEFINITION_RE = re.compile(
+    r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*==\s*([0-9]+)\s*$"
+)
+TLA_BUG_RIGHT_RELATION_OPERAND_RE = re.compile(
+    r"(?<![A-Za-z0-9_])Bug(?![A-Za-z0-9_])\s*(?:=|#|/=)\s*"
+    r"([A-Za-z_][A-Za-z0-9_]*|[0-9]+)"
+)
+TLA_BUG_LEFT_RELATION_OPERAND_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*|[0-9]+)\s*(?:=|#|/=)\s*"
+    r"(?<![A-Za-z0-9_])Bug(?![A-Za-z0-9_])"
+)
+TLA_BUG_MEMBERSHIP_OPERAND_RE = re.compile(
+    r"(?<![A-Za-z0-9_])Bug(?![A-Za-z0-9_])\s*"
+    r"\\(?:in|notin)\s*(.*)"
+)
+TLA_IDENTIFIER_OR_NUMBER_SCAN_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*|[0-9]+"
+)
 
 
 @dataclass(frozen=True)
@@ -1745,6 +3154,240 @@ def tla_line_without_comment(line: str) -> str:
     return line
 
 
+def tla_line_without_comment_or_strings(line: str) -> str:
+    """Strip TLA line comments and mask quoted string literal contents."""
+
+    text = tla_line_without_comment(line)
+    masked: list[str] = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            masked.append(" ")
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            masked.append(" ")
+            continue
+        masked.append(char)
+    return "".join(masked)
+
+
+def tla_unquoted_delimiter_delta(text: str) -> int:
+    """Return bracket/set delimiter balance after ignoring quoted strings."""
+
+    delta = 0
+    in_string = False
+    escaped = False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{([":
+            delta += 1
+        elif char in "})]":
+            delta -= 1
+    return delta
+
+
+@cache
+def tla_bug_expression_string_literals(path: Path) -> frozenset[str]:
+    """Return strings that appear in TLA expressions mentioning exact Bug."""
+
+    if not path.exists():
+        return frozenset()
+
+    literals: set[str] = set()
+    active_delimiter_balance = 0
+    pending_bug_continuation = False
+    for line in read_text(path).splitlines():
+        text = tla_line_without_comment(line).rstrip()
+        stripped = text.strip()
+        if not stripped:
+            if active_delimiter_balance == 0:
+                pending_bug_continuation = False
+            continue
+
+        contains_bug = TLA_BUG_IDENTIFIER_RE.search(text) is not None
+        in_bug_expression = (
+            contains_bug
+            or active_delimiter_balance > 0
+            or pending_bug_continuation
+        )
+        if in_bug_expression:
+            literals.update(TLA_STRING_LITERAL_RE.findall(text))
+
+        if not in_bug_expression:
+            continue
+
+        line_delta = tla_unquoted_delimiter_delta(text)
+        if active_delimiter_balance > 0:
+            active_delimiter_balance = max(
+                0, active_delimiter_balance + line_delta
+            )
+        else:
+            active_delimiter_balance = max(0, line_delta)
+
+        if active_delimiter_balance > 0:
+            pending_bug_continuation = False
+            continue
+
+        pending_bug_continuation = bool(
+            (contains_bug or pending_bug_continuation)
+            and TLA_BUG_EXPRESSION_CONTINUATION_RE.search(stripped)
+        )
+
+    return frozenset(literals)
+
+
+@cache
+def tla_reachable_bug_expression_string_literals(path: Path) -> frozenset[str]:
+    """Return Bug-expression strings from a TLA module dependency graph."""
+
+    literals: set[str] = set()
+    for module_path in tla_reachable_module_files(path):
+        literals.update(tla_bug_expression_string_literals(module_path))
+    return frozenset(literals)
+
+
+@cache
+def tla_non_declaration_identifier_references(path: Path) -> frozenset[str]:
+    """Return identifiers used outside TLA constant declarations."""
+
+    if not path.exists():
+        return frozenset()
+
+    declaration_lines = {
+        line_number
+        for line_number, _constant in tla_constant_declaration_entries(path)
+    }
+    identifiers: set[str] = set()
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        if line_number in declaration_lines:
+            continue
+        text = tla_line_without_comment_or_strings(line)
+        identifiers.update(
+            identifier
+            for identifier in TLA_IDENTIFIER_SCAN_RE.findall(text)
+            if is_tla_user_identifier(identifier)
+        )
+    return frozenset(identifiers)
+
+
+@cache
+def tla_reachable_non_declaration_identifier_references(
+    path: Path,
+) -> frozenset[str]:
+    """Return non-declaration identifiers from a TLA dependency graph."""
+
+    identifiers: set[str] = set()
+    for module_path in tla_reachable_module_files(path):
+        identifiers.update(tla_non_declaration_identifier_references(module_path))
+    return frozenset(identifiers)
+
+
+def _canonical_numeric_literal(value: str) -> str:
+    """Return a decimal literal in canonical form."""
+
+    return str(int(value))
+
+
+def _resolved_numeric_bug_operand(
+    token: str, definitions: dict[str, str]
+) -> str | None:
+    """Resolve a TLA token to a numeric Bug selector value if possible."""
+
+    if re.fullmatch(r"[0-9]+", token):
+        return _canonical_numeric_literal(token)
+    value = definitions.get(token)
+    if value is None:
+        return None
+    return _canonical_numeric_literal(value)
+
+
+@cache
+def tla_reachable_numeric_definitions(path: Path) -> dict[str, str]:
+    """Return one-line numeric operator definitions from reachable modules."""
+
+    definitions: dict[str, str] = {}
+    for module_path in tla_reachable_module_files(path):
+        if not module_path.exists():
+            continue
+        for line in read_text(module_path).splitlines():
+            text = tla_line_without_comment_or_strings(line)
+            match = TLA_NUMERIC_DEFINITION_RE.fullmatch(text)
+            if match is None:
+                continue
+            definitions.setdefault(
+                match.group(1), _canonical_numeric_literal(match.group(2))
+            )
+    return definitions
+
+
+@cache
+def tla_reachable_bug_relation_numeric_values(path: Path) -> frozenset[str]:
+    """Return numeric values used as reachable exact Bug relation operands."""
+
+    definitions = tla_reachable_numeric_definitions(path)
+    values: set[str] = set()
+    for module_path in tla_reachable_module_files(path):
+        if not module_path.exists():
+            continue
+        collecting_membership = False
+        membership_balance = 0
+        for line in read_text(module_path).splitlines():
+            text = tla_line_without_comment_or_strings(line).strip()
+            if collecting_membership:
+                for token in TLA_IDENTIFIER_OR_NUMBER_SCAN_RE.findall(text):
+                    value = _resolved_numeric_bug_operand(token, definitions)
+                    if value is not None:
+                        values.add(value)
+                membership_balance += tla_unquoted_delimiter_delta(text)
+                if membership_balance <= 0:
+                    collecting_membership = False
+                    membership_balance = 0
+
+            for match in TLA_BUG_RIGHT_RELATION_OPERAND_RE.finditer(text):
+                value = _resolved_numeric_bug_operand(
+                    match.group(1), definitions
+                )
+                if value is not None:
+                    values.add(value)
+            for match in TLA_BUG_LEFT_RELATION_OPERAND_RE.finditer(text):
+                value = _resolved_numeric_bug_operand(
+                    match.group(1), definitions
+                )
+                if value is not None:
+                    values.add(value)
+
+            membership_match = TLA_BUG_MEMBERSHIP_OPERAND_RE.search(text)
+            if membership_match is None:
+                continue
+            tail = membership_match.group(1)
+            for token in TLA_IDENTIFIER_OR_NUMBER_SCAN_RE.findall(tail):
+                value = _resolved_numeric_bug_operand(token, definitions)
+                if value is not None:
+                    values.add(value)
+            membership_balance = tla_unquoted_delimiter_delta(tail)
+            collecting_membership = membership_balance > 0
+            if not collecting_membership:
+                membership_balance = 0
+    return frozenset(values)
+
+
 def display_path(path: Path) -> Path:
     try:
         return path.relative_to(ROOT_DIR)
@@ -1764,6 +3407,32 @@ def is_cfg_operator_reference_name(value: str) -> bool:
     )
 
 
+def path_allows_yaml_run(path: Path) -> bool:
+    return path.suffix in {".yml", ".yaml"}
+
+
+def direct_formal_command_text(stripped_line: str, path: Path) -> str:
+    """Return a direct command, accepting YAML run syntax only in workflows."""
+
+    command_text = stripped_line
+    if path_allows_yaml_run(path) and command_text.startswith("- "):
+        command_text = command_text[2:].lstrip()
+    if path_allows_yaml_run(path):
+        run_value = workflow_field_value(command_text, "run")
+        if run_value is not None:
+            command_text = run_value.strip()
+    return command_text
+
+
+def workflow_field_value(stripped_line: str, field: str) -> str | None:
+    """Return a YAML field value, accepting optional space before the colon."""
+
+    field_match = re.match(rf"^{re.escape(field)}\s*:(.*)$", stripped_line)
+    if field_match is None:
+        return None
+    return field_match.group(1)
+
+
 def command_modes(
     path: Path, command_re: re.Pattern[str] = APALACHE_COMMAND_RE
 ) -> list[str]:
@@ -1772,7 +3441,82 @@ def command_modes(
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        modes.extend(match.group(1) for match in command_re.finditer(line))
+        match = command_re.fullmatch(direct_formal_command_text(stripped, path))
+        if match is not None:
+            modes.append(match.group(1))
+    return modes
+
+
+def readme_formal_command_block_errors(path: Path = README) -> list[str]:
+    """Return errors for README formal commands outside shell code fences."""
+
+    errors: list[str] = []
+    in_fence = False
+    fence_marker = ""
+    fence_language = ""
+    fence_start_line = 0
+    fence_contains_formal_command = False
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        stripped = line.strip()
+        fence_match = re.match(r"^(```|~~~)\s*([A-Za-z0-9_-]*)", stripped)
+        if fence_match is not None:
+            marker = fence_match.group(1)
+            if in_fence and marker == fence_marker:
+                in_fence = False
+                fence_marker = ""
+                fence_language = ""
+                fence_start_line = 0
+                fence_contains_formal_command = False
+            elif not in_fence:
+                in_fence = True
+                fence_marker = marker
+                fence_language = fence_match.group(2).lower()
+                fence_start_line = line_number
+                fence_contains_formal_command = False
+            continue
+
+        if not stripped or stripped.startswith("#"):
+            continue
+        is_formal_command = (
+            APALACHE_COMMAND_RE.fullmatch(stripped) is not None
+            or TLC_COMMAND_RE.fullmatch(stripped) is not None
+        )
+        if not is_formal_command:
+            continue
+        if in_fence and fence_language in README_FORMAL_COMMAND_FENCE_LANGUAGES:
+            fence_contains_formal_command = True
+            continue
+        errors.append(
+            f"{display_path(path)}:{line_number}: README formal runner command "
+            "must live in a shell fenced code block: "
+            f"{stripped}"
+        )
+    if (
+        in_fence
+        and fence_language in README_FORMAL_COMMAND_FENCE_LANGUAGES
+        and fence_contains_formal_command
+    ):
+        errors.append(
+            f"{display_path(path)}:{fence_start_line}: README shell fenced "
+            "code block containing formal runner commands must be closed"
+        )
+    return errors
+
+
+def active_command_modes(
+    path: Path,
+    command_prefix: str = APALACHE_COMMAND_PREFIX,
+) -> list[str]:
+    """Return formal modes invoked by active direct runner commands."""
+
+    command_re = re.compile(
+        rf"{re.escape(command_prefix)}\s+({COMMAND_MODE_PATTERN})"
+    )
+    modes: list[str] = []
+    for _, command_text in active_command_lines(path):
+        match = command_re.fullmatch(command_text)
+        if match is not None:
+            modes.append(match.group(1))
     return modes
 
 
@@ -1783,26 +3527,173 @@ def command_shape_errors(path: Path, command_prefix: str, owner: str) -> list[st
         if not stripped or stripped.startswith("#"):
             continue
 
-        start = 0
-        while True:
-            index = line.find(command_prefix, start)
-            if index == -1:
-                break
-            tail = line[index + len(command_prefix) :]
-            match = re.match(r"\s+(\S+)\s*$", tail)
-            if match is None:
+        if command_prefix not in stripped:
+            continue
+        command_text = direct_formal_command_text(stripped, path)
+        if not command_text.startswith(command_prefix):
+            errors.append(
+                f"{owner} {display_path(path)}:{line_number} must be a direct "
+                f"runner command: {stripped}"
+            )
+            continue
+        tail = command_text[len(command_prefix) :]
+        match = re.match(r"\s+(\S+)\s*$", tail)
+        if match is None:
+            errors.append(
+                f"{owner} {display_path(path)}:{line_number} has "
+                f"malformed command: {stripped}"
+            )
+        else:
+            mode = match.group(1)
+            if not COMMAND_MODE_RE.match(mode):
                 errors.append(
-                    f"{owner} {display_path(path)}:{line_number} has "
-                    f"malformed command: {stripped}"
+                    f"{owner} {display_path(path)}:{line_number} "
+                    f"has invalid mode token {mode!r}"
                 )
-            else:
-                mode = match.group(1)
-                if not COMMAND_MODE_RE.match(mode):
-                    errors.append(
-                        f"{owner} {display_path(path)}:{line_number} "
-                        f"has invalid mode token {mode!r}"
-                    )
-            start = index + len(command_prefix)
+    return errors
+
+
+def formal_command_shape_errors(
+    paths: tuple[Path, ...] = FORMAL_COMMAND_SHAPE_PATHS,
+) -> list[str]:
+    """Return errors for malformed direct formal runner commands."""
+
+    errors: list[str] = []
+    for path in paths:
+        errors.extend(
+            command_shape_errors(path, APALACHE_COMMAND_PREFIX, "Apalache command")
+        )
+        errors.extend(command_shape_errors(path, TLC_COMMAND_PREFIX, "TLC command"))
+    return errors
+
+
+def strict_shell_errors(
+    paths: tuple[Path, ...] = FORMAL_STRICT_SHELL_PATHS,
+) -> list[str]:
+    """Return errors when formal shell entrypoints can mask command failures."""
+
+    errors: list[str] = []
+    for path in paths:
+        lines = read_text(path).splitlines()
+        if not lines or lines[0] != "#!/bin/bash":
+            errors.append(
+                f"formal shell entrypoint {display_path(path)} must start "
+                "with #!/bin/bash"
+            )
+        if len(lines) < 2 or lines[1] != "set -euo pipefail":
+            errors.append(
+                f"formal shell entrypoint {display_path(path)} must set "
+                "-euo pipefail immediately after the shebang"
+            )
+    return errors
+
+
+def formal_ci_linear_script_errors(
+    paths: tuple[Path, ...] = FORMAL_LINEAR_CI_SCRIPT_PATHS,
+) -> list[str]:
+    """Return errors when CI proof scripts can make evidence conditional."""
+
+    errors: list[str] = []
+    for path in paths:
+        for line_number, line in enumerate(read_text(path).splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            line_has_structural_error = False
+            if SHELL_CONTROL_FLOW_LINE_RE.match(stripped) is not None:
+                line_has_structural_error = True
+                errors.append(
+                    f"formal CI proof script {display_path(path)}:{line_number} "
+                    "must stay linear; shell control flow is not allowed: "
+                    f"{stripped}"
+                )
+            if SHELL_HEREDOC_LINE_RE.search(stripped) is not None:
+                line_has_structural_error = True
+                errors.append(
+                    f"formal CI proof script {display_path(path)}:{line_number} "
+                    "must stay linear; here-documents are not allowed: "
+                    f"{stripped}"
+                )
+            if SHELL_REACHABILITY_OVERRIDE_LINE_RE.match(stripped) is not None:
+                line_has_structural_error = True
+                errors.append(
+                    f"formal CI proof script {display_path(path)}:{line_number} "
+                    "must stay linear; early exits and error-handling overrides "
+                    f"are not allowed: {stripped}"
+                )
+            if (
+                not line_has_structural_error
+                and not formal_ci_allowed_direct_command(stripped)
+            ):
+                errors.append(
+                    f"formal CI proof script {display_path(path)}:{line_number} "
+                    "must stay linear; only allowlisted direct evidence "
+                    f"commands are allowed: {stripped}"
+                )
+    return errors
+
+
+def formal_ci_allowed_direct_command(command_text: str) -> bool:
+    """Return whether a formal CI script line is an allowed direct command."""
+
+    if command_text in FORMAL_CI_ALLOWED_EXACT_COMMANDS:
+        return True
+    for prefix in FORMAL_CI_ALLOWED_PREFIX_COMMANDS:
+        if command_text.startswith(f"{prefix} "):
+            mode = command_text[len(prefix) :].strip()
+            return COMMAND_MODE_RE.fullmatch(mode) is not None
+    return False
+
+
+def apalache_length_override_errors(
+    paths: tuple[Path, ...],
+    documentation_paths: tuple[Path, ...] = (README,),
+) -> list[str]:
+    """Return errors when formal evidence commands override proof bounds."""
+
+    documentation_path_set = set(documentation_paths)
+    errors: list[str] = []
+    for path in paths:
+        for line_number, line in enumerate(read_text(path).splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if FORMAL_APALACHE_LENGTH_OVERRIDE_RE.search(line) is None:
+                continue
+            if path in documentation_path_set and APALACHE_COMMAND_PREFIX not in line:
+                continue
+            errors.append(
+                f"{display_path(path)}:{line_number} must not set "
+                "APALACHE_LENGTH for Sumeragi formal proof commands: "
+                f"{stripped}"
+            )
+    return errors
+
+
+def formal_toolchain_override_errors(
+    paths: tuple[Path, ...],
+    documentation_paths: tuple[Path, ...] = (README,),
+) -> list[str]:
+    """Return errors when formal evidence commands override toolchains."""
+
+    documentation_path_set = set(documentation_paths)
+    errors: list[str] = []
+    for path in paths:
+        for line_number, line in enumerate(read_text(path).splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if FORMAL_TOOLCHAIN_OVERRIDE_RE.search(line) is None:
+                continue
+            if path in documentation_path_set and not (
+                APALACHE_COMMAND_PREFIX in line or TLC_COMMAND_PREFIX in line
+            ):
+                continue
+            errors.append(
+                f"{display_path(path)}:{line_number} must not set model-checker "
+                "toolchain overrides for Sumeragi formal proof commands: "
+                f"{stripped}"
+            )
     return errors
 
 
@@ -2040,6 +3931,64 @@ def pr_tlc_cross_check_errors(
         errors.append(
             "Sumeragi Apalache-only PR modes unexpectedly have README TLC commands:\n"
             + format_items(allowlisted_readme_modes)
+        )
+
+    return errors
+
+
+def ci_tlc_inventory_errors(
+    ci_tlc_modes: list[str] | set[str],
+    readme_tlc_modes: set[str],
+    tlc_cases: dict[str, RunnerCase],
+) -> list[str]:
+    """Return errors for active CI/workflow TLC modes missing evidence wiring."""
+
+    errors: list[str] = []
+    ci_tlc_mode_set = set(ci_tlc_modes)
+    for mode in duplicate_values(list(ci_tlc_modes)):
+        errors.append(f"{mode} is invoked by CI/workflow more than once")
+
+    unsupported_modes = sorted_unique(
+        mode
+        for mode in ci_tlc_mode_set
+        if matching_case(mode, tlc_cases) is None
+    )
+    for mode in unsupported_modes:
+        errors.append(
+            f"{mode} is invoked by CI/workflow but unsupported by the TLC runner"
+        )
+
+    undocumented_modes = sorted_unique(ci_tlc_mode_set - readme_tlc_modes)
+    for mode in undocumented_modes:
+        errors.append(
+            f"{mode} is invoked by CI/workflow but missing from README TLC commands"
+        )
+    return errors
+
+
+def apalache_only_typecheck_contract_errors(
+    apalache_only_modes: set[str] = APALACHE_ONLY_PR_MODES,
+    typecheck_only_modes: set[str] = APALACHE_TYPECHECK_ONLY_MODES,
+    bounded_exceptions: set[str] = APALACHE_ONLY_BOUNDED_PR_MODE_EXCEPTIONS,
+) -> list[str]:
+    """Return errors when Apalache-only proof modes are not typecheck-only."""
+
+    errors: list[str] = []
+    stale_exceptions = sorted_unique(bounded_exceptions - apalache_only_modes)
+    if stale_exceptions:
+        errors.append(
+            "Apalache-only bounded PR exception entries are stale:\n"
+            + format_items(stale_exceptions)
+        )
+
+    unbounded_only_modes = sorted_unique(
+        apalache_only_modes - bounded_exceptions - typecheck_only_modes
+    )
+    if unbounded_only_modes:
+        errors.append(
+            "Apalache-only PR modes without TLC evidence must be typecheck-only "
+            "unless explicitly listed as bounded exceptions:\n"
+            + format_items(unbounded_only_modes)
         )
 
     return errors
@@ -2359,6 +4308,67 @@ def tlc_runner_constraint_errors(
     return errors
 
 
+def tlc_runner_constraint_contract_errors(
+    cases: dict[str, RunnerCase] | list[RunnerCase] | None = None,
+    *,
+    singleton_constraint: str = TLC_SINGLETON_OR_EMPTY_CONSTRAINT,
+    constrained_prefixes: tuple[
+        str, ...
+    ] = TLC_SINGLETON_OR_EMPTY_CONSTRAINT_MODE_PREFIXES,
+) -> list[str]:
+    """Return errors if TLC-only state-space constraints drift."""
+
+    if cases is None:
+        case_list = list(parse_runner_cases(TLC_RUNNER).values())
+    elif isinstance(cases, dict):
+        case_list = list(cases.values())
+    else:
+        case_list = cases
+
+    expected_labels: set[str] = set()
+    for prefix in constrained_prefixes:
+        expected_labels.add(f"{prefix}-fast")
+        expected_labels.add(f"{prefix}-bug-*")
+
+    case_labels = {case.label for case in case_list}
+    errors: list[str] = []
+    for label in sorted(expected_labels - case_labels):
+        errors.append(
+            "TLC runner is missing documented singleton-or-empty constrained "
+            f"case {label!r}"
+        )
+
+    for case in case_list:
+        values = TLC_CONSTRAINT_ASSIGN_RE.findall(case.body)
+        expected = case.label in expected_labels
+        if expected:
+            if not values:
+                errors.append(
+                    f"TLC runner case {case.label!r} must assign "
+                    f'tlc_constraint="{singleton_constraint}" for documented '
+                    "singleton-or-empty state-space splitting"
+                )
+                continue
+            for value in values:
+                if value == singleton_constraint:
+                    continue
+                errors.append(
+                    f"TLC runner case {case.label!r} assigns "
+                    f'tlc_constraint="{value}", expected '
+                    f'"{singleton_constraint}" for documented '
+                    "singleton-or-empty state-space splitting"
+                )
+            continue
+
+        for value in values:
+            errors.append(
+                f"TLC runner case {case.label!r} assigns undocumented "
+                f'tlc_constraint="{value}"; only documented '
+                "singleton-or-empty families may narrow TLC state space"
+            )
+    return errors
+
+
 def apalache_length_value(
     mode: str,
     case: RunnerCase,
@@ -2525,6 +4535,15 @@ def cfg_shape_errors(mode: str, paths: list[Path]) -> list[str]:
         if not (CFG_CHECK_DIRECTIVES & directives):
             errors.append(f"{mode}: {relative} has no invariant or property checks")
     return errors
+
+
+def cfg_shape_surface_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return shape errors for every CFG in the formal corpus."""
+
+    return cfg_shape_errors("formal coverage", sorted(spec_dir.glob(cfg_glob)))
 
 
 @cache
@@ -2865,6 +4884,1684 @@ def cfg_check_operator_kinds(path: Path) -> tuple[dict[str, str], list[str]]:
         )
         operator_kinds[operator] = kind
     return operator_kinds, errors
+
+
+def cfg_behavior_operator_references(
+    path: Path,
+) -> tuple[dict[str, list[tuple[int, str]]], list[str]]:
+    """Return behavior operators referenced by a CFG file."""
+    references, errors = cfg_operator_references(path)
+    behavior_entries: dict[str, list[tuple[int, str]]] = {
+        directive: [] for directive in CFG_BEHAVIOR_DIRECTIVES
+    }
+    for line_number, directive, operator in references:
+        if directive in CFG_BEHAVIOR_DIRECTIVES:
+            behavior_entries[directive].append((line_number, operator))
+    return behavior_entries, errors
+
+
+def cfg_behavior_surface_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return errors when CFGs omit, mix, or repeat behavior bindings."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        behavior_entries, behavior_errors = cfg_behavior_operator_references(
+            cfg_path
+        )
+        errors.extend(behavior_errors)
+        if behavior_errors:
+            continue
+
+        specification_entries = behavior_entries["SPECIFICATION"]
+        init_entries = behavior_entries["INIT"]
+        next_entries = behavior_entries["NEXT"]
+        for directive, entries in behavior_entries.items():
+            if len(entries) <= 1:
+                continue
+            first_line = entries[0][0]
+            for line_number, operator in entries[1:]:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} repeats "
+                    f"{directive} behavior binding {operator} first "
+                    f"declared at line {first_line}; each CFG must use "
+                    "exactly one behavior surface"
+                )
+
+        if specification_entries and (init_entries or next_entries):
+            errors.append(
+                f"{display_path(cfg_path)} mixes SPECIFICATION with "
+                "INIT/NEXT behavior; each CFG must define exactly one "
+                "behavior surface"
+            )
+            continue
+        if specification_entries:
+            continue
+        if not init_entries and not next_entries:
+            errors.append(
+                f"{display_path(cfg_path)} must define exactly one CFG "
+                "behavior surface: SPECIFICATION or both INIT and NEXT"
+            )
+            continue
+        if not init_entries or not next_entries:
+            errors.append(
+                f"{display_path(cfg_path)} must bind both INIT and NEXT "
+                "for the INIT/NEXT behavior surface"
+            )
+    return errors
+
+
+def cfg_proof_surface_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return errors when CFGs omit typed-state or semantic proof checks."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        check_kinds, cfg_errors = cfg_check_operator_kinds(cfg_path)
+        errors.extend(cfg_errors)
+        if cfg_errors:
+            continue
+        type_kind = check_kinds.get("TypeInvariant")
+        if type_kind is None:
+            errors.append(
+                f"{display_path(cfg_path)} must check INVARIANT "
+                "TypeInvariant for formal coverage"
+            )
+        elif type_kind != "INVARIANT":
+            errors.append(
+                f"{display_path(cfg_path)} checks {type_kind} "
+                "TypeInvariant, expected INVARIANT for formal coverage"
+            )
+        semantic_targets = sorted(
+            operator for operator in check_kinds if operator != "TypeInvariant"
+        )
+        if semantic_targets:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)} must check at least one "
+            "non-TypeInvariant invariant/property for formal coverage"
+        )
+    return errors
+
+
+def cfg_behavior_contract_label(required_behavior: tuple[tuple[str, str], ...]) -> str:
+    """Return a compact human-readable behavior contract label."""
+    expected = dict(required_behavior)
+    specification = expected.get("SPECIFICATION")
+    init = expected.get("INIT")
+    next_operator = expected.get("NEXT")
+    if specification is not None:
+        return f"SPECIFICATION {specification}"
+    if init is not None and next_operator is not None:
+        return f"INIT {init} and NEXT {next_operator}"
+    return " and ".join(
+        f"{directive} {operator}" for directive, operator in required_behavior
+    )
+
+
+def cfg_required_behavior_contract_errors(
+    cfg_path: Path,
+    required_behavior: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a CFG file is not bound to the expected behavior."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} behavior"
+        ]
+
+    behavior_entries, cfg_errors = cfg_behavior_operator_references(cfg_path)
+    if cfg_errors:
+        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+
+    required = dict(required_behavior)
+    required_directives = set(required)
+    expected_label = cfg_behavior_contract_label(required_behavior)
+    errors: list[str] = []
+
+    for directive in ("SPECIFICATION", "INIT", "NEXT"):
+        entries = behavior_entries[directive]
+        expected_operator = required.get(directive)
+        if expected_operator is None:
+            for line_number, operator in entries:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} binds unexpected "
+                    f"{directive} {operator}; expected {expected_label} for "
+                    f"{coverage_label}"
+                )
+            continue
+
+        if not entries:
+            errors.append(
+                f"{display_path(cfg_path)} must bind {directive} "
+                f"{expected_operator} for {coverage_label}"
+            )
+            continue
+        if len(entries) > 1:
+            first_line = entries[0][0]
+            for line_number, operator in entries[1:]:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} repeats "
+                    f"{directive} behavior binding {operator} first declared "
+                    f"at line {first_line}; expected {expected_label} for "
+                    f"{coverage_label}"
+                )
+        for line_number, operator in entries:
+            if operator == expected_operator:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds {directive} "
+                f"{operator}, expected {expected_operator} for {coverage_label}"
+            )
+
+    if required_directives == {"SPECIFICATION"}:
+        return errors
+    if required_directives == {"INIT", "NEXT"}:
+        return errors
+    errors.append(
+        f"{display_path(cfg_path)} has unsupported CFG behavior contract "
+        f"{expected_label} for {coverage_label}"
+    )
+    return errors
+
+
+def cfg_check_deadlock_entries(path: Path) -> tuple[list[tuple[int, str]], list[str]]:
+    """Return valid top-level CHECK_DEADLOCK entries from a CFG file."""
+
+    directive_errors = cfg_directive_errors(path)
+    if directive_errors:
+        return [], directive_errors
+
+    entries: list[tuple[int, str]] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        stripped = tla_line_without_comment(line).strip()
+        if not stripped or line[:1].isspace():
+            continue
+        parts = stripped.split()
+        if parts[0] == "CHECK_DEADLOCK":
+            entries.append((line_number, parts[1]))
+    return entries, []
+
+
+def cfg_required_check_deadlock_contract_errors(
+    cfg_path: Path,
+    expected_value: str,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a CFG file does not pin CHECK_DEADLOCK."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} "
+            "deadlock policy"
+        ]
+
+    entries, cfg_errors = cfg_check_deadlock_entries(cfg_path)
+    if cfg_errors:
+        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+
+    if not entries:
+        return [
+            f"{display_path(cfg_path)} must set CHECK_DEADLOCK {expected_value} "
+            f"for {coverage_label}"
+        ]
+
+    errors: list[str] = []
+    for line_number, value in entries:
+        if value == expected_value:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)}:{line_number} sets CHECK_DEADLOCK "
+            f"{value}, expected {expected_value} for {coverage_label}"
+        )
+    return errors
+
+
+def specification_cfg_deadlock_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return errors when temporal SPECIFICATION CFGs omit deadlock policy."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        behavior_entries, behavior_errors = cfg_behavior_operator_references(
+            cfg_path
+        )
+        errors.extend(
+            f"{display_path(cfg_path)}: {error}" for error in behavior_errors
+        )
+        if behavior_errors:
+            continue
+        if not behavior_entries["SPECIFICATION"]:
+            continue
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "SPECIFICATION coverage",
+            )
+        )
+    return errors
+
+
+def cfg_owner_module_candidates(
+    cfg_path: Path,
+    spec_dir: Path = SPEC_DIR,
+) -> list[Path]:
+    """Return candidate TLA modules for a CFG file."""
+
+    stem = cfg_path.stem
+    candidates: list[str] = []
+
+    def add(candidate: str) -> None:
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    if "_bug_" in stem:
+        family = stem.split("_bug_", 1)[0]
+        add(family)
+        for suffix in ("_tlc", "_progress"):
+            if family.endswith(suffix):
+                add(family[: -len(suffix)])
+    else:
+        add(stem)
+        for suffix in (
+            "_tlc_fast",
+            "_tlc_small",
+            "_fast",
+            "_deep",
+            "_progress",
+            "_wide",
+            "_npos",
+            "_tlc",
+        ):
+            if stem.endswith(suffix):
+                add(stem[: -len(suffix)])
+        if stem.startswith("Sumeragi_byzantine_") and stem.endswith("_top_fast"):
+            add("Sumeragi")
+
+    return [spec_dir / f"{candidate}.tla" for candidate in candidates]
+
+
+def cfg_owner_module_path(
+    cfg_path: Path,
+    spec_dir: Path = SPEC_DIR,
+) -> Path | None:
+    """Return the TLA module inferred to own a CFG file."""
+
+    for candidate in cfg_owner_module_candidates(cfg_path, spec_dir):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def cfg_operator_reference_surface_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return errors for invalid CFG operator reference surfaces."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        module_path = cfg_owner_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in cfg_owner_module_candidates(cfg_path, spec_dir)
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has no inferred owning TLA module; "
+                f"tried {candidates}"
+            )
+            continue
+        errors.extend(
+            cfg_duplicate_operator_reference_errors("formal coverage", cfg_path)
+        )
+        errors.extend(
+            cfg_operator_reference_errors("formal coverage", module_path, cfg_path)
+        )
+        errors.extend(
+            cfg_trivial_check_operator_errors(
+                "formal coverage",
+                module_path,
+                cfg_path,
+                "formal coverage",
+            )
+        )
+    return errors
+
+
+def cfg_constant_binding_surface_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return errors for missing, duplicate, or undeclared CFG constants."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        module_path = cfg_owner_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in cfg_owner_module_candidates(cfg_path, spec_dir)
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has no inferred owning TLA module; "
+                f"tried {candidates}"
+            )
+            continue
+        errors.extend(
+            cfg_duplicate_constant_binding_errors("formal coverage", cfg_path)
+        )
+        errors.extend(
+            cfg_constant_binding_errors(
+                "formal coverage", module_path, cfg_path
+            )
+        )
+    return errors
+
+
+def cfg_required_constant_value_contract_errors(
+    cfg_path: Path,
+    constant: str,
+    expected_value: str,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a CFG file does not pin a constant binding value."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} "
+            f"constant binding {constant}"
+        ]
+
+    bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+    if parse_errors:
+        return parse_errors
+
+    entries = [
+        (line_number, value)
+        for line_number, name, value in bindings
+        if name == constant
+    ]
+    if not entries:
+        return [
+            f"{display_path(cfg_path)} must bind constant {constant} = "
+            f"{expected_value} for {coverage_label}"
+        ]
+
+    errors: list[str] = []
+    for line_number, value in entries:
+        if value == expected_value:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)}:{line_number} binds constant "
+            f"{constant} = {value}, expected {expected_value} for "
+            f"{coverage_label}"
+        )
+    return errors
+
+
+def cfg_required_constant_values_contract_errors(
+    cfg_path: Path,
+    required_values: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when CFG constants do not match required values."""
+
+    errors: list[str] = []
+    for constant, expected_value in required_values:
+        errors.extend(
+            cfg_required_constant_value_contract_errors(
+                cfg_path,
+                constant,
+                expected_value,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def cfg_required_exact_constant_set_contract_errors(
+    cfg_path: Path,
+    required_values: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a CFG binds constants outside a proof envelope."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} "
+            "constant set"
+        ]
+
+    bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+    if parse_errors:
+        return parse_errors
+
+    expected_constants = {constant for constant, _ in required_values}
+    expected_label = ", ".join(sorted(expected_constants))
+    errors: list[str] = []
+    for line_number, constant, _value in bindings:
+        if constant in expected_constants:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)}:{line_number} binds unexpected "
+            f"constant {constant}; expected only {expected_label} for "
+            f"{coverage_label}"
+        )
+    return errors
+
+
+def cfg_required_bug_suffix_constant_errors(
+    cfg_path: Path,
+    stem_prefix: str,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a mutation CFG Bug constant drifts from its suffix."""
+
+    stem = cfg_path.stem
+    if not stem.startswith(stem_prefix):
+        return [
+            f"{display_path(cfg_path)} must use stem prefix {stem_prefix} "
+            f"for {coverage_label}"
+        ]
+    expected_value = f'"{stem[len(stem_prefix):]}"'
+    return cfg_required_constant_value_contract_errors(
+        cfg_path,
+        "Bug",
+        expected_value,
+        coverage_label,
+    )
+
+
+def cfg_required_inferred_bug_suffix_constant_errors(
+    cfg_path: Path,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a mutation CFG Bug constant does not match its suffix."""
+
+    marker = "_bug_"
+    stem = cfg_path.stem
+    marker_index = stem.find(marker)
+    if marker_index == -1:
+        return [
+            f"{display_path(cfg_path)} must include {marker} in its stem for "
+            f"{coverage_label}"
+        ]
+    stem_prefix = stem[: marker_index + len(marker)]
+    return cfg_required_bug_suffix_constant_errors(
+        cfg_path,
+        stem_prefix,
+        coverage_label,
+    )
+
+
+BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATIONS = {
+    "SumeragiForkSafety_bug_double_sign.cfg": frozenset(
+        {
+            "BugDisableSingleVote",
+            "BugDisableLockedQcGate",
+        }
+    ),
+}
+BOOLEAN_BUG_SELECTOR_NAME_ALIASES = {
+    "SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg": (
+        "BugSkipHighestRecord"
+    ),
+    "SumeragiEnginePrepareLockHighestGate_bug_clear_highest_on_rejected.cfg": (
+        "BugClearOnRejected"
+    ),
+    "SumeragiEnginePrepareLockHighestGate_bug_clear_highest_on_replay_conflict_pending.cfg": (
+        "BugClearOnReplayConflictPending"
+    ),
+    "SumeragiEnginePrepareLockHighestGate_bug_record_highest_on_rejected.cfg": (
+        "BugRecordOnRejected"
+    ),
+    "SumeragiEnginePrepareLockHighestGate_bug_record_highest_on_replay_conflict_pending.cfg": (
+        "BugRecordOnReplayConflictPending"
+    ),
+    "SumeragiEnginePrepareLockHighestGate_bug_skip_improving_highest.cfg": (
+        "BugSkipImprovingRecord"
+    ),
+    "SumeragiEnginePrepareLockHighestGate_bug_skip_no_current_highest.cfg": (
+        "BugSkipNoCurrentRecord"
+    ),
+    "SumeragiEnginePrepareQcGate_bug_missing_lock_record.cfg": (
+        "BugSkipLockRecord"
+    ),
+    "SumeragiFrontierRecovery_bug_promotion_reset.cfg": (
+        "BugPromoteWithoutReset"
+    ),
+    "SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg": (
+        "BugKeepQuorumWindowAfterRetransmit"
+    ),
+    "SumeragiFrontierRecovery_bug_stale_owner.cfg": "BugDisableStaleRecovery",
+    "SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg": (
+        "BugKeepStaleRecoveryOwnerAfterUnlock"
+    ),
+    "SumeragiFrontierRecovery_bug_vote_queue.cfg": "BugDisableQueueDrain",
+    "SumeragiQuorumPolicy_bug_count_over_validators.cfg": (
+        "BugCountAllowsOverValidatorCount"
+    ),
+    "SumeragiRbcDeliverQuorum_bug_inbound_force_one_acceptance.cfg": (
+        "BugInboundForceOneAccepted"
+    ),
+    "SumeragiValidationGate_bug_invalid_replay.cfg": (
+        "BugKeepInflightAfterInvalid"
+    ),
+    "SumeragiValidationGate_bug_unknown_result.cfg": (
+        "BugAdvanceUnknownValidation"
+    ),
+    "SumeragiValidatorSetTransition_bug_mixed_cert.cfg": (
+        "BugAllowMixedSetCertificate"
+    ),
+    "SumeragiValidatorSetTransition_bug_premature_activation.cfg": (
+        "BugDisableActivationFinalityGate"
+    ),
+    "SumeragiValidatorSetTransition_bug_premature_new_cert.cfg": (
+        "BugAllowPrematureNewSetCertificate"
+    ),
+}
+
+
+def _boolean_bug_selector_name(selector: str) -> str:
+    """Return the snake_case selector name without the Bug prefix."""
+
+    if selector.startswith("Bug"):
+        selector = selector[len("Bug") :]
+    first_pass = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", selector)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", first_pass).lower()
+
+
+def _boolean_bug_selector_matches_suffix(selector: str, suffix: str) -> bool:
+    """Return whether a boolean selector name covers the mutation suffix."""
+
+    selector_name = _boolean_bug_selector_name(selector)
+    if suffix in selector_name:
+        return True
+    suffix_tokens = set(suffix.split("_"))
+    selector_tokens = set(selector_name.split("_"))
+    return suffix_tokens <= selector_tokens
+
+
+def _format_boolean_bug_selectors(selectors: list[tuple[int, str]]) -> str:
+    """Return a stable summary of enabled boolean mutation selectors."""
+
+    if not selectors:
+        return "none"
+    return ", ".join(
+        f"{constant} at line {line_number}"
+        for line_number, constant in selectors
+    )
+
+
+def boolean_bug_selector_module_candidates(
+    cfg_path: Path,
+    spec_dir: Path = SPEC_DIR,
+) -> list[Path]:
+    """Return candidate TLA modules for a boolean-selector mutation CFG."""
+
+    family = cfg_path.stem.split("_bug_", 1)[0]
+    families = [family]
+    stripped_family = family
+    for suffix in ("_tlc", "_progress"):
+        if stripped_family.endswith(suffix):
+            stripped_family = stripped_family[: -len(suffix)]
+            families.append(stripped_family)
+    candidates = []
+    seen: set[str] = set()
+    for candidate_family in families:
+        if candidate_family in seen:
+            continue
+        seen.add(candidate_family)
+        candidates.append(spec_dir / f"{candidate_family}.tla")
+    return candidates
+
+
+def boolean_bug_selector_module_path(
+    cfg_path: Path,
+    spec_dir: Path = SPEC_DIR,
+) -> Path | None:
+    """Return the TLA module that owns a boolean-selector mutation CFG."""
+
+    for candidate in boolean_bug_selector_module_candidates(cfg_path, spec_dir):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def quoted_bug_suffix_constant_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when quoted Bug constants drift from mutation CFG suffixes."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        expected_value = stem.split("_bug_", 1)[1]
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        for line_number, constant, value in bindings:
+            if constant != "Bug":
+                continue
+            if not (value.startswith('"') and value.endswith('"')):
+                continue
+            actual_value = value.strip('"')
+            if actual_value == expected_value:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds quoted "
+                f'Bug = {value}, expected "{expected_value}" from mutation '
+                "file suffix"
+            )
+    return errors
+
+
+def quoted_bug_selector_reference_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when quoted Bug selectors are not reachable Bug branches."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        quoted_bug_bindings = [
+            (line_number, value)
+            for line_number, constant, value in bindings
+            if constant == "Bug"
+            and value.startswith('"')
+            and value.endswith('"')
+        ]
+        if not quoted_bug_bindings:
+            continue
+        module_path = boolean_bug_selector_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in boolean_bug_selector_module_candidates(
+                    cfg_path, spec_dir
+                )
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has quoted Bug selector but no "
+                f"matching TLA module; tried {candidates}"
+            )
+            continue
+        reachable_literals = tla_reachable_bug_expression_string_literals(
+            module_path
+        )
+        for line_number, value in quoted_bug_bindings:
+            if value in reachable_literals:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds quoted "
+                f"Bug selector {value}, but reachable TLA modules from "
+                f"{display_path(module_path)} do not use it in a Bug "
+                "expression"
+            )
+    return errors
+
+
+def mutation_bug_selector_style_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when mutation CFGs mix or omit Bug selector styles."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        exact_bug_bindings = [
+            (line_number, constant)
+            for line_number, constant, _value in bindings
+            if constant == "Bug"
+        ]
+        boolean_bug_bindings = [
+            (line_number, constant)
+            for line_number, constant, _value in bindings
+            if constant.startswith("Bug") and constant != "Bug"
+        ]
+        if exact_bug_bindings and boolean_bug_bindings:
+            errors.append(
+                f"{display_path(cfg_path)} mixes exact Bug selector "
+                f"{_format_boolean_bug_selectors(exact_bug_bindings)} "
+                "with boolean selectors "
+                f"{_format_boolean_bug_selectors(boolean_bug_bindings)}"
+            )
+            continue
+        if exact_bug_bindings or boolean_bug_bindings:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)} must bind exact Bug or at least one "
+            "boolean Bug... selector for mutation coverage"
+        )
+    return errors
+
+
+def clean_cfg_mutation_selector_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return errors when non-mutation CFGs enable mutation selectors."""
+
+    disabled_exact_values = {'"none"', "0"}
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        if "_bug_" in cfg_path.stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        exact_bug_bindings = [
+            (line_number, constant, value)
+            for line_number, constant, value in bindings
+            if constant == "Bug"
+        ]
+        boolean_bug_bindings = [
+            (line_number, constant, value)
+            for line_number, constant, value in bindings
+            if constant.startswith("Bug") and constant != "Bug"
+        ]
+        if exact_bug_bindings and boolean_bug_bindings:
+            exact_labels = [
+                (line_number, constant)
+                for line_number, constant, _value in exact_bug_bindings
+            ]
+            boolean_labels = [
+                (line_number, constant)
+                for line_number, constant, _value in boolean_bug_bindings
+            ]
+            errors.append(
+                f"{display_path(cfg_path)} mixes exact Bug selector "
+                f"{_format_boolean_bug_selectors(exact_labels)} "
+                "with boolean selectors "
+                f"{_format_boolean_bug_selectors(boolean_labels)} "
+                "in non-mutation coverage"
+            )
+        for line_number, _constant, value in exact_bug_bindings:
+            if value in disabled_exact_values:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds clean exact "
+                f"Bug selector {value}, expected disabled selector "
+                '"none" or 0'
+            )
+        for line_number, constant, value in boolean_bug_bindings:
+            if value == "FALSE":
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds clean "
+                f"boolean mutation selector {constant} = {value}, "
+                "expected FALSE"
+            )
+    return errors
+
+
+def mutation_bug_selector_duplicate_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when a mutation CFG binds a selector more than once."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        seen: dict[str, int] = {}
+        for line_number, constant, _value in bindings:
+            if constant != "Bug" and not constant.startswith("Bug"):
+                continue
+            previous_line = seen.get(constant)
+            if previous_line is not None:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} repeats "
+                    f"mutation Bug selector {constant}; first declared at "
+                    f"line {previous_line}"
+                )
+                continue
+            seen[constant] = line_number
+    return errors
+
+
+def exact_bug_selector_value_shape_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when exact Bug selector values use unsupported shapes."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        for line_number, constant, value in bindings:
+            if constant != "Bug":
+                continue
+            if value.startswith('"') and value.endswith('"'):
+                continue
+            if re.fullmatch(r"[0-9]+", value):
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds exact "
+                f"Bug selector value {value}, expected a quoted string "
+                "or decimal legacy selector"
+            )
+    return errors
+
+
+def numeric_bug_selector_canonical_value_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when numeric Bug selectors use non-canonical decimals."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        for line_number, constant, value in bindings:
+            if constant != "Bug":
+                continue
+            if re.fullmatch(r"[0-9]+", value) is None:
+                continue
+            canonical_value = str(int(value))
+            if value == canonical_value:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds numeric "
+                f"Bug selector {value}, expected canonical decimal "
+                f"{canonical_value}"
+            )
+    return errors
+
+
+def numeric_bug_selector_positive_value_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when numeric Bug selectors are zero."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        for line_number, constant, value in bindings:
+            if constant != "Bug":
+                continue
+            if re.fullmatch(r"[0-9]+", value) is None:
+                continue
+            if int(value) > 0:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds numeric "
+                "Bug selector 0, expected a positive mutation selector"
+            )
+    return errors
+
+
+def numeric_bug_selector_reference_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when numeric Bug selectors are not reachable Bug operands."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        numeric_bug_bindings = [
+            (line_number, _canonical_numeric_literal(value))
+            for line_number, constant, value in bindings
+            if constant == "Bug" and re.fullmatch(r"[0-9]+", value)
+        ]
+        if not numeric_bug_bindings:
+            continue
+        module_path = boolean_bug_selector_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in boolean_bug_selector_module_candidates(
+                    cfg_path, spec_dir
+                )
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has numeric Bug selector but no "
+                f"matching TLA module; tried {candidates}"
+            )
+            continue
+        reachable_values = tla_reachable_bug_relation_numeric_values(
+            module_path
+        )
+        for line_number, value in numeric_bug_bindings:
+            if value in reachable_values:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds numeric "
+                f"Bug selector {value}, but reachable TLA modules from "
+                f"{display_path(module_path)} do not use it as a Bug "
+                "relation operand"
+            )
+    return errors
+
+
+def boolean_bug_selector_one_hot_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when boolean Bug... mutation selectors are ambiguous."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        if any(constant == "Bug" for _, constant, _ in bindings):
+            continue
+        bug_selectors = [
+            (line_number, constant, value)
+            for line_number, constant, value in bindings
+            if constant.startswith("Bug")
+        ]
+        if not bug_selectors:
+            errors.append(
+                f"{display_path(cfg_path)} must bind Bug or at least one "
+                "boolean Bug... selector for mutation coverage"
+            )
+            continue
+        for line_number, constant, value in bug_selectors:
+            if value in {"TRUE", "FALSE"}:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds boolean "
+                f"mutation selector {constant} = {value}, expected TRUE "
+                "or FALSE"
+            )
+        true_selectors = [
+            (line_number, constant)
+            for line_number, constant, value in bug_selectors
+            if value == "TRUE"
+        ]
+        compound_selectors = BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATIONS.get(
+            cfg_path.name
+        )
+        if compound_selectors is not None:
+            actual_selectors = {constant for _, constant in true_selectors}
+            if actual_selectors == compound_selectors:
+                continue
+            expected = ", ".join(sorted(compound_selectors))
+            errors.append(
+                f"{display_path(cfg_path)} enables boolean mutation "
+                "selectors "
+                f"{_format_boolean_bug_selectors(true_selectors)}, "
+                f"expected {expected} for documented compound mutation"
+            )
+            continue
+        if len(true_selectors) == 1:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)} enables boolean mutation selectors "
+            f"{_format_boolean_bug_selectors(true_selectors)}, expected "
+            "exactly one TRUE selector"
+        )
+    return errors
+
+
+def boolean_bug_selector_name_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when boolean Bug... selectors drift from CFG suffixes."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        if any(constant == "Bug" for _, constant, _ in bindings):
+            continue
+        if cfg_path.name in BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATIONS:
+            continue
+        true_selectors = [
+            (line_number, constant)
+            for line_number, constant, value in bindings
+            if constant.startswith("Bug") and value == "TRUE"
+        ]
+        if len(true_selectors) != 1:
+            continue
+        line_number, selector = true_selectors[0]
+        expected_alias = BOOLEAN_BUG_SELECTOR_NAME_ALIASES.get(cfg_path.name)
+        suffix = stem.split("_bug_", 1)[1]
+        if expected_alias is not None:
+            if selector == expected_alias:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} enables boolean "
+                f"mutation selector {selector}, expected {expected_alias} "
+                f"for mutation file suffix {suffix}"
+            )
+            continue
+        if _boolean_bug_selector_matches_suffix(selector, suffix):
+            continue
+        selector_name = _boolean_bug_selector_name(selector)
+        errors.append(
+            f"{display_path(cfg_path)}:{line_number} enables boolean "
+            f"mutation selector {selector} ({selector_name}), expected it "
+            f"to match mutation file suffix {suffix}"
+        )
+    return errors
+
+
+def boolean_bug_selector_exception_errors(
+    spec_dir: Path = SPEC_DIR,
+    alias_exceptions: dict[str, str] = BOOLEAN_BUG_SELECTOR_NAME_ALIASES,
+    compound_exceptions: dict[str, frozenset[str]] = (
+        BOOLEAN_BUG_SELECTOR_COMPOUND_MUTATIONS
+    ),
+) -> list[str]:
+    """Return errors when boolean selector exception tables go stale or weak."""
+
+    errors: list[str] = []
+    overlapping_exceptions = sorted(
+        set(alias_exceptions) & set(compound_exceptions)
+    )
+    for cfg_name in overlapping_exceptions:
+        errors.append(
+            f"{cfg_name} is declared as both a boolean selector alias and "
+            "compound mutation exception"
+        )
+    overlapping_exception_set = set(overlapping_exceptions)
+
+    for cfg_name, alias_selector in sorted(alias_exceptions.items()):
+        if cfg_name in overlapping_exception_set:
+            continue
+        if not cfg_name.endswith(".cfg") or "_bug_" not in cfg_name:
+            errors.append(
+                f"{cfg_name} is not a mutation CFG filename for boolean "
+                "selector alias"
+            )
+            continue
+        cfg_path = spec_dir / cfg_name
+        if not cfg_path.is_file():
+            errors.append(
+                f"{display_path(cfg_path)} is missing for boolean selector "
+                "alias exception"
+            )
+            continue
+        suffix = cfg_path.stem.split("_bug_", 1)[1]
+        if _boolean_bug_selector_matches_suffix(alias_selector, suffix):
+            errors.append(
+                f"{cfg_name} boolean selector alias {alias_selector} "
+                f"matches suffix {suffix} without an exception; remove "
+                "the alias entry"
+            )
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        true_selectors = [
+            (line_number, constant)
+            for line_number, constant, value in bindings
+            if constant.startswith("Bug") and value == "TRUE"
+        ]
+        if len(true_selectors) == 1 and true_selectors[0][1] == alias_selector:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)} alias exception expects "
+            f"{alias_selector}, but CFG enables "
+            f"{_format_boolean_bug_selectors(true_selectors)}"
+        )
+
+    for cfg_name, compound_selectors in sorted(compound_exceptions.items()):
+        if cfg_name in overlapping_exception_set:
+            continue
+        if not cfg_name.endswith(".cfg") or "_bug_" not in cfg_name:
+            errors.append(
+                f"{cfg_name} is not a mutation CFG filename for compound "
+                "boolean selector"
+            )
+            continue
+        if len(compound_selectors) < 2:
+            expected = ", ".join(sorted(compound_selectors)) or "none"
+            errors.append(
+                f"{cfg_name} compound boolean selector exception contains "
+                f"{expected}, expected at least two selectors"
+            )
+        non_bug_selectors = sorted(
+            selector
+            for selector in compound_selectors
+            if not selector.startswith("Bug")
+        )
+        if non_bug_selectors:
+            errors.append(
+                f"{cfg_name} compound boolean selector exception contains "
+                f"non-Bug selectors {', '.join(non_bug_selectors)}"
+            )
+        cfg_path = spec_dir / cfg_name
+        if not cfg_path.is_file():
+            errors.append(
+                f"{display_path(cfg_path)} is missing for compound boolean "
+                "selector exception"
+            )
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        true_selectors = [
+            (line_number, constant)
+            for line_number, constant, value in bindings
+            if constant.startswith("Bug") and value == "TRUE"
+        ]
+        actual_selectors = {constant for _, constant in true_selectors}
+        if actual_selectors == set(compound_selectors):
+            continue
+        expected = ", ".join(sorted(compound_selectors))
+        errors.append(
+            f"{display_path(cfg_path)} compound exception expects {expected}, "
+            f"but CFG enables {_format_boolean_bug_selectors(true_selectors)}"
+        )
+    return errors
+
+
+def boolean_bug_selector_uniqueness_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when boolean Bug... TRUE selectors collide by family."""
+
+    errors: list[str] = []
+    selectors: dict[tuple[str, str], tuple[Path, int]] = {}
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        family = stem.split("_bug_", 1)[0]
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        if any(constant == "Bug" for _, constant, _ in bindings):
+            continue
+        for line_number, constant, value in bindings:
+            if not constant.startswith("Bug") or value != "TRUE":
+                continue
+            previous = selectors.get((family, constant))
+            if previous is None:
+                selectors[(family, constant)] = (cfg_path, line_number)
+                continue
+            previous_path, previous_line = previous
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} reuses boolean "
+                f"Bug selector {constant} for {family}; first declared at "
+                f"{display_path(previous_path)}:{previous_line}"
+            )
+    return errors
+
+
+def boolean_bug_selector_declaration_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when boolean Bug... selectors are undeclared constants."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        if any(constant == "Bug" for _, constant, _ in bindings):
+            continue
+        bug_selectors = [
+            (line_number, constant)
+            for line_number, constant, _value in bindings
+            if constant.startswith("Bug")
+        ]
+        if not bug_selectors:
+            continue
+        module_path = boolean_bug_selector_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in boolean_bug_selector_module_candidates(
+                    cfg_path, spec_dir
+                )
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has boolean Bug selectors but no "
+                f"matching TLA module; tried {candidates}"
+            )
+            continue
+        errors.extend(tla_constant_declaration_parse_errors(module_path))
+        declarations = tla_constant_declarations(module_path)
+        for line_number, selector in bug_selectors:
+            if selector in declarations:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds boolean "
+                f"Bug selector {selector}, but {display_path(module_path)} "
+                "does not declare it"
+            )
+    return errors
+
+
+def boolean_bug_selector_completeness_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when boolean selector CFGs omit declared selectors."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        if any(constant == "Bug" for _, constant, _value in bindings):
+            continue
+        bound_selectors = {
+            constant
+            for _line_number, constant, _value in bindings
+            if constant.startswith("Bug")
+        }
+        if not bound_selectors:
+            continue
+        module_path = boolean_bug_selector_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in boolean_bug_selector_module_candidates(
+                    cfg_path, spec_dir
+                )
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has boolean Bug selectors but no "
+                f"matching TLA module; tried {candidates}"
+            )
+            continue
+        errors.extend(tla_constant_declaration_parse_errors(module_path))
+        declarations = tla_constant_declarations(module_path)
+        declared_selectors = {
+            constant
+            for constant in declarations
+            if constant.startswith("Bug") and constant != "Bug"
+        }
+        missing_selectors = sorted(declared_selectors - bound_selectors)
+        if not missing_selectors:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)} omits boolean Bug selectors declared "
+            f"by {display_path(module_path)}: "
+            f"{', '.join(missing_selectors)}"
+        )
+    return errors
+
+
+def boolean_bug_selector_reference_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when boolean Bug... selectors are not used by TLA code."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        if any(constant == "Bug" for _, constant, _value in bindings):
+            continue
+        bug_selectors = [
+            (line_number, constant)
+            for line_number, constant, _value in bindings
+            if constant.startswith("Bug")
+        ]
+        if not bug_selectors:
+            continue
+        module_path = boolean_bug_selector_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in boolean_bug_selector_module_candidates(
+                    cfg_path, spec_dir
+                )
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has boolean Bug selectors but no "
+                f"matching TLA module; tried {candidates}"
+            )
+            continue
+        errors.extend(tla_constant_declaration_parse_errors(module_path))
+        references = tla_reachable_non_declaration_identifier_references(
+            module_path
+        )
+        for line_number, selector in bug_selectors:
+            if selector in references:
+                continue
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds boolean "
+                f"Bug selector {selector}, but reachable TLA modules from "
+                f"{display_path(module_path)} do not use it outside "
+                "declarations"
+            )
+    return errors
+
+
+def exact_bug_selector_declaration_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when exact Bug mutation selectors are undeclared."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        exact_bug_bindings = [
+            line_number
+            for line_number, constant, _value in bindings
+            if constant == "Bug"
+        ]
+        if not exact_bug_bindings:
+            continue
+        module_path = boolean_bug_selector_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in boolean_bug_selector_module_candidates(
+                    cfg_path, spec_dir
+                )
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has exact Bug selector but no "
+                f"matching TLA module; tried {candidates}"
+            )
+            continue
+        errors.extend(tla_constant_declaration_parse_errors(module_path))
+        declarations = tla_constant_declarations(module_path)
+        if "Bug" in declarations:
+            continue
+        for line_number in exact_bug_bindings:
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} binds exact Bug "
+                f"selector, but {display_path(module_path)} does not "
+                "declare Bug"
+            )
+    return errors
+
+
+def numeric_bug_selector_uniqueness_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when numeric Bug selectors collide within a CFG family."""
+
+    errors: list[str] = []
+    selectors: dict[tuple[str, str], tuple[Path, int]] = {}
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        stem = cfg_path.stem
+        if "_bug_" not in stem:
+            continue
+        family = stem.split("_bug_", 1)[0]
+        bindings, parse_errors = cfg_constant_binding_values(cfg_path)
+        errors.extend(parse_errors)
+        if parse_errors:
+            continue
+        for line_number, constant, value in bindings:
+            if constant != "Bug":
+                continue
+            if value.startswith('"') and value.endswith('"'):
+                continue
+            previous = selectors.get((family, value))
+            if previous is None:
+                selectors[(family, value)] = (cfg_path, line_number)
+                continue
+            previous_path, previous_line = previous
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} reuses numeric "
+                f"Bug selector {value} for {family}; first declared at "
+                f"{display_path(previous_path)}:{previous_line}"
+            )
+    return errors
+
+
+def top_level_cfg_behavior_errors(
+    cfg_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_CFG_REQUIRED_BEHAVIORS,
+) -> list[str]:
+    """Return errors if root Sumeragi CFG behavior bindings drift."""
+
+    errors: list[str] = []
+    for cfg_path, required_behavior, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                required_behavior,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def top_level_cfg_deadlock_errors(
+    cfg_contracts: tuple[
+        tuple[Path, str, str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_CFG_REQUIRED_DEADLOCK_POLICIES,
+) -> list[str]:
+    """Return errors if root Sumeragi CFG deadlock policy drifts."""
+
+    errors: list[str] = []
+    for cfg_path, expected_value, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                expected_value,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def cfg_forbidden_check_deadlock_contract_errors(
+    cfg_path: Path,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a proof CFG binds an unexpected deadlock policy."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} CFG"
+        ]
+
+    entries, cfg_errors = cfg_check_deadlock_entries(cfg_path)
+    if cfg_errors:
+        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+
+    return [
+        f"{display_path(cfg_path)}:{line_number} sets CHECK_DEADLOCK "
+        f"{value}, but {coverage_label} must not bind CHECK_DEADLOCK"
+        for line_number, value in entries
+    ]
+
+
+def top_level_cfg_deadlock_absence_errors(
+    cfg_contracts: tuple[
+        tuple[Path, str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_CFG_FORBIDDEN_DEADLOCK_POLICIES,
+) -> list[str]:
+    """Return errors if non-temporal root proof CFGs bind deadlock policy."""
+
+    errors: list[str] = []
+    for cfg_path, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_forbidden_check_deadlock_contract_errors(
+                cfg_path,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def cfg_required_no_static_constraint_contract_errors(
+    cfg_path: Path,
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a proof CFG adds a static constraint."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required unconstrained "
+            f"{coverage_label} CFG"
+        ]
+
+    references, parse_errors = cfg_operator_references(cfg_path)
+    if parse_errors:
+        return [f"{display_path(cfg_path)}: {error}" for error in parse_errors]
+
+    errors: list[str] = []
+    for line_number, directive, operator in references:
+        if directive != "CONSTRAINT":
+            continue
+        errors.append(
+            f"{display_path(cfg_path)}:{line_number} binds CONSTRAINT "
+            f"{operator}, but {coverage_label} must remain unconstrained"
+        )
+    return errors
+
+
+def top_level_cfg_constraint_errors(
+    cfg_contracts: tuple[
+        tuple[Path, str],
+        ...,
+    ] = SUMERAGI_UNCONSTRAINED_TOP_LEVEL_CFGS,
+) -> list[str]:
+    """Return errors if root Sumeragi proof CFGs become constrained."""
+
+    errors: list[str] = []
+    for cfg_path, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_required_no_static_constraint_contract_errors(
+                cfg_path,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def top_level_cfg_constant_errors(
+    cfg_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_CFG_REQUIRED_CONSTANT_VALUES,
+) -> list[str]:
+    """Return errors if root Sumeragi CFG model constants drift."""
+
+    errors: list[str] = []
+    for cfg_path, required_values, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_required_constant_values_contract_errors(
+                cfg_path,
+                required_values,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def top_level_cfg_constant_set_errors(
+    cfg_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_CFG_EXACT_CONSTANT_VALUES,
+) -> list[str]:
+    """Return errors if root Sumeragi CFGs bind extra constants."""
+
+    errors: list[str] = []
+    for cfg_path, required_values, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_required_exact_constant_set_contract_errors(
+                cfg_path,
+                required_values,
+                coverage_label,
+            )
+        )
+    return errors
 
 
 def top_level_cfg_check_parity_errors(
@@ -3334,6 +7031,7 @@ def consensus_core_root_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "Sumeragi.tla",
     contracts: dict[str, tuple[str, ...]] = SUMERAGI_CONSENSUS_CORE_ROOT_CONJUNCT_CONTRACTS,
     *,
+    allow_non_named_conjunct_operators: frozenset[str] = frozenset(),
     root_kind: str = "consensus-core proof root",
     zero_arity_requirement: str = (
         "aggregate proof roots must be zero-arity operators"
@@ -3374,6 +7072,22 @@ def consensus_core_root_conjunct_contract_errors(
             continue
 
         definition_line, body = definition
+        if operator not in allow_non_named_conjunct_operators:
+            for conjunct in tla_top_level_conjuncts(body):
+                compact_conjunct = " ".join(
+                    strip_static_outer_parentheses(conjunct).split()
+                )
+                if (
+                    TLA_IDENTIFIER_RE.fullmatch(compact_conjunct)
+                    and is_tla_user_identifier(compact_conjunct)
+                ):
+                    continue
+                errors.append(
+                    f"{display_path(module_path)}:{definition_line} defines "
+                    f"{operator}, but contains direct non-named conjunct "
+                    f"{compact_conjunct}; {unexpected_requirement}"
+                )
+
         direct_conjuncts = tuple(tla_zero_arity_conjunct_references(body))
         direct_conjunct_set = set(direct_conjuncts)
         expected_conjunct_set = set(expected_conjuncts)
@@ -3924,6 +7638,822 @@ def rbc_live_evidence_causality_envelope_conjunct_contract_errors(
             "documented conjunct contract"
         ),
     )
+
+
+def implication_antecedent_contract_errors(
+    module_path: Path,
+    contracts: dict[str, str],
+) -> list[str]:
+    """Return errors for proof operators that must keep a top-level implication."""
+
+    if not module_path.exists():
+        return []
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    errors: list[str] = []
+    for operator, expected_antecedent in contracts.items():
+        definition = definitions.get(operator)
+        if definition is None:
+            continue
+        definition_line, body = definition
+        operands = tla_top_level_implication_operands(body)
+        if len(operands) != 2:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{operator}, but it must keep a top-level implication guarded "
+                f"by {expected_antecedent}"
+            )
+            continue
+        antecedent = " ".join(operands[0].split())
+        if antecedent != expected_antecedent:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{operator}, but its implication antecedent is {antecedent}; "
+                f"expected {expected_antecedent}"
+            )
+    return errors
+
+
+def byzantine_top_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "Sumeragi.tla",
+) -> list[str]:
+    """Return errors for top-level Byzantine corridor aggregate proof drift."""
+
+    errors = consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
+        allow_non_named_conjunct_operators=frozenset(
+            SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS
+        ),
+        root_kind="top-level Byzantine direct-commit aggregate",
+        zero_arity_requirement=(
+            "top-level Byzantine direct-commit aggregate operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each top-level Byzantine direct-commit obligation must be counted "
+            "once"
+        ),
+        unexpected_requirement=(
+            "keep top-level Byzantine direct-commit aggregate proof operators "
+            "on the documented conjunct contract"
+        ),
+    )
+    errors.extend(
+        implication_antecedent_contract_errors(
+            module_path,
+            SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS,
+        )
+    )
+    return errors
+
+
+def projected_byzantine_top_conjunct(conjunct: str) -> str:
+    """Return the projected counterpart of a top-level Byzantine obligation."""
+
+    return SUMERAGI_TOP_TO_PROJECTION_LITERAL_CONJUNCTS.get(
+        conjunct,
+        f"Projected{conjunct}",
+    )
+
+
+def byzantine_top_projection_contract_alignment_errors(
+    top_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
+    projection_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+    operator_map: dict[
+        str,
+        str,
+    ] = SUMERAGI_BYZANTINE_TOP_TO_PROJECTION_OPERATOR_CONTRACTS,
+    top_implication_contracts: dict[
+        str,
+        str,
+    ] = SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS,
+    projection_implication_contracts: dict[
+        str,
+        str,
+    ] = SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS,
+) -> list[str]:
+    """Return errors if projection top contracts drift from central top contracts."""
+
+    errors: list[str] = []
+    for top_operator, projected_operator in operator_map.items():
+        top_conjuncts = top_contracts.get(top_operator)
+        if top_conjuncts is None:
+            errors.append(
+                "Byzantine top/projection alignment references missing top "
+                f"contract {top_operator}"
+            )
+            continue
+        projected_conjuncts = projection_contracts.get(projected_operator)
+        if projected_conjuncts is None:
+            errors.append(
+                "Byzantine top/projection alignment references missing "
+                f"projection contract {projected_operator}"
+            )
+            continue
+
+        expected_projected_conjuncts = tuple(
+            projected_byzantine_top_conjunct(conjunct)
+            for conjunct in top_conjuncts
+        )
+        expected_projected_set = set(expected_projected_conjuncts)
+        projected_set = set(projected_conjuncts)
+        missing_conjuncts = [
+            conjunct
+            for conjunct in expected_projected_conjuncts
+            if conjunct not in projected_set
+        ]
+        if missing_conjuncts:
+            errors.append(
+                f"{projected_operator} must mirror {top_operator} projected "
+                "conjunct contract; missing projected conjunct(s) "
+                f"{', '.join(missing_conjuncts)}"
+            )
+
+        unexpected_conjuncts = [
+            conjunct
+            for conjunct in projected_conjuncts
+            if conjunct not in expected_projected_set
+        ]
+        if unexpected_conjuncts:
+            errors.append(
+                f"{projected_operator} must mirror {top_operator} projected "
+                "conjunct contract; unexpected projected conjunct(s) "
+                f"{', '.join(unexpected_conjuncts)}"
+            )
+
+    for top_operator, top_antecedent in top_implication_contracts.items():
+        projected_operator = operator_map.get(top_operator)
+        if projected_operator is None:
+            errors.append(
+                "Byzantine top/projection alignment cannot map implication "
+                f"operator {top_operator}"
+            )
+            continue
+        expected_antecedent = projected_byzantine_top_conjunct(top_antecedent)
+        actual_antecedent = projection_implication_contracts.get(projected_operator)
+        if actual_antecedent != expected_antecedent:
+            actual = actual_antecedent or "<missing>"
+            errors.append(
+                f"{projected_operator} implication antecedent must mirror "
+                f"{top_operator}; expected {expected_antecedent}, found {actual}"
+            )
+
+    return errors
+
+
+def byzantine_top_corridor_contract_alignment_errors(
+    top_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
+    common_conjuncts: tuple[str, ...] = SUMERAGI_BYZANTINE_TOP_COMMON_CONJUNCTS,
+    wait_conjuncts: tuple[str, ...] = SUMERAGI_BYZANTINE_TOP_WAIT_CONJUNCTS,
+    delivered_operator: str = "ByzantineDeliveredFirstTopExactness",
+    vote_operator: str = "ByzantineVoteFirstTopExactness",
+    direct_operator: str = "ByzantineDirectTopExactness",
+) -> list[str]:
+    """Return errors if top-level Byzantine corridor contracts drift internally."""
+
+    expected_contracts = {
+        delivered_operator: common_conjuncts,
+        vote_operator: (*common_conjuncts, *wait_conjuncts),
+        direct_operator: (*common_conjuncts, *wait_conjuncts),
+    }
+    errors: list[str] = []
+    for operator, expected_conjuncts in expected_contracts.items():
+        actual_conjuncts = top_contracts.get(operator)
+        if actual_conjuncts is None:
+            errors.append(
+                "Byzantine top corridor alignment references missing "
+                f"contract {operator}"
+            )
+            continue
+
+        expected_set = set(expected_conjuncts)
+        actual_set = set(actual_conjuncts)
+        missing_conjuncts = [
+            conjunct for conjunct in expected_conjuncts if conjunct not in actual_set
+        ]
+        if missing_conjuncts:
+            errors.append(
+                f"{operator} must keep the Byzantine top corridor contract; "
+                f"missing conjunct(s) {', '.join(missing_conjuncts)}"
+            )
+
+        unexpected_conjuncts = [
+            conjunct for conjunct in actual_conjuncts if conjunct not in expected_set
+        ]
+        if unexpected_conjuncts:
+            errors.append(
+                f"{operator} must keep the Byzantine top corridor contract; "
+                f"unexpected conjunct(s) {', '.join(unexpected_conjuncts)}"
+            )
+
+    return errors
+
+
+def projection_bridge_interleaving_contract_alignment_errors(
+    projection_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+    top_operator: str = "ProjectedByzantineDirectTopExactness",
+    core_operator: str = "ProjectionBridgeMatchesInterleavingCore",
+    bridge_operator: str = "ProjectionBridgeMatchesInterleavingExactness",
+) -> list[str]:
+    """Return errors if the full projection bridge drifts from its components."""
+
+    errors: list[str] = []
+    missing_inputs = [
+        operator
+        for operator in (top_operator, core_operator, bridge_operator)
+        if operator not in projection_contracts
+    ]
+    if missing_inputs:
+        errors.append(
+            "projection bridge interleaving alignment references missing "
+            f"contract(s) {', '.join(missing_inputs)}"
+        )
+        return errors
+
+    expected_conjuncts = (
+        *projection_contracts[top_operator],
+        *projection_contracts[core_operator],
+    )
+    expected_set = set(expected_conjuncts)
+    bridge_conjuncts = projection_contracts[bridge_operator]
+    bridge_set = set(bridge_conjuncts)
+
+    missing_conjuncts = [
+        conjunct for conjunct in expected_conjuncts if conjunct not in bridge_set
+    ]
+    if missing_conjuncts:
+        errors.append(
+            f"{bridge_operator} must compose {top_operator} and "
+            f"{core_operator}; missing conjunct(s) {', '.join(missing_conjuncts)}"
+        )
+
+    unexpected_conjuncts = [
+        conjunct for conjunct in bridge_conjuncts if conjunct not in expected_set
+    ]
+    if unexpected_conjuncts:
+        errors.append(
+            f"{bridge_operator} must compose {top_operator} and "
+            f"{core_operator}; unexpected conjunct(s) "
+            f"{', '.join(unexpected_conjuncts)}"
+        )
+
+    return errors
+
+
+def source_progress_safety_contract_alignment_errors(
+    alignment_contracts: tuple[
+        tuple[str, dict[str, tuple[str, ...]], str, tuple[str, ...]],
+        ...,
+    ] = SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS,
+) -> list[str]:
+    """Return errors if source progress safety envelopes drift from exactness."""
+
+    errors: list[str] = []
+    for (
+        family,
+        conjunct_contracts,
+        envelope_operator,
+        expected_components,
+    ) in alignment_contracts:
+        envelope_conjuncts = conjunct_contracts.get(envelope_operator)
+        if envelope_conjuncts is None:
+            errors.append(
+                f"{family} progress safety alignment references missing "
+                f"contract {envelope_operator}"
+            )
+            continue
+
+        expected_set = set(expected_components)
+        envelope_set = set(envelope_conjuncts)
+        component_summary = " and ".join(expected_components)
+
+        missing_conjuncts = [
+            conjunct for conjunct in expected_components if conjunct not in envelope_set
+        ]
+        if missing_conjuncts:
+            errors.append(
+                f"{envelope_operator} must compose {component_summary} for "
+                f"{family} progress safety; missing conjunct(s) "
+                f"{', '.join(missing_conjuncts)}"
+            )
+
+        unexpected_conjuncts = [
+            conjunct for conjunct in envelope_conjuncts if conjunct not in expected_set
+        ]
+        if unexpected_conjuncts:
+            errors.append(
+                f"{envelope_operator} must compose {component_summary} for "
+                f"{family} progress safety; unexpected conjunct(s) "
+                f"{', '.join(unexpected_conjuncts)}"
+            )
+
+    return errors
+
+
+def byzantine_interleaving_exactness_alignment_errors(
+    direct_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+    byzantine_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+    direct_operator: str = "DirectCommitInterleavingExactness",
+    byzantine_operator: str = "ByzantineCommitInterleavingExactness",
+    byzantine_extra_conjuncts: tuple[str, ...] = (
+        BYZANTINE_INTERLEAVING_EXTRA_EXACTNESS_CONJUNCTS
+    ),
+) -> list[str]:
+    """Return errors if Byzantine interleaving stops extending the direct core."""
+
+    errors: list[str] = []
+    direct_conjuncts = direct_contracts.get(direct_operator)
+    byzantine_conjuncts = byzantine_contracts.get(byzantine_operator)
+    missing_inputs = []
+    if direct_conjuncts is None:
+        missing_inputs.append(direct_operator)
+    if byzantine_conjuncts is None:
+        missing_inputs.append(byzantine_operator)
+    if missing_inputs:
+        errors.append(
+            "Byzantine interleaving exactness alignment references missing "
+            f"contract(s) {', '.join(missing_inputs)}"
+        )
+        return errors
+
+    expected_conjuncts = (*direct_conjuncts, *byzantine_extra_conjuncts)
+    expected_set = set(expected_conjuncts)
+    byzantine_set = set(byzantine_conjuncts)
+
+    missing_conjuncts = [
+        conjunct for conjunct in expected_conjuncts if conjunct not in byzantine_set
+    ]
+    if missing_conjuncts:
+        errors.append(
+            f"{byzantine_operator} must extend {direct_operator} with "
+            "Byzantine-only exactness conjuncts; missing conjunct(s) "
+            f"{', '.join(missing_conjuncts)}"
+        )
+
+    unexpected_conjuncts = [
+        conjunct for conjunct in byzantine_conjuncts if conjunct not in expected_set
+    ]
+    if unexpected_conjuncts:
+        errors.append(
+            f"{byzantine_operator} must extend {direct_operator} with "
+            "Byzantine-only exactness conjuncts; unexpected conjunct(s) "
+            f"{', '.join(unexpected_conjuncts)}"
+        )
+
+    return errors
+
+
+def projection_bridge_core_source_alignment_errors(
+    source_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+    projection_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+    source_operator: str = "ByzantineCommitInterleavingExactness",
+    bridge_core_operator: str = "ProjectionBridgeMatchesInterleavingCore",
+) -> list[str]:
+    """Return errors if projection bridge core drifts from source exactness."""
+
+    errors: list[str] = []
+    source_conjuncts = source_contracts.get(source_operator)
+    bridge_core_conjuncts = projection_contracts.get(bridge_core_operator)
+    missing_inputs = []
+    if source_conjuncts is None:
+        missing_inputs.append(source_operator)
+    if bridge_core_conjuncts is None:
+        missing_inputs.append(bridge_core_operator)
+    if missing_inputs:
+        errors.append(
+            "projection bridge core/source alignment references missing "
+            f"contract(s) {', '.join(missing_inputs)}"
+        )
+        return errors
+
+    source_set = set(source_conjuncts)
+    bridge_core_set = set(bridge_core_conjuncts)
+
+    missing_conjuncts = [
+        conjunct for conjunct in source_conjuncts if conjunct not in bridge_core_set
+    ]
+    if missing_conjuncts:
+        errors.append(
+            f"{bridge_core_operator} must mirror {source_operator}; "
+            f"missing conjunct(s) {', '.join(missing_conjuncts)}"
+        )
+
+    unexpected_conjuncts = [
+        conjunct for conjunct in bridge_core_conjuncts if conjunct not in source_set
+    ]
+    if unexpected_conjuncts:
+        errors.append(
+            f"{bridge_core_operator} must mirror {source_operator}; "
+            f"unexpected conjunct(s) {', '.join(unexpected_conjuncts)}"
+        )
+
+    return errors
+
+
+def projected_commit_progress_contract_alignment_errors(
+    projection_contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+    envelope_operator: str = "ProjectedCommitProgressSafetyEnvelope",
+    expected_components: tuple[str, ...] = (
+        "ProjectionBridgeCoversOrderedTopCorridors",
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope",
+    ),
+) -> list[str]:
+    """Return errors if projected progress safety drifts from bridge components."""
+
+    errors: list[str] = []
+    missing_inputs = [
+        operator
+        for operator in (*expected_components, envelope_operator)
+        if operator not in projection_contracts
+    ]
+    if missing_inputs:
+        errors.append(
+            "projected commit progress alignment references missing "
+            f"contract(s) {', '.join(missing_inputs)}"
+        )
+        return errors
+
+    expected_set = set(expected_components)
+    envelope_conjuncts = projection_contracts[envelope_operator]
+    envelope_set = set(envelope_conjuncts)
+    component_summary = " and ".join(expected_components)
+
+    missing_conjuncts = [
+        conjunct for conjunct in expected_components if conjunct not in envelope_set
+    ]
+    if missing_conjuncts:
+        errors.append(
+            f"{envelope_operator} must compose {component_summary}; "
+            f"missing conjunct(s) {', '.join(missing_conjuncts)}"
+        )
+
+    unexpected_conjuncts = [
+        conjunct for conjunct in envelope_conjuncts if conjunct not in expected_set
+    ]
+    if unexpected_conjuncts:
+        errors.append(
+            f"{envelope_operator} must compose {component_summary}; "
+            f"unexpected conjunct(s) {', '.join(unexpected_conjuncts)}"
+        )
+
+    return errors
+
+
+def tla_wf_vars_operator_references(body: str) -> tuple[str, ...]:
+    """Return simple operator operands referenced by WF_vars clauses."""
+
+    comment_free_body = "\n".join(
+        tla_line_without_comment(line) for line in body.splitlines()
+    )
+    return tuple(TLA_WF_VARS_RE.findall(comment_free_body))
+
+
+def commit_progress_spec_contract_errors(
+    module_path: Path,
+    spec_operator: str,
+    fairness_operator: str,
+    next_closure: str,
+    expected_fairness_actions: tuple[str, ...],
+    root_kind: str,
+) -> list[str]:
+    """Return errors if a progress spec/fairness wiring contract drifts."""
+
+    errors = consensus_core_root_conjunct_contract_errors(
+        module_path,
+        {spec_operator: ("Init", fairness_operator)},
+        allow_non_named_conjunct_operators=frozenset({spec_operator}),
+        root_kind=root_kind,
+        zero_arity_requirement=(
+            f"{root_kind} operators must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            f"each {root_kind} obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            f"keep {root_kind}s on the documented conjunct contract"
+        ),
+    )
+    if not module_path.exists():
+        return errors
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+
+    spec_definition = definitions.get(spec_operator)
+    if spec_definition is not None:
+        definition_line, body = spec_definition
+        compact_body = "".join(
+            "".join(tla_line_without_comment(line).split())
+            for line in body.splitlines()
+        )
+        if next_closure not in compact_body:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{spec_operator}, but must keep direct {next_closure} "
+                "transition closure"
+            )
+
+        raw_fairness_actions = tla_wf_vars_operator_references(body)
+        if raw_fairness_actions:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{spec_operator}, but must compose {fairness_operator} "
+                "instead of raw WF_vars fairness clauses: "
+                f"{', '.join(raw_fairness_actions)}"
+            )
+
+    fairness_definition = definitions.get(fairness_operator)
+    if fairness_definition is None:
+        errors.append(
+            f"{display_path(module_path)} does not define {root_kind} "
+            f"fairness {fairness_operator}"
+        )
+        return errors
+
+    signature = signatures.get(fairness_operator)
+    if signature is not None and signature[1] != 0:
+        root_line, root_arity = signature
+        errors.append(
+            f"{display_path(module_path)}:{root_line} defines {root_kind} "
+            f"fairness {fairness_operator} with arity {root_arity}; "
+            f"{root_kind} fairness operators must be zero-arity"
+        )
+        return errors
+
+    fairness_line, fairness_body = fairness_definition
+    fairness_actions = tla_wf_vars_operator_references(fairness_body)
+    fairness_action_set = set(fairness_actions)
+    expected_action_set = set(expected_fairness_actions)
+
+    repeated_actions = duplicate_values(fairness_actions)
+    if repeated_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but repeats WF_vars action(s) "
+            f"{', '.join(repeated_actions)}; each {root_kind} "
+            "fairness action must be counted once"
+        )
+
+    missing_actions = [
+        action
+        for action in expected_fairness_actions
+        if action not in fairness_action_set
+    ]
+    if missing_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but is missing WF_vars action(s) "
+            f"{', '.join(missing_actions)}"
+        )
+
+    unexpected_actions = [
+        action for action in fairness_actions if action not in expected_action_set
+    ]
+    if unexpected_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but contains unexpected WF_vars action(s) "
+            f"{', '.join(unexpected_actions)}; keep {root_kind} "
+            "fairness on the documented action contract"
+        )
+
+    return errors
+
+
+def projected_commit_progress_spec_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiByzantineCommitProjectionGate.tla",
+    spec_operator: str = "ProjectedCommitProgressSpec",
+    fairness_operator: str = "ProjectedCommitProgressFairness",
+    expected_fairness_actions: tuple[
+        str, ...
+    ] = SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS,
+) -> list[str]:
+    """Return errors if projected progress spec/fairness wiring drifts."""
+
+    return commit_progress_spec_contract_errors(
+        module_path,
+        spec_operator,
+        fairness_operator,
+        "[][Next]_vars",
+        expected_fairness_actions,
+        "projected commit progress",
+    )
+
+
+def source_commit_progress_spec_contract_errors(
+    contracts: tuple[
+        tuple[Path, str, str, str, tuple[str, ...], str],
+        ...,
+    ] = SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS,
+) -> list[str]:
+    """Return errors if source progress spec/fairness wiring drifts."""
+
+    errors: list[str] = []
+    for (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        expected_fairness_actions,
+        root_kind,
+    ) in contracts:
+        errors.extend(
+            commit_progress_spec_contract_errors(
+                module_path,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                expected_fairness_actions,
+                root_kind,
+            )
+        )
+    return errors
+
+
+def top_level_commit_spec_contract_errors(
+    contracts: tuple[
+        tuple[Path, str, str, str, tuple[str, ...], str],
+        ...,
+    ] = SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS,
+) -> list[str]:
+    """Return errors if top-level Sumeragi spec/fairness wiring drifts."""
+
+    errors: list[str] = []
+    for (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        expected_fairness_actions,
+        root_kind,
+    ) in contracts:
+        errors.extend(
+            commit_progress_spec_contract_errors(
+                module_path,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                expected_fairness_actions,
+                root_kind,
+            )
+        )
+    return errors
+
+
+def direct_delivered_first_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate.tla",
+) -> list[str]:
+    """Return errors for delivered-first progress-safety drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS,
+        root_kind="direct delivered-first progress safety aggregate",
+        zero_arity_requirement=(
+            "direct delivered-first progress safety operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each direct delivered-first progress safety obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep direct delivered-first progress safety operators on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def direct_vote_first_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate.tla",
+) -> list[str]:
+    """Return errors for vote-first progress-safety drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS,
+        root_kind="direct vote-first progress safety aggregate",
+        zero_arity_requirement=(
+            "direct vote-first progress safety operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each direct vote-first progress safety obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep direct vote-first progress safety operators on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def byzantine_interleaving_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiByzantineCommitInterleavingGate.tla",
+) -> list[str]:
+    """Return errors for Byzantine interleaving progress-safety drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        root_kind="Byzantine interleaving progress safety aggregate",
+        zero_arity_requirement=(
+            "Byzantine interleaving progress safety operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each Byzantine interleaving progress safety obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep Byzantine interleaving progress safety operators on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def direct_interleaving_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiDirectCommitInterleavingGate.tla",
+) -> list[str]:
+    """Return errors for direct interleaving progress-safety drift."""
+
+    return consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        root_kind="direct interleaving progress safety aggregate",
+        zero_arity_requirement=(
+            "direct interleaving progress safety operators must be "
+            "zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each direct interleaving progress safety obligation must be "
+            "counted once"
+        ),
+        unexpected_requirement=(
+            "keep direct interleaving progress safety operators on the "
+            "documented conjunct contract"
+        ),
+    )
+
+
+def projection_gate_conjunct_contract_errors(
+    module_path: Path = SPEC_DIR / "SumeragiByzantineCommitProjectionGate.tla",
+) -> list[str]:
+    """Return errors for Byzantine projection gate aggregate proof drift."""
+
+    errors = consensus_core_root_conjunct_contract_errors(
+        module_path,
+        SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+        allow_non_named_conjunct_operators=frozenset(
+            SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS
+        ),
+        root_kind="projection gate aggregate",
+        zero_arity_requirement=(
+            "projection gate aggregate operators must be zero-arity operators"
+        ),
+        duplicate_requirement=(
+            "each projection gate aggregate obligation must be counted once"
+        ),
+        unexpected_requirement=(
+            "keep projection gate aggregate proof operators on the documented "
+            "conjunct contract"
+        ),
+    )
+    errors.extend(
+        implication_antecedent_contract_errors(
+            module_path,
+            SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS,
+        )
+    )
+    return errors
 
 
 def consensus_core_root_cfg_check_contract_errors(
@@ -4663,6 +9193,14 @@ def tla_module_dependency_references(
     references: list[tuple[int, str, str]] = []
     errors: list[str] = []
     dependency_window_closed_line: int | None = None
+    declarations_seen = False
+    declaration_block_open = False
+
+    def declaration_start(text: str) -> bool:
+        return re.match(r"^(?:CONSTANTS?|VARIABLES?)\b", text) is not None
+
+    def declaration_list_continuation(text: str) -> bool:
+        return TLA_DECLARATION_LIST_RE.match(text) is not None
 
     def malformed_dependency_prefix_start(text: str) -> str | None:
         def missing_separator_after(prefix: str) -> bool:
@@ -4697,17 +9235,33 @@ def tla_module_dependency_references(
             or TLA_NAMED_INSTANCE_START_RE.match(stripped) is not None
             or malformed_dependency_prefix is not None
         )
+        extends_candidate = TLA_EXTENDS_START_RE.match(stripped) is not None
+        instance_candidate = (
+            TLA_INSTANCE_START_RE.match(stripped) is not None
+            or TLA_NAMED_INSTANCE_START_RE.match(stripped) is not None
+            or malformed_dependency_prefix == "INSTANCE"
+        )
         if dependency_text != dependency_text.lstrip() and dependency_candidate:
             errors.append(
                 f"{display_path(path)}:{line_number} TLA dependency "
                 f"declarations must be top-level: {stripped}"
             )
             continue
-        if dependency_window_closed_line is not None and dependency_candidate:
+        if (
+            dependency_window_closed_line is not None
+            and dependency_candidate
+        ):
             errors.append(
                 f"{display_path(path)}:{line_number} TLA dependency "
-                "declarations must appear before declarations and "
-                f"definitions: {stripped}"
+                "declarations must appear before operator definitions: "
+                f"{stripped}"
+            )
+            continue
+        if declarations_seen and extends_candidate:
+            errors.append(
+                f"{display_path(path)}:{line_number} EXTENDS declarations "
+                "must appear before declarations and definitions: "
+                f"{stripped}"
             )
             continue
 
@@ -4825,6 +9379,13 @@ def tla_module_dependency_references(
             and not TLA_MODULE_RE.match(stripped)
             and not TLA_TERMINATOR_RE.match(stripped)
         ):
+            if declaration_start(stripped):
+                declarations_seen = True
+                declaration_block_open = True
+                continue
+            if declaration_block_open and declaration_list_continuation(stripped):
+                continue
+            declaration_block_open = False
             dependency_window_closed_line = line_number
 
     return references, errors
@@ -5449,6 +10010,18 @@ def tla_module_validation_errors(mode: str, path: Path) -> list[str]:
     ]
 
 
+def tla_module_surface_errors(
+    spec_dir: Path = SPEC_DIR,
+    tla_glob: str = "*.tla",
+) -> list[str]:
+    """Return validation errors for every local TLA module in the corpus."""
+
+    errors: list[str] = []
+    for tla_path in sorted(spec_dir.glob(tla_glob)):
+        errors.extend(tla_module_validation_errors("formal coverage", tla_path))
+    return sorted_unique(errors)
+
+
 @cache
 def tla_module_validation_error_templates(path: Path) -> tuple[str, ...]:
     return tuple(
@@ -5476,8 +10049,10 @@ def tla_module_validation_errors_uncached(mode: str, path: Path) -> list[str]:
 
 
 @cache
-def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]:
-    bindings: list[tuple[int, str]] = []
+def cfg_constant_binding_values(
+    path: Path,
+) -> tuple[list[tuple[int, str, str]], list[str]]:
+    bindings: list[tuple[int, str, str]] = []
     errors: list[str] = []
     collecting = False
     collecting_line: int | None = None
@@ -5501,7 +10076,11 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
         collecting_entries = 0
         collecting_invalid = False
 
-    def parse_binding(line_number: int, text: str, context: str) -> str | None:
+    def parse_binding(
+        line_number: int,
+        text: str,
+        context: str,
+    ) -> tuple[str, str] | None:
         match = CFG_CONSTANT_BINDING_LINE_RE.match(text)
         if match is None:
             errors.append(
@@ -5524,7 +10103,7 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
                 f"nested binding-looking token {nested_match.group(2)}"
             )
             return None
-        return constant
+        return constant, rhs
 
     def malformed_constant_directive_start(text: str) -> bool:
         return any(
@@ -5581,7 +10160,8 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
                 line_number, rest, f"directive {directive}"
             )
             if binding is not None:
-                bindings.append((line_number, binding))
+                constant, value = binding
+                bindings.append((line_number, constant, value))
             continue
 
         if malformed_constant_directive_start(stripped):
@@ -5627,11 +10207,21 @@ def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]
         if binding is None:
             collecting_invalid = True
             continue
-        bindings.append((line_number, binding))
+        constant, value = binding
+        bindings.append((line_number, constant, value))
         collecting_entries += 1
 
     close_collecting()
     return bindings, errors
+
+
+@cache
+def cfg_constant_bindings(path: Path) -> tuple[list[tuple[int, str]], list[str]]:
+    bindings, errors = cfg_constant_binding_values(path)
+    return [
+        (line_number, constant)
+        for line_number, constant, _value in bindings
+    ], errors
 
 
 def cfg_constant_binding_errors(mode: str, module_path: Path, cfg_path: Path) -> list[str]:
@@ -5672,6 +10262,31 @@ def cfg_module_ownership_errors(
         f"{display_path(module_path)}; expected filename stem {module_path.stem} "
         f"or {module_path.stem}_*"
     ]
+
+
+def cfg_module_ownership_surface_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return errors when CFG filenames do not match their inferred module."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        module_path = cfg_owner_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in cfg_owner_module_candidates(cfg_path, spec_dir)
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has no inferred owning TLA module; "
+                f"tried {candidates}"
+            )
+            continue
+        errors.extend(
+            cfg_module_ownership_errors("formal coverage", module_path, cfg_path)
+        )
+    return errors
 
 
 def cfg_duplicate_constant_binding_errors(mode: str, cfg_path: Path) -> list[str]:
@@ -5870,6 +10485,22 @@ def cfg_fast_generic_check_errors(
         errors.append(
             f"{mode}: {runner_name} cfg {display_path(cfg_file)} has no "
             "model-specific *CorrectnessEnvelope invariant/property check"
+        )
+    return errors
+
+
+def cfg_fast_generic_surface_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return errors when fast CFGs use generic instead of direct envelopes."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        errors.extend(
+            cfg_fast_generic_check_errors(
+                "formal coverage", cfg_path, "formal coverage"
+            )
         )
     return errors
 
@@ -17061,6 +21692,52 @@ def cfg_direct_exactness_envelope_pairing_errors(
     return errors
 
 
+def cfg_proof_target_shape_surface_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*.cfg",
+) -> list[str]:
+    """Return correctness-envelope and direct-exactness shape errors."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        module_path = cfg_owner_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in cfg_owner_module_candidates(cfg_path, spec_dir)
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has no inferred owning TLA module; "
+                f"tried {candidates}"
+            )
+            continue
+        errors.extend(
+            cfg_correctness_envelope_shape_errors(
+                "formal coverage",
+                module_path,
+                cfg_path,
+                "formal coverage",
+            )
+        )
+        errors.extend(
+            cfg_direct_exactness_shape_errors(
+                "formal coverage",
+                module_path,
+                cfg_path,
+                "formal coverage",
+            )
+        )
+        errors.extend(
+            cfg_direct_exactness_envelope_pairing_errors(
+                "formal coverage",
+                module_path,
+                cfg_path,
+                "formal coverage",
+            )
+        )
+    return errors
+
+
 def cfg_trivial_check_operator_errors(
     mode: str,
     module_path: Path,
@@ -17161,10 +21838,1359 @@ def format_items(values: list[str], limit: int = 80) -> str:
     return "\n".join(f"  - {value}" for value in shown) + suffix
 
 
+def expected_failure_tlc_inventory_errors(
+    expected_failure_tlc_modes: list[str],
+) -> list[str]:
+    modes = sorted_unique(expected_failure_tlc_modes)
+    if not modes:
+        return []
+    return [
+        "Expected-failure CI invokes TLC modes; standalone mutation sweep "
+        "must stay Apalache-only:\n"
+        + format_items(modes)
+    ]
+
+
 def print_error_sections(errors: list[str]) -> None:
     print("Sumeragi formal coverage check failed:", file=sys.stderr)
     for section in errors:
         print(f"\n{section}", file=sys.stderr)
+
+
+def active_command_lines(path: Path) -> list[tuple[int, str]]:
+    """Return non-comment shell commands and single-line workflow run commands."""
+
+    commands: list[tuple[int, str]] = []
+    workflow_block_scalars = {"", "|", ">", "|-", "|+", ">-", ">+"}
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if path_allows_yaml_run(path):
+            if stripped.startswith("- "):
+                stripped = stripped[2:].lstrip()
+            run_value = workflow_field_value(stripped, "run")
+            if run_value is None:
+                continue
+            stripped = run_value.strip()
+            if stripped in workflow_block_scalars:
+                continue
+        if not path_allows_yaml_run(path):
+            stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        commands.append((line_number, stripped))
+    return commands
+
+
+def active_command_matches(command_text: str, command: str) -> bool:
+    """Return whether command_text satisfies an exact or allowlisted prefix command."""
+
+    if command in FORMAL_PREFIX_MATCH_COMMANDS:
+        return command_text == command or command_text.startswith(f"{command} ")
+    return command_text == command
+
+
+def workflow_job_lines(
+    path: Path, job_names: tuple[str, ...]
+) -> list[tuple[int, str]]:
+    """Return raw lines belonging to the named top-level workflow jobs."""
+
+    lines: list[tuple[int, str]] = []
+    in_jobs = False
+    active = False
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_jobs = top_level_key == "jobs"
+            active = False
+            continue
+        if not in_jobs:
+            continue
+        job_key = workflow_mapping_key(line, 2)
+        if job_key is not None:
+            active = job_key in job_names
+            continue
+        if active:
+            lines.append((line_number, line))
+    return lines
+
+
+def workflow_header_lines(path: Path) -> list[tuple[int, str]]:
+    """Return raw workflow lines before the top-level jobs block."""
+
+    lines: list[tuple[int, str]] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        if workflow_mapping_key(line, 0) == "jobs":
+            break
+        lines.append((line_number, line))
+    return lines
+
+
+def yaml_scalar_text(value: str) -> str:
+    """Return a small YAML scalar with surrounding quotes removed."""
+
+    scalar = value.strip()
+    if len(scalar) >= 2 and scalar[0] == scalar[-1] and scalar[0] in {"'", '"'}:
+        return scalar[1:-1]
+    return scalar
+
+
+def workflow_header_name_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow name values from the workflow header."""
+
+    names: list[tuple[int, str]] = []
+    for line_number, line in workflow_header_lines(path):
+        if workflow_mapping_key(line, 0) != "name":
+            continue
+        name_value = workflow_field_value(line.strip(), "name")
+        if name_value is None:
+            continue
+        names.append((line_number, yaml_scalar_text(name_value)))
+    return names
+
+
+def workflow_header_top_level_key_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow header keys before the jobs block."""
+
+    keys: list[tuple[int, str]] = []
+    for line_number, line in workflow_header_lines(path):
+        key = workflow_mapping_key(line, 0)
+        if key is not None:
+            keys.append((line_number, key))
+    return keys
+
+
+def workflow_header_on_lines(path: Path) -> list[tuple[int, str]]:
+    """Return non-comment lines from top-level workflow trigger blocks."""
+
+    trigger_lines: list[tuple[int, str]] = []
+    in_on = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_on = top_level_key == "on"
+            if in_on:
+                trigger_lines.append((line_number, line))
+                on_value = workflow_field_value(line.strip(), "on")
+                if on_value is not None and on_value.strip():
+                    in_on = False
+            continue
+        if not in_on:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith(" "):
+            trigger_lines.append((line_number, line))
+            continue
+        in_on = False
+    return trigger_lines
+
+
+def workflow_header_on_event_lines(path: Path) -> list[tuple[int, str]]:
+    """Return workflow event keys from the top-level on block."""
+
+    events: list[tuple[int, str]] = []
+    in_on = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_on = top_level_key == "on"
+            if in_on:
+                on_value = workflow_field_value(line.strip(), "on")
+                if on_value is not None and on_value.strip():
+                    events.append((line_number, f"<inline {line.strip()}>"))
+                    in_on = False
+            continue
+        if not in_on:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        event_key = workflow_mapping_key(line, 2)
+        if event_key is not None:
+            events.append((line_number, event_key))
+            continue
+        list_item_match = re.match(r"^  -\s+(.+?)\s*$", line)
+        if list_item_match is not None:
+            events.append((line_number, yaml_scalar_text(list_item_match.group(1))))
+            continue
+        if line.strip() and not line.startswith("    "):
+            in_on = False
+    return events
+
+
+def workflow_header_paths_ignore_lines(path: Path) -> list[tuple[int, str]]:
+    """Return PR trigger paths_ignore entries from the workflow header."""
+
+    ignored_paths: list[tuple[int, str]] = []
+    in_paths_ignore = False
+    for line_number, line in workflow_header_lines(path):
+        if re.match(r"^    paths_ignore\s*:\s*$", line):
+            in_paths_ignore = True
+            continue
+        if not in_paths_ignore:
+            continue
+        list_item_match = re.match(r"^      -\s+(.+?)\s*$", line)
+        if list_item_match is not None:
+            ignored_paths.append(
+                (line_number, yaml_scalar_text(list_item_match.group(1)))
+            )
+            continue
+        if line.strip() and not line.startswith("      "):
+            in_paths_ignore = False
+    return ignored_paths
+
+
+def workflow_header_concurrency_lines(path: Path) -> list[tuple[int, str]]:
+    """Return non-comment lines from top-level workflow concurrency blocks."""
+
+    concurrency_lines: list[tuple[int, str]] = []
+    in_concurrency = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_concurrency = top_level_key == "concurrency"
+            if in_concurrency:
+                concurrency_lines.append((line_number, line))
+                concurrency_value = workflow_field_value(line.strip(), "concurrency")
+                if concurrency_value is not None and concurrency_value.strip():
+                    in_concurrency = False
+            continue
+        if not in_concurrency:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith(" "):
+            concurrency_lines.append((line_number, line))
+            continue
+        in_concurrency = False
+    return concurrency_lines
+
+
+def workflow_header_env_key_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow env keys from the workflow header."""
+
+    env_keys: list[tuple[int, str]] = []
+    in_env = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_env = top_level_key == "env"
+            if in_env:
+                env_value = workflow_field_value(line.strip(), "env")
+                if env_value is not None and env_value.strip():
+                    env_keys.append((line_number, f"<inline {line.strip()}>"))
+                    in_env = False
+            continue
+        if not in_env:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key_match = re.match(r"^  ([A-Za-z_][A-Za-z0-9_]*)\s*:", line)
+        if key_match is not None:
+            env_keys.append((line_number, key_match.group(1)))
+            continue
+        if line.strip() and not line.startswith("    "):
+            in_env = False
+    return env_keys
+
+
+def workflow_header_env_binding_lines(path: Path) -> list[tuple[int, str]]:
+    """Return top-level workflow env bindings from the workflow header."""
+
+    env_bindings: list[tuple[int, str]] = []
+    in_env = False
+    for line_number, line in workflow_header_lines(path):
+        top_level_key = workflow_mapping_key(line, 0)
+        if top_level_key is not None:
+            in_env = top_level_key == "env"
+            if in_env:
+                env_value = workflow_field_value(line.strip(), "env")
+                if env_value is not None and env_value.strip():
+                    env_bindings.append((line_number, f"<inline {line.strip()}>"))
+                    in_env = False
+            continue
+        if not in_env:
+            continue
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        binding_match = re.match(r"^  ([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$", line)
+        if binding_match is not None:
+            key, value = binding_match.groups()
+            env_bindings.append((line_number, f"{key}: {value.strip()}"))
+            continue
+        if line.strip() and not line.startswith("    "):
+            in_env = False
+    return env_bindings
+
+
+def workflow_run_command_text(stripped_line: str) -> str | None:
+    """Return a single-line workflow run command, or None for non-run lines."""
+
+    command_text = stripped_line
+    if command_text.startswith("- "):
+        command_text = command_text[2:].lstrip()
+    run_value = workflow_field_value(command_text, "run")
+    if run_value is None:
+        return None
+    return run_value.strip()
+
+
+def workflow_uses_action_text(stripped_line: str) -> str | None:
+    """Return a workflow action reference, or None for non-uses lines."""
+
+    action_text = stripped_line
+    if action_text.startswith("- "):
+        action_text = action_text[2:].lstrip()
+    uses_value = workflow_field_value(action_text, "uses")
+    if uses_value is None:
+        return None
+    return uses_value.strip()
+
+
+def workflow_mapping_key(line: str, indent: int) -> str | None:
+    """Return a YAML mapping key at a fixed space indent."""
+
+    match = re.match(rf"^ {{{indent}}}([A-Za-z0-9_-]+)\s*:(?:\s+.*)?$", line)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def formal_workflow_paths(workflow_dir: Path = WORKFLOW_DIR) -> tuple[Path, ...]:
+    """Return GitHub workflow files scanned for stray formal commands."""
+
+    return tuple(
+        sorted({*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")})
+    )
+
+
+def formal_workflow_unscoped_command_errors(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] | None = None,
+    workflow_paths: tuple[Path, ...] | None = None,
+    allowed_jobs_by_path: dict[Path, tuple[str, ...]] | None = None,
+) -> list[str]:
+    """Return errors for formal proof commands outside checked workflow jobs."""
+
+    if workflow_jobs is not None and allowed_jobs_by_path is None:
+        allowed_jobs_by_path = dict(workflow_jobs)
+    if allowed_jobs_by_path is None:
+        allowed_jobs_by_path = FORMAL_WORKFLOW_ALLOWED_JOB_NAMES
+    if workflow_paths is None:
+        if workflow_jobs is None:
+            workflow_paths = formal_workflow_paths()
+        else:
+            workflow_paths = tuple(path for path, _ in workflow_jobs)
+
+    errors: list[str] = []
+    for path in workflow_paths:
+        job_names = allowed_jobs_by_path.get(path, ())
+        job_label = (
+            ", ".join(job_names)
+            if job_names
+            else "the checked formal workflow jobs"
+        )
+        in_jobs = False
+        active_allowed_job = False
+        for line_number, line in enumerate(read_text(path).splitlines(), 1):
+            top_level_key = workflow_mapping_key(line, 0)
+            if top_level_key is not None:
+                in_jobs = top_level_key == "jobs"
+                active_allowed_job = False
+                continue
+            if in_jobs:
+                job_key = workflow_mapping_key(line, 2)
+            else:
+                job_key = None
+            if job_key is not None:
+                active_allowed_job = job_key in job_names
+                continue
+            if active_allowed_job:
+                continue
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if any(
+                fragment in stripped
+                for fragment in FORMAL_WORKFLOW_PROOF_COMMAND_FRAGMENTS
+            ):
+                errors.append(
+                    f"formal workflow {display_path(path)}:{line_number} "
+                    "must keep formal proof commands inside checked jobs "
+                    f"{job_label}: {stripped}"
+                )
+    return errors
+
+
+def workflow_job_active_command_lines(
+    path: Path, job_names: tuple[str, ...]
+) -> list[tuple[int, str]]:
+    """Return single-line run commands inside the named workflow jobs."""
+
+    commands: list[tuple[int, str]] = []
+    block_scalars = {"", "|", ">", "|-", "|+", ">-", ">+"}
+    for line_number, line in workflow_job_lines(path, job_names):
+        command_text = workflow_run_command_text(line.strip())
+        if command_text is None or command_text in block_scalars:
+            continue
+        commands.append((line_number, command_text))
+    return commands
+
+
+def workflow_job_active_command_modes(
+    path: Path,
+    job_names: tuple[str, ...],
+    command_prefix: str = APALACHE_COMMAND_PREFIX,
+) -> list[str]:
+    """Return formal modes invoked by active run commands in named jobs."""
+
+    command_re = re.compile(
+        rf"{re.escape(command_prefix)}\s+({COMMAND_MODE_PATTERN})"
+    )
+    modes: list[str] = []
+    for _, command_text in workflow_job_active_command_lines(path, job_names):
+        match = command_re.fullmatch(command_text)
+        if match is not None:
+            modes.append(match.group(1))
+    return modes
+
+
+def workflow_job_step_lines(
+    path: Path, job_names: tuple[str, ...]
+) -> list[list[tuple[int, str]]]:
+    """Return raw step-line blocks inside the named workflow jobs."""
+
+    steps: list[list[tuple[int, str]]] = []
+    step_lines: list[tuple[int, str]] = []
+
+    def flush_step() -> None:
+        nonlocal step_lines
+        if step_lines:
+            steps.append(step_lines)
+            step_lines = []
+
+    for line_number, line in workflow_job_lines(path, job_names):
+        stripped = line.strip()
+        if re.match(r"^      -(?:\s+.*)?$", line):
+            flush_step()
+            step_lines = [(line_number, line)]
+            continue
+        if step_lines and (line.startswith("        ") or not stripped):
+            step_lines.append((line_number, line))
+            continue
+        flush_step()
+    flush_step()
+    return steps
+
+
+def workflow_step_action(
+    step_lines: list[tuple[int, str]]
+) -> tuple[int, str] | None:
+    """Return the action used by a workflow step, if any."""
+
+    actions = workflow_step_actions(step_lines)
+    return actions[0] if actions else None
+
+
+def workflow_step_actions(
+    step_lines: list[tuple[int, str]]
+) -> list[tuple[int, str]]:
+    """Return every action reference used by a workflow step."""
+
+    actions: list[tuple[int, str]] = []
+    for line_number, line in step_lines:
+        action_text = workflow_uses_action_text(
+            workflow_step_field_text(line.strip())
+        )
+        if action_text is not None:
+            actions.append((line_number, action_text))
+    return actions
+
+
+def workflow_step_run_commands(
+    step_lines: list[tuple[int, str]]
+) -> list[tuple[int, str]]:
+    """Return every run command used by a workflow step."""
+
+    commands: list[tuple[int, str]] = []
+    for line_number, line in step_lines:
+        command_text = workflow_run_command_text(
+            workflow_step_field_text(line.strip())
+        )
+        if command_text is not None:
+            commands.append((line_number, command_text))
+    return commands
+
+
+def workflow_step_with_inputs(
+    step_lines: list[tuple[int, str]]
+) -> list[tuple[int, str]]:
+    """Return `with` input lines from a workflow step."""
+
+    inputs: list[tuple[int, str]] = []
+    in_with = False
+    for line_number, line in step_lines:
+        stripped = line.strip()
+        field_text = workflow_step_field_text(stripped)
+        with_value = workflow_field_value(field_text, "with")
+        if with_value is not None:
+            inline_value = with_value.strip()
+            if inline_value:
+                inputs.append((line_number, f"with: {inline_value}"))
+                in_with = False
+            else:
+                in_with = True
+            continue
+        if not in_with:
+            continue
+        if line.startswith("          "):
+            if stripped:
+                inputs.append((line_number, stripped))
+            continue
+        if stripped:
+            in_with = False
+    return inputs
+
+
+def formal_workflow_allowed_run_command(command_text: str) -> bool:
+    """Return whether a formal workflow run command is allowlisted."""
+
+    if command_text in FORMAL_WORKFLOW_ALLOWED_EXACT_RUN_COMMANDS:
+        return True
+    for prefix in FORMAL_WORKFLOW_ALLOWED_PREFIX_RUN_COMMANDS:
+        if not command_text.startswith(f"{prefix} "):
+            continue
+        tail = command_text[len(prefix) :].strip()
+        return COMMAND_MODE_RE.fullmatch(tail) is not None
+    return False
+
+
+def formal_workflow_proof_run_command(command_text: str) -> bool:
+    """Return whether a workflow run command contributes formal proof evidence."""
+
+    if command_text in (
+        FORMAL_APALACHE_VERSION_COMMAND,
+        FORMAL_BASELINE_COMMAND,
+        FORMAL_EXPECTED_FAILURE_COMMAND,
+    ):
+        return True
+    for prefix in (
+        INSTALL_APALACHE_COMMAND_PREFIX,
+        APALACHE_COMMAND_PREFIX,
+        TLC_COMMAND_PREFIX,
+    ):
+        if command_text == prefix or command_text.startswith(f"{prefix} "):
+            return True
+    return False
+
+
+def workflow_step_field_text(stripped_line: str) -> str:
+    """Return a workflow step field with any leading list marker removed."""
+
+    if stripped_line.startswith("- "):
+        return stripped_line[2:].lstrip()
+    return stripped_line
+
+
+def workflow_control_field(field_text: str) -> str | None:
+    """Return a proof-step control or execution-modifier field name, if present."""
+
+    for field in (
+        "if",
+        "continue-on-error",
+        "needs",
+        "environment",
+        "env",
+        "shell",
+        "working-directory",
+        "timeout-minutes",
+        "permissions",
+        "container",
+        "services",
+        "strategy",
+    ):
+        if field_text == field or workflow_field_value(field_text, field) is not None:
+            return field
+    return None
+
+
+def required_active_command_errors(
+    active_commands: list[tuple[int, str]],
+    path: Path,
+    commands: tuple[str, ...],
+    owner: str,
+) -> list[str]:
+    """Return errors for required commands missing from active command lines."""
+
+    return [
+        f"{owner} {display_path(path)} is missing command: {command}"
+        for command in commands
+        if not any(
+            active_command_matches(command_text, command)
+            for _, command_text in active_commands
+        )
+    ]
+
+
+def active_command_order_errors(
+    active_commands: list[tuple[int, str]],
+    path: Path,
+    first: str,
+    second: str,
+    owner: str,
+) -> list[str]:
+    """Return errors when first is not before second in active command lines."""
+
+    first_index = next(
+        (
+            index
+            for index, (_, command_text) in enumerate(active_commands)
+            if active_command_matches(command_text, first)
+        ),
+        -1,
+    )
+    second_index = next(
+        (
+            index
+            for index, (_, command_text) in enumerate(active_commands)
+            if active_command_matches(command_text, second)
+        ),
+        -1,
+    )
+    if first_index == -1 or second_index == -1 or first_index < second_index:
+        return []
+    return [
+        f"{owner} {display_path(path)} must run {first!r} before {second!r}"
+    ]
+
+
+def active_singleton_command_errors(
+    active_commands: list[tuple[int, str]],
+    path: Path,
+    commands: tuple[str, ...],
+    owner: str,
+) -> list[str]:
+    """Return errors when singleton evidence commands appear more than once."""
+
+    errors: list[str] = []
+    for command in commands:
+        matches = [
+            f"{line_number}: {command_text}"
+            for line_number, command_text in active_commands
+            if active_command_matches(command_text, command)
+        ]
+        if len(matches) > 1:
+            errors.append(
+                f"{owner} {display_path(path)} must run {command!r} at most once:\n"
+                + format_items(matches)
+            )
+    return errors
+
+
+def formal_workflow_run_command_errors(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
+) -> list[str]:
+    """Return errors when formal workflow jobs can wrap evidence commands."""
+
+    errors: list[str] = []
+    block_scalars = {"", "|", ">", "|-", "|+", ">-", ">+"}
+    for path, job_names in workflow_jobs:
+        for step_lines in workflow_job_step_lines(path, job_names):
+            run_commands = workflow_step_run_commands(step_lines)
+            actions = workflow_step_actions(step_lines)
+            if len(run_commands) > 1:
+                matches = [
+                    f"{line_number}: {command_text}"
+                    for line_number, command_text in run_commands
+                ]
+                errors.append(
+                    f"formal workflow {display_path(path)} checked formal job "
+                    "steps must set run at most once:\n"
+                    + format_items(matches)
+                )
+            if run_commands and actions:
+                run_summary = format_items(
+                    [
+                        f"{line_number}: {command_text}"
+                        for line_number, command_text in run_commands
+                    ]
+                )
+                action_summary = format_items(
+                    [
+                        f"{line_number}: {action_text}"
+                        for line_number, action_text in actions
+                    ]
+                )
+                errors.append(
+                    f"formal workflow {display_path(path)} checked formal job "
+                    "steps must not combine run and uses:\n"
+                    f"{run_summary}\n{action_summary}"
+                )
+        for line_number, line in workflow_job_lines(path, job_names):
+            command_text = workflow_run_command_text(line.strip())
+            if command_text is None:
+                continue
+            if command_text in block_scalars:
+                errors.append(
+                    f"formal workflow {display_path(path)}:{line_number} "
+                    "must use single-line allowlisted run commands; block run "
+                    f"commands are not allowed: {line.strip()}"
+                )
+                continue
+            if not formal_workflow_allowed_run_command(command_text):
+                errors.append(
+                    f"formal workflow {display_path(path)}:{line_number} "
+                    "may contain only single-line allowlisted run commands: "
+                    f"{command_text}"
+                )
+    return errors
+
+
+def formal_workflow_run_inventory_errors(
+    contracts: tuple[
+        tuple[Path, tuple[str, ...], str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_RUN_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow jobs change run command inventory/order."""
+
+    errors: list[str] = []
+    for path, job_names, owner, expected_commands in contracts:
+        command_lines = workflow_job_active_command_lines(path, job_names)
+        actual_commands = tuple(command_text for _, command_text in command_lines)
+        if actual_commands == expected_commands:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [
+                    f"{line_number}: {command_text}"
+                    for line_number, command_text in command_lines
+                ]
+            )
+            if command_lines
+            else " no run commands"
+        )
+        expected_summary = "\n" + format_items(list(expected_commands))
+        errors.append(
+            f"{owner} {display_path(path)} must use exact run command inventory:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_name_errors(
+    contracts: tuple[
+        tuple[Path, str, str],
+        ...,
+    ] = FORMAL_WORKFLOW_NAME_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow top-level names drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_name in contracts:
+        name_lines = workflow_header_name_lines(path)
+        actual_names = tuple(name for _, name in name_lines)
+        if actual_names == (expected_name,):
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {name}" for line_number, name in name_lines]
+            )
+            if name_lines
+            else " no workflow name"
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must set exact workflow name: "
+            f"{expected_name}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_header_key_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_HEADER_KEY_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow top-level header keys drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_keys in contracts:
+        key_lines = workflow_header_top_level_key_lines(path)
+        actual_keys = tuple(key for _, key in key_lines)
+        if actual_keys == expected_keys:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {key}" for line_number, key in key_lines]
+            )
+            if key_lines
+            else " no top-level header keys"
+        )
+        expected_summary = "\n" + format_items(list(expected_keys))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level header keys:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_trigger_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_TRIGGER_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow trigger surfaces drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_lines in contracts:
+        trigger_lines = workflow_header_on_lines(path)
+        actual_lines = tuple(line for _, line in trigger_lines)
+        if actual_lines == expected_lines:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {line}" for line_number, line in trigger_lines]
+            )
+            if trigger_lines
+            else " no top-level on block"
+        )
+        expected_summary = "\n" + format_items(list(expected_lines))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level trigger "
+            f"block:{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_on_event_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_ON_EVENT_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow trigger event inventories drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_events in contracts:
+        event_lines = workflow_header_on_event_lines(path)
+        actual_events = tuple(event for _, event in event_lines)
+        if actual_events == expected_events:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {event}" for line_number, event in event_lines]
+            )
+            if event_lines
+            else " no trigger events"
+        )
+        expected_summary = (
+            "\n" + format_items(list(expected_events))
+            if expected_events
+            else " no trigger events"
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact trigger events:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_paths_ignore_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_PATHS_IGNORE_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow PR path filters drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_paths in contracts:
+        ignored_path_lines = workflow_header_paths_ignore_lines(path)
+        actual_paths = tuple(ignored_path for _, ignored_path in ignored_path_lines)
+        if actual_paths == expected_paths:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [
+                    f"{line_number}: {ignored_path}"
+                    for line_number, ignored_path in ignored_path_lines
+                ]
+            )
+            if ignored_path_lines
+            else " no paths_ignore entries"
+        )
+        expected_summary = "\n" + format_items(list(expected_paths))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact paths_ignore entries:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_concurrency_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_CONCURRENCY_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow concurrency behavior drifts."""
+
+    errors: list[str] = []
+    for path, owner, expected_lines in contracts:
+        concurrency_lines = workflow_header_concurrency_lines(path)
+        actual_lines = tuple(line for _, line in concurrency_lines)
+        if actual_lines == expected_lines:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {line}" for line_number, line in concurrency_lines]
+            )
+            if concurrency_lines
+            else " no top-level concurrency block"
+        )
+        expected_summary = "\n" + format_items(list(expected_lines))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level "
+            f"concurrency block:{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_header_control_errors(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
+    forbidden_fields: tuple[str, ...] = FORMAL_WORKFLOW_FORBIDDEN_HEADER_FIELDS,
+) -> list[str]:
+    """Return errors when formal workflows set inherited header controls."""
+
+    errors: list[str] = []
+    for path, _ in workflow_jobs:
+        for line_number, line in workflow_header_lines(path):
+            key = workflow_mapping_key(line, 0)
+            if key not in forbidden_fields:
+                continue
+            errors.append(
+                f"formal workflow {display_path(path)}:{line_number} must not set "
+                f"top-level {key}: {line.strip()}"
+            )
+    return errors
+
+
+def formal_workflow_header_env_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_HEADER_ENV_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow top-level env keys drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_keys in contracts:
+        key_lines = workflow_header_env_key_lines(path)
+        actual_keys = tuple(key for _, key in key_lines)
+        if actual_keys == expected_keys:
+            continue
+        actual_summary = (
+            "\n" + format_items([f"{line_number}: {key}" for line_number, key in key_lines])
+            if key_lines
+            else " no top-level env keys"
+        )
+        expected_summary = (
+            "\n" + format_items(list(expected_keys))
+            if expected_keys
+            else " no top-level env keys"
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level env keys:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_header_env_binding_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_HEADER_ENV_BINDING_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow top-level env bindings drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_bindings in contracts:
+        binding_lines = workflow_header_env_binding_lines(path)
+        actual_bindings = tuple(binding for _, binding in binding_lines)
+        if actual_bindings == expected_bindings:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [
+                    f"{line_number}: {binding}"
+                    for line_number, binding in binding_lines
+                ]
+            )
+            if binding_lines
+            else " no top-level env bindings"
+        )
+        expected_summary = (
+            "\n" + format_items(list(expected_bindings))
+            if expected_bindings
+            else " no top-level env bindings"
+        )
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact top-level env bindings:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_action_step_errors(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
+) -> list[str]:
+    """Return errors when formal workflow jobs use unpinned or unvetted actions."""
+
+    errors: list[str] = []
+    for path, job_names in workflow_jobs:
+        for step_lines in workflow_job_step_lines(path, job_names):
+            actions = workflow_step_actions(step_lines)
+            if not actions:
+                continue
+            if len(actions) > 1:
+                matches = [
+                    f"{line_number}: {action_text}"
+                    for line_number, action_text in actions
+                ]
+                errors.append(
+                    f"formal workflow {display_path(path)} checked formal job "
+                    "steps must set uses at most once:\n"
+                    + format_items(matches)
+                )
+            for line_number, action_text in actions:
+                if action_text in FORMAL_WORKFLOW_ALLOWED_ACTIONS:
+                    continue
+                errors.append(
+                    f"formal workflow {display_path(path)}:{line_number} may use "
+                    "only allowlisted action steps in checked formal jobs: "
+                    f"{action_text}"
+                )
+    return errors
+
+
+def formal_workflow_action_inventory_errors(
+    contracts: tuple[
+        tuple[Path, tuple[str, ...], str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_ACTION_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow jobs change action inventory/order."""
+
+    errors: list[str] = []
+    for path, job_names, owner, expected_actions in contracts:
+        action_lines = [
+            (line_number, action_text)
+            for step_lines in workflow_job_step_lines(path, job_names)
+            for line_number, action_text in workflow_step_actions(step_lines)
+        ]
+        actual_actions = tuple(action_text for _, action_text in action_lines)
+        if actual_actions == expected_actions:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [
+                    f"{line_number}: {action_text}"
+                    for line_number, action_text in action_lines
+                ]
+            )
+            if action_lines
+            else " no action steps"
+        )
+        expected_summary = "\n" + format_items(list(expected_actions))
+        errors.append(
+            f"{owner} {display_path(path)} must use exact action step inventory:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_action_input_errors(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
+) -> list[str]:
+    """Return errors when formal workflow action inputs drift."""
+
+    errors: list[str] = []
+    for path, job_names in workflow_jobs:
+        for step_lines in workflow_job_step_lines(path, job_names):
+            action = workflow_step_action(step_lines)
+            if action is None:
+                continue
+            line_number, action_text = action
+            if action_text not in FORMAL_WORKFLOW_ACTION_INPUTS:
+                continue
+            expected_inputs = FORMAL_WORKFLOW_ACTION_INPUTS[action_text]
+            actual_input_lines = workflow_step_with_inputs(step_lines)
+            actual_inputs = tuple(input_text for _, input_text in actual_input_lines)
+            if actual_inputs == expected_inputs:
+                continue
+            actual_summary = (
+                "\n"
+                + format_items(
+                    [
+                        f"{input_line}: {input_text}"
+                        for input_line, input_text in actual_input_lines
+                    ]
+                )
+                if actual_input_lines
+                else " no with inputs"
+            )
+            expected_summary = (
+                "\n" + format_items(list(expected_inputs))
+                if expected_inputs
+                else " no with inputs"
+            )
+            errors.append(
+                f"formal workflow {display_path(path)}:{line_number} action "
+                f"{action_text!r} must use pinned inputs:{expected_summary}; "
+                f"found:{actual_summary}"
+            )
+    return errors
+
+
+def formal_workflow_setup_action_control_errors(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
+) -> list[str]:
+    """Return errors when setup actions in formal jobs can be skipped or masked."""
+
+    errors: list[str] = []
+    for path, job_names in workflow_jobs:
+        for step_lines in workflow_job_step_lines(path, job_names):
+            action = workflow_step_action(step_lines)
+            if action is None:
+                continue
+            action_line, action_text = action
+            if action_text not in FORMAL_WORKFLOW_SETUP_ACTIONS:
+                continue
+            for line_number, line in step_lines:
+                field_text = workflow_step_field_text(line.strip())
+                control_field = workflow_control_field(field_text)
+                if control_field is None:
+                    continue
+                errors.append(
+                    f"formal workflow {display_path(path)}:{line_number} setup "
+                    f"action {action_text!r} at line {action_line} must not set "
+                    f"{control_field}: {line.strip()}"
+                )
+    return errors
+
+
+def formal_workflow_runner_label_errors(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
+) -> list[str]:
+    """Return errors when checked formal workflow jobs change runner labels."""
+
+    errors: list[str] = []
+    for path, job_names in workflow_jobs:
+        for job_name in job_names:
+            runner_lines = [
+                (line_number, line.strip())
+                for line_number, line in workflow_job_lines(path, (job_name,))
+                if re.match(r"^    runs-on\s*:", line)
+            ]
+            if not runner_lines:
+                errors.append(
+                    f"formal workflow {display_path(path)} checked job {job_name} "
+                    f"must set runs-on: {FORMAL_WORKFLOW_REQUIRED_RUNNER}"
+                )
+                continue
+            if len(runner_lines) > 1:
+                matches = [
+                    f"{line_number}: {line}" for line_number, line in runner_lines
+                ]
+                errors.append(
+                    f"formal workflow {display_path(path)} checked job {job_name} "
+                    "must set runs-on at most once:\n"
+                    + format_items(matches)
+                )
+            for line_number, line in runner_lines:
+                runner_value = workflow_field_value(line, "runs-on")
+                runner = runner_value.strip() if runner_value is not None else None
+                if runner == FORMAL_WORKFLOW_REQUIRED_RUNNER:
+                    continue
+                errors.append(
+                    f"formal workflow {display_path(path)}:{line_number} checked job "
+                    f"{job_name} must set runs-on: {FORMAL_WORKFLOW_REQUIRED_RUNNER}: "
+                    f"{line}"
+                )
+    return errors
+
+
+def formal_workflow_timeout_errors(
+    contracts: tuple[
+        tuple[Path, tuple[str, ...], str, str],
+        ...,
+    ] = FORMAL_WORKFLOW_TIMEOUT_CONTRACTS,
+) -> list[str]:
+    """Return errors when checked formal workflow jobs change timeout budgets."""
+
+    errors: list[str] = []
+    for path, job_names, owner, expected_timeout in contracts:
+        for job_name in job_names:
+            timeout_lines = [
+                (line_number, line.strip())
+                for line_number, line in workflow_job_lines(path, (job_name,))
+                if re.match(r"^    timeout-minutes\s*:", line)
+            ]
+            if not timeout_lines:
+                errors.append(
+                    f"{owner} {display_path(path)} checked job {job_name} "
+                    f"must set timeout-minutes: {expected_timeout}"
+                )
+                continue
+            if len(timeout_lines) > 1:
+                matches = [
+                    f"{line_number}: {line}" for line_number, line in timeout_lines
+                ]
+                errors.append(
+                    f"{owner} {display_path(path)} checked job {job_name} "
+                    "must set timeout-minutes at most once:\n"
+                    + format_items(matches)
+                )
+            for line_number, line in timeout_lines:
+                timeout_value = workflow_field_value(line, "timeout-minutes")
+                timeout = (
+                    timeout_value.strip() if timeout_value is not None else None
+                )
+                if timeout == expected_timeout:
+                    continue
+                errors.append(
+                    f"{owner} {display_path(path)}:{line_number} checked job "
+                    f"{job_name} must set timeout-minutes: {expected_timeout}: "
+                    f"{line}"
+                )
+    return errors
+
+
+def formal_workflow_proof_step_control_errors(
+    workflow_jobs: tuple[tuple[Path, tuple[str, ...]], ...] = FORMAL_WORKFLOW_JOB_NAMES,
+) -> list[str]:
+    """Return errors when formal proof workflow steps can be skipped or masked."""
+
+    errors: list[str] = []
+
+    def flush_step(path: Path, step_lines: list[tuple[int, str]]) -> None:
+        proof_commands = [
+            command_text
+            for _, line in step_lines
+            if (
+                command_text := workflow_run_command_text(
+                    workflow_step_field_text(line.strip())
+                )
+            )
+            is not None
+            and formal_workflow_proof_run_command(command_text)
+        ]
+        if not proof_commands:
+            return
+        proof_command = proof_commands[0]
+        for line_number, line in step_lines:
+            field_text = workflow_step_field_text(line.strip())
+            control_field = workflow_control_field(field_text)
+            if control_field is None:
+                continue
+            errors.append(
+                f"formal workflow {display_path(path)}:{line_number} proof step "
+                f"{proof_command!r} must not set {control_field}: {line.strip()}"
+            )
+
+    for path, job_names in workflow_jobs:
+        job_label = ", ".join(job_names)
+        step_lines: list[tuple[int, str]] = []
+        for line_number, line in workflow_job_lines(path, job_names):
+            stripped = line.strip()
+            if re.match(
+                r"^    (?:if|continue-on-error|needs|environment|env|defaults|permissions|container|services|strategy)\s*:",
+                line,
+            ):
+                control_field = workflow_control_field(stripped)
+                if control_field is None:
+                    control_field = "defaults"
+                errors.append(
+                    f"formal workflow {display_path(path)}:{line_number} checked job "
+                    f"{job_label} must not set {control_field}: {stripped}"
+                )
+                continue
+            if re.match(r"^      -(?:\s+.*)?$", line):
+                flush_step(path, step_lines)
+                step_lines = [(line_number, line)]
+                continue
+            if step_lines and (line.startswith("        ") or not stripped):
+                step_lines.append((line_number, line))
+                continue
+            flush_step(path, step_lines)
+            step_lines = []
+        flush_step(path, step_lines)
+    return errors
+
+
+def formal_workflow_job_entrypoint_errors(
+    contracts: tuple[
+        tuple[
+            Path,
+            tuple[str, ...],
+            str,
+            tuple[str, ...],
+            tuple[tuple[str, str], ...],
+        ],
+        ...,
+    ] = FORMAL_WORKFLOW_JOB_ENTRYPOINT_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow proof commands leave formal jobs."""
+
+    errors: list[str] = []
+    for path, job_names, owner, required_commands, ordered_pairs in contracts:
+        active_commands = workflow_job_active_command_lines(path, job_names)
+        errors.extend(
+            required_active_command_errors(
+                active_commands, path, required_commands, owner
+            )
+        )
+        errors.extend(
+            active_singleton_command_errors(
+                active_commands, path, required_commands, owner
+            )
+        )
+        for first, second in ordered_pairs:
+            errors.extend(
+                active_command_order_errors(
+                    active_commands, path, first, second, owner
+                )
+            )
+    return errors
+
+
+def formal_ci_singleton_command_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]], ...
+    ] = FORMAL_CI_SINGLETON_COMMAND_CONTRACTS,
+) -> list[str]:
+    """Return errors when CI proof scripts duplicate singleton evidence commands."""
+
+    errors: list[str] = []
+    for path, owner, commands in contracts:
+        errors.extend(
+            active_singleton_command_errors(
+                active_command_lines(path), path, commands, owner
+            )
+        )
+    return errors
 
 
 def required_command_errors(
@@ -17172,11 +23198,11 @@ def required_command_errors(
     commands: tuple[str, ...],
     owner: str,
 ) -> list[str]:
-    text = read_text(path)
+    active_commands = {command_text for _, command_text in active_command_lines(path)}
     return [
         f"{owner} {display_path(path)} is missing command: {command}"
         for command in commands
-        if command not in text
+        if command not in active_commands
     ]
 
 
@@ -17193,19 +23219,190 @@ def required_text_errors(
     ]
 
 
+def shell_logical_commands(path: Path) -> list[tuple[int, str]]:
+    """Return shell commands with trailing-backslash continuations flattened."""
+
+    commands: list[tuple[int, str]] = []
+    parts: list[str] = []
+    start_line = 0
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        stripped = line.strip()
+        if not parts and (not stripped or stripped.startswith("#")):
+            continue
+        if not parts:
+            start_line = line_number
+        if stripped.endswith("\\"):
+            parts.append(stripped[:-1].rstrip())
+            continue
+        parts.append(stripped)
+        command = " ".join(part for part in parts if part)
+        if command:
+            commands.append((start_line, command))
+        parts = []
+    if parts:
+        command = " ".join(part for part in parts if part)
+        if command:
+            commands.append((start_line, command))
+    return commands
+
+
+def apalache_invocation_wrapper_errors(
+    apalache_runner: Path = APALACHE_RUNNER,
+) -> list[str]:
+    errors: list[str] = []
+    for line_number, command in shell_logical_commands(apalache_runner):
+        if not APALACHE_PROOF_INVOCATION_RE.search(command):
+            continue
+        if command.startswith("run_with_expected_status "):
+            continue
+        errors.append(
+            f"Apalache runner invocation {display_path(apalache_runner)}:"
+            f"{line_number} must route proof command through "
+            f"run_with_expected_status: {command}"
+        )
+    return errors
+
+
+def command_index(
+    commands: list[tuple[int, str]],
+    predicate: Callable[[str], bool],
+    *,
+    start: int = 0,
+    stop: int | None = None,
+) -> int:
+    if stop is None:
+        stop = len(commands)
+    for index in range(start, stop):
+        if predicate(commands[index][1]):
+            return index
+    return -1
+
+
+def tlc_invocation_status_capture_errors(
+    tlc_runner: Path = TLC_RUNNER,
+) -> list[str]:
+    commands = shell_logical_commands(tlc_runner)
+    java_commands = [
+        (index, line_number, command)
+        for index, (line_number, command) in enumerate(commands)
+        if TLC_PROOF_INVOCATION_RE.search(command)
+    ]
+    if len(java_commands) != 1:
+        return [
+            f"TLC runner invocation {display_path(tlc_runner)} must have "
+            f"exactly one status-captured TLC java command, found "
+            f"{len(java_commands)}"
+        ]
+
+    java_index, line_number, java_command = java_commands[0]
+    set_plus_index = command_index(
+        commands,
+        lambda command: command == "set +e",
+        stop=java_index,
+    )
+    tee_index = command_index(
+        commands,
+        lambda command: command == ') 2>&1 | tee "$log_file"',
+        start=java_index + 1,
+    )
+    status_index = command_index(
+        commands,
+        lambda command: command == "tlc_status=${PIPESTATUS[0]}",
+        start=java_index + 1,
+    )
+    set_minus_index = command_index(
+        commands,
+        lambda command: command == "set -e",
+        start=java_index + 1,
+    )
+    expected_branch_index = command_index(
+        commands,
+        lambda command: command == 'if [[ "$expect_failure" -eq 1 ]]; then',
+        start=java_index + 1,
+    )
+    ordered = (
+        set_plus_index != -1
+        and tee_index != -1
+        and status_index != -1
+        and set_minus_index != -1
+        and expected_branch_index != -1
+        and set_plus_index < java_index < tee_index < status_index
+        and status_index < set_minus_index < expected_branch_index
+    )
+    if ordered:
+        return []
+    return [
+        f"TLC runner invocation {display_path(tlc_runner)}:{line_number} "
+        "must run under set +e, pipe output to $log_file, capture "
+        "tlc_status=${PIPESTATUS[0]}, restore set -e, and only then enter "
+        f"the expected-failure branch: {java_command}"
+    ]
+
+
 def command_order_errors(
     path: Path,
     first: str,
     second: str,
     owner: str,
 ) -> list[str]:
-    text = read_text(path)
-    first_index = text.find(first)
-    second_index = text.find(second)
+    active_commands = active_command_lines(path)
+    first_index = next(
+        (
+            index
+            for index, (_, command_text) in enumerate(active_commands)
+            if active_command_matches(command_text, first)
+        ),
+        -1,
+    )
+    second_index = next(
+        (
+            index
+            for index, (_, command_text) in enumerate(active_commands)
+            if active_command_matches(command_text, second)
+        ),
+        -1,
+    )
     if first_index == -1 or second_index == -1 or first_index < second_index:
         return []
     return [
         f"{owner} {display_path(path)} must run {first!r} before {second!r}"
+    ]
+
+
+def command_after_all_errors(
+    path: Path,
+    command: str,
+    earlier_prefixes: tuple[str, ...],
+    owner: str,
+) -> list[str]:
+    active_commands = active_command_lines(path)
+    command_indices = [
+        index
+        for index, (_, command_text) in enumerate(active_commands)
+        if command_text == command
+    ]
+    if not command_indices:
+        return []
+    if len(command_indices) > 1:
+        return [
+            f"{owner} {display_path(path)} must run {command!r} exactly once"
+        ]
+    command_index = command_indices[0]
+    later_commands = [
+        f"{line_number}: {command_text}"
+        for index, (line_number, command_text) in enumerate(active_commands)
+        if index > command_index
+        and any(
+            active_command_matches(command_text, prefix)
+            for prefix in earlier_prefixes
+        )
+    ]
+    if not later_commands:
+        return []
+    return [
+        f"{owner} {display_path(path)} must run {command!r} after all "
+        f"{', '.join(repr(prefix) for prefix in earlier_prefixes)} commands:\n"
+        + format_items(later_commands)
     ]
 
 
@@ -17248,6 +23445,57 @@ def version_values_mismatch_errors(
     ]
 
 
+def active_version_values_mismatch_errors(
+    path: Path,
+    pattern: re.Pattern[str],
+    expected: str,
+    label: str,
+) -> list[str]:
+    return active_command_version_values_mismatch_errors(
+        active_command_lines(path), path, pattern, expected, label
+    )
+
+
+def active_command_version_values_mismatch_errors(
+    active_commands: list[tuple[int, str]],
+    path: Path,
+    pattern: re.Pattern[str],
+    expected: str,
+    label: str,
+) -> list[str]:
+    values: list[str] = []
+    for _, command_text in active_commands:
+        first_token = command_text.split(maxsplit=1)[0]
+        if first_token.endswith(":") or first_token in {"echo", "printf"}:
+            continue
+        values.extend(pattern.findall(command_text))
+    if not values:
+        return [
+            f"{label} {display_path(path)} does not declare Apalache {expected}"
+        ]
+    return [
+        f"{label} {display_path(path)} uses Apalache {value}, expected {expected}"
+        for value in sorted_unique(values)
+        if value != expected
+    ]
+
+
+def workflow_job_version_values_mismatch_errors(
+    path: Path,
+    job_names: tuple[str, ...],
+    pattern: re.Pattern[str],
+    expected: str,
+    label: str,
+) -> list[str]:
+    return active_command_version_values_mismatch_errors(
+        workflow_job_active_command_lines(path, job_names),
+        path,
+        pattern,
+        expected,
+        label,
+    )
+
+
 def apalache_version_pin_errors() -> list[str]:
     runner_version, errors = single_regex_value(
         APALACHE_RUNNER, RUNNER_APALACHE_VERSION_RE, "Apalache runner"
@@ -17255,12 +23503,45 @@ def apalache_version_pin_errors() -> list[str]:
     if runner_version is None:
         return errors
 
+    active_pinned_sources: tuple[
+        tuple[Path, tuple[str, ...], re.Pattern[str], str],
+        ...,
+    ] = (
+        (
+            PR_WORKFLOW,
+            ("sumeragi_formal",),
+            INSTALL_APALACHE_COMMAND_VERSION_RE,
+            "PR formal workflow job install command",
+        ),
+        (
+            PR_WORKFLOW,
+            ("sumeragi_formal",),
+            APALACHE_TOOLCHAIN_PATH_VERSION_RE,
+            "PR formal workflow job toolchain path",
+        ),
+        (
+            NIGHTLY_WORKFLOW,
+            ("frontier-nightly",),
+            INSTALL_APALACHE_COMMAND_VERSION_RE,
+            "nightly formal workflow job install command",
+        ),
+        (
+            NIGHTLY_WORKFLOW,
+            ("frontier-nightly",),
+            APALACHE_TOOLCHAIN_PATH_VERSION_RE,
+            "nightly formal workflow job toolchain path",
+        ),
+    )
+    for path, job_names, pattern, label in active_pinned_sources:
+        errors.extend(
+            workflow_job_version_values_mismatch_errors(
+                path, job_names, pattern, runner_version, label
+            )
+        )
+
     pinned_sources: tuple[tuple[Path, re.Pattern[str], str], ...] = (
         (TLC_RUNNER, RUNNER_APALACHE_VERSION_RE, "TLC runner"),
         (ROOT_DIR / "scripts" / "formal" / "install_apalache.sh", INSTALLER_APALACHE_VERSION_RE, "Apalache installer"),
-        (PR_WORKFLOW, INSTALL_APALACHE_COMMAND_VERSION_RE, "PR workflow install command"),
-        (PR_WORKFLOW, APALACHE_TOOLCHAIN_PATH_VERSION_RE, "PR workflow toolchain path"),
-        (NIGHTLY_WORKFLOW, INSTALL_APALACHE_COMMAND_VERSION_RE, "nightly workflow install command"),
         (README, INSTALL_APALACHE_COMMAND_VERSION_RE, "formal README install command"),
         (README, APALACHE_TOOLCHAIN_PATH_VERSION_RE, "formal README toolchain path"),
         (README, APALACHE_DOCKER_IMAGE_VERSION_RE, "formal README Docker image"),
@@ -17307,6 +23588,7 @@ def runner_invocation_errors(
             "Apalache runner invocation",
         )
     )
+    errors.extend(apalache_invocation_wrapper_errors(apalache_runner))
     errors.extend(
         required_text_errors(
             tlc_runner,
@@ -17314,6 +23596,7 @@ def runner_invocation_errors(
             "TLC runner invocation",
         )
     )
+    errors.extend(tlc_invocation_status_capture_errors(tlc_runner))
     return errors
 
 
@@ -17322,7 +23605,7 @@ def workflow_entrypoint_errors() -> list[str]:
     errors.extend(
         required_command_errors(
             PR_WORKFLOW,
-            (FORMAL_BASELINE_COMMAND,),
+            (FORMAL_APALACHE_VERSION_COMMAND, FORMAL_BASELINE_COMMAND),
             "PR workflow",
         )
     )
@@ -17330,6 +23613,14 @@ def workflow_entrypoint_errors() -> list[str]:
         command_order_errors(
             PR_WORKFLOW,
             INSTALL_APALACHE_COMMAND_PREFIX,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            "PR workflow",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            PR_WORKFLOW,
+            FORMAL_APALACHE_VERSION_COMMAND,
             FORMAL_BASELINE_COMMAND,
             "PR workflow",
         )
@@ -17337,7 +23628,11 @@ def workflow_entrypoint_errors() -> list[str]:
     errors.extend(
         required_command_errors(
             NIGHTLY_WORKFLOW,
-            (FORMAL_BASELINE_COMMAND, FRONTIER_NIGHTLY_COMMAND),
+            (
+                FORMAL_APALACHE_VERSION_COMMAND,
+                FORMAL_BASELINE_COMMAND,
+                FRONTIER_NIGHTLY_COMMAND,
+            ),
             "nightly workflow",
         )
     )
@@ -17345,6 +23640,14 @@ def workflow_entrypoint_errors() -> list[str]:
         command_order_errors(
             NIGHTLY_WORKFLOW,
             INSTALL_APALACHE_COMMAND_PREFIX,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            "nightly workflow",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            NIGHTLY_WORKFLOW,
+            FORMAL_APALACHE_VERSION_COMMAND,
             FORMAL_BASELINE_COMMAND,
             "nightly workflow",
         )
@@ -17360,7 +23663,20 @@ def workflow_entrypoint_errors() -> list[str]:
     errors.extend(
         required_command_errors(
             FAST_CI,
-            (FORMAL_COVERAGE_COMMAND, FORMAL_EXPECTED_FAILURE_COMMAND),
+            (
+                FORMAL_COVERAGE_COMMAND,
+                FORMAL_APALACHE_VERSION_COMMAND,
+                FORMAL_EXPECTED_FAILURE_COMMAND,
+                FORMAL_BASELINE_SUCCESS_COMMAND,
+            ),
+            "formal baseline script",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            FAST_CI,
+            FORMAL_COVERAGE_COMMAND,
+            FORMAL_APALACHE_VERSION_COMMAND,
             "formal baseline script",
         )
     )
@@ -17370,6 +23686,109 @@ def workflow_entrypoint_errors() -> list[str]:
             FORMAL_COVERAGE_COMMAND,
             APALACHE_COMMAND_PREFIX,
             "formal baseline script",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            FAST_CI,
+            FORMAL_COVERAGE_COMMAND,
+            TLC_COMMAND_PREFIX,
+            "formal baseline script",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            FAST_CI,
+            FORMAL_COVERAGE_COMMAND,
+            FORMAL_EXPECTED_FAILURE_COMMAND,
+            "formal baseline script",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            FAST_CI,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            APALACHE_COMMAND_PREFIX,
+            "formal baseline script",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            FAST_CI,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            TLC_COMMAND_PREFIX,
+            "formal baseline script",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            FAST_CI,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            FORMAL_EXPECTED_FAILURE_COMMAND,
+            "formal baseline script",
+        )
+    )
+    errors.extend(
+        command_after_all_errors(
+            FAST_CI,
+            FORMAL_EXPECTED_FAILURE_COMMAND,
+            (APALACHE_COMMAND_PREFIX, TLC_COMMAND_PREFIX),
+            "formal baseline script",
+        )
+    )
+    errors.extend(
+        command_after_all_errors(
+            FAST_CI,
+            FORMAL_BASELINE_SUCCESS_COMMAND,
+            (
+                APALACHE_COMMAND_PREFIX,
+                TLC_COMMAND_PREFIX,
+                FORMAL_EXPECTED_FAILURE_COMMAND,
+            ),
+            "formal baseline script",
+        )
+    )
+    errors.extend(
+        required_command_errors(
+            EXPECTED_FAILURE_CI,
+            (
+                FORMAL_COVERAGE_COMMAND,
+                FORMAL_APALACHE_VERSION_COMMAND,
+                FORMAL_EXPECTED_FAILURE_SUCCESS_COMMAND,
+            ),
+            "formal expected-failure script",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            EXPECTED_FAILURE_CI,
+            FORMAL_COVERAGE_COMMAND,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            "formal expected-failure script",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            EXPECTED_FAILURE_CI,
+            FORMAL_COVERAGE_COMMAND,
+            APALACHE_COMMAND_PREFIX,
+            "formal expected-failure script",
+        )
+    )
+    errors.extend(
+        command_order_errors(
+            EXPECTED_FAILURE_CI,
+            FORMAL_APALACHE_VERSION_COMMAND,
+            APALACHE_COMMAND_PREFIX,
+            "formal expected-failure script",
+        )
+    )
+    errors.extend(
+        command_after_all_errors(
+            EXPECTED_FAILURE_CI,
+            FORMAL_EXPECTED_FAILURE_SUCCESS_COMMAND,
+            (APALACHE_COMMAND_PREFIX, TLC_COMMAND_PREFIX),
+            "formal expected-failure script",
         )
     )
     return errors
@@ -17453,6 +23872,51 @@ def expected_failure_default_errors(
         errors.append(
             f"{runner_name} runner {display_path(path)}:{values[0][0]} must "
             "set top-level expect_failure default to 0"
+        )
+    return errors
+
+
+def tlc_constraint_default_errors(path: Path = TLC_RUNNER) -> list[str]:
+    """Return errors for unsafe global TLC constraint defaults."""
+    lines = read_text(path).splitlines()
+    starts = [index for index, line in enumerate(lines) if line == 'case "$mode" in']
+    if len(starts) != 1:
+        return []
+    start = starts[0]
+    try:
+        end = next(
+            index for index, line in enumerate(lines[start + 1 :], start + 1)
+            if line == "esac"
+        )
+    except StopIteration:
+        return []
+
+    errors: list[str] = []
+    values: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        if start <= index <= end:
+            continue
+        if not TLC_CONSTRAINT_MUTATION_RE.match(line):
+            continue
+        match = TLC_CONSTRAINT_ASSIGN_RE.match(line)
+        line_number = index + 1
+        if match is None:
+            errors.append(
+                f"TLC runner {display_path(path)}:{line_number} has "
+                f"malformed top-level tlc_constraint assignment: {line.strip()}"
+            )
+            continue
+        values.append((line_number, match.group(1)))
+
+    if len(values) != 1:
+        errors.append(
+            f"TLC runner {display_path(path)} must declare exactly one "
+            f'top-level tlc_constraint="" default, found {len(values)}'
+        )
+    elif values[0][1] != "":
+        errors.append(
+            f"TLC runner {display_path(path)}:{values[0][0]} must set "
+            'top-level tlc_constraint default to ""'
         )
     return errors
 
@@ -17746,6 +24210,1295 @@ def mutation_cfg_equivalence_errors(
     return errors
 
 
+def mutation_cfg_type_invariant_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when mutation CFGs omit TypeInvariant."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        if "_bug_" not in cfg_path.stem:
+            continue
+        check_kinds, cfg_errors = cfg_check_operator_kinds(cfg_path)
+        errors.extend(
+            f"{display_path(cfg_path)}: {error}" for error in cfg_errors
+        )
+        if cfg_errors:
+            continue
+        kind = check_kinds.get("TypeInvariant")
+        if kind is None:
+            errors.append(
+                f"{display_path(cfg_path)} must check INVARIANT "
+                "TypeInvariant for mutation coverage"
+            )
+        elif kind != "INVARIANT":
+            errors.append(
+                f"{display_path(cfg_path)} checks {kind} TypeInvariant, "
+                "expected INVARIANT"
+            )
+    return errors
+
+
+def mutation_cfg_semantic_check_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+) -> list[str]:
+    """Return errors when mutation CFGs have weak mutation-detecting checks."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        if "_bug_" not in cfg_path.stem:
+            continue
+        references, cfg_errors = cfg_operator_references(cfg_path)
+        errors.extend(
+            f"{display_path(cfg_path)}: {error}" for error in cfg_errors
+        )
+        if cfg_errors:
+            continue
+        semantic_references = [
+            (line_number, normalized_cfg_check_directive(directive), operator)
+            for line_number, directive, operator in references
+            if directive in CFG_CHECK_DIRECTIVES and operator != "TypeInvariant"
+        ]
+        if not semantic_references:
+            errors.append(
+                f"{display_path(cfg_path)} must check at least one "
+                "non-TypeInvariant invariant/property for mutation coverage"
+            )
+            continue
+
+        module_path = boolean_bug_selector_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in boolean_bug_selector_module_candidates(
+                    cfg_path, spec_dir
+                )
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has semantic proof targets but no "
+                f"matching TLA module; tried {candidates}"
+            )
+            continue
+
+        definitions = tla_operator_definitions(module_path)
+        signatures = tla_operator_signatures(module_path)
+        trivial_chains = tla_trivial_operator_chains(module_path)
+        for line_number, directive, operator in semantic_references:
+            reference_kind = f"{directive} semantic check {operator}"
+            if operator not in definitions:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} references "
+                    f"{reference_kind}, but {display_path(module_path)} "
+                    "does not define it"
+                )
+                continue
+            signature = signatures.get(operator)
+            if signature is not None and signature[1] != 0:
+                definition_line, arity = signature
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} references "
+                    f"{reference_kind}, but "
+                    f"{display_path(module_path)}:{definition_line} defines "
+                    f"it with arity {arity}; mutation proof targets must be "
+                    "zero-arity operators"
+                )
+                continue
+
+            chain = trivial_chains.get(operator)
+            if chain is None:
+                continue
+            definition_line = chain[0][1]
+            value = chain[-1][2]
+            if len(chain) == 1 and value in {"TRUE", "FALSE"}:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} references "
+                    f"{reference_kind}, but "
+                    f"{display_path(module_path)}:{definition_line} defines "
+                    f"it as literal {value}"
+                )
+                continue
+            if len(chain) == 1 and value == "TypeInvariant":
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} references "
+                    f"{reference_kind}, but "
+                    f"{display_path(module_path)}:{definition_line} aliases "
+                    "TypeInvariant directly"
+                )
+                continue
+
+            chain_text = " -> ".join(
+                f"{name}@{display_path(module_path)}:{chain_line}"
+                for name, chain_line, _ in chain
+            )
+            terminal = f"literal {value}" if value in {"TRUE", "FALSE"} else value
+            errors.append(
+                f"{display_path(cfg_path)}:{line_number} references "
+                f"{reference_kind}, but {chain_text} resolves to {terminal}"
+            )
+    return errors
+
+
+def mutation_cfg_behavior_errors(
+    spec_dir: Path = SPEC_DIR,
+    cfg_glob: str = "*_bug_*.cfg",
+    custom_init_operators: dict[str, str] = MUTATION_CFG_CUSTOM_INIT_OPERATORS,
+) -> list[str]:
+    """Return errors when mutation CFGs drift from expected behavior bindings."""
+
+    errors: list[str] = []
+    for cfg_path in sorted(spec_dir.glob(cfg_glob)):
+        if "_bug_" not in cfg_path.stem:
+            continue
+        behavior_entries, cfg_errors = cfg_behavior_operator_references(cfg_path)
+        errors.extend(
+            f"{display_path(cfg_path)}: {error}" for error in cfg_errors
+        )
+        if cfg_errors:
+            continue
+
+        specification_entries = behavior_entries["SPECIFICATION"]
+        init_entries = behavior_entries["INIT"]
+        next_entries = behavior_entries["NEXT"]
+        is_progress_mutation = "_progress_bug_" in cfg_path.stem
+
+        if specification_entries:
+            if not is_progress_mutation:
+                for line_number, operator in specification_entries:
+                    errors.append(
+                        f"{display_path(cfg_path)}:{line_number} binds "
+                        f"SPECIFICATION {operator}, expected INIT "
+                        "and NEXT for mutation coverage"
+                    )
+            if init_entries or next_entries:
+                for line_number, operator in init_entries:
+                    errors.append(
+                        f"{display_path(cfg_path)}:{line_number} mixes "
+                        f"INIT {operator} with SPECIFICATION behavior"
+                    )
+                for line_number, operator in next_entries:
+                    errors.append(
+                        f"{display_path(cfg_path)}:{line_number} mixes "
+                        f"NEXT {operator} with SPECIFICATION behavior"
+                    )
+            if len(specification_entries) != 1:
+                first_line = (
+                    specification_entries[0][0]
+                    if specification_entries
+                    else "none"
+                )
+                errors.append(
+                    f"{display_path(cfg_path)} has "
+                    f"{len(specification_entries)} SPECIFICATION bindings; "
+                    f"expected exactly one for progress mutation coverage "
+                    f"(first: {first_line})"
+                )
+            for line_number, operator in specification_entries:
+                if operator.endswith("ProgressSpec"):
+                    continue
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} binds "
+                    f"SPECIFICATION {operator}, expected a *ProgressSpec "
+                    "operator for progress mutation coverage"
+                )
+            continue
+
+        if is_progress_mutation:
+            errors.append(
+                f"{display_path(cfg_path)} must bind a SPECIFICATION "
+                "*ProgressSpec operator for progress mutation coverage"
+            )
+            continue
+
+        expected_init = custom_init_operators.get(cfg_path.name, "Init")
+        if len(init_entries) != 1:
+            errors.append(
+                f"{display_path(cfg_path)} must bind exactly one INIT "
+                f"{expected_init} for mutation coverage"
+            )
+        else:
+            line_number, operator = init_entries[0]
+            if operator != expected_init:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} binds INIT "
+                    f"{operator}, expected {expected_init} for mutation "
+                    "coverage"
+                )
+
+        if len(next_entries) != 1:
+            errors.append(
+                f"{display_path(cfg_path)} must bind exactly one NEXT Next "
+                "for mutation coverage"
+            )
+        else:
+            line_number, operator = next_entries[0]
+            if operator != "Next":
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} binds NEXT "
+                    f"{operator}, expected Next for mutation coverage"
+                )
+    return errors
+
+
+def mutation_cfg_custom_init_exception_errors(
+    spec_dir: Path = SPEC_DIR,
+    custom_init_operators: dict[str, str] = MUTATION_CFG_CUSTOM_INIT_OPERATORS,
+) -> list[str]:
+    """Return errors when custom mutation INIT exceptions go stale."""
+
+    errors: list[str] = []
+    for cfg_name, expected_init in sorted(custom_init_operators.items()):
+        if not cfg_name.endswith(".cfg") or "_bug_" not in cfg_name:
+            errors.append(
+                f"{cfg_name} is not a mutation CFG filename for custom "
+                "INIT exception"
+            )
+            continue
+        cfg_path = spec_dir / cfg_name
+        if not cfg_path.is_file():
+            errors.append(
+                f"{display_path(cfg_path)} is missing for custom INIT "
+                "exception"
+            )
+            continue
+        if "_progress_bug_" in cfg_path.stem:
+            errors.append(
+                f"{display_path(cfg_path)} is a progress mutation CFG; "
+                "custom INIT exceptions apply only to INIT/NEXT mutation "
+                "coverage"
+            )
+        if expected_init == "Init":
+            errors.append(
+                f"{display_path(cfg_path)} custom INIT exception is "
+                "redundant with default Init"
+            )
+            continue
+
+        behavior_entries, cfg_errors = cfg_behavior_operator_references(cfg_path)
+        errors.extend(
+            f"{display_path(cfg_path)}: {error}" for error in cfg_errors
+        )
+        if cfg_errors:
+            continue
+        init_entries = behavior_entries["INIT"]
+        next_entries = behavior_entries["NEXT"]
+        if len(init_entries) != 1:
+            errors.append(
+                f"{display_path(cfg_path)} custom INIT exception expects "
+                f"exactly one INIT {expected_init}, found {len(init_entries)}"
+            )
+        else:
+            line_number, operator = init_entries[0]
+            if operator != expected_init:
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} custom INIT "
+                    f"exception expects {expected_init}, but CFG binds "
+                    f"INIT {operator}"
+                )
+        if len(next_entries) != 1:
+            errors.append(
+                f"{display_path(cfg_path)} custom INIT exception expects "
+                f"exactly one NEXT Next, found {len(next_entries)}"
+            )
+        else:
+            line_number, operator = next_entries[0]
+            if operator != "Next":
+                errors.append(
+                    f"{display_path(cfg_path)}:{line_number} custom INIT "
+                    f"exception expects NEXT Next, but CFG binds NEXT "
+                    f"{operator}"
+                )
+
+        module_path = boolean_bug_selector_module_path(cfg_path, spec_dir)
+        if module_path is None:
+            candidates = ", ".join(
+                str(display_path(candidate))
+                for candidate in boolean_bug_selector_module_candidates(
+                    cfg_path, spec_dir
+                )
+            )
+            errors.append(
+                f"{display_path(cfg_path)} has custom INIT exception but no "
+                f"matching TLA module; tried {candidates}"
+            )
+            continue
+
+        definitions = tla_operator_definitions(module_path)
+        if expected_init not in definitions:
+            errors.append(
+                f"{display_path(cfg_path)} custom INIT exception references "
+                f"{expected_init}, but {display_path(module_path)} does not "
+                "define it"
+            )
+            continue
+        signature = tla_operator_signatures(module_path).get(expected_init)
+        if signature is None or signature[1] == 0:
+            continue
+        definition_line, arity = signature
+        errors.append(
+            f"{display_path(cfg_path)} custom INIT exception references "
+            f"{expected_init}, but {display_path(module_path)}:"
+            f"{definition_line} defines it with arity {arity}; custom "
+            "INIT exceptions must target zero-arity operators"
+        )
+    return errors
+
+
+def cfg_required_check_contract_errors(
+    cfg_path: Path,
+    required_checks: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a CFG file omits or downgrades required proof checks."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} checks"
+        ]
+
+    check_kinds, cfg_errors = cfg_check_operator_kinds(cfg_path)
+    if cfg_errors:
+        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+
+    errors: list[str] = []
+    for operator, expected_kind in required_checks:
+        kind = check_kinds.get(operator)
+        if kind is None:
+            errors.append(
+                f"{display_path(cfg_path)} must check {expected_kind} {operator} "
+                f"for {coverage_label}"
+            )
+        elif kind != expected_kind:
+            errors.append(
+                f"{display_path(cfg_path)} checks {kind} {operator}, "
+                f"expected {expected_kind}"
+            )
+    return errors
+
+
+def cfg_required_exact_check_set_contract_errors(
+    cfg_path: Path,
+    required_checks: tuple[tuple[str, str], ...],
+    coverage_label: str,
+) -> list[str]:
+    """Return errors when a sentinel CFG proof-check set drifts."""
+
+    if not cfg_path.exists():
+        return [
+            f"{display_path(cfg_path)} is missing required {coverage_label} "
+            "check set"
+        ]
+
+    check_kinds, cfg_errors = cfg_check_operator_kinds(cfg_path)
+    if cfg_errors:
+        return [f"{display_path(cfg_path)}: {error}" for error in cfg_errors]
+
+    errors = cfg_required_check_contract_errors(
+        cfg_path,
+        required_checks,
+        coverage_label,
+    )
+    expected = {operator: kind for operator, kind in required_checks}
+    expected_label = ", ".join(
+        f"{kind} {operator}" for operator, kind in required_checks
+    )
+    for operator in sorted(check_kinds):
+        if operator in expected:
+            continue
+        errors.append(
+            f"{display_path(cfg_path)} checks unexpected "
+            f"{check_kinds[operator]} {operator}; expected only "
+            f"{expected_label} for {coverage_label}"
+        )
+    return errors
+
+
+def top_level_fast_cfg_check_errors(
+    cfg_path: Path = SUMERAGI_FAST_CFG,
+    required_checks: tuple[tuple[str, str], ...] = SUMERAGI_FAST_CFG_REQUIRED_CHECKS,
+) -> list[str]:
+    """Return errors if the root fast CFG stops checking its sentinel surface."""
+
+    return cfg_required_check_contract_errors(
+        cfg_path,
+        required_checks,
+        "top-level fast sentinel coverage",
+    )
+
+
+def top_level_cfg_check_set_errors(
+    cfg_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = SUMERAGI_SENTINEL_TOP_LEVEL_CFG_EXACT_CHECKS,
+) -> list[str]:
+    """Return errors if top-level sentinel CFG check sets drift."""
+
+    errors: list[str] = []
+    for cfg_path, required_checks, coverage_label in cfg_contracts:
+        errors.extend(
+            cfg_required_exact_check_set_contract_errors(
+                cfg_path,
+                required_checks,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def projection_clean_cfg_errors(
+    fast_cfg: Path = PROJECTION_FAST_CFG,
+    progress_cfg: Path = PROJECTION_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean projection CFGs stop checking the proof surface."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "projection fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "projection fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+        "projection fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "projection progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "projection progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        PROJECTION_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "projection progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS,
+        "projection progress coverage",
+    )
+
+
+def byzantine_top_cfg_errors(
+    cfg_contracts: tuple[
+        tuple[Path, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = BYZANTINE_TOP_CFG_REQUIRED_CHECKS,
+) -> list[str]:
+    """Return errors if top-level Byzantine CFGs stop naming bridge checks."""
+
+    errors: list[str] = []
+    for cfg_path, required_checks, coverage_label in cfg_contracts:
+        behavior_contract = BYZANTINE_TOP_CFG_REQUIRED_BEHAVIOR_BY_NAME.get(
+            cfg_path.name
+        )
+        if behavior_contract is not None:
+            required_behavior, behavior_label = behavior_contract
+            errors.extend(
+                cfg_required_behavior_contract_errors(
+                    cfg_path,
+                    required_behavior,
+                    behavior_label,
+                )
+            )
+        constant_contract = BYZANTINE_TOP_CFG_REQUIRED_CONSTANT_VALUES_BY_NAME.get(
+            cfg_path.name
+        )
+        if constant_contract is not None:
+            required_values, constant_label = constant_contract
+            errors.extend(
+                cfg_required_constant_values_contract_errors(
+                    cfg_path,
+                    required_values,
+                    constant_label,
+                )
+            )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                required_checks,
+                coverage_label,
+            )
+        )
+    return errors
+
+
+def byzantine_interleaving_clean_cfg_errors(
+    fast_cfg: Path = BYZANTINE_INTERLEAVING_FAST_CFG,
+    progress_cfg: Path = BYZANTINE_INTERLEAVING_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean source Byzantine CFGs drop proof checks."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "Byzantine interleaving fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "Byzantine interleaving fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+        "Byzantine interleaving fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "Byzantine interleaving progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "Byzantine interleaving progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "Byzantine interleaving progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS,
+        "Byzantine interleaving progress coverage",
+    )
+
+
+def direct_delivered_first_clean_cfg_errors(
+    fast_cfg: Path = DIRECT_DELIVERED_FIRST_FAST_CFG,
+    progress_cfg: Path = DIRECT_DELIVERED_FIRST_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean delivered-first CFGs drop proof checks."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "direct delivered-first fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "direct delivered-first fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        DIRECT_DELIVERED_FIRST_FAST_CFG_REQUIRED_CHECKS,
+        "direct delivered-first fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "direct delivered-first progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "direct delivered-first progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "direct delivered-first progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_CHECKS,
+        "direct delivered-first progress coverage",
+    )
+
+
+def direct_vote_first_clean_cfg_errors(
+    fast_cfg: Path = DIRECT_VOTE_FIRST_FAST_CFG,
+    progress_cfg: Path = DIRECT_VOTE_FIRST_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean vote-first CFGs drop proof checks."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "direct vote-first fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "direct vote-first fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        DIRECT_VOTE_FIRST_FAST_CFG_REQUIRED_CHECKS,
+        "direct vote-first fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "direct vote-first progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "direct vote-first progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "direct vote-first progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_CHECKS,
+        "direct vote-first progress coverage",
+    )
+
+
+def direct_interleaving_clean_cfg_errors(
+    fast_cfg: Path = DIRECT_INTERLEAVING_FAST_CFG,
+    progress_cfg: Path = DIRECT_INTERLEAVING_PROGRESS_CFG,
+) -> list[str]:
+    """Return errors if clean direct interleaving CFGs drop proof checks."""
+
+    return cfg_required_behavior_contract_errors(
+        fast_cfg,
+        CLEAN_SAFETY_CFG_REQUIRED_BEHAVIOR,
+        "direct interleaving fast coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        fast_cfg,
+        "Bug",
+        CLEAN_SAFETY_BUG_CONSTANT_VALUE,
+        "direct interleaving fast coverage",
+    ) + cfg_required_check_contract_errors(
+        fast_cfg,
+        DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+        "direct interleaving fast coverage",
+    ) + cfg_required_check_deadlock_contract_errors(
+        progress_cfg,
+        "FALSE",
+        "direct interleaving progress coverage",
+    ) + cfg_required_constant_value_contract_errors(
+        progress_cfg,
+        "Bug",
+        CLEAN_PROGRESS_BUG_CONSTANT_VALUE,
+        "direct interleaving progress coverage",
+    ) + cfg_required_behavior_contract_errors(
+        progress_cfg,
+        DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+        "direct interleaving progress coverage",
+    ) + cfg_required_check_contract_errors(
+        progress_cfg,
+        DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS,
+        "direct interleaving progress coverage",
+    )
+
+
+def source_safety_mutation_cfg_errors(
+    cfg_contracts: tuple[
+        tuple[str, tuple[tuple[str, str], ...], str],
+        ...,
+    ] = SOURCE_SAFETY_MUTATION_CFG_REQUIRED_CHECKS,
+    spec_dir: Path = SPEC_DIR,
+) -> list[str]:
+    """Return errors if source safety mutation CFGs drop proof checks."""
+
+    errors: list[str] = []
+    for cfg_glob, required_checks, coverage_label in cfg_contracts:
+        cfg_paths = sorted(spec_dir.glob(cfg_glob))
+        if not cfg_paths:
+            errors.append(f"no {coverage_label} cfgs matched {cfg_glob}")
+            continue
+        for cfg_path in cfg_paths:
+            errors.extend(
+                cfg_required_inferred_bug_suffix_constant_errors(
+                    cfg_path,
+                    coverage_label,
+                )
+            )
+            errors.extend(
+                cfg_required_behavior_contract_errors(
+                    cfg_path,
+                    SAFETY_MUTATION_CFG_REQUIRED_BEHAVIOR,
+                    coverage_label,
+                )
+            )
+            errors.extend(
+                cfg_required_check_contract_errors(
+                    cfg_path,
+                    required_checks,
+                    coverage_label,
+                )
+            )
+    return errors
+
+
+def direct_interleaving_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if direct interleaving progress mutation CFGs drop checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(SPEC_DIR.glob(DIRECT_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB))
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no direct interleaving progress mutation cfgs matched "
+            f"{DIRECT_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "direct interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+                "direct interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "direct interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                DIRECT_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "direct interleaving progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def direct_delivered_first_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if delivered-first progress mutation CFGs drop checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_CFG_GLOB)
+        )
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no direct delivered-first progress mutation cfgs matched "
+            f"{DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "direct delivered-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+                "direct delivered-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "direct delivered-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "direct delivered-first progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def direct_vote_first_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if vote-first progress mutation CFGs drop checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(SPEC_DIR.glob(DIRECT_VOTE_FIRST_PROGRESS_MUTATION_CFG_GLOB))
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no direct vote-first progress mutation cfgs matched "
+            f"{DIRECT_VOTE_FIRST_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "direct vote-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+                "direct vote-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "direct vote-first progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                DIRECT_VOTE_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "direct vote-first progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def byzantine_interleaving_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if source Byzantine progress mutation CFGs drop checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(
+            SPEC_DIR.glob(BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB)
+        )
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no Byzantine interleaving progress mutation cfgs matched "
+            f"{BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "Byzantine interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+                "Byzantine interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "Byzantine interleaving progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "Byzantine interleaving progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def projection_mutation_bridge_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if projection mutation CFGs stop checking the full bridge."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(SPEC_DIR.glob(PROJECTION_MUTATION_CFG_GLOB))
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            f"no projection mutation cfgs matched {PROJECTION_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_inferred_bug_suffix_constant_errors(
+                cfg_path,
+                "projection bridge mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                SAFETY_MUTATION_CFG_REQUIRED_BEHAVIOR,
+                "projection bridge mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                PROJECTION_MUTATION_BRIDGE_REQUIRED_CHECKS,
+                "projection bridge mutation coverage",
+            )
+        )
+    return errors
+
+
+def projection_progress_mutation_cfg_errors(
+    cfg_paths: list[Path] | None = None,
+) -> list[str]:
+    """Return errors if projection progress mutation CFGs drop required checks."""
+
+    if cfg_paths is None:
+        cfg_paths = sorted(SPEC_DIR.glob(PROJECTION_PROGRESS_MUTATION_CFG_GLOB))
+
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(
+            "no projection progress mutation cfgs matched "
+            f"{PROJECTION_PROGRESS_MUTATION_CFG_GLOB}"
+        )
+        return errors
+
+    for cfg_path in cfg_paths:
+        errors.extend(
+            cfg_required_check_deadlock_contract_errors(
+                cfg_path,
+                "FALSE",
+                "projection progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_bug_suffix_constant_errors(
+                cfg_path,
+                PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+                "projection progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_behavior_contract_errors(
+                cfg_path,
+                PROJECTION_PROGRESS_CFG_REQUIRED_BEHAVIOR,
+                "projection progress mutation coverage",
+            )
+        )
+        errors.extend(
+            cfg_required_check_contract_errors(
+                cfg_path,
+                PROJECTION_PROGRESS_MUTATION_REQUIRED_CHECKS,
+                "projection progress mutation coverage",
+            )
+        )
+    return errors
+
+
+def mutation_cfg_suffixes(
+    cfg_paths: list[Path],
+    stem_prefix: str,
+    family_label: str,
+) -> tuple[set[str], list[str]]:
+    """Return normalized mutation suffixes for a family of CFG files."""
+
+    suffixes: set[str] = set()
+    errors: list[str] = []
+    if not cfg_paths:
+        errors.append(f"no {family_label} mutation cfgs were found")
+        return suffixes, errors
+
+    for cfg_path in cfg_paths:
+        stem = cfg_path.stem
+        if not stem.startswith(stem_prefix):
+            errors.append(
+                f"{display_path(cfg_path)} does not match expected "
+                f"{family_label} mutation prefix {stem_prefix}"
+            )
+            continue
+        suffix = stem[len(stem_prefix) :]
+        if not suffix:
+            errors.append(
+                f"{display_path(cfg_path)} has an empty {family_label} "
+                "mutation suffix"
+            )
+            continue
+        suffixes.add(suffix)
+    return suffixes, errors
+
+
+def mutation_suffix_set_difference_errors(
+    actual_label: str,
+    actual_suffixes: set[str],
+    expected_label: str,
+    expected_suffixes: set[str],
+) -> list[str]:
+    """Return errors when one mutation suffix family stops matching another."""
+
+    errors: list[str] = []
+    missing_suffixes = sorted_unique(expected_suffixes - actual_suffixes)
+    if missing_suffixes:
+        errors.append(
+            f"{actual_label} mutation CFGs are missing {expected_label} "
+            "mutation suffixes:\n"
+            + format_items(missing_suffixes)
+        )
+
+    extra_suffixes = sorted_unique(actual_suffixes - expected_suffixes)
+    if extra_suffixes:
+        errors.append(
+            f"{actual_label} mutation CFGs have suffixes absent from "
+            f"{expected_label}:\n"
+            + format_items(extra_suffixes)
+        )
+    return errors
+
+
+def direct_mutation_family_alignment_errors(
+    delivered_cfg_paths: list[Path] | None = None,
+    delivered_progress_cfg_paths: list[Path] | None = None,
+    vote_cfg_paths: list[Path] | None = None,
+    vote_progress_cfg_paths: list[Path] | None = None,
+    interleaving_cfg_paths: list[Path] | None = None,
+    interleaving_progress_cfg_paths: list[Path] | None = None,
+    delivered_progress_safety_only_mutations: frozenset[str] = (
+        DIRECT_DELIVERED_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS
+    ),
+    vote_progress_safety_only_mutations: frozenset[str] = (
+        DIRECT_VOTE_FIRST_PROGRESS_SAFETY_ONLY_MUTATIONS
+    ),
+    interleaving_progress_safety_only_mutations: frozenset[str] = (
+        DIRECT_INTERLEAVING_PROGRESS_SAFETY_ONLY_MUTATIONS
+    ),
+) -> list[str]:
+    """Return errors if direct safety/progress mutation families drift."""
+
+    if delivered_cfg_paths is None:
+        delivered_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_DELIVERED_FIRST_MUTATION_CFG_GLOB)
+        )
+    if delivered_progress_cfg_paths is None:
+        delivered_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_CFG_GLOB)
+        )
+    if vote_cfg_paths is None:
+        vote_cfg_paths = sorted(SPEC_DIR.glob(DIRECT_VOTE_FIRST_MUTATION_CFG_GLOB))
+    if vote_progress_cfg_paths is None:
+        vote_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_VOTE_FIRST_PROGRESS_MUTATION_CFG_GLOB)
+        )
+    if interleaving_cfg_paths is None:
+        interleaving_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_INTERLEAVING_MUTATION_CFG_GLOB)
+        )
+    if interleaving_progress_cfg_paths is None:
+        interleaving_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(DIRECT_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB)
+        )
+
+    family_specs = (
+        (
+            "direct delivered-first",
+            delivered_cfg_paths,
+            DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX,
+            delivered_progress_cfg_paths,
+            DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            delivered_progress_safety_only_mutations,
+        ),
+        (
+            "direct vote-first",
+            vote_cfg_paths,
+            DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX,
+            vote_progress_cfg_paths,
+            DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            vote_progress_safety_only_mutations,
+        ),
+        (
+            "direct interleaving",
+            interleaving_cfg_paths,
+            DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX,
+            interleaving_progress_cfg_paths,
+            DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            interleaving_progress_safety_only_mutations,
+        ),
+    )
+
+    errors: list[str] = []
+    for (
+        family_label,
+        safety_cfg_paths,
+        safety_stem_prefix,
+        progress_cfg_paths,
+        progress_stem_prefix,
+        progress_safety_only_mutations,
+    ) in family_specs:
+        safety_suffixes, safety_errors = mutation_cfg_suffixes(
+            safety_cfg_paths,
+            safety_stem_prefix,
+            f"{family_label} safety",
+        )
+        progress_suffixes, progress_errors = mutation_cfg_suffixes(
+            progress_cfg_paths,
+            progress_stem_prefix,
+            f"{family_label} progress",
+        )
+        errors.extend(safety_errors)
+        errors.extend(progress_errors)
+        if safety_errors or progress_errors:
+            continue
+
+        stale_allowlist = sorted_unique(
+            progress_safety_only_mutations - safety_suffixes
+        )
+        if stale_allowlist:
+            errors.append(
+                f"{family_label} progress safety-only mutation allowlist has "
+                "stale suffixes absent from the safety family:\n"
+                + format_items(stale_allowlist)
+            )
+
+        expected_progress = safety_suffixes - progress_safety_only_mutations
+        errors.extend(
+            mutation_suffix_set_difference_errors(
+                f"{family_label} progress",
+                progress_suffixes,
+                f"{family_label} safety minus safety-only mutations",
+                expected_progress,
+            )
+        )
+    return errors
+
+
+def byzantine_mutation_family_alignment_errors(
+    interleaving_cfg_paths: list[Path] | None = None,
+    interleaving_progress_cfg_paths: list[Path] | None = None,
+    projection_cfg_paths: list[Path] | None = None,
+    projection_progress_cfg_paths: list[Path] | None = None,
+    progress_safety_only_mutations: frozenset[str] = (
+        BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATIONS
+    ),
+) -> list[str]:
+    """Return errors if Byzantine source/projection mutation families drift."""
+
+    if interleaving_cfg_paths is None:
+        interleaving_cfg_paths = sorted(
+            SPEC_DIR.glob(BYZANTINE_INTERLEAVING_MUTATION_CFG_GLOB)
+        )
+    if interleaving_progress_cfg_paths is None:
+        interleaving_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_CFG_GLOB)
+        )
+    if projection_cfg_paths is None:
+        projection_cfg_paths = sorted(SPEC_DIR.glob(PROJECTION_MUTATION_CFG_GLOB))
+    if projection_progress_cfg_paths is None:
+        projection_progress_cfg_paths = sorted(
+            SPEC_DIR.glob(PROJECTION_PROGRESS_MUTATION_CFG_GLOB)
+        )
+
+    family_specs = (
+        (
+            "source Byzantine interleaving safety",
+            interleaving_cfg_paths,
+            BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX,
+        ),
+        (
+            "source Byzantine interleaving progress",
+            interleaving_progress_cfg_paths,
+            BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+        ),
+        (
+            "projection safety",
+            projection_cfg_paths,
+            PROJECTION_MUTATION_STEM_PREFIX,
+        ),
+        (
+            "projection progress",
+            projection_progress_cfg_paths,
+            PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+        ),
+    )
+
+    suffix_sets: dict[str, set[str]] = {}
+    errors: list[str] = []
+    for family_label, cfg_paths, stem_prefix in family_specs:
+        suffixes, suffix_errors = mutation_cfg_suffixes(
+            cfg_paths,
+            stem_prefix,
+            family_label,
+        )
+        suffix_sets[family_label] = suffixes
+        errors.extend(suffix_errors)
+
+    if errors:
+        return errors
+
+    source_safety = suffix_sets["source Byzantine interleaving safety"]
+    source_progress = suffix_sets["source Byzantine interleaving progress"]
+    projection_safety = suffix_sets["projection safety"]
+    projection_progress = suffix_sets["projection progress"]
+
+    errors.extend(
+        mutation_suffix_set_difference_errors(
+            "projection safety",
+            projection_safety,
+            "source Byzantine interleaving safety",
+            source_safety,
+        )
+    )
+    errors.extend(
+        mutation_suffix_set_difference_errors(
+            "projection progress",
+            projection_progress,
+            "source Byzantine interleaving progress",
+            source_progress,
+        )
+    )
+
+    stale_allowlist = sorted_unique(progress_safety_only_mutations - source_safety)
+    if stale_allowlist:
+        errors.append(
+            "Byzantine progress safety-only mutation allowlist has stale "
+            "suffixes absent from the source safety family:\n"
+            + format_items(stale_allowlist)
+        )
+
+    for family_label, safety_suffixes, progress_suffixes in (
+        (
+            "source Byzantine interleaving",
+            source_safety,
+            source_progress,
+        ),
+        (
+            "projection",
+            projection_safety,
+            projection_progress,
+        ),
+    ):
+        expected_progress = safety_suffixes - progress_safety_only_mutations
+        errors.extend(
+            mutation_suffix_set_difference_errors(
+                f"{family_label} progress",
+                progress_suffixes,
+                f"{family_label} safety minus safety-only mutations",
+                expected_progress,
+            )
+        )
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
 
@@ -17811,7 +25564,39 @@ def main() -> int:
     expected_failure_default_mismatches = expected_failure_default_errors(
         APALACHE_RUNNER, "Apalache"
     ) + expected_failure_default_errors(TLC_RUNNER, "TLC")
+    tlc_constraint_default_mismatches = tlc_constraint_default_errors()
     runner_invocation_mismatches = runner_invocation_errors()
+    tlc_runner_constraint_contract_mismatches = (
+        tlc_runner_constraint_contract_errors(tlc_cases)
+    )
+    tla_module_surface_mismatches = tla_module_surface_errors()
+    cfg_shape_surface_mismatches = cfg_shape_surface_errors()
+    cfg_module_ownership_surface_mismatches = (
+        cfg_module_ownership_surface_errors()
+    )
+    cfg_behavior_surface_mismatches = cfg_behavior_surface_errors()
+    cfg_proof_surface_mismatches = cfg_proof_surface_errors()
+    cfg_operator_reference_surface_mismatches = (
+        cfg_operator_reference_surface_errors()
+    )
+    cfg_fast_generic_surface_mismatches = cfg_fast_generic_surface_errors()
+    cfg_proof_target_shape_surface_mismatches = (
+        cfg_proof_target_shape_surface_errors()
+    )
+    cfg_constant_binding_surface_mismatches = (
+        cfg_constant_binding_surface_errors()
+    )
+    top_level_cfg_behavior_mismatches = top_level_cfg_behavior_errors()
+    top_level_cfg_deadlock_mismatches = top_level_cfg_deadlock_errors()
+    top_level_cfg_deadlock_absence_mismatches = (
+        top_level_cfg_deadlock_absence_errors()
+    )
+    specification_cfg_deadlock_mismatches = specification_cfg_deadlock_errors()
+    top_level_cfg_constraint_mismatches = top_level_cfg_constraint_errors()
+    top_level_cfg_constant_mismatches = top_level_cfg_constant_errors()
+    top_level_cfg_constant_set_mismatches = top_level_cfg_constant_set_errors()
+    top_level_fast_cfg_check_mismatches = top_level_fast_cfg_check_errors()
+    top_level_cfg_check_set_mismatches = top_level_cfg_check_set_errors()
     top_level_cfg_check_parity_mismatches = top_level_cfg_check_parity_errors()
     property_root_reachability_mismatches = cfg_property_root_reachability_errors()
     state_invariant_root_reachability_mismatches = (
@@ -17895,26 +25680,134 @@ def main() -> int:
     rbc_live_evidence_causality_envelope_contract_mismatches = (
         rbc_live_evidence_causality_envelope_conjunct_contract_errors()
     )
+    byzantine_top_contract_mismatches = byzantine_top_conjunct_contract_errors()
+    byzantine_top_cfg_mismatches = byzantine_top_cfg_errors()
+    byzantine_top_corridor_contract_mismatches = (
+        byzantine_top_corridor_contract_alignment_errors()
+    )
+    byzantine_top_projection_contract_mismatches = (
+        byzantine_top_projection_contract_alignment_errors()
+    )
+    projection_bridge_interleaving_contract_mismatches = (
+        projection_bridge_interleaving_contract_alignment_errors()
+    )
+    source_progress_safety_contract_mismatches = (
+        source_progress_safety_contract_alignment_errors()
+    )
+    byzantine_interleaving_exactness_alignment_mismatches = (
+        byzantine_interleaving_exactness_alignment_errors()
+    )
+    projection_bridge_core_source_alignment_mismatches = (
+        projection_bridge_core_source_alignment_errors()
+    )
+    projected_commit_progress_contract_mismatches = (
+        projected_commit_progress_contract_alignment_errors()
+    )
+    projected_commit_progress_spec_contract_mismatches = (
+        projected_commit_progress_spec_contract_errors()
+    )
+    source_commit_progress_spec_contract_mismatches = (
+        source_commit_progress_spec_contract_errors()
+    )
+    top_level_commit_spec_contract_mismatches = (
+        top_level_commit_spec_contract_errors()
+    )
+    direct_delivered_first_contract_mismatches = (
+        direct_delivered_first_gate_conjunct_contract_errors()
+    )
+    direct_delivered_first_clean_cfg_mismatches = (
+        direct_delivered_first_clean_cfg_errors()
+    )
+    direct_vote_first_contract_mismatches = (
+        direct_vote_first_gate_conjunct_contract_errors()
+    )
+    direct_vote_first_clean_cfg_mismatches = direct_vote_first_clean_cfg_errors()
+    direct_interleaving_contract_mismatches = (
+        direct_interleaving_gate_conjunct_contract_errors()
+    )
+    direct_interleaving_clean_cfg_mismatches = (
+        direct_interleaving_clean_cfg_errors()
+    )
+    byzantine_interleaving_contract_mismatches = (
+        byzantine_interleaving_gate_conjunct_contract_errors()
+    )
+    byzantine_interleaving_clean_cfg_mismatches = (
+        byzantine_interleaving_clean_cfg_errors()
+    )
+    projection_gate_contract_mismatches = projection_gate_conjunct_contract_errors()
+    projection_clean_cfg_mismatches = projection_clean_cfg_errors()
     consensus_core_root_cfg_check_contract_mismatches = (
         consensus_core_root_cfg_check_contract_errors()
     )
     temporal_shape_contract_mismatches = sumeragi_temporal_shape_contract_errors()
     apalache_typecheck_default_mismatches = apalache_typecheck_default_errors()
     workflow_entrypoint_mismatches = workflow_entrypoint_errors()
-    command_shape_mismatches: list[str] = []
-    for path in (FAST_CI, EXPECTED_FAILURE_CI, NIGHTLY_WORKFLOW, README):
-        command_shape_mismatches.extend(
-            command_shape_errors(path, APALACHE_COMMAND_PREFIX, "Apalache command")
-        )
-    command_shape_mismatches.extend(
-        command_shape_errors(README, TLC_COMMAND_PREFIX, "TLC command")
+    formal_workflow_unscoped_command_mismatches = (
+        formal_workflow_unscoped_command_errors()
     )
-    fast_ci_modes = command_modes(FAST_CI, APALACHE_COMMAND_RE)
-    expected_failure_modes = command_modes(EXPECTED_FAILURE_CI, APALACHE_COMMAND_RE)
-    nightly_ci_modes = command_modes(NIGHTLY_WORKFLOW, APALACHE_COMMAND_RE)
+    formal_workflow_run_command_mismatches = formal_workflow_run_command_errors()
+    formal_workflow_run_inventory_mismatches = (
+        formal_workflow_run_inventory_errors()
+    )
+    formal_workflow_name_mismatches = formal_workflow_name_errors()
+    formal_workflow_header_key_mismatches = formal_workflow_header_key_errors()
+    formal_workflow_trigger_mismatches = formal_workflow_trigger_errors()
+    formal_workflow_on_event_mismatches = formal_workflow_on_event_errors()
+    formal_workflow_paths_ignore_mismatches = formal_workflow_paths_ignore_errors()
+    formal_workflow_concurrency_mismatches = formal_workflow_concurrency_errors()
+    formal_workflow_header_control_mismatches = (
+        formal_workflow_header_control_errors()
+    )
+    formal_workflow_header_env_mismatches = formal_workflow_header_env_errors()
+    formal_workflow_header_env_binding_mismatches = (
+        formal_workflow_header_env_binding_errors()
+    )
+    formal_workflow_action_step_mismatches = formal_workflow_action_step_errors()
+    formal_workflow_action_inventory_mismatches = (
+        formal_workflow_action_inventory_errors()
+    )
+    formal_workflow_action_input_mismatches = formal_workflow_action_input_errors()
+    formal_workflow_setup_action_control_mismatches = (
+        formal_workflow_setup_action_control_errors()
+    )
+    formal_workflow_runner_label_mismatches = formal_workflow_runner_label_errors()
+    formal_workflow_timeout_mismatches = formal_workflow_timeout_errors()
+    formal_workflow_proof_step_control_mismatches = (
+        formal_workflow_proof_step_control_errors()
+    )
+    formal_workflow_job_entrypoint_mismatches = (
+        formal_workflow_job_entrypoint_errors()
+    )
+    formal_ci_singleton_command_mismatches = formal_ci_singleton_command_errors()
+    command_shape_mismatches = formal_command_shape_errors()
+    readme_formal_command_block_mismatches = readme_formal_command_block_errors()
+    strict_shell_mismatches = strict_shell_errors()
+    formal_ci_linear_script_mismatches = formal_ci_linear_script_errors()
+    apalache_length_override_mismatches = apalache_length_override_errors(
+        (FAST_CI, EXPECTED_FAILURE_CI, PR_WORKFLOW, NIGHTLY_WORKFLOW, README)
+    )
+    formal_toolchain_override_mismatches = formal_toolchain_override_errors(
+        (FAST_CI, EXPECTED_FAILURE_CI, PR_WORKFLOW, NIGHTLY_WORKFLOW, README)
+    )
+    fast_ci_modes = active_command_modes(FAST_CI, APALACHE_COMMAND_PREFIX)
+    expected_failure_modes = active_command_modes(
+        EXPECTED_FAILURE_CI, APALACHE_COMMAND_PREFIX
+    )
+    nightly_ci_modes = workflow_job_active_command_modes(
+        NIGHTLY_WORKFLOW, ("frontier-nightly",), APALACHE_COMMAND_PREFIX
+    )
     ci_modes = fast_ci_modes + expected_failure_modes + nightly_ci_modes
     readme_modes = command_modes(README, APALACHE_COMMAND_RE)
     readme_tlc_modes = command_modes(README, TLC_COMMAND_RE)
+    fast_ci_tlc_modes = active_command_modes(FAST_CI, TLC_COMMAND_PREFIX)
+    expected_failure_tlc_modes = active_command_modes(
+        EXPECTED_FAILURE_CI, TLC_COMMAND_PREFIX
+    )
+    nightly_tlc_modes = workflow_job_active_command_modes(
+        NIGHTLY_WORKFLOW, ("frontier-nightly",), TLC_COMMAND_PREFIX
+    )
+    ci_tlc_modes = fast_ci_tlc_modes + expected_failure_tlc_modes + nightly_tlc_modes
+    readme_tlc_bug_modes = bug_modes(readme_tlc_modes)
     readme_fast_table_modes = documented_fast_table_modes(README)
     readme_apalache_length_rows = documented_apalache_length_rows(README)
     readme_apalache_length_shape_mismatches = apalache_length_table_shape_errors(
@@ -18066,6 +25959,13 @@ def main() -> int:
     )
     readme_fast_table_set = set(readme_fast_table_modes)
     readme_tlc_set = set(readme_tlc_modes)
+    ci_tlc_set = set(ci_tlc_modes)
+    ci_tlc_inventory_mismatches = ci_tlc_inventory_errors(
+        ci_tlc_modes, readme_tlc_set, tlc_cases
+    )
+    expected_failure_tlc_inventory_mismatches = (
+        expected_failure_tlc_inventory_errors(expected_failure_tlc_modes)
+    )
     pr_modes_with_tlc_runner = {
         mode
         for mode in pr_baseline_modes | APALACHE_ONLY_PR_MODES
@@ -18081,6 +25981,9 @@ def main() -> int:
         APALACHE_ONLY_PR_MODE_README_SNIPPETS,
         "Sumeragi formal README",
     )
+    apalache_only_typecheck_contract_mismatches = (
+        apalache_only_typecheck_contract_errors()
+    )
     apalache_typecheck_only_mismatches = apalache_typecheck_only_mode_errors(
         set(all_modes_to_resolve) | exact_runner_modes,
         apalache_cases,
@@ -18095,26 +25998,32 @@ def main() -> int:
         FORMAL_README_GUARD_CONTRACT_SNIPPETS,
         "Sumeragi formal README",
     )
-    tlc_modes_to_resolve = readme_fast_table_set | readme_tlc_set | readme_bug_modes
+    tlc_modes_to_resolve = (
+        readme_fast_table_set | readme_tlc_set | readme_bug_modes | ci_tlc_set
+    )
     missing_tlc_runner_modes = sorted_unique(
         mode
         for mode in readme_fast_table_set
-        if matching_case(mode, tlc_cases) is None
+        if mode not in APALACHE_ONLY_PR_MODES
+        and matching_case(mode, tlc_cases) is None
     )
     missing_readme_tlc_commands = sorted_unique(
-        readme_fast_table_set - readme_tlc_set
+        readme_fast_table_set - readme_tlc_set - APALACHE_ONLY_PR_MODES
     )
     exact_tlc_fast_modes = exact_fast_runner_modes(tlc_cases)
     undocumented_tlc_runner_modes = sorted_unique(
         exact_tlc_fast_modes - readme_fast_table_set
     )
+    documented_tlc_bug_modes = readme_bug_modes | readme_tlc_bug_modes
     documented_bug_modes_missing_tlc_runner = sorted_unique(
-        mode for mode in readme_bug_modes if matching_case(mode, tlc_cases) is None
+        mode
+        for mode in documented_tlc_bug_modes
+        if matching_case(mode, tlc_cases) is None
     )
     tlc_expected_failure_without_marker = modes_without_expected_failure_marker(
-        readme_bug_modes, tlc_cases, "TLC"
+        documented_tlc_bug_modes, tlc_cases, "TLC"
     )
-    tlc_non_bug_modes = tlc_modes_to_resolve - readme_bug_modes
+    tlc_non_bug_modes = tlc_modes_to_resolve - documented_tlc_bug_modes
     tlc_baseline_with_expected_failure_marker = modes_with_unexpected_failure_marker(
         tlc_non_bug_modes, tlc_cases, "TLC"
     )
@@ -18129,6 +26038,85 @@ def main() -> int:
     mutation_cfg_name_mismatches = mutation_cfg_name_errors(
         readme_bug_modes, apalache_cases, "Apalache"
     ) + mutation_cfg_name_errors(readme_bug_modes, tlc_cases, "TLC")
+    mutation_cfg_type_invariant_mismatches = (
+        mutation_cfg_type_invariant_errors()
+    )
+    mutation_cfg_semantic_check_mismatches = (
+        mutation_cfg_semantic_check_errors()
+    )
+    mutation_cfg_behavior_mismatches = mutation_cfg_behavior_errors()
+    mutation_cfg_custom_init_exception_mismatches = (
+        mutation_cfg_custom_init_exception_errors()
+    )
+    quoted_bug_suffix_mismatches = quoted_bug_suffix_constant_errors()
+    quoted_bug_selector_reference_mismatches = (
+        quoted_bug_selector_reference_errors()
+    )
+    clean_cfg_mutation_selector_mismatches = (
+        clean_cfg_mutation_selector_errors()
+    )
+    mutation_bug_selector_style_mismatches = mutation_bug_selector_style_errors()
+    mutation_bug_selector_duplicate_mismatches = (
+        mutation_bug_selector_duplicate_errors()
+    )
+    boolean_bug_selector_mismatches = boolean_bug_selector_one_hot_errors()
+    boolean_bug_selector_name_mismatches = boolean_bug_selector_name_errors()
+    boolean_bug_selector_exception_mismatches = (
+        boolean_bug_selector_exception_errors()
+    )
+    boolean_bug_selector_uniqueness_mismatches = (
+        boolean_bug_selector_uniqueness_errors()
+    )
+    boolean_bug_selector_declaration_mismatches = (
+        boolean_bug_selector_declaration_errors()
+    )
+    boolean_bug_selector_completeness_mismatches = (
+        boolean_bug_selector_completeness_errors()
+    )
+    boolean_bug_selector_reference_mismatches = (
+        boolean_bug_selector_reference_errors()
+    )
+    exact_bug_selector_declaration_mismatches = (
+        exact_bug_selector_declaration_errors()
+    )
+    exact_bug_selector_value_shape_mismatches = (
+        exact_bug_selector_value_shape_errors()
+    )
+    numeric_bug_selector_canonical_value_mismatches = (
+        numeric_bug_selector_canonical_value_errors()
+    )
+    numeric_bug_selector_positive_value_mismatches = (
+        numeric_bug_selector_positive_value_errors()
+    )
+    numeric_bug_selector_reference_mismatches = (
+        numeric_bug_selector_reference_errors()
+    )
+    numeric_bug_selector_mismatches = numeric_bug_selector_uniqueness_errors()
+    source_safety_mutation_cfg_mismatches = source_safety_mutation_cfg_errors()
+    projection_mutation_bridge_cfg_mismatches = (
+        projection_mutation_bridge_cfg_errors()
+    )
+    direct_delivered_first_progress_mutation_cfg_mismatches = (
+        direct_delivered_first_progress_mutation_cfg_errors()
+    )
+    direct_vote_first_progress_mutation_cfg_mismatches = (
+        direct_vote_first_progress_mutation_cfg_errors()
+    )
+    direct_interleaving_progress_mutation_cfg_mismatches = (
+        direct_interleaving_progress_mutation_cfg_errors()
+    )
+    projection_progress_mutation_cfg_mismatches = (
+        projection_progress_mutation_cfg_errors()
+    )
+    byzantine_interleaving_progress_mutation_cfg_mismatches = (
+        byzantine_interleaving_progress_mutation_cfg_errors()
+    )
+    direct_mutation_family_alignment_mismatches = (
+        direct_mutation_family_alignment_errors()
+    )
+    byzantine_mutation_family_alignment_mismatches = (
+        byzantine_mutation_family_alignment_errors()
+    )
     module_identity_mismatches = module_identity_errors(
         tlc_modes_to_resolve, apalache_cases, tlc_cases
     )
@@ -18304,6 +26292,7 @@ def main() -> int:
             "Expected-failure CI includes non-mutation Sumeragi formal modes:\n"
             + format_items(expected_failure_ci_non_bug_modes)
         )
+    errors.extend(expected_failure_tlc_inventory_mismatches)
     if duplicate_readme_apalache_commands:
         errors.append(
             "README has duplicate Apalache commands for modes:\n"
@@ -18360,10 +26349,140 @@ def main() -> int:
             "Sumeragi formal workflow entrypoints are not wired to the guard:\n"
             + format_items(workflow_entrypoint_mismatches)
         )
+    if formal_workflow_unscoped_command_mismatches:
+        errors.append(
+            "Sumeragi formal workflow proof commands escaped checked jobs:\n"
+            + format_items(formal_workflow_unscoped_command_mismatches)
+        )
+    if formal_workflow_run_command_mismatches:
+        errors.append(
+            "Sumeragi formal workflow jobs can wrap proof evidence commands:\n"
+            + format_items(formal_workflow_run_command_mismatches)
+        )
+    if formal_workflow_run_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow run command inventory drifted:\n"
+            + format_items(formal_workflow_run_inventory_mismatches)
+        )
+    if formal_workflow_name_mismatches:
+        errors.append(
+            "Sumeragi formal workflow names drifted:\n"
+            + format_items(formal_workflow_name_mismatches)
+        )
+    if formal_workflow_header_key_mismatches:
+        errors.append(
+            "Sumeragi formal workflow header key inventory drifted:\n"
+            + format_items(formal_workflow_header_key_mismatches)
+        )
+    if formal_workflow_trigger_mismatches:
+        errors.append(
+            "Sumeragi formal workflow triggers drifted:\n"
+            + format_items(formal_workflow_trigger_mismatches)
+        )
+    if formal_workflow_on_event_mismatches:
+        errors.append(
+            "Sumeragi formal workflow trigger event inventory drifted:\n"
+            + format_items(formal_workflow_on_event_mismatches)
+        )
+    if formal_workflow_paths_ignore_mismatches:
+        errors.append(
+            "Sumeragi formal workflow path filters drifted:\n"
+            + format_items(formal_workflow_paths_ignore_mismatches)
+        )
+    if formal_workflow_concurrency_mismatches:
+        errors.append(
+            "Sumeragi formal workflow concurrency drifted:\n"
+            + format_items(formal_workflow_concurrency_mismatches)
+        )
+    if formal_workflow_header_control_mismatches:
+        errors.append(
+            "Sumeragi formal workflow headers set inherited controls:\n"
+            + format_items(formal_workflow_header_control_mismatches)
+        )
+    if formal_workflow_header_env_mismatches:
+        errors.append(
+            "Sumeragi formal workflow top-level env drifted:\n"
+            + format_items(formal_workflow_header_env_mismatches)
+        )
+    if formal_workflow_header_env_binding_mismatches:
+        errors.append(
+            "Sumeragi formal workflow top-level env bindings drifted:\n"
+            + format_items(formal_workflow_header_env_binding_mismatches)
+        )
+    if formal_workflow_action_step_mismatches:
+        errors.append(
+            "Sumeragi formal workflow jobs use unvetted actions:\n"
+            + format_items(formal_workflow_action_step_mismatches)
+        )
+    if formal_workflow_action_inventory_mismatches:
+        errors.append(
+            "Sumeragi formal workflow action inventory drifted:\n"
+            + format_items(formal_workflow_action_inventory_mismatches)
+        )
+    if formal_workflow_action_input_mismatches:
+        errors.append(
+            "Sumeragi formal workflow action inputs changed proof environment:\n"
+            + format_items(formal_workflow_action_input_mismatches)
+        )
+    if formal_workflow_setup_action_control_mismatches:
+        errors.append(
+            "Sumeragi formal workflow setup actions can be skipped or masked:\n"
+            + format_items(formal_workflow_setup_action_control_mismatches)
+        )
+    if formal_workflow_runner_label_mismatches:
+        errors.append(
+            "Sumeragi formal workflow jobs changed proof runner labels:\n"
+            + format_items(formal_workflow_runner_label_mismatches)
+        )
+    if formal_workflow_timeout_mismatches:
+        errors.append(
+            "Sumeragi formal workflow jobs changed proof timeout budgets:\n"
+            + format_items(formal_workflow_timeout_mismatches)
+        )
+    if formal_workflow_proof_step_control_mismatches:
+        errors.append(
+            "Sumeragi formal workflow proof steps can be skipped or masked:\n"
+            + format_items(formal_workflow_proof_step_control_mismatches)
+        )
+    if formal_workflow_job_entrypoint_mismatches:
+        errors.append(
+            "Sumeragi formal workflow proof entrypoints left checked formal jobs:\n"
+            + format_items(formal_workflow_job_entrypoint_mismatches)
+        )
+    if formal_ci_singleton_command_mismatches:
+        errors.append(
+            "Sumeragi formal singleton evidence commands are duplicated:\n"
+            + format_items(formal_ci_singleton_command_mismatches)
+        )
     if command_shape_mismatches:
         errors.append(
             "Sumeragi formal command lines are malformed:\n"
             + format_items(command_shape_mismatches)
+        )
+    if readme_formal_command_block_mismatches:
+        errors.append(
+            "Sumeragi formal README commands are outside shell code blocks:\n"
+            + format_items(readme_formal_command_block_mismatches)
+        )
+    if strict_shell_mismatches:
+        errors.append(
+            "Sumeragi formal shell entrypoints can mask command failures:\n"
+            + format_items(strict_shell_mismatches)
+        )
+    if formal_ci_linear_script_mismatches:
+        errors.append(
+            "Sumeragi formal CI scripts can make proof evidence conditional:\n"
+            + format_items(formal_ci_linear_script_mismatches)
+        )
+    if apalache_length_override_mismatches:
+        errors.append(
+            "Sumeragi formal proof commands override Apalache bounds:\n"
+            + format_items(apalache_length_override_mismatches)
+        )
+    if formal_toolchain_override_mismatches:
+        errors.append(
+            "Sumeragi formal proof commands override model-checker toolchains:\n"
+            + format_items(formal_toolchain_override_mismatches)
         )
     if apalache_version_mismatches:
         errors.append(
@@ -18380,10 +26499,110 @@ def main() -> int:
             "Sumeragi formal expected-failure defaults are miswired:\n"
             + format_items(expected_failure_default_mismatches)
         )
+    if tlc_constraint_default_mismatches:
+        errors.append(
+            "Sumeragi TLC runner constraint default is miswired:\n"
+            + format_items(tlc_constraint_default_mismatches)
+        )
     if runner_invocation_mismatches:
         errors.append(
             "Sumeragi formal runner invocations do not bind selected proof inputs:\n"
             + format_items(runner_invocation_mismatches)
+        )
+    if tlc_runner_constraint_contract_mismatches:
+        errors.append(
+            "Sumeragi TLC runner constraint contract drifted:\n"
+            + format_items(tlc_runner_constraint_contract_mismatches)
+        )
+    if tla_module_surface_mismatches:
+        errors.append(
+            "Sumeragi TLA module surfaces are invalid:\n"
+            + format_items(tla_module_surface_mismatches)
+        )
+    if cfg_shape_surface_mismatches:
+        errors.append(
+            "Sumeragi CFG directive surfaces are malformed:\n"
+            + format_items(cfg_shape_surface_mismatches)
+        )
+    if cfg_module_ownership_surface_mismatches:
+        errors.append(
+            "Sumeragi CFG module ownership surfaces are invalid:\n"
+            + format_items(cfg_module_ownership_surface_mismatches)
+        )
+    if cfg_behavior_surface_mismatches:
+        errors.append(
+            "Sumeragi CFG behavior surfaces are ambiguous:\n"
+            + format_items(cfg_behavior_surface_mismatches)
+        )
+    if cfg_proof_surface_mismatches:
+        errors.append(
+            "Sumeragi CFG proof surfaces are weak:\n"
+            + format_items(cfg_proof_surface_mismatches)
+        )
+    if cfg_operator_reference_surface_mismatches:
+        errors.append(
+            "Sumeragi CFG operator reference surfaces are invalid:\n"
+            + format_items(cfg_operator_reference_surface_mismatches)
+        )
+    if cfg_fast_generic_surface_mismatches:
+        errors.append(
+            "Sumeragi fast CFG proof surfaces are generic:\n"
+            + format_items(cfg_fast_generic_surface_mismatches)
+        )
+    if cfg_proof_target_shape_surface_mismatches:
+        errors.append(
+            "Sumeragi CFG proof-target shapes are invalid:\n"
+            + format_items(cfg_proof_target_shape_surface_mismatches)
+        )
+    if cfg_constant_binding_surface_mismatches:
+        errors.append(
+            "Sumeragi CFG constant binding surfaces are invalid:\n"
+            + format_items(cfg_constant_binding_surface_mismatches)
+        )
+    if top_level_cfg_behavior_mismatches:
+        errors.append(
+            "Sumeragi top-level CFG behavior bindings drifted:\n"
+            + format_items(top_level_cfg_behavior_mismatches)
+        )
+    if top_level_cfg_deadlock_mismatches:
+        errors.append(
+            "Sumeragi top-level CFG deadlock policy drifted:\n"
+            + format_items(top_level_cfg_deadlock_mismatches)
+        )
+    if top_level_cfg_deadlock_absence_mismatches:
+        errors.append(
+            "Sumeragi non-temporal top-level CFGs gained deadlock policy:\n"
+            + format_items(top_level_cfg_deadlock_absence_mismatches)
+        )
+    if specification_cfg_deadlock_mismatches:
+        errors.append(
+            "Sumeragi SPECIFICATION CFG deadlock policy drifted:\n"
+            + format_items(specification_cfg_deadlock_mismatches)
+        )
+    if top_level_cfg_constraint_mismatches:
+        errors.append(
+            "Sumeragi top-level CFGs became constrained:\n"
+            + format_items(top_level_cfg_constraint_mismatches)
+        )
+    if top_level_cfg_constant_mismatches:
+        errors.append(
+            "Sumeragi top-level CFG constants drifted:\n"
+            + format_items(top_level_cfg_constant_mismatches)
+        )
+    if top_level_cfg_constant_set_mismatches:
+        errors.append(
+            "Sumeragi top-level CFG constant sets drifted:\n"
+            + format_items(top_level_cfg_constant_set_mismatches)
+        )
+    if top_level_fast_cfg_check_mismatches:
+        errors.append(
+            "Sumeragi fast CFG sentinel checks drifted:\n"
+            + format_items(top_level_fast_cfg_check_mismatches)
+        )
+    if top_level_cfg_check_set_mismatches:
+        errors.append(
+            "Sumeragi top-level sentinel CFG check sets drifted:\n"
+            + format_items(top_level_cfg_check_set_mismatches)
         )
     if top_level_cfg_check_parity_mismatches:
         errors.append(
@@ -18544,6 +26763,125 @@ def main() -> int:
                 rbc_live_evidence_causality_envelope_contract_mismatches
             )
         )
+    if byzantine_top_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine top-level proof aggregates drifted:\n"
+            + format_items(byzantine_top_contract_mismatches)
+        )
+    if byzantine_top_cfg_mismatches:
+        errors.append(
+            "Sumeragi Byzantine top-level cfg behavior/checks drifted:\n"
+            + format_items(byzantine_top_cfg_mismatches)
+        )
+    if byzantine_top_corridor_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine top-level corridor contract alignment "
+            "drifted:\n"
+            + format_items(byzantine_top_corridor_contract_mismatches)
+        )
+    if byzantine_top_projection_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine top/projection contract alignment drifted:\n"
+            + format_items(byzantine_top_projection_contract_mismatches)
+        )
+    if projection_bridge_interleaving_contract_mismatches:
+        errors.append(
+            "Sumeragi projection bridge interleaving contract alignment "
+            "drifted:\n"
+            + format_items(projection_bridge_interleaving_contract_mismatches)
+        )
+    if source_progress_safety_contract_mismatches:
+        errors.append(
+            "Sumeragi source progress safety envelope contract alignment "
+            "drifted:\n"
+            + format_items(source_progress_safety_contract_mismatches)
+        )
+    if byzantine_interleaving_exactness_alignment_mismatches:
+        errors.append(
+            "Sumeragi Byzantine interleaving exactness alignment drifted:\n"
+            + format_items(byzantine_interleaving_exactness_alignment_mismatches)
+        )
+    if projection_bridge_core_source_alignment_mismatches:
+        errors.append(
+            "Sumeragi projection bridge core/source alignment drifted:\n"
+            + format_items(projection_bridge_core_source_alignment_mismatches)
+        )
+    if projected_commit_progress_contract_mismatches:
+        errors.append(
+            "Sumeragi projected commit progress safety contract alignment "
+            "drifted:\n"
+            + format_items(projected_commit_progress_contract_mismatches)
+        )
+    if projected_commit_progress_spec_contract_mismatches:
+        errors.append(
+            "Sumeragi projected commit progress spec/fairness contract "
+            "drifted:\n"
+            + format_items(projected_commit_progress_spec_contract_mismatches)
+        )
+    if source_commit_progress_spec_contract_mismatches:
+        errors.append(
+            "Sumeragi source commit progress spec/fairness contracts "
+            "drifted:\n"
+            + format_items(source_commit_progress_spec_contract_mismatches)
+        )
+    if top_level_commit_spec_contract_mismatches:
+        errors.append(
+            "Sumeragi top-level commit spec/fairness contracts drifted:\n"
+            + format_items(top_level_commit_spec_contract_mismatches)
+        )
+    if direct_delivered_first_contract_mismatches:
+        errors.append(
+            "Sumeragi direct delivered-first progress safety aggregate "
+            "drifted:\n"
+            + format_items(direct_delivered_first_contract_mismatches)
+        )
+    if direct_delivered_first_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct delivered-first clean cfg behavior/checks drifted:\n"
+            + format_items(direct_delivered_first_clean_cfg_mismatches)
+        )
+    if direct_vote_first_contract_mismatches:
+        errors.append(
+            "Sumeragi direct vote-first progress safety aggregate drifted:\n"
+            + format_items(direct_vote_first_contract_mismatches)
+        )
+    if direct_vote_first_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct vote-first clean cfg behavior/checks drifted:\n"
+            + format_items(direct_vote_first_clean_cfg_mismatches)
+        )
+    if direct_interleaving_contract_mismatches:
+        errors.append(
+            "Sumeragi direct interleaving progress safety aggregate "
+            "drifted:\n"
+            + format_items(direct_interleaving_contract_mismatches)
+        )
+    if direct_interleaving_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct interleaving clean cfg behavior/checks drifted:\n"
+            + format_items(direct_interleaving_clean_cfg_mismatches)
+        )
+    if byzantine_interleaving_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine interleaving progress safety aggregate "
+            "drifted:\n"
+            + format_items(byzantine_interleaving_contract_mismatches)
+        )
+    if byzantine_interleaving_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi Byzantine interleaving clean cfg behavior/checks drifted:\n"
+            + format_items(byzantine_interleaving_clean_cfg_mismatches)
+        )
+    if projection_gate_contract_mismatches:
+        errors.append(
+            "Sumeragi Byzantine projection gate proof aggregates drifted:\n"
+            + format_items(projection_gate_contract_mismatches)
+        )
+    if projection_clean_cfg_mismatches:
+        errors.append(
+            "Sumeragi Byzantine projection clean cfg behavior/checks drifted:\n"
+            + format_items(projection_clean_cfg_mismatches)
+        )
     if consensus_core_root_cfg_check_contract_mismatches:
         errors.append(
             "Sumeragi consensus-core root CFG check roles drifted:\n"
@@ -18565,6 +26903,11 @@ def main() -> int:
             "Sumeragi formal README is missing Apalache-only PR mode documentation:\n"
             + format_items(apalache_only_readme_mismatches)
         )
+    if apalache_only_typecheck_contract_mismatches:
+        errors.append(
+            "Sumeragi Apalache-only PR mode typecheck contract drifted:\n"
+            + format_items(apalache_only_typecheck_contract_mismatches)
+        )
     if apalache_typecheck_only_mismatches:
         errors.append(
             "Sumeragi Apalache typecheck-only modes are miswired:\n"
@@ -18581,6 +26924,11 @@ def main() -> int:
             "Sumeragi formal README is missing formal guard contract "
             "documentation:\n"
             + format_items(formal_readme_guard_contract_mismatches)
+        )
+    if ci_tlc_inventory_mismatches:
+        errors.append(
+            "CI/workflow TLC formal mode inventory is inconsistent:\n"
+            + format_items(ci_tlc_inventory_mismatches)
         )
     if missing_tlc_runner_modes:
         errors.append(
@@ -18628,6 +26976,167 @@ def main() -> int:
             "README mutation modes resolve to cfg files without matching "
             "mutation-name fragments:\n"
             + format_items(mutation_cfg_name_mismatches)
+        )
+    if mutation_cfg_type_invariant_mismatches:
+        errors.append(
+            "Sumeragi mutation cfgs must check TypeInvariant:\n"
+            + format_items(mutation_cfg_type_invariant_mismatches)
+        )
+    if mutation_cfg_semantic_check_mismatches:
+        errors.append(
+            "Sumeragi mutation cfgs must check a semantic proof target:\n"
+            + format_items(mutation_cfg_semantic_check_mismatches)
+        )
+    if mutation_cfg_behavior_mismatches:
+        errors.append(
+            "Sumeragi mutation cfg behavior bindings drifted:\n"
+            + format_items(mutation_cfg_behavior_mismatches)
+        )
+    if mutation_cfg_custom_init_exception_mismatches:
+        errors.append(
+            "Sumeragi mutation cfg custom INIT exceptions drifted:\n"
+            + format_items(mutation_cfg_custom_init_exception_mismatches)
+        )
+    if quoted_bug_suffix_mismatches:
+        errors.append(
+            "Sumeragi quoted-string mutation Bug constants drifted from file suffixes:\n"
+            + format_items(quoted_bug_suffix_mismatches)
+        )
+    if quoted_bug_selector_reference_mismatches:
+        errors.append(
+            "Sumeragi quoted-string mutation Bug selectors are unreferenced:\n"
+            + format_items(quoted_bug_selector_reference_mismatches)
+        )
+    if clean_cfg_mutation_selector_mismatches:
+        errors.append(
+            "Sumeragi clean CFG mutation selectors are enabled:\n"
+            + format_items(clean_cfg_mutation_selector_mismatches)
+        )
+    if mutation_bug_selector_style_mismatches:
+        errors.append(
+            "Sumeragi mutation CFG Bug selector styles are ambiguous:\n"
+            + format_items(mutation_bug_selector_style_mismatches)
+        )
+    if mutation_bug_selector_duplicate_mismatches:
+        errors.append(
+            "Sumeragi mutation CFG Bug selectors are duplicated:\n"
+            + format_items(mutation_bug_selector_duplicate_mismatches)
+        )
+    if boolean_bug_selector_mismatches:
+        errors.append(
+            "Sumeragi boolean mutation Bug selectors are ambiguous:\n"
+            + format_items(boolean_bug_selector_mismatches)
+        )
+    if boolean_bug_selector_name_mismatches:
+        errors.append(
+            "Sumeragi boolean mutation Bug selectors drifted from file suffixes:\n"
+            + format_items(boolean_bug_selector_name_mismatches)
+        )
+    if boolean_bug_selector_exception_mismatches:
+        errors.append(
+            "Sumeragi boolean mutation selector exceptions are stale:\n"
+            + format_items(boolean_bug_selector_exception_mismatches)
+        )
+    if boolean_bug_selector_uniqueness_mismatches:
+        errors.append(
+            "Sumeragi boolean mutation Bug selectors collide within a CFG family:\n"
+            + format_items(boolean_bug_selector_uniqueness_mismatches)
+        )
+    if boolean_bug_selector_declaration_mismatches:
+        errors.append(
+            "Sumeragi boolean mutation Bug selectors are undeclared:\n"
+            + format_items(boolean_bug_selector_declaration_mismatches)
+        )
+    if boolean_bug_selector_completeness_mismatches:
+        errors.append(
+            "Sumeragi boolean mutation Bug selector bindings are incomplete:\n"
+            + format_items(boolean_bug_selector_completeness_mismatches)
+        )
+    if boolean_bug_selector_reference_mismatches:
+        errors.append(
+            "Sumeragi boolean mutation Bug selectors are unreferenced:\n"
+            + format_items(boolean_bug_selector_reference_mismatches)
+        )
+    if exact_bug_selector_declaration_mismatches:
+        errors.append(
+            "Sumeragi exact mutation Bug selectors are undeclared:\n"
+            + format_items(exact_bug_selector_declaration_mismatches)
+        )
+    if exact_bug_selector_value_shape_mismatches:
+        errors.append(
+            "Sumeragi exact mutation Bug selector values are malformed:\n"
+            + format_items(exact_bug_selector_value_shape_mismatches)
+        )
+    if numeric_bug_selector_canonical_value_mismatches:
+        errors.append(
+            "Sumeragi numeric mutation Bug selector values are non-canonical:\n"
+            + format_items(numeric_bug_selector_canonical_value_mismatches)
+        )
+    if numeric_bug_selector_positive_value_mismatches:
+        errors.append(
+            "Sumeragi numeric mutation Bug selector values are not positive:\n"
+            + format_items(numeric_bug_selector_positive_value_mismatches)
+        )
+    if numeric_bug_selector_reference_mismatches:
+        errors.append(
+            "Sumeragi numeric mutation Bug selectors are unreferenced:\n"
+            + format_items(numeric_bug_selector_reference_mismatches)
+        )
+    if numeric_bug_selector_mismatches:
+        errors.append(
+            "Sumeragi numeric mutation Bug selectors collide within a CFG family:\n"
+            + format_items(numeric_bug_selector_mismatches)
+        )
+    if source_safety_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi source safety mutation cfgs must check the fast "
+            "type/exactness surface:\n"
+            + format_items(source_safety_mutation_cfg_mismatches)
+        )
+    if projection_mutation_bridge_cfg_mismatches:
+        errors.append(
+            "Sumeragi projection mutation cfgs must check the full bridge:\n"
+            + format_items(projection_mutation_bridge_cfg_mismatches)
+        )
+    if direct_delivered_first_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct delivered-first progress mutation cfgs must "
+            "bind progress behavior and check the safety/progress surface:\n"
+            + format_items(direct_delivered_first_progress_mutation_cfg_mismatches)
+        )
+    if direct_vote_first_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct vote-first progress mutation cfgs must bind "
+            "progress behavior and check the safety/progress surface:\n"
+            + format_items(direct_vote_first_progress_mutation_cfg_mismatches)
+        )
+    if direct_interleaving_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi direct interleaving progress mutation cfgs must "
+            "bind progress behavior and check the safety/progress surface:\n"
+            + format_items(direct_interleaving_progress_mutation_cfg_mismatches)
+        )
+    if byzantine_interleaving_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi Byzantine interleaving progress mutation cfgs must "
+            "bind progress behavior and check the safety/progress surface:\n"
+            + format_items(byzantine_interleaving_progress_mutation_cfg_mismatches)
+        )
+    if projection_progress_mutation_cfg_mismatches:
+        errors.append(
+            "Sumeragi projection progress mutation cfgs must bind progress "
+            "behavior and check the safety/progress surface:\n"
+            + format_items(projection_progress_mutation_cfg_mismatches)
+        )
+    if direct_mutation_family_alignment_mismatches:
+        errors.append(
+            "Sumeragi direct mutation family coverage drifted:\n"
+            + format_items(direct_mutation_family_alignment_mismatches)
+        )
+    if byzantine_mutation_family_alignment_mismatches:
+        errors.append(
+            "Sumeragi Byzantine mutation family coverage drifted:\n"
+            + format_items(byzantine_mutation_family_alignment_mismatches)
         )
     if module_identity_mismatches:
         errors.append(
@@ -18692,7 +27201,7 @@ def main() -> int:
         f"{len(set(nightly_ci_modes))} scheduled/manual modes, "
         f"{len(set(readme_modes))} documented modes, "
         f"{len(readme_fast_table_set)} TLC fast modes, "
-        f"{len(readme_bug_modes)} TLC mutation modes)."
+        f"{len(documented_tlc_bug_modes)} TLC mutation modes)."
     )
     return 0
 

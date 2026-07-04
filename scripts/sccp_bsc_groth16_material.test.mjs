@@ -7182,6 +7182,79 @@ test("proof-self-test refuses mainnet candidate flag on testnet reports", async 
   }
 });
 
+test("proof-self-test rejects both unready candidate flags", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-both-candidate-flags-"));
+  try {
+    const candidate = await writePreflightCandidate(root, {
+      bscNetwork: "mainnet",
+      manifest: {
+        productionReady: false,
+        productionBlockers: ["mainnet candidate awaits external ceremony attestations"],
+      },
+    });
+    const snarkjsStub = await writeSnarkjsStub(
+      root,
+      candidate.snarkjsVerificationKey,
+      { supportProofSelfTest: true },
+    );
+
+    await assert.rejects(
+      () =>
+        main([
+          "proof-self-test",
+          "--manifest",
+          candidate.manifest,
+          "--snarkjs-bin",
+          snarkjsStub,
+          "--allow-unready-candidate",
+          "true",
+          "--allow-unready-mainnet-candidate",
+          "true",
+          "--out",
+          join(root, "proof-self-test.json"),
+        ]),
+      /--allow-unready-candidate and --allow-unready-mainnet-candidate are mutually exclusive/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("proof-self-test rejects unready candidate flags on production-ready manifests", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-ready-unready-flag-"));
+  try {
+    const candidate = await writePreflightCandidate(root);
+    const snarkjsStub = await writeSnarkjsStub(
+      root,
+      candidate.snarkjsVerificationKey,
+      { supportProofSelfTest: true },
+    );
+
+    for (const flag of [
+      "--allow-unready-candidate",
+      "--allow-unready-mainnet-candidate",
+    ]) {
+      await assert.rejects(
+        () =>
+          main([
+            "proof-self-test",
+            "--manifest",
+            candidate.manifest,
+            "--snarkjs-bin",
+            snarkjsStub,
+            flag,
+            "true",
+            "--out",
+            join(root, "proof-self-test.json"),
+          ]),
+        /unready candidate proof-self-test flags are only allowed for manifests that are not production-ready/u,
+      );
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("proof-self-test rejects malformed unready-candidate boolean options", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-proof-boolean-"));
   try {

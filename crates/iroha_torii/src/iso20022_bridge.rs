@@ -925,16 +925,6 @@ fn convert_config_profile(
         .transpose()?
         .or(global_policy)
         .unwrap_or(EmbeddedSignaturePolicy::RecordOnly);
-    let trusted_public_key_sha256 = normalise_profile_sha256_pins(
-        id,
-        "trusted_public_key_sha256",
-        &config.trusted_public_key_sha256,
-    )?;
-    let trusted_certificate_sha256 = normalise_profile_sha256_pins(
-        id,
-        "trusted_certificate_sha256",
-        &config.trusted_certificate_sha256,
-    )?;
     let revoked_certificate_sha256 = normalise_profile_sha256_pins(
         id,
         "revoked_certificate_sha256",
@@ -948,29 +938,36 @@ fn convert_config_profile(
         .map(|message| convert_config_message_profile(id, message))
         .collect::<eyre::Result<Vec<_>>>()?;
     validate_profile_message_entries(id, &message_profiles)?;
-    let mut signature_public_key_sha256_pins = normalise_profile_sha256_pins(
+    let signature_public_key_sha256_pins = normalise_profile_sha256_pins(
         id,
         "signature_public_key_sha256_pins",
         &config.signature_public_key_sha256_pins,
     )?;
-    append_unique_sha256_pins(
-        id,
-        "signature_public_key_sha256_pins",
-        &mut signature_public_key_sha256_pins,
-        "trusted_public_key_sha256",
-        &trusted_public_key_sha256,
-    )?;
-    let mut x509_trust_anchor_sha256_pins = normalise_profile_sha256_pins(
+    let x509_trust_anchor_sha256_pins = normalise_profile_sha256_pins(
         id,
         "x509_trust_anchor_sha256_pins",
         &config.x509_trust_anchor_sha256_pins,
     )?;
-    append_unique_sha256_pins(
+    reject_profile_sha256_overlap(
+        id,
+        "signature_public_key_sha256_pins",
+        &signature_public_key_sha256_pins,
+        "x509_trust_anchor_sha256_pins",
+        &x509_trust_anchor_sha256_pins,
+    )?;
+    reject_profile_sha256_overlap(
         id,
         "x509_trust_anchor_sha256_pins",
-        &mut x509_trust_anchor_sha256_pins,
-        "trusted_certificate_sha256",
-        &trusted_certificate_sha256,
+        &x509_trust_anchor_sha256_pins,
+        "revoked_certificate_sha256",
+        &revoked_certificate_sha256,
+    )?;
+    reject_profile_sha256_overlap(
+        id,
+        "signature_public_key_sha256_pins",
+        &signature_public_key_sha256_pins,
+        "revoked_certificate_sha256",
+        &revoked_certificate_sha256,
     )?;
     let x509_required_certificate_policy_oids = normalise_profile_oid_literals(
         id,
@@ -998,8 +995,6 @@ fn convert_config_profile(
         x509_crl_der_base64,
         x509_require_ocsp_revocation_check: config.x509_require_ocsp_revocation_check,
         x509_ocsp_response_der_base64,
-        trusted_public_key_sha256,
-        trusted_certificate_sha256,
         revoked_certificate_sha256,
         required_reference_datasets,
         message_profiles,
@@ -1250,21 +1245,20 @@ fn normalise_profile_sha256_pins(
     Ok(normalized)
 }
 
-fn append_unique_sha256_pins(
+fn reject_profile_sha256_overlap(
     profile_id: &str,
-    target_field: &str,
-    target: &mut Vec<String>,
-    alias_field: &str,
-    aliases: &[String],
+    left_field: &str,
+    left: &[String],
+    right_field: &str,
+    right: &[String],
 ) -> eyre::Result<()> {
-    let mut seen = target.iter().cloned().collect::<HashSet<_>>();
-    for alias in aliases {
-        if !seen.insert(alias.clone()) {
+    let left_values = left.iter().collect::<HashSet<_>>();
+    for value in right {
+        if left_values.contains(value) {
             eyre::bail!(
-                "iso_bridge profile `{profile_id}` fields `{target_field}` and `{alias_field}` must not overlap"
+                "iso_bridge profile `{profile_id}` fields `{left_field}` and `{right_field}` must not overlap"
             );
         }
-        target.push(alias.clone());
     }
     Ok(())
 }
@@ -2029,7 +2023,7 @@ impl Iso20022BridgeRuntime {
         let referenced_message_id = lifecycle_referenced_message_id(message_type, parsed)?;
         let securities_tx_id = if matches!(
             message_type,
-            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+            "sese.023" | "sese.024" | "sese.025" | "colr.012"
         ) {
             unique_field_text_by_suffix(parsed, &["TxId"], "TxId")?
         } else {
@@ -2037,7 +2031,7 @@ impl Iso20022BridgeRuntime {
         };
         let id = if matches!(
             message_type,
-            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+            "sese.023" | "sese.024" | "sese.025" | "colr.012"
         ) {
             securities_tx_id
                 .or_else(|| business_message_id(parsed))
@@ -2054,7 +2048,7 @@ impl Iso20022BridgeRuntime {
         }
         if matches!(
             message_type,
-            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+            "sese.023" | "sese.024" | "sese.025" | "colr.012"
         ) {
             Ok(format!("{message_type}:{id}"))
         } else {
@@ -2951,7 +2945,7 @@ impl Iso20022BridgeRuntime {
     ) -> Result<(), MsgError> {
         if !matches!(
             message_type,
-            "sese.023" | "sese.024" | "sese.025" | "colr.007" | "colr.012"
+            "sese.023" | "sese.024" | "sese.025" | "colr.012"
         ) {
             return Ok(());
         }
@@ -3898,7 +3892,7 @@ fn lifecycle_referenced_message_id<'a>(
         }
         "sese.024" | "sese.025" => unique_field_text_by_suffix(parsed, &["TxId"], "TxId"),
         "sese.023" => Ok(None),
-        "colr.007" | "colr.012" => Ok(None),
+        "colr.012" => Ok(None),
         _ => Ok(None),
     }
 }
@@ -3919,7 +3913,7 @@ fn lifecycle_status_code<'a>(message_type: &str, parsed: &'a ParsedMessage) -> O
         ),
         "sese.025" => parsed.field_text("ConfSts"),
         "sese.023" => Some("ACTC"),
-        "colr.007" | "colr.012" => Some("ACSC"),
+        "colr.012" => Some("ACSC"),
         _ => None,
     }
     .filter(|value| !value.trim().is_empty())
@@ -3970,7 +3964,7 @@ fn lifecycle_update_matches_original(lifecycle_type: &str, original_type: Option
             is_iso_family(original_type, "pacs.008") || is_iso_family(original_type, "pacs.009")
         }
         "sese.024" | "sese.025" => is_iso_family(original_type, "sese.023"),
-        "colr.007" | "colr.012" => false,
+        "colr.012" => false,
         _ => false,
     }
 }
@@ -4010,7 +4004,7 @@ fn lifecycle_context(message_type: &str, parsed: &ParsedMessage) -> Option<IsoMe
             context.plan_execution_order = parsed_text(parsed, "Plan/ExecutionOrder");
             context.plan_atomicity = parsed_text(parsed, "Plan/Atomicity");
         }
-        "colr.007" | "colr.012" => {
+        "colr.012" => {
             context.collateral_obligation_id = parsed_text(parsed, "OblgtnId");
             context.collateral_original_amount = parsed_text(parsed, "Substitution/OriginalAmt");
             context.collateral_original_currency = parsed_text(parsed, "Substitution/OriginalCcy");
@@ -5626,7 +5620,6 @@ fn xml_signature_key_material_with_policy(
             let terminal_is_trust_anchor = profile
                 .x509_trust_anchor_sha256_pins
                 .iter()
-                .chain(profile.trusted_certificate_sha256.iter())
                 .any(|pin| pin == terminal_certificate_sha256);
             if terminal_is_trust_anchor && !x509_certificate_is_ca(terminal_certificate)? {
                 return Err(MsgError::ValidationFailed);
@@ -9264,8 +9257,6 @@ mod tests {
             x509_crl_der_base64: Vec::new(),
             x509_require_ocsp_revocation_check: false,
             x509_ocsp_response_der_base64: Vec::new(),
-            trusted_public_key_sha256: Vec::new(),
-            trusted_certificate_sha256: Vec::new(),
             revoked_certificate_sha256: Vec::new(),
             required_reference_datasets: Vec::new(),
             message_profiles: vec![actual::IsoMessageProfile {
@@ -9307,8 +9298,6 @@ mod tests {
             x509_crl_der_base64: Vec::new(),
             x509_require_ocsp_revocation_check: false,
             x509_ocsp_response_der_base64: Vec::new(),
-            trusted_public_key_sha256: Vec::new(),
-            trusted_certificate_sha256: Vec::new(),
             revoked_certificate_sha256: Vec::new(),
             required_reference_datasets: vec![
                 "bic-lei".to_owned(),
@@ -9320,6 +9309,35 @@ mod tests {
                 message_profile("sese.024", "sese.024.001.10"),
                 message_profile("sese.025", "sese.025.001.11"),
             ],
+        }
+    }
+
+    fn live_collateral_lifecycle_profile() -> actual::IsoBridgeProfile {
+        actual::IsoBridgeProfile {
+            id: "collateral-lifecycle-fixtures".to_owned(),
+            rail: "generic-iso20022".to_owned(),
+            embedded_signature_policy: None,
+            signature_public_key_sha256_pins: Vec::new(),
+            x509_trust_anchor_sha256_pins: Vec::new(),
+            x509_required_certificate_policy_oids: Vec::new(),
+            x509_require_crl_revocation_check: false,
+            x509_crl_der_base64: Vec::new(),
+            x509_require_ocsp_revocation_check: false,
+            x509_ocsp_response_der_base64: Vec::new(),
+            revoked_certificate_sha256: Vec::new(),
+            required_reference_datasets: Vec::new(),
+            message_profiles: vec![actual::IsoMessageProfile {
+                message_type: "colr.012".to_owned(),
+                direction: "inbound".to_owned(),
+                versions: vec!["colr.012".to_owned(), "colr.012.001.05".to_owned()],
+                business_services: Vec::new(),
+                require_app_header: false,
+                require_business_service: false,
+                require_uetr: false,
+                structured_address_mode: "permissive".to_owned(),
+                supplementary_data_max_bytes: 4096,
+                amount_minor_units: Vec::new(),
+            }],
         }
     }
 
@@ -9335,8 +9353,6 @@ mod tests {
             x509_crl_der_base64: Vec::new(),
             x509_require_ocsp_revocation_check: false,
             x509_ocsp_response_der_base64: Vec::new(),
-            trusted_public_key_sha256: Vec::new(),
-            trusted_certificate_sha256: Vec::new(),
             revoked_certificate_sha256: Vec::new(),
             required_reference_datasets: Vec::new(),
             message_profiles: vec![actual::IsoMessageProfile {
@@ -11049,10 +11065,9 @@ mod tests {
         issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         issuer_params.not_before = date_time_ymd(2020, 1, 1);
         issuer_params.not_after = date_time_ymd(2030, 1, 1);
-        issuer_params.key_usages = vec![
-            KeyUsagePurpose::DigitalSignature,
-            KeyUsagePurpose::KeyCertSign,
-        ];
+        issuer_params
+            .custom_extensions
+            .push(critical_key_usage_digital_signature_key_cert_sign_extension());
         let issuer_cert = issuer_params
             .self_signed(&issuer_key)
             .expect("issuer certificate");
@@ -12251,6 +12266,23 @@ mod tests {
         embed_ocsp_response: bool,
         signing_time: &str,
     ) -> GeneratedOcspSignedPayload {
+        for _ in 0..128 {
+            if let Some(payload) = try_signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+                response_status,
+                embed_ocsp_response,
+                signing_time,
+            ) {
+                return payload;
+            }
+        }
+        panic!("generated OCSP X.509 fixture must satisfy low-S certificate signature policy")
+    }
+
+    fn try_signed_pacs008_xml_with_generated_ocsp_x509_certificate_chain(
+        response_status: TestOcspResponseStatus,
+        embed_ocsp_response: bool,
+        signing_time: &str,
+    ) -> Option<GeneratedOcspSignedPayload> {
         let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
         let mut issuer_params =
             CertificateParams::new(vec!["ocsp-issuer.example".to_owned()]).expect("issuer params");
@@ -12278,10 +12310,19 @@ mod tests {
         leaf_params.is_ca = IsCa::NoCa;
         leaf_params.not_before = date_time_ymd(2020, 1, 1);
         leaf_params.not_after = date_time_ymd(2030, 1, 1);
-        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params
+            .custom_extensions
+            .push(critical_key_usage_digital_signature_extension());
         let leaf_cert = leaf_params
             .signed_by(&leaf_key, &issuer)
             .expect("leaf certificate");
+        if !generated_x509_certificate_signatures_are_accepted(
+            leaf_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            None,
+        ) {
+            return None;
+        }
 
         let response_der = test_ocsp_response_der(
             leaf_cert.der().as_ref(),
@@ -12305,16 +12346,33 @@ mod tests {
             signing_time,
         );
 
-        GeneratedOcspSignedPayload {
+        Some(GeneratedOcspSignedPayload {
             payload: signed_payload.payload,
             trust_anchor_pin: signed_payload.issuer_sha256,
             response_der_base64,
-        }
+        })
     }
 
     fn signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(
         include_responder_certificate: bool,
     ) -> GeneratedOcspSignedPayload {
+        for _ in 0..128 {
+            if let Some(payload) =
+                try_signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(
+                    include_responder_certificate,
+                )
+            {
+                return payload;
+            }
+        }
+        panic!(
+            "generated delegated OCSP X.509 fixture must satisfy low-S certificate signature policy"
+        )
+    }
+
+    fn try_signed_pacs008_xml_with_generated_delegated_ocsp_x509_certificate_chain(
+        include_responder_certificate: bool,
+    ) -> Option<GeneratedOcspSignedPayload> {
         let issuer_key = RcgenKeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("issuer key");
         let mut issuer_params =
             CertificateParams::new(vec!["delegated-ocsp-issuer.example".to_owned()])
@@ -12326,10 +12384,9 @@ mod tests {
         issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         issuer_params.not_before = date_time_ymd(2020, 1, 1);
         issuer_params.not_after = date_time_ymd(2030, 1, 1);
-        issuer_params.key_usages = vec![
-            KeyUsagePurpose::DigitalSignature,
-            KeyUsagePurpose::KeyCertSign,
-        ];
+        issuer_params
+            .custom_extensions
+            .push(critical_key_usage_digital_signature_key_cert_sign_extension());
         let issuer_cert = issuer_params
             .self_signed(&issuer_key)
             .expect("issuer certificate");
@@ -12346,7 +12403,9 @@ mod tests {
         leaf_params.is_ca = IsCa::NoCa;
         leaf_params.not_before = date_time_ymd(2020, 1, 1);
         leaf_params.not_after = date_time_ymd(2030, 1, 1);
-        leaf_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        leaf_params
+            .custom_extensions
+            .push(critical_key_usage_digital_signature_extension());
         let leaf_cert = leaf_params
             .signed_by(&leaf_key, &issuer)
             .expect("leaf certificate");
@@ -12363,11 +12422,20 @@ mod tests {
         responder_params.is_ca = IsCa::NoCa;
         responder_params.not_before = date_time_ymd(2020, 1, 1);
         responder_params.not_after = date_time_ymd(2030, 1, 1);
-        responder_params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         responder_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::OcspSigning];
+        responder_params
+            .custom_extensions
+            .push(critical_key_usage_digital_signature_extension());
         let responder_cert = responder_params
             .signed_by(&responder_key, &issuer)
             .expect("responder certificate");
+        if !generated_x509_certificate_signatures_are_accepted(
+            leaf_cert.der().as_ref(),
+            issuer_cert.der().as_ref(),
+            Some(responder_cert.der().as_ref()),
+        ) {
+            return None;
+        }
 
         let response_der = test_ocsp_response_der(
             leaf_cert.der().as_ref(),
@@ -12386,11 +12454,36 @@ mod tests {
             XML_SIGNATURE_TEST_SIGNING_TIME,
         );
 
-        GeneratedOcspSignedPayload {
+        Some(GeneratedOcspSignedPayload {
             payload: signed_payload.payload,
             trust_anchor_pin: signed_payload.issuer_sha256,
             response_der_base64,
+        })
+    }
+
+    fn generated_x509_certificate_signatures_are_accepted(
+        leaf_der: &[u8],
+        issuer_der: &[u8],
+        responder_der: Option<&[u8]>,
+    ) -> bool {
+        let Ok(leaf) = parse_x509_certificate_der(leaf_der) else {
+            return false;
+        };
+        let Ok(issuer) = parse_x509_certificate_der(issuer_der) else {
+            return false;
+        };
+        if verify_x509_certificate_signature(&leaf, &issuer).is_err()
+            || verify_x509_certificate_signature(&issuer, &issuer).is_err()
+        {
+            return false;
         }
+        if let Some(responder_der) = responder_der {
+            let Ok(responder) = parse_x509_certificate_der(responder_der) else {
+                return false;
+            };
+            return verify_x509_certificate_signature(&responder, &issuer).is_ok();
+        }
+        true
     }
 
     fn test_ocsp_response_der(
@@ -13260,8 +13353,22 @@ mod tests {
         CustomExtension::from_oid_content(&[2, 5, 29, 15], vec![0x03, 0x02, 0x02, 0x84])
     }
 
+    fn critical_key_usage_digital_signature_key_cert_sign_extension() -> CustomExtension {
+        let mut extension =
+            CustomExtension::from_oid_content(&[2, 5, 29, 15], vec![0x03, 0x02, 0x02, 0x84]);
+        extension.set_criticality(true);
+        extension
+    }
+
     fn noncritical_key_usage_digital_signature_extension() -> CustomExtension {
         CustomExtension::from_oid_content(&[2, 5, 29, 15], vec![0x03, 0x02, 0x07, 0x80])
+    }
+
+    fn critical_key_usage_digital_signature_extension() -> CustomExtension {
+        let mut extension =
+            CustomExtension::from_oid_content(&[2, 5, 29, 15], vec![0x03, 0x02, 0x07, 0x80]);
+        extension.set_criticality(true);
+        extension
     }
 
     fn assert_pinned_certificate_chain_rejected(
@@ -13270,8 +13377,8 @@ mod tests {
     ) {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.trusted_public_key_sha256.clear();
-        profile.trusted_certificate_sha256 = vec![fixture.issuer_sha256];
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![fixture.issuer_sha256];
         config.profiles.push(profile);
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
@@ -13295,8 +13402,8 @@ mod tests {
     ) {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.trusted_public_key_sha256.clear();
-        profile.trusted_certificate_sha256 = vec![fixture.issuer_sha256];
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![fixture.issuer_sha256];
         config.profiles.push(profile);
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
@@ -13579,7 +13686,7 @@ mod tests {
     fn runtime_from_config_rejects_noncanonical_xml_signature_pin() {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.trusted_public_key_sha256 = vec!["AB".repeat(32)];
+        profile.signature_public_key_sha256_pins = vec!["AB".repeat(32)];
         config.profiles.push(profile);
 
         let err = match Iso20022BridgeRuntime::from_config(&config) {
@@ -13588,21 +13695,21 @@ mod tests {
         };
 
         assert!(
-            err.to_string().contains("trusted_public_key_sha256"),
+            err.to_string().contains("signature_public_key_sha256_pins"),
             "unexpected error: {err:?}"
         );
     }
 
     #[test]
-    fn runtime_from_config_rejects_overlapping_xml_signature_pin_aliases() {
+    fn runtime_from_config_rejects_overlapping_xml_signature_pin_roles() {
         let public_pin = test_p256_public_key_pin();
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.trusted_public_key_sha256 = vec![public_pin];
+        profile.x509_trust_anchor_sha256_pins = vec![public_pin];
         config.profiles.push(profile);
 
         let err = match Iso20022BridgeRuntime::from_config(&config) {
-            Ok(_) => panic!("overlapping public-key pin aliases must fail configuration"),
+            Ok(_) => panic!("overlapping public-key and certificate pins must fail configuration"),
             Err(err) => err,
         };
         assert!(
@@ -13614,11 +13721,13 @@ mod tests {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
         profile.x509_trust_anchor_sha256_pins = vec![certificate_pin.clone()];
-        profile.trusted_certificate_sha256 = vec![certificate_pin];
+        profile.revoked_certificate_sha256 = vec![certificate_pin];
         config.profiles.push(profile);
 
         let err = match Iso20022BridgeRuntime::from_config(&config) {
-            Ok(_) => panic!("overlapping certificate pin aliases must fail configuration"),
+            Ok(_) => {
+                panic!("overlapping trusted and revoked certificate pins must fail configuration")
+            }
             Err(err) => err,
         };
         assert!(
@@ -14561,8 +14670,8 @@ mod tests {
         let fixture = signed_pacs008_xml_with_certificate_chain_signed_properties_reference();
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.trusted_public_key_sha256.clear();
-        profile.trusted_certificate_sha256 = vec![fixture.issuer_sha256];
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![fixture.issuer_sha256];
         config.profiles.push(profile);
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
@@ -16082,7 +16191,7 @@ mod tests {
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
         profile.signature_public_key_sha256_pins.clear();
-        profile.trusted_public_key_sha256 = vec!["11".repeat(32)];
+        profile.signature_public_key_sha256_pins = vec!["11".repeat(32)];
         config.profiles.push(profile);
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
@@ -16143,7 +16252,7 @@ mod tests {
             .expect("canonicalized character references should satisfy the XMLDSig digest");
 
         assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig&amp;001"));
+        assert_eq!(metadata.business_message_id(), Some("sig&001"));
     }
 
     #[test]
@@ -16892,31 +17001,25 @@ mod tests {
     }
 
     #[test]
-    fn require_verified_profile_rejects_certificate_chain_with_revoked_issuer() {
-        let CertificateChainSignedPayload {
-            payload,
-            issuer_sha256,
-            ..
-        } = signed_pacs008_xml_with_certificate_chain();
+    fn runtime_from_config_rejects_revoked_x509_trust_anchor_pin_overlap() {
+        let CertificateChainSignedPayload { issuer_sha256, .. } =
+            signed_pacs008_xml_with_certificate_chain();
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.trusted_public_key_sha256.clear();
-        profile.trusted_certificate_sha256 = vec![issuer_sha256.clone()];
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![issuer_sha256.clone()];
         profile.revoked_certificate_sha256 = vec![issuer_sha256];
         config.profiles.push(profile);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
 
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("revoked certificate pins must override matching trust pins");
-
-        assert!(matches!(err, MsgError::ValidationFailed));
+        let err = match Iso20022BridgeRuntime::from_config(&config) {
+            Ok(_) => panic!("trust-anchor and revoked certificate pins must be disjoint"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("x509_trust_anchor_sha256_pins")
+                && err.to_string().contains("revoked_certificate_sha256"),
+            "unexpected overlap error: {err:?}"
+        );
     }
 
     #[test]
@@ -16928,8 +17031,8 @@ mod tests {
         } = signed_pacs008_xml_with_certificate_chain();
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.trusted_public_key_sha256.clear();
-        profile.trusted_certificate_sha256 = vec![issuer_sha256];
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![issuer_sha256];
         profile.revoked_certificate_sha256 = vec![leaf_sha256];
         config.profiles.push(profile);
         let runtime = Iso20022BridgeRuntime::from_config(&config)
@@ -18198,8 +18301,8 @@ mod tests {
         let fixture = signed_pacs008_xml_with_certificate_chain_signed_properties_reference();
         let mut config = sample_config();
         let mut profile = signed_message_profile("require-verified");
-        profile.trusted_public_key_sha256.clear();
-        profile.trusted_certificate_sha256 = vec![fixture.issuer_sha256];
+        profile.signature_public_key_sha256_pins.clear();
+        profile.x509_trust_anchor_sha256_pins = vec![fixture.issuer_sha256];
         config.profiles.push(profile);
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
@@ -18420,7 +18523,7 @@ mod tests {
         let payload =
             signed_pacs008_xml_with_public_key(&BASE64_STANDARD.encode(&compressed_public_key));
         let mut profile = signed_message_profile("require-verified");
-        profile.trusted_public_key_sha256 = vec![sha256_hex(&compressed_public_key)];
+        profile.signature_public_key_sha256_pins = vec![sha256_hex(&compressed_public_key)];
         let mut config = sample_config();
         config.profiles.push(profile);
         let runtime = Iso20022BridgeRuntime::from_config(&config)
@@ -19524,11 +19627,14 @@ mod tests {
 
     #[test]
     fn checked_in_colr012_fixture_records_collateral_context() {
-        let config = sample_config();
+        let mut config = sample_config();
+        config.profiles.push(live_collateral_lifecycle_profile());
         let runtime = Iso20022BridgeRuntime::from_config(&config)
             .expect("cfg")
             .expect("enabled");
-        let profile = runtime.default_profile();
+        let profile = runtime
+            .resolve_profile(Some("collateral-lifecycle-fixtures"))
+            .expect("collateral lifecycle fixture profile");
         let parsed =
             parse_message("colr.012", COLR012_FIXTURE_XML.as_bytes()).expect("colr.012 fixture");
         let metadata = runtime
@@ -19538,8 +19644,8 @@ mod tests {
                 &parsed,
                 COLR012_FIXTURE_XML.as_bytes(),
             )
-            .expect("generic profile accepts colr.012 fixture");
-        assert_eq!(metadata.profile_id(), Some("generic-iso20022"));
+            .expect("collateral fixture profile accepts colr.012 fixture");
+        assert_eq!(metadata.profile_id(), Some("collateral-lifecycle-fixtures"));
         assert_eq!(metadata.message_type(), Some("colr.012"));
         assert_eq!(metadata.business_message_id(), None);
 
@@ -19618,7 +19724,7 @@ mod tests {
                 "sepa.sct.inst",
                 live_pacs008_xml(
                     "SEPA-XSD-1",
-                    "pacs.008.001.10",
+                    "pacs.008.001.08",
                     "sepa.sct.inst",
                     "EUR",
                     "10.00",
@@ -19629,7 +19735,7 @@ mod tests {
                 "securities-csd",
                 "pacs.009",
                 "securities.csd.cash",
-                live_pacs009_xml("SECURITIES-XSD-1", "pacs.009.001.10", "securities.csd.cash"),
+                live_pacs009_xml("SECURITIES-XSD-1", "pacs.009.001.08", "securities.csd.cash"),
             ),
         ];
 
@@ -19677,7 +19783,7 @@ mod tests {
                 "pacs.008",
                 live_pacs008_xml(
                     "SEPA-BAD-SVC",
-                    "pacs.008.001.10",
+                    "pacs.008.001.08",
                     "fedwire.funds.01",
                     "EUR",
                     "10.00",
@@ -19687,7 +19793,7 @@ mod tests {
             (
                 "securities-csd",
                 "pacs.009",
-                live_pacs009_xml("SECURITIES-BAD-SVC", "pacs.009.001.10", "sepa.sct.inst"),
+                live_pacs009_xml("SECURITIES-BAD-SVC", "pacs.009.001.08", "sepa.sct.inst"),
             ),
         ];
 
@@ -19772,7 +19878,7 @@ mod tests {
                 remove_xml_element(
                     &live_pacs008_xml(
                         "SEPA-MISSING-SVC",
-                        "pacs.008.001.10",
+                        "pacs.008.001.08",
                         "sepa.sct.inst",
                         "EUR",
                         "10.00",
@@ -19787,7 +19893,7 @@ mod tests {
                 remove_xml_element(
                     &live_pacs009_xml(
                         "SECURITIES-MISSING-SVC",
-                        "pacs.009.001.10",
+                        "pacs.009.001.08",
                         "securities.csd.cash",
                     ),
                     "BizSvc",
@@ -19978,7 +20084,7 @@ mod tests {
 
         let bad_minor_units = live_pacs008_xml(
             "SEPA-BAD-AMOUNT",
-            "pacs.008.001.10",
+            "pacs.008.001.08",
             "sepa.sct.inst",
             "EUR",
             "10.001",
@@ -20004,6 +20110,253 @@ mod tests {
                 kind: InvalidValueKind::Amount
             } if field == "IntrBkSttlmAmt"
         ));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_header_document_definition_drift() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-BAH-DOCUMENT-DRIFT",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174303",
+        )
+        .replace(
+            "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08",
+            "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.10",
+        );
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("BAH MsgDefIdr and Document namespace drift must fail parsing");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_spoofed_document_namespace() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-SPOOFED-DOCUMENT-NS",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174304",
+        )
+        .replace(
+            "urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08",
+            "https://attacker.invalid/schema:pacs.008.001.08",
+        );
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("Document namespace suffix spoofing must fail parsing");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_unqualified_document_namespace() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-UNQUALIFIED-DOCUMENT-NS",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174305",
+        )
+        .replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+            "<Document>",
+        );
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("Document without an ISO namespace must fail parsing");
+
+        assert!(matches!(err, MsgError::UnknownMessageType));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_mismatched_closing_tag() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-MISMATCHED-CLOSE",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174307",
+        )
+        .replace("</GrpHdr>", "</WrongGrpHdr>");
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("mismatched XML close tags must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_mixed_xml_content() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-MIXED-CONTENT",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174314",
+        )
+        .replace("<GrpHdr><MsgId>", "<GrpHdr>mixed<MsgId>");
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("mixed XML content must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_unquoted_document_namespace_attribute() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-UNQUOTED-DOCUMENT-NS",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174308",
+        )
+        .replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+            r#"<Document xmlns=urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08>"#,
+        );
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("unquoted Document namespace attributes must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_doctype_declaration() {
+        let payload = format!(
+            "{}{}",
+            r#"<!DOCTYPE Document [<!ENTITY x "boom">]>"#,
+            live_pacs008_xml(
+                "FEDWIRE-DOCTYPE",
+                "pacs.008.001.08",
+                "fedwire.funds.01",
+                "USD",
+                "10.00",
+                "123e4567-e89b-12d3-a456-426614174309",
+            )
+        );
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("DOCTYPE declarations must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_malformed_document_qname() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-MALFORMED-QNAME",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174310",
+        )
+        .replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+            r#"<pacs::Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+        )
+        .replace("</Document>", "</pacs::Document>");
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("malformed Document QNames must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_unknown_xml_entity_reference() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-&xxe;-ENTITY",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174311",
+        );
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("unknown XML entity references must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_unterminated_xml_entity_reference() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-UNTERMINATED-ENTITY",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "US&amp",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174312",
+        );
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("unterminated XML entity references must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_reject_invalid_numeric_xml_character_reference() {
+        let payload = live_pacs008_xml(
+            "FEDWIRE-BAD-NUMERIC-ENTITY",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "US&#x0;",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174313",
+        );
+
+        let err = parse_message("pacs.008", payload.as_bytes())
+            .expect_err("invalid XML numeric character references must fail parsing");
+
+        assert!(matches!(err, MsgError::InvalidFormat));
+    }
+
+    #[test]
+    fn live_rail_profile_xsd_fixtures_accept_prefixed_document_namespace() {
+        let (config, _reference_files) = sample_config_with_live_reference_data();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let profile = runtime
+            .resolve_profile(Some("fedwire-funds"))
+            .expect("fedwire profile");
+        let payload = live_pacs008_xml(
+            "FEDWIRE-PREFIXED-DOCUMENT-NS",
+            "pacs.008.001.08",
+            "fedwire.funds.01",
+            "USD",
+            "10.00",
+            "123e4567-e89b-12d3-a456-426614174306",
+        )
+        .replace(
+            r#"<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+            r#"<pacs:Document xmlns:pacs="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">"#,
+        )
+        .replace("<FIToFICstmrCdtTrf>", "<pacs:FIToFICstmrCdtTrf>")
+        .replace("</FIToFICstmrCdtTrf>", "</pacs:FIToFICstmrCdtTrf>")
+        .replace("</Document>", "</pacs:Document>");
+
+        let parsed = parse_message("pacs.008", payload.as_bytes())
+            .expect("prefixed ISO Document namespace should parse");
+
+        runtime
+            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
+            .expect("prefixed ISO Document namespace should pass live profile validation");
     }
 
     #[test]

@@ -27,12 +27,13 @@ if str(SCRIPT_DIR) not in sys.path:
 import iso_xsd_fixture_verify as xsd
 
 
-PROBE_SUMMARY_VERSION = 1
+PROBE_SUMMARY_VERSION = 2
 DEFAULT_TIMEOUT_SECS = 25.0
 MAX_TIMEOUT_SECS = 300.0
 DEFAULT_MAX_BYTES = 4096
 MAX_PROBE_BYTES = 65536
 MAX_CONTENT_TYPE_CHARS = 256
+MAX_TARGET_NAMESPACE_CHARS = 256
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 ASCII_FLOAT_RE = re.compile(
     r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?"
@@ -43,13 +44,18 @@ XSD_ROOT_OPEN_RE = re.compile(
     rb"(?:<\?xml\b[^>]*\?>[ \t\r\n]*)?"
     rb"(?:(?:<!--.*?-->|<\?[A-Za-z_][^?]*\?>)[ \t\r\n]*)*"
     rb"(?:"
-    rb"<xs:schema(?:[ \t\r\n/>])"
-    rb"(?=[^>]*\bxmlns:xs\s*=\s*['\"]http://www\.w3\.org/2001/XMLSchema['\"])"
-    rb"|<xsd:schema(?:[ \t\r\n/>])"
-    rb"(?=[^>]*\bxmlns:xsd\s*=\s*['\"]http://www\.w3\.org/2001/XMLSchema['\"])"
-    rb"|<schema(?:[ \t\r\n/>])"
-    rb"(?=[^>]*\bxmlns\s*=\s*['\"]http://www\.w3\.org/2001/XMLSchema['\"])"
+    rb"(?P<xs><xs:schema(?=[ \t\r\n/>])"
+    rb"(?=[^>]*\bxmlns:xs\s*=\s*['\"]http://www\.w3\.org/2001/XMLSchema['\"])[^>]*>)"
+    rb"|(?P<xsd><xsd:schema(?=[ \t\r\n/>])"
+    rb"(?=[^>]*\bxmlns:xsd\s*=\s*['\"]http://www\.w3\.org/2001/XMLSchema['\"])[^>]*>)"
+    rb"|(?P<default><schema(?=[ \t\r\n/>])"
+    rb"(?=[^>]*\bxmlns\s*=\s*['\"]http://www\.w3\.org/2001/XMLSchema['\"])[^>]*>)"
     rb")",
+    re.DOTALL,
+)
+XML_ATTRIBUTE_RE = re.compile(
+    rb"(?P<name>[A-Za-z_][A-Za-z0-9_.:-]*)\s*=\s*"
+    rb"(?P<quote>['\"])(?P<value>.*?)(?P=quote)",
     re.DOTALL,
 )
 
@@ -225,9 +231,51 @@ def _selected_message_ids(values: Any) -> list[str]:
     return sorted(result)
 
 
-def _looks_like_xsd(data: bytes) -> bool:
+def _expected_target_namespace(message_def_id: str) -> str:
+    return f"{xsd.ISO_NAMESPACE_PREFIX}{message_def_id}"
+
+
+def _safe_target_namespace(value: str) -> str | None:
+    if not value or len(value) > MAX_TARGET_NAMESPACE_CHARS:
+        return None
+    if value != value.strip():
+        return None
+    if any(ord(ch) > 0x7E for ch in value):
+        return None
+    if xsd._contains_control_character(value):
+        return None
+    if xsd._contains_secret_material(value) or xsd._contains_secret_identifier_material(
+        value
+    ):
+        return None
+    return value
+
+
+def _xsd_target_namespace(data: bytes) -> str | None:
     sample = data[: min(len(data), 4096)].lstrip()
-    return XSD_ROOT_OPEN_RE.search(sample) is not None
+    match = XSD_ROOT_OPEN_RE.search(sample)
+    if match is None:
+        return None
+    schema_root = match.group("xs") or match.group("xsd") or match.group("default")
+    if not schema_root:
+        return None
+    for attribute in XML_ATTRIBUTE_RE.finditer(schema_root):
+        try:
+            name = attribute.group("name").decode("ascii")
+        except UnicodeDecodeError:
+            continue
+        if name != "targetNamespace":
+            continue
+        try:
+            value = attribute.group("value").decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        return _safe_target_namespace(value)
+    return None
+
+
+def _looks_like_xsd(data: bytes, message_def_id: str) -> bool:
+    return _xsd_target_namespace(data) == _expected_target_namespace(message_def_id)
 
 
 def _content_type(headers: Any) -> str | None:
@@ -377,6 +425,7 @@ def _probe_download(
         "submitting_organisation": metadata["submitting_organisation"],
         "catalogue_url": metadata["catalogue_url"],
         "download_url": metadata["download_url"],
+        "target_namespace": None,
     }
     try:
         response_context = opener(request, timeout=timeout_secs)
@@ -472,8 +521,11 @@ def _probe_download(
                     "looks_like_xsd": False,
                     "error_kind": "NetworkError",
                 }
-            looks_like_xsd = _looks_like_xsd(sample)
-            if not downloaded or looks_like_xsd and not (200 <= status <= 299):
+            target_namespace = _xsd_target_namespace(sample)
+            looks_like_xsd = target_namespace == _expected_target_namespace(message_def_id)
+            if not downloaded or (
+                target_namespace is not None and not (200 <= status <= 299)
+            ):
                 return {
                     **base,
                     "status": "network_error",
@@ -499,6 +551,7 @@ def _probe_download(
                 "downloaded_bytes": downloaded,
                 "sample_sha256": sha256_hex(sample) if sample else None,
                 "truncated": total_bytes > max_bytes,
+                "target_namespace": target_namespace,
                 "looks_like_xsd": looks_like_xsd,
                 "error_kind": None,
             }

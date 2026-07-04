@@ -303,7 +303,8 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new(storage_ticket),
-            Signature::from_bytes(&[0x33; 64]),
+            Signature::try_from_bytes(&[0x33; 64])
+                .expect("checked core DA commitment-store acknowledgement signature fixture"),
         )
     }
 

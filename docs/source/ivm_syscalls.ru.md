@@ -38,10 +38,11 @@ translator: machine-google-reviewed
 | 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`, `&Name`, `&Json` | `u64=0` | `G_set_detail + bytes(val)` | Прописывает реквизиты для аккаунта |
 | 0x22 | МИНТ_АСЕТ | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_mint` | Монетный двор `amount` актива на счет |
 | 0x23 | BURN_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | Бернс `amount` со счета |
-| 0x24 | ПЕРЕДАЧА_АКТИВ | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Переводы `amount` между счетами |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | Начать пакетную передачу FASTPQ |
 | 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | Сбросить накопленный пакет передачи FASTPQ |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Применить пакет, закодированный Norito, за один системный вызов |
+| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Регистрирует новый NFT |
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | Передает право собственности на NFT |
 | 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | Обновления метаданных NFT |

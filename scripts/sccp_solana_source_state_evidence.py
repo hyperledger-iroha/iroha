@@ -233,6 +233,18 @@ def _require_nonzero_fixed_bytes(value: bytes, *, label: str, byte_length: int) 
     return raw
 
 
+def _optional_expected_record_hash(
+    args: argparse.Namespace,
+    name: str,
+    *,
+    label: str,
+) -> bytes | None:
+    value = getattr(args, name, None)
+    if value is None:
+        return None
+    return _require_nonzero_fixed_bytes(value, label=label, byte_length=32)
+
+
 def solana_template_component_hash(component_id: str, component_kind: str) -> bytes:
     """Return the built-in Solana mainnet source-material template hash."""
 
@@ -778,10 +790,10 @@ def _require_expected_record_hashes(
     *,
     output: str | None = None,
 ) -> None:
-    expected_material_hash = getattr(
+    expected_material_hash = _optional_expected_record_hash(
         args,
         "expected_source_verifier_material_hash",
-        None,
+        label="--expected-source-verifier-material-hash",
     )
     if expected_material_hash is None:
         if output is not None:
@@ -797,10 +809,10 @@ def _require_expected_record_hashes(
                 f"expected {_hex(expected_material_hash)}, got {_hex(material_hash)}"
             )
 
-    expected_deployment_hash = getattr(
+    expected_deployment_hash = _optional_expected_record_hash(
         args,
         "expected_source_adapter_engine_deployment_hash",
-        None,
+        label="--expected-source-adapter-engine-deployment-hash",
     )
     if expected_deployment_hash is None:
         if output is not None:
@@ -824,7 +836,11 @@ def _require_full_light_client_evidence_consistency(
     output: str | None = None,
 ) -> None:
     supplied = _require_complete_light_client_evidence_hashes(args)
-    expected_gate_hash = getattr(args, "expected_full_light_client_gate_hash", None)
+    expected_gate_hash = _optional_expected_record_hash(
+        args,
+        "expected_full_light_client_gate_hash",
+        label="--expected-full-light-client-gate-hash",
+    )
     gate_hash = solana_full_light_client_gate_hash(args)
     if output is not None and gate_hash is None:
         raise SystemExit(
@@ -984,16 +1000,25 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
     _validate_solana_evidence(args)
     material_hash = solana_source_verifier_material_record_hash(args)
     deployment_hash = solana_source_adapter_engine_deployment_record_hash(args)
-    expected_material_matches = (
-        getattr(args, "expected_source_verifier_material_hash", None) == material_hash
+    expected_material_hash = _optional_expected_record_hash(
+        args,
+        "expected_source_verifier_material_hash",
+        label="--expected-source-verifier-material-hash",
     )
-    expected_deployment_matches = (
-        getattr(args, "expected_source_adapter_engine_deployment_hash", None)
-        == deployment_hash
+    expected_deployment_hash = _optional_expected_record_hash(
+        args,
+        "expected_source_adapter_engine_deployment_hash",
+        label="--expected-source-adapter-engine-deployment-hash",
+    )
+    expected_material_matches = expected_material_hash == material_hash
+    expected_deployment_matches = expected_deployment_hash == deployment_hash
+    expected_gate_hash = _optional_expected_record_hash(
+        args,
+        "expected_full_light_client_gate_hash",
+        label="--expected-full-light-client-gate-hash",
     )
     supplied = _light_client_evidence_hashes(args)
     gate_hash = solana_full_light_client_gate_hash(args)
-    expected_gate_hash = getattr(args, "expected_full_light_client_gate_hash", None)
     full_light_client_evidence_ready = gate_hash is not None
     expected_gate_matches = gate_hash is not None and expected_gate_hash == gate_hash
     light_client_hashes = {

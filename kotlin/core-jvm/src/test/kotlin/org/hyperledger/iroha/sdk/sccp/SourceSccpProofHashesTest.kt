@@ -730,9 +730,9 @@ class SourceSccpProofHashesTest {
         val bscCommitMessageHash =
             "0x5832165d1a87ed49a323f2ecaecbef973489aed1a42e7eab369244e7abec43c7"
         val bscCommitSignatures = listOf(
-            hexBytes("1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f00"),
-            hexBytes("921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f001"),
-            hexBytes("cfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d3619600"),
+            hexBytes("1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f1b"),
+            hexBytes("921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f01c"),
+            hexBytes("cfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d361961b"),
         )
         assertEquals(
             117,
@@ -776,9 +776,26 @@ class SourceSccpProofHashesTest {
         )
         assertEquals(297, SccpSourceProofs.canonicalBscCommitSealBytes(bscCommitSeal).size)
         assertEquals(
-            "0xcd9d87b24d8c1cf7615cb4267cde5a3fc24bbb770807134ee75d4ddaba992172",
+            "0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb",
             SccpSourceProofs.bscCommitSealHash(bscCommitSeal),
         )
+        listOf(0, 1, 29, 30).forEach { recoveryId ->
+            val rejectedSignature = bscCommitSignatures[0].copyOf()
+            rejectedSignature[64] = recoveryId.toByte()
+            assertTrue(
+                assertFailsWith<IllegalArgumentException> {
+                    SccpSourceProofs.canonicalBscCommitSealBytes(
+                        bscCommitSeal.copy(
+                            signatures = listOf(
+                                rejectedSignature,
+                                bscCommitSignatures[1],
+                                bscCommitSignatures[2],
+                            ),
+                        ),
+                    )
+                }.message!!.contains("canonical recoverable"),
+            )
+        }
         assertTrue(
             assertFailsWith<IllegalArgumentException> {
                 SccpSourceProofs.canonicalBscCommitSealBytes(
@@ -1560,6 +1577,22 @@ class SourceSccpProofHashesTest {
                 signatures = listOf(tronSourceEventSignature),
             )
         }
+        (27..30).forEach { legacyRecoveryId ->
+            val legacySignature = tronSourceEventSignature.copyOf()
+            legacySignature[64] = legacyRecoveryId.toByte()
+            val failure = assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalTronWitnessSealBytes(
+                    totalWeight = "1",
+                    signedWeight = "1",
+                    solidBlockMessageHash = "0x$tronSourceEventTransactionId",
+                    witnessAddresses = listOf(tronTestOwnerAddress),
+                    witnessWeights = listOf("1"),
+                    signersBitmap = byteArrayOf(0x01),
+                    signatures = listOf(legacySignature),
+                )
+            }
+            assertTrue(failure.message.orEmpty().contains("canonical low-S 65-byte TRON signature"))
+        }
         val parentWitnessSchedulePayload = hexBytes(
             "0101000000417e5f4552091a69125d5dfcb7b8c2659029395bdf0100000000000000",
         )
@@ -1642,6 +1675,30 @@ class SourceSccpProofHashesTest {
                 signersBitmap = byteArrayOf(0x01),
                 signatures = listOf(transitionSignature),
             )
+        }
+        (27..30).forEach { legacyRecoveryId ->
+            val legacyTransitionSignature = transitionSignature.copyOf()
+            legacyTransitionSignature[64] = legacyRecoveryId.toByte()
+            val failure = assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalTronWitnessScheduleTransitionSealBytes(
+                    sourceDomain = SccpSourceProofs.DOMAIN_TRON,
+                    fromWitnessScheduleEpoch = "7",
+                    toWitnessScheduleEpoch = "8",
+                    transitionBlockNumber = "12345",
+                    transitionBlockHash = "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286",
+                    parentWitnessScheduleHash = parentWitnessScheduleHash,
+                    nextWitnessScheduleHash = tronWitnessScheduleHash,
+                    nextWitnessSchedulePayload = witnessPayload,
+                    transitionMessageHash = transitionMessageHash,
+                    totalWeight = "1",
+                    signedWeight = "1",
+                    witnessAddresses = listOf(tronTestOwnerAddress),
+                    witnessWeights = listOf("1"),
+                    signersBitmap = byteArrayOf(0x01),
+                    signatures = listOf(legacyTransitionSignature),
+                )
+            }
+            assertTrue(failure.message.orEmpty().contains("canonical low-S 65-byte TRON signature"))
         }
 
 
@@ -1959,8 +2016,31 @@ class SourceSccpProofHashesTest {
                 inclusionBranch = transactionSourceInclusionBranch,
             )
         }
+        val transactionSourceSignature = hexBytes(
+            "cc58d7ac52c9111792495fee682b53cab96ff4229043c5b8b90c31447f593455" +
+                "3d8854ab35de34372c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c01",
+        )
+        (27..30).forEach { legacyRecoveryId ->
+            val legacyTransactionSignature = transactionSourceSignature.copyOf()
+            legacyTransactionSignature[64] = legacyRecoveryId.toByte()
+            val legacyTransactionSourceBytes =
+                transactionSourceBytes.replacingFirst(transactionSourceSignature, legacyTransactionSignature)
+            val failure = assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalTronTransactionSourceProofBytes(
+                    sourceEventDigest = sourceEventDigest,
+                    receiptRoot = "bb".repeat(32),
+                    transactionRoot = transactionSourceRoot,
+                    transactionIndex = "0",
+                    transactionCount = "1",
+                    transactionBytes = legacyTransactionSourceBytes,
+                    transactionMerkleBranch = transactionSourceBranch,
+                    inclusionBranch = transactionSourceInclusionBranch,
+                )
+            }
+            assertTrue(failure.message.orEmpty().contains("successful TRON TriggerSmartContract source call"))
+        }
         val wrongSignerTransactionSourceBytes = transactionSourceBytes.replacingFirst(
-            hexBytes("cc58d7ac52c9111792495fee682b53cab96ff4229043c5b8b90c31447f5934553d8854ab35de34372c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c01"),
+            transactionSourceSignature,
             hexBytes("b50455577deef2a0d6c3c521d97de050d5b9ba46df00c8ddad014bac4ca3345173223f1d4c5940538f1b1da069bed6828a9b27794bd1eac1a35810baaef28d2101"),
         )
         assertFailsWith<IllegalArgumentException> {
@@ -2094,7 +2174,7 @@ class SourceSccpProofHashesTest {
                 rawData = rawHeader,
                 witnessSignature = tronHeaderSignature(0),
                 parentRawData = parentRawHeader,
-                parentWitnessSignature = tronHeaderSignature(27),
+                parentWitnessSignature = tronHeaderSignature(1),
                 rawDataHash = tronRawHeaderHash,
                 parentRawDataHash = tronParentRawHeaderHash,
                 blockId = tronBlockId,
@@ -2111,7 +2191,7 @@ class SourceSccpProofHashesTest {
                 rawData = rawHeader,
                 witnessSignature = tronHeaderSignature(0),
                 parentRawData = parentRawHeader,
-                parentWitnessSignature = tronHeaderSignature(27),
+                parentWitnessSignature = tronHeaderSignature(1),
                 rawDataHash = "aa".repeat(32),
                 parentRawDataHash = tronParentRawHeaderHash,
                 blockId = tronBlockId,
@@ -2130,7 +2210,7 @@ class SourceSccpProofHashesTest {
                 rawData = overlongKeyRawHeader,
                 witnessSignature = tronHeaderSignature(0),
                 parentRawData = parentRawHeader,
-                parentWitnessSignature = tronHeaderSignature(27),
+                parentWitnessSignature = tronHeaderSignature(1),
                 rawDataHash = overlongKeyRawHeaderHash,
                 parentRawDataHash = tronParentRawHeaderHash,
                 blockId = SccpSourceProofs.tronBlockIdFromRawDataHash("12345", overlongKeyRawHeaderHash),
@@ -2147,7 +2227,7 @@ class SourceSccpProofHashesTest {
                 rawData = rawHeader,
                 witnessSignature = tronHeaderSignature(0),
                 parentRawData = parentRawHeader,
-                parentWitnessSignature = tronHeaderSignature(27),
+                parentWitnessSignature = tronHeaderSignature(1),
                 rawDataHash = tronRawHeaderHash,
                 parentRawDataHash = tronParentRawHeaderHash,
                 blockId = tronBlockId,
@@ -2160,12 +2240,12 @@ class SourceSccpProofHashesTest {
             )
         }
         assertEquals(
-            "0x25416bda5734ecef1ab9920d15f1011e962f6ff90e9c6247ff6b2ce34a5ab49f",
+            "0x362579d1667137b9dac3fc20772de7b0b4adb3888d4508bb5d75e53596d43771",
             SccpSourceProofs.tronSolidBlockHeaderProofHash(
                 rawData = rawHeader,
                 witnessSignature = tronHeaderSignature(0),
                 parentRawData = parentRawHeader,
-                parentWitnessSignature = tronHeaderSignature(27),
+                parentWitnessSignature = tronHeaderSignature(1),
                 rawDataHash = tronRawHeaderHash,
                 parentRawDataHash = tronParentRawHeaderHash,
                 blockId = tronBlockId,
@@ -2177,6 +2257,44 @@ class SourceSccpProofHashesTest {
                 headerVersion = 1,
             ),
         )
+        (27..30).forEach { legacyRecoveryId ->
+            val witnessFailure = assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalTronSolidBlockHeaderProofBytes(
+                    rawData = rawHeader,
+                    witnessSignature = tronHeaderSignature(legacyRecoveryId),
+                    parentRawData = parentRawHeader,
+                    parentWitnessSignature = tronHeaderSignature(1),
+                    rawDataHash = tronRawHeaderHash,
+                    parentRawDataHash = tronParentRawHeaderHash,
+                    blockId = tronBlockId,
+                    txTrieRoot = "dd".repeat(32),
+                    accountStateRoot = "ee".repeat(32),
+                    parentBlockId = tronParentBlockId,
+                    witnessAddress = "41" + "11".repeat(20),
+                    timestampMs = "1700000012345",
+                    headerVersion = 1,
+                )
+            }
+            assertTrue(witnessFailure.message.orEmpty().contains("recovery id 0..3"))
+            val parentFailure = assertFailsWith<IllegalArgumentException> {
+                SccpSourceProofs.canonicalTronSolidBlockHeaderProofBytes(
+                    rawData = rawHeader,
+                    witnessSignature = tronHeaderSignature(0),
+                    parentRawData = parentRawHeader,
+                    parentWitnessSignature = tronHeaderSignature(legacyRecoveryId),
+                    rawDataHash = tronRawHeaderHash,
+                    parentRawDataHash = tronParentRawHeaderHash,
+                    blockId = tronBlockId,
+                    txTrieRoot = "dd".repeat(32),
+                    accountStateRoot = "ee".repeat(32),
+                    parentBlockId = tronParentBlockId,
+                    witnessAddress = "41" + "11".repeat(20),
+                    timestampMs = "1700000012345",
+                    headerVersion = 1,
+                )
+            }
+            assertTrue(parentFailure.message.orEmpty().contains("recovery id 0..3"))
+        }
 
 
     }

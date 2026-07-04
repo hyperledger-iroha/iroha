@@ -1029,7 +1029,7 @@ mod tests {
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
         ] {
-            let mut malformed = signature.clone();
+            let mut malformed = signature;
             malformed.signature[..32].copy_from_slice(&replacement_r);
             let err = verify_signature(&payload, &malformed)
                 .expect_err("malformed Ed25519 R must fail admission");

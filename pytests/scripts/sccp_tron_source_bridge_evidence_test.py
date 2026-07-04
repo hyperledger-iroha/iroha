@@ -83,6 +83,22 @@ def load_evidence_module():
     return module
 
 
+class HostileExpectedRecordHash:
+    def __str__(self):
+        raise AssertionError(
+            "secret-token TRON expected record hash was stringified"
+        )
+
+    def __repr__(self):
+        raise AssertionError("secret-token TRON expected record hash was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON expected record hash was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TRON expected record hash was compared")
+
+
 def sample_full_toml_args():
     return SimpleNamespace(
         source_domain=5,
@@ -2465,6 +2481,183 @@ def test_full_toml_rendering_rejects_route_canary_source_record_hash_replay():
             raise AssertionError(
                 f"full TOML accepted route canary replay of {label}"
             )
+
+
+def test_tron_source_bridge_rejects_hostile_expected_record_hashes_without_hooks(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    config_hash = bytes.fromhex(TRON_SOURCE_CONFIG_VECTOR)
+    destination_binding_hash = bytes.fromhex(TRON_DESTINATION_BINDING_VECTOR)
+
+    class FakeParser:
+        prog = "sccp-tron-source-bridge-evidence-test"
+
+        def __init__(self, args):
+            self.args = args
+
+        def parse_args(self, _argv):
+            return self.args
+
+        def exit(self, code, message=None):
+            raise SystemExit((code, message or ""))
+
+    def direct_call(args, field):
+        if field == "expected_config_hash":
+            return lambda: module._require_expected_hash(
+                args,
+                output="toml",
+                option_name="expected-config-hash",
+                attr_name=field,
+                actual_hash=config_hash,
+            )
+        if field in {
+            "expected_source_verifier_material_hash",
+            "expected_source_adapter_engine_deployment_hash",
+            "expected_tron_dpos_source_gate_hash",
+        }:
+            return lambda: module._require_expected_source_record_hashes(
+                args,
+                config_hash,
+            )
+        if field == "expected_destination_binding_hash":
+            return lambda: module._require_expected_hash(
+                args,
+                output="full-toml",
+                option_name="expected-destination-binding-hash",
+                attr_name=field,
+                actual_hash=destination_binding_hash,
+            )
+        if field == "route_allowlist_hash":
+            return lambda: module._require_expected_route_allowlist_hash(
+                args,
+                config_hash,
+                destination_binding_hash,
+            )
+        raise AssertionError(f"unexpected TRON expected-hash field {field}")
+
+    malformed_cases = (
+        (
+            "expected_config_hash",
+            HostileExpectedRecordHash,
+            "--expected-config-hash must be 32 bytes",
+        ),
+        (
+            "expected_config_hash",
+            lambda: bytes(32),
+            "--expected-config-hash must not be zero",
+        ),
+        (
+            "expected_config_hash",
+            lambda: b"\x11" * 31,
+            "--expected-config-hash must be 32 bytes",
+        ),
+        (
+            "expected_source_verifier_material_hash",
+            HostileExpectedRecordHash,
+            "--expected-source-verifier-material-hash must be 32 bytes",
+        ),
+        (
+            "expected_source_verifier_material_hash",
+            lambda: bytes(32),
+            "--expected-source-verifier-material-hash must not be zero",
+        ),
+        (
+            "expected_source_verifier_material_hash",
+            lambda: b"\x11" * 31,
+            "--expected-source-verifier-material-hash must be 32 bytes",
+        ),
+        (
+            "expected_source_adapter_engine_deployment_hash",
+            HostileExpectedRecordHash,
+            "--expected-source-adapter-engine-deployment-hash must be 32 bytes",
+        ),
+        (
+            "expected_source_adapter_engine_deployment_hash",
+            lambda: bytes(32),
+            "--expected-source-adapter-engine-deployment-hash must not be zero",
+        ),
+        (
+            "expected_source_adapter_engine_deployment_hash",
+            lambda: b"\x11" * 31,
+            "--expected-source-adapter-engine-deployment-hash must be 32 bytes",
+        ),
+        (
+            "expected_tron_dpos_source_gate_hash",
+            HostileExpectedRecordHash,
+            "--expected-tron-dpos-source-gate-hash must be 32 bytes",
+        ),
+        (
+            "expected_tron_dpos_source_gate_hash",
+            lambda: bytes(32),
+            "--expected-tron-dpos-source-gate-hash must not be zero",
+        ),
+        (
+            "expected_tron_dpos_source_gate_hash",
+            lambda: b"\x11" * 31,
+            "--expected-tron-dpos-source-gate-hash must be 32 bytes",
+        ),
+        (
+            "expected_destination_binding_hash",
+            HostileExpectedRecordHash,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+        (
+            "expected_destination_binding_hash",
+            lambda: bytes(32),
+            "--expected-destination-binding-hash must not be zero",
+        ),
+        (
+            "expected_destination_binding_hash",
+            lambda: b"\x11" * 31,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+        (
+            "route_allowlist_hash",
+            HostileExpectedRecordHash,
+            "route_allowlist_hash must be 32 bytes",
+        ),
+        (
+            "route_allowlist_hash",
+            lambda: bytes(32),
+            "route_allowlist_hash must not be zero",
+        ),
+        (
+            "route_allowlist_hash",
+            lambda: b"\x11" * 31,
+            "route_allowlist_hash must be 32 bytes",
+        ),
+    )
+
+    for field, make_value, expected_error in malformed_cases:
+        direct_args = sample_full_toml_args()
+        setattr(direct_args, field, make_value())
+        try:
+            direct_call(direct_args, field)()
+        except ValueError as exc:
+            message = str(exc)
+            assert expected_error in message
+            assert "secret-token" not in message
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(f"direct TRON helper accepted malformed {field}")
+
+        main_args = module.build_parser().parse_args(
+            sample_full_toml_cli_args(include_route_canary=False)
+        )
+        setattr(main_args, field, make_value())
+        fake_parser = FakeParser(main_args)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "build_parser", lambda: fake_parser)
+            try:
+                module.main([])
+            except SystemExit as exc:
+                code, message = exc.code
+                assert code == 2
+                assert expected_error in message
+                assert "secret-token" not in message
+            else:
+                raise AssertionError(f"TRON main accepted malformed {field}")
 
 
 def test_cli_expected_config_hash_check_accepts_matching_value(capsys):

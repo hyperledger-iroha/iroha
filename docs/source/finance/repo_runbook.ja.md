@@ -161,7 +161,7 @@ iroha --config client.toml --output \
 * 現在、CLI 呼び出しは空の命令メタデータを生成します。決済レベルで Python ヘルパーを使用する
   メタデータを添付する必要があります。
 * ISO 20022 フィールド マッピングについては、[`settlement_iso_mapping.md`](./settlement_iso_mapping.md) を参照してください。
-  これらの指示 (`sese.023`、`sese.025`、`colr.007`、`pacs.009`、`camt.054`) をサポートします。
+  これらの指示 (`sese.023`、`sese.025`、`colr.012`、`pacs.009`、`camt.054`) をサポートします。
 * `--iso-xml-out <path>` を渡すと、CLI は Norito とともに正規の XML プレビューを出力します
   指示;ファイルは上記のマッピングに従います (DvP の場合は `sese.023`、PvP の場合は `sese.025``)。ペアリングする
   `--iso-reference-crosswalk <path>` でフラグを設定するため、CLI は `--delivery-instrument-id` を

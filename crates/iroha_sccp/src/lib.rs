@@ -138,17 +138,21 @@ const SCCP_SOLANA_ROUTE_CANARY_LIVE_PROGRAM_LABEL_V1: &[u8] =
 const SCCP_LOCAL_ADMISSION_ENVELOPE_ENCODING_V1: &str = "norito:sccp-local-admission:v1";
 const SCCP_LOCAL_ADMISSION_SUBMISSION_KIND_V1: &str = "local_admission";
 const SCCP_LOCAL_ADMISSION_ENTRYPOINT_V1: &str = "SubmitBridgeProof";
-const SCCP_BSC_MATERIAL_ONLY_LOCAL_ADMISSION_PREFIX_V1: &[u8] =
-    b"sccp:bsc:material-only-local-admission:v1";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_ENVELOPE_ENCODING_V1: &str =
     "norito:sccp-taira-tron-xor-diagnostic:v1";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SUBMISSION_KIND_V1: &str = "diagnostic_local_admission";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_FINALITY_PREFIX_V1: &[u8] =
     b"sccp:taira-tron-xor:nile-diagnostic-finality:v1";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_PROOF_PREFIX_V1: &[u8] =
     b"sccp:taira-tron-xor:nile-diagnostic-proof:v1";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_MATERIAL_PREFIX_V1: &[u8] =
     b"sccp:taira-tron-xor:nile-diagnostic-source-material:v1";
+#[cfg(any(test, feature = "test-fixtures"))]
 const SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_DEPLOYMENT_PREFIX_V1: &[u8] =
     b"sccp:taira-tron-xor:nile-diagnostic-source-deployment:v1";
 /// Solana mainnet-beta destination anchor id required for SCCP verifier rollout.
@@ -7912,16 +7916,7 @@ pub fn sccp_route_allowlist_is_production_ready(
 }
 
 pub fn sccp_production_policy_v1() -> SccpProductionPolicyV1 {
-    let mut policy = SccpProductionPolicyV1 {
-        launch_mode: SccpLaunchModeV1::TonMainnetLane,
-        ..SccpProductionPolicyV1::default()
-    };
-    if let Ok(value) = std::env::var("IROHA_SCCP_LAUNCH_MODE_V1")
-        && let Ok(launch_mode) = value.parse()
-    {
-        policy.launch_mode = launch_mode;
-    }
-    policy
+    SccpProductionPolicyV1::default()
 }
 
 pub fn sccp_source_proof_plan_for_domain(domain: u32) -> Option<SccpSourceProofPlanV1> {
@@ -8612,11 +8607,20 @@ fn sccp_manifest_matches_domain_production_backend(manifest: &SccpProofManifestV
         && manifest.submission_template == expected_submission_template
 }
 
+fn sccp_allow_unready_transparent_proof_bypass_enabled(allow_unready: bool) -> bool {
+    allow_unready && cfg!(test)
+}
+
+fn sccp_allow_unready_source_proof_bypass_enabled(allow_unready: bool) -> bool {
+    allow_unready && cfg!(test)
+}
+
 pub fn sccp_manifest_allows_transparent_proofs(
     manifest: &SccpProofManifestV1,
     allow_unready: bool,
 ) -> bool {
-    sccp_manifest_is_production_ready(manifest) || allow_unready
+    sccp_manifest_is_production_ready(manifest)
+        || sccp_allow_unready_transparent_proof_bypass_enabled(allow_unready)
 }
 
 pub fn sccp_message_payload_kind_keys_v1() -> Vec<String> {
@@ -9234,7 +9238,8 @@ fn build_sccp_counterparty_proof_job_from_bundle_internal(
     ) {
         return None;
     }
-    if !allow_unready
+    let allow_unready_source_proof = sccp_allow_unready_source_proof_bypass_enabled(allow_unready);
+    if !allow_unready_source_proof
         && !sccp_bundle_source_proof_satisfies_production_build_gate(
             bundle,
             source_material,
@@ -9282,7 +9287,8 @@ fn build_sccp_counterparty_proof_job_from_bundle_with_proof_bytes_internal(
     ) {
         return None;
     }
-    if !allow_unready
+    let allow_unready_source_proof = sccp_allow_unready_source_proof_bypass_enabled(allow_unready);
+    if !allow_unready_source_proof
         && !sccp_bundle_source_proof_satisfies_production_build_gate(
             bundle,
             source_material,
@@ -9419,7 +9425,7 @@ pub fn canonical_nexus_sccp_message_bundle_bytes(bundle: &NexusSccpMessageProofV
     canonical_nexus_sccp_message_bundle_bytes_checked(bundle).unwrap_or_default()
 }
 
-pub fn canonical_nexus_sccp_message_bundle_bytes_checked(
+fn canonical_nexus_sccp_message_bundle_bytes_len_checked(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<Vec<u8>> {
     let commitment = canonical_commitment_bytes(&bundle.commitment);
@@ -9436,6 +9442,15 @@ pub fn canonical_nexus_sccp_message_bundle_bytes_checked(
     Some(out)
 }
 
+pub fn canonical_nexus_sccp_message_bundle_bytes_checked(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<Vec<u8>> {
+    if !verify_message_bundle_structure(bundle) {
+        return None;
+    }
+    canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)
+}
+
 pub fn canonical_sccp_source_chain_proof_envelope_bytes(
     proof: &SccpSourceChainProofEnvelopeV1,
 ) -> Vec<u8> {
@@ -9445,6 +9460,9 @@ pub fn canonical_sccp_source_chain_proof_envelope_bytes(
 pub fn canonical_sccp_source_chain_proof_envelope_bytes_checked(
     proof: &SccpSourceChainProofEnvelopeV1,
 ) -> Option<Vec<u8>> {
+    if !verify_sccp_source_chain_proof_envelope_base_shape(proof) {
+        return None;
+    }
     let mut out = Vec::new();
     push_u8(&mut out, proof.version);
     push_u32(&mut out, proof.source_domain);
@@ -9638,6 +9656,29 @@ fn sccp_source_adapter_engine_deployment_role_hashes_are_separated(
     ])
 }
 
+fn sccp_source_adapter_engine_deployment_reuses_builtin_template_component_hashes(
+    deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> bool {
+    sccp_source_verifier_hashes_reuse_any_builtin_or_profile_template_components(&[
+        deployment.source_trust_anchor_hash,
+        deployment.consensus_verifier_hash,
+        deployment.message_inclusion_verifier_hash,
+        deployment.finality_policy_hash,
+        deployment.source_state_verifier_hash,
+        deployment.adapter_verifier_vk_hash,
+        deployment.source_bridge_emitter_code_hash,
+        deployment.source_bridge_network_id,
+        deployment.source_bridge_config_hash,
+        deployment.deployment_receipt_hash,
+        deployment.solana_tower_replay_verifier_hash,
+        deployment.solana_full_accountsdb_lattice_verifier_hash,
+        deployment.solana_bank_fork_choice_verifier_hash,
+        deployment.ton_masterchain_config_verifier_hash,
+        deployment.ton_validator_set_transition_verifier_hash,
+        deployment.ton_shard_accounts_dictionary_verifier_hash,
+    ])
+}
+
 fn sccp_source_adapter_deployment_solana_full_light_client_audit_hashes(
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> [H256; 3] {
@@ -9664,7 +9705,7 @@ fn sccp_source_adapter_deployment_solana_full_light_client_audit_nonzero_count(
 fn sccp_solana_full_light_client_audit_hashes_reuse_template_components(
     audit_hashes: &[H256; 3],
 ) -> bool {
-    sccp_source_verifier_hashes_reuse_any_profile_template_components(audit_hashes)
+    sccp_source_verifier_hashes_reuse_any_builtin_or_profile_template_components(audit_hashes)
 }
 
 fn sccp_solana_full_light_client_audit_hashes_are_role_separated(
@@ -9758,7 +9799,7 @@ fn sccp_source_adapter_deployment_ton_full_light_client_audit_nonzero_count(
 fn sccp_ton_full_light_client_audit_hashes_reuse_template_components(
     audit_hashes: &[H256; 3],
 ) -> bool {
-    sccp_source_verifier_hashes_reuse_any_profile_template_components(audit_hashes)
+    sccp_source_verifier_hashes_reuse_any_builtin_or_profile_template_components(audit_hashes)
 }
 
 fn sccp_ton_full_light_client_audit_hashes_are_role_separated(
@@ -12891,10 +12932,34 @@ fn sccp_hash_reuses_any_profile_template_component(hash: &H256) -> bool {
             })
 }
 
+fn sccp_hash_reuses_any_builtin_placeholder_component(hash: &H256) -> bool {
+    h256_is_nonzero(hash)
+        && SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1
+            .iter()
+            .any(|domain| {
+                sccp_source_verifier_material_for_domain(*domain).is_some_and(|placeholder| {
+                    sccp_hash_reuses_template_source_verifier_component(hash, &placeholder)
+                })
+            })
+}
+
+fn sccp_hash_reuses_any_builtin_or_profile_template_component(hash: &H256) -> bool {
+    sccp_hash_reuses_any_profile_template_component(hash)
+        || sccp_hash_reuses_any_builtin_placeholder_component(hash)
+}
+
 fn sccp_source_verifier_hashes_reuse_any_profile_template_components(hashes: &[H256]) -> bool {
     hashes
         .iter()
         .any(sccp_hash_reuses_any_profile_template_component)
+}
+
+fn sccp_source_verifier_hashes_reuse_any_builtin_or_profile_template_components(
+    hashes: &[H256],
+) -> bool {
+    hashes
+        .iter()
+        .any(sccp_hash_reuses_any_builtin_or_profile_template_component)
 }
 
 fn sccp_source_verifier_deployed_role_hashes_are_valid(
@@ -12914,7 +12979,9 @@ fn sccp_source_verifier_deployed_role_hashes_are_valid(
         && h256_is_nonzero(&consensus_verifier_hash)
         && h256_is_nonzero(&message_inclusion_verifier_hash)
         && h256_is_nonzero(&finality_policy_hash)
-        && !sccp_source_verifier_hashes_reuse_any_profile_template_components(&role_hashes)
+        && !sccp_source_verifier_hashes_reuse_any_builtin_or_profile_template_components(
+            &role_hashes,
+        )
         && sccp_nonzero_h256_values_are_pairwise_distinct(&role_hashes)
 }
 
@@ -12923,7 +12990,7 @@ fn sccp_deployed_hash_is_distinct_from_material_roles(
     material: &SccpSourceVerifierMaterialV1,
 ) -> bool {
     h256_is_nonzero(hash)
-        && !sccp_hash_reuses_any_profile_template_component(hash)
+        && !sccp_hash_reuses_any_builtin_or_profile_template_component(hash)
         && *hash != material.source_trust_anchor_hash
         && *hash != material.consensus_verifier_hash
         && *hash != material.message_inclusion_verifier_hash
@@ -13276,10 +13343,6 @@ fn sccp_source_verifier_material_matches_domain_profile(
 pub fn sccp_source_verifier_material_is_production_ready(
     material: &SccpSourceVerifierMaterialV1,
 ) -> bool {
-    if sccp_bsc_material_only_source_adapter_is_production_ready(material) {
-        return true;
-    }
-
     material.version == 1
         && !material.placeholder_material
         && !sccp_source_verifier_material_uses_builtin_placeholder_components(material)
@@ -13303,57 +13366,6 @@ pub fn sccp_source_verifier_material_is_production_ready(
         && h256_is_nonzero(&material.consensus_verifier_hash)
         && h256_is_nonzero(&material.message_inclusion_verifier_hash)
         && h256_is_nonzero(&material.finality_policy_hash)
-        && sccp_source_verifier_material_role_hashes_are_separated(material)
-        && h256_is_nonzero(&sccp_source_verifier_material_hash(material))
-}
-
-fn sccp_bsc_material_only_source_adapter_is_production_ready(
-    material: &SccpSourceVerifierMaterialV1,
-) -> bool {
-    let Some(template) = sccp_evm_family_mainnet_source_verifier_material_v1(SCCP_DOMAIN_BSC)
-    else {
-        return false;
-    };
-
-    // BSC source material can be carried by the signed source-proof envelope
-    // itself. This path intentionally validates the exact deterministic BSC
-    // validator-set/receipt profile instead of requiring a separate governed
-    // source-adapter deployment record.
-    material.version == 1
-        && material.source_domain == SCCP_DOMAIN_BSC
-        && material.placeholder_material
-        && !sccp_source_verifier_material_uses_builtin_placeholder_components(material)
-        && material.source_chain == "bsc"
-        && material.source_proof_plan == SccpSourceProofPlanV1::BscValidatorSetReceiptProof
-        && material.finality_model == SccpProofFinalityModelV1::BscValidatorSet
-        && material.adapter_circuit_id == SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1
-        && material.source_trust_anchor_id == SCCP_BSC_MAINNET_SOURCE_TRUST_ANCHOR_ID_V1
-        && material.consensus_verifier_id == SCCP_BSC_MAINNET_CONSENSUS_VERIFIER_ID_V1
-        && material.message_inclusion_verifier_id
-            == SCCP_BSC_MAINNET_MESSAGE_INCLUSION_VERIFIER_ID_V1
-        && material.finality_policy_id == SCCP_BSC_MAINNET_FINALITY_POLICY_ID_V1
-        && material.source_bridge_emitter_id == SCCP_BSC_MAINNET_SOURCE_BRIDGE_EMITTER_ID_V1
-        && material.source_trust_anchor_hash == template.source_trust_anchor_hash
-        && material.consensus_verifier_hash == template.consensus_verifier_hash
-        && material.message_inclusion_verifier_hash == template.message_inclusion_verifier_hash
-        && material.finality_policy_hash == template.finality_policy_hash
-        && material.source_state_verifier_id.is_empty()
-        && !h256_is_nonzero(&material.source_state_verifier_hash)
-        && sccp_source_bridge_emitter_binding_is_production_ready(material)
-        && sccp_source_bridge_config_hash_fields_are_empty(
-            &material.source_bridge_network_id,
-            &material.source_bridge_owner_address,
-            &material.source_bridge_config_hash,
-        )
-        && h256_is_nonzero(&material.source_trust_anchor_hash)
-        && h256_is_nonzero(&material.consensus_verifier_hash)
-        && h256_is_nonzero(&material.message_inclusion_verifier_hash)
-        && h256_is_nonzero(&material.finality_policy_hash)
-        && h256_is_nonzero(&material.source_bridge_emitter_code_hash)
-        && material.source_bridge_emitter_code_hash != material.source_trust_anchor_hash
-        && material.source_bridge_emitter_code_hash != material.consensus_verifier_hash
-        && material.source_bridge_emitter_code_hash != material.message_inclusion_verifier_hash
-        && material.source_bridge_emitter_code_hash != material.finality_policy_hash
         && sccp_source_verifier_material_role_hashes_are_separated(material)
         && h256_is_nonzero(&sccp_source_verifier_material_hash(material))
 }
@@ -13422,8 +13434,11 @@ pub fn sccp_source_adapter_engine_deployment_from_material_for_target_v1(
         deployment_receipt_hash,
     };
 
-    sccp_source_adapter_engine_deployment_role_hashes_are_separated(&deployment)
-        .then_some(deployment)
+    (sccp_source_adapter_engine_deployment_role_hashes_are_separated(&deployment)
+        && !sccp_source_adapter_engine_deployment_reuses_builtin_template_component_hashes(
+            &deployment,
+        ))
+    .then_some(deployment)
 }
 
 pub fn sccp_source_adapter_engine_deployment_from_material_v1(
@@ -13658,6 +13673,9 @@ pub fn sccp_source_adapter_engine_deployment_matches_material(
         && sccp_source_bridge_config_hash_is_production_ready(material)
         && h256_is_nonzero(&deployment.deployment_receipt_hash)
         && sccp_source_adapter_engine_deployment_role_hashes_are_separated(deployment)
+        && !sccp_source_adapter_engine_deployment_reuses_builtin_template_component_hashes(
+            deployment,
+        )
         && h256_is_nonzero(&sccp_source_adapter_engine_deployment_hash(deployment))
         && sccp_source_verifier_material_can_back_source_adapter_deployment(material)
 }
@@ -13796,6 +13814,34 @@ fn source_verifier_evidence_role_hashes_are_separated(
     evidence: &SccpSourceVerifierEvidenceV1,
 ) -> bool {
     sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        evidence.adapter_proof_hash,
+        evidence.adapter_transcript_hash,
+        evidence.source_trust_anchor_hash,
+        evidence.consensus_verifier_hash,
+        evidence.message_inclusion_verifier_hash,
+        evidence.finality_policy_hash,
+        evidence.source_state_verifier_hash,
+        evidence.source_bridge_emitter_code_hash,
+        evidence.source_bridge_network_id,
+        evidence.source_bridge_config_hash,
+        evidence.source_adapter_deployment_hash,
+        evidence.source_adapter_deployment_receipt_hash,
+    ])
+}
+
+fn source_verifier_evidence_adapter_hashes_reuse_builtin_template_component_hashes(
+    evidence: &SccpSourceVerifierEvidenceV1,
+) -> bool {
+    sccp_source_verifier_hashes_reuse_any_builtin_or_profile_template_components(&[
+        evidence.adapter_proof_hash,
+        evidence.adapter_transcript_hash,
+    ])
+}
+
+fn source_verifier_evidence_reuses_builtin_template_component_hashes(
+    evidence: &SccpSourceVerifierEvidenceV1,
+) -> bool {
+    sccp_source_verifier_hashes_reuse_any_builtin_or_profile_template_components(&[
         evidence.source_trust_anchor_hash,
         evidence.consensus_verifier_hash,
         evidence.message_inclusion_verifier_hash,
@@ -13821,6 +13867,10 @@ fn source_verifier_evidence_has_common_valid_shape(
         source_verifier_evidence_deployment_fields_are_empty(evidence);
     let deployment_fields_are_consistent =
         deployment_fields_are_populated || deployment_fields_are_empty;
+    let deployment_template_hashes_are_absent = !deployment_fields_are_populated
+        || !source_verifier_evidence_reuses_builtin_template_component_hashes(evidence);
+    let proof_artifact_template_hashes_are_absent =
+        !source_verifier_evidence_adapter_hashes_reuse_builtin_template_component_hashes(evidence);
     let source_state_shape_is_consistent = source_verifier_evidence_source_state_shape_is_valid(
         evidence,
         deployment_fields_are_populated,
@@ -13875,7 +13925,9 @@ fn source_verifier_evidence_has_common_valid_shape(
         && h256_is_nonzero(&evidence.message_inclusion_verifier_hash)
         && h256_is_nonzero(&evidence.finality_policy_hash)
         && source_verifier_evidence_role_hashes_are_separated(evidence)
+        && proof_artifact_template_hashes_are_absent
         && deployment_fields_are_consistent
+        && deployment_template_hashes_are_absent
         && source_state_shape_is_consistent
         && source_bridge_emitter_shape_is_consistent
         && source_bridge_config_hash_is_consistent
@@ -14134,8 +14186,22 @@ pub fn canonical_sccp_source_adapter_verification_statement_bytes_checked(
     adapter_transcript_hash: H256,
     verifier_evidence_hash: H256,
 ) -> Option<Vec<u8>> {
+    if !verify_sccp_source_chain_proof_envelope_statement_shape(proof)
+        || !h256_is_nonzero(&adapter_transcript_hash)
+        || !h256_is_nonzero(&verifier_evidence_hash)
+    {
+        return None;
+    }
     let adapter_proof_bytes = canonical_sccp_source_adapter_proof_bytes_checked(adapter_proof)?;
     let adapter_proof_hash = sccp_source_adapter_proof_hash_from_bytes(&adapter_proof_bytes);
+    if !sccp_source_adapter_statement_role_hashes_are_separated(
+        proof,
+        adapter_transcript_hash,
+        verifier_evidence_hash,
+        adapter_proof_hash,
+    ) {
+        return None;
+    }
     let mut out = Vec::new();
     push_u8(&mut out, 1);
     push_u32(&mut out, proof.source_domain);
@@ -14162,6 +14228,27 @@ pub fn canonical_sccp_source_adapter_verification_statement_bytes_checked(
     out.extend_from_slice(&adapter_proof_hash);
     push_u32_len_checked(&mut out, adapter_proof_bytes.len())?;
     Some(out)
+}
+
+fn sccp_source_adapter_statement_role_hashes_are_separated(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    adapter_transcript_hash: H256,
+    verifier_evidence_hash: H256,
+    adapter_proof_hash: H256,
+) -> bool {
+    h256_is_nonzero(&adapter_proof_hash)
+        && sccp_nonzero_h256_values_are_pairwise_distinct(&[
+            proof.message_id,
+            proof.payload_hash,
+            proof.source_event_digest,
+            proof.commitment_root,
+            proof.finality_block_hash,
+            proof.finalized_header_hash,
+            proof.receipt_or_message_root,
+            adapter_transcript_hash,
+            verifier_evidence_hash,
+            adapter_proof_hash,
+        ])
 }
 
 fn canonical_sccp_source_adapter_proof_commitment_bytes_checked(
@@ -14430,7 +14517,7 @@ fn sccp_source_adapter_verification_open_verify_envelope_shape(
 pub fn sccp_source_chain_proof_adapter_verifier_commitment(
     proof: &SccpSourceChainProofEnvelopeV1,
 ) -> Option<H256> {
-    if !verify_sccp_source_chain_proof_envelope_base_shape(proof) {
+    if !verify_sccp_source_chain_proof_envelope_shape(proof) {
         return None;
     }
     let consensus = decode_sccp_source_consensus_proof(&proof.consensus_proof)?;
@@ -14585,6 +14672,9 @@ fn source_adapter_deployment_has_standalone_valid_shape(
         && h256_is_nonzero(&deployment.deployment_receipt_hash)
         && audit_shape_is_valid
         && sccp_source_adapter_engine_deployment_role_hashes_are_separated(deployment)
+        && !sccp_source_adapter_engine_deployment_reuses_builtin_template_component_hashes(
+            deployment,
+        )
         && sccp_source_adapter_engine_deployment_matches_material(&deployment_material, deployment)
         && h256_is_nonzero(&sccp_source_adapter_engine_deployment_hash(deployment))
 }
@@ -14642,14 +14732,6 @@ pub fn sccp_source_chain_proof_matches_adapter_deployment(
     proof: &SccpSourceChainProofEnvelopeV1,
     deployment: &SccpSourceAdapterEngineDeploymentV1,
 ) -> bool {
-    if ton_testnet_placeholder_source_proof_shape_is_valid(proof) {
-        return source_adapter_deployment_has_standalone_valid_shape(deployment)
-            && deployment.source_domain == proof.source_domain
-            && deployment.target_domain == proof.target_domain
-            && deployment.source_chain == proof.source_chain
-            && deployment.source_proof_plan == proof.source_proof_plan
-            && deployment.finality_model == proof.finality_model;
-    }
     let Some(consensus) = decode_sccp_source_consensus_proof(&proof.consensus_proof) else {
         return false;
     };
@@ -17735,7 +17817,18 @@ fn sccp_proof_request_source_proof_matches_bundle(
     source_proof_bytes: &[u8],
 ) -> bool {
     if bundle_summary.source_domain == SCCP_DOMAIN_SORA {
-        return source_proof_bytes.is_empty();
+        if !source_proof_bytes.is_empty() {
+            return false;
+        }
+        let Some(finality_proof) =
+            decode_nexus_bridge_finality_proof(&bundle_summary.finality_proof)
+        else {
+            return false;
+        };
+        return verify_nexus_bridge_finality_proof_structure(&finality_proof)
+            && finality_proof.commitment_root == bundle_summary.commitment_root
+            && finality_proof.height == public_inputs.finality_height
+            && finality_proof.block_hash == public_inputs.finality_block_hash;
     }
     let Some(source_proof) = decode_canonical_sccp_source_chain_proof_bytes(source_proof_bytes)
     else {
@@ -18367,7 +18460,7 @@ fn sccp_bsc_mainnet_destination_binding_is_deployment_bound(
     let Some(network_id) = required_raw_lower_hex_string_is_nonzero::<32>(network_id) else {
         return false;
     };
-    if !sccp_evm_network_id_word_is_supported_for_domain(SCCP_DOMAIN_BSC, &network_id) {
+    if network_id != sccp_bsc_mainnet_network_id_word_v1() {
         return false;
     }
     let Some(verifier_address) =
@@ -18415,7 +18508,7 @@ pub fn build_sccp_bsc_mainnet_destination_binding(
 ) -> Option<SccpDestinationBindingV1> {
     if manifest.local_domain != SCCP_DOMAIN_SORA
         || manifest.counterparty_domain != SCCP_DOMAIN_BSC
-        || !sccp_evm_network_id_word_is_supported_for_domain(SCCP_DOMAIN_BSC, &network_id)
+        || network_id != sccp_bsc_mainnet_network_id_word_v1()
     {
         return None;
     }
@@ -19081,10 +19174,7 @@ fn sccp_local_admission_is_allowed(
                     deployment,
                 )
         }
-        None => {
-            source_domain == SCCP_DOMAIN_BSC
-                && sccp_bsc_material_only_source_adapter_is_production_ready(material)
-        }
+        None => false,
     };
 
     manifest.local_domain == SCCP_DOMAIN_SORA
@@ -19100,21 +19190,13 @@ fn sccp_local_admission_is_allowed(
 }
 
 fn sccp_local_admission_source_adapter_hash(
-    material: &SccpSourceVerifierMaterialV1,
+    _material: &SccpSourceVerifierMaterialV1,
     source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> Option<H256> {
     if let Some(deployment) = source_deployment {
         return Some(sccp_source_adapter_engine_deployment_hash(deployment));
     }
-    if material.source_domain != SCCP_DOMAIN_BSC
-        || !sccp_bsc_material_only_source_adapter_is_production_ready(material)
-    {
-        return None;
-    }
-    Some(prefixed_blake2b(
-        SCCP_BSC_MATERIAL_ONLY_LOCAL_ADMISSION_PREFIX_V1,
-        &sccp_source_verifier_material_hash(material),
-    ))
+    None
 }
 
 fn build_sccp_local_admission_submission_payload(
@@ -19678,13 +19760,14 @@ fn build_sccp_counterparty_submission_package_internal(
     source_material: Option<&SccpSourceVerifierMaterialV1>,
     source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
+    let allow_unready_source_proof = sccp_allow_unready_source_proof_bypass_enabled(allow_unready);
     if !sccp_manifest_allows_transparent_proofs(manifest, allow_unready) {
         return None;
     }
     if !sccp_message_bundle_matches_manifest_counterparty(bundle, manifest) {
         return None;
     }
-    if !allow_unready
+    if !allow_unready_source_proof
         && !sccp_bundle_source_proof_satisfies_production_build_gate(
             bundle,
             source_material,
@@ -20461,6 +20544,7 @@ pub fn build_nexus_sccp_message_transparent_proof_allow_unready(
     )
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn sccp_taira_tron_xor_diagnostic_transfer(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<&TransferPayloadV1> {
@@ -20485,6 +20569,7 @@ fn sccp_taira_tron_xor_diagnostic_transfer(
 /// This helper intentionally does not replace production source-chain proof
 /// verification. It only validates the SCCP message commitment, payload shape,
 /// and non-empty source evidence carrier for the TAIRA testnet route.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn sccp_taira_tron_xor_diagnostic_message_bundle_structure(
     bundle: &NexusSccpMessageProofV1,
 ) -> bool {
@@ -20507,6 +20592,7 @@ pub fn sccp_taira_tron_xor_diagnostic_message_bundle_structure(
 }
 
 /// Build deterministic public inputs for the TAIRA XOR diagnostic TRON-Nile source route.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<SccpMessageTransparentPublicInputsV1> {
@@ -20514,7 +20600,7 @@ pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
     if !sccp_taira_tron_xor_diagnostic_message_bundle_structure(bundle) {
         return None;
     }
-    let mut finality_context = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
+    let mut finality_context = canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)?;
     finality_context.extend_from_slice(&transfer.nonce.to_le_bytes());
     let finality_block_hash = prefixed_blake2b(
         SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_FINALITY_PREFIX_V1,
@@ -20531,6 +20617,7 @@ pub fn sccp_taira_tron_xor_diagnostic_message_public_inputs(
     })
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn sccp_taira_tron_xor_diagnostic_statement_hash(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
@@ -20544,12 +20631,13 @@ fn sccp_taira_tron_xor_diagnostic_statement_hash(
     ))
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn sccp_taira_tron_xor_diagnostic_proof_bytes(
     bundle: &NexusSccpMessageProofV1,
     statement_hash: H256,
     public_inputs: &SccpMessageTransparentPublicInputsV1,
 ) -> Option<Vec<u8>> {
-    let mut proof_context = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
+    let mut proof_context = canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)?;
     proof_context.extend_from_slice(&canonical_sccp_message_transparent_public_inputs_bytes(
         public_inputs,
     ));
@@ -20569,6 +20657,7 @@ fn sccp_taira_tron_xor_diagnostic_proof_bytes(
     Some(proof_bytes)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
 fn sccp_taira_tron_xor_diagnostic_submission_package(
     manifest: &SccpProofManifestV1,
     bundle: &NexusSccpMessageProofV1,
@@ -20576,7 +20665,7 @@ fn sccp_taira_tron_xor_diagnostic_submission_package(
     statement_hash: H256,
     public_inputs: &SccpMessageTransparentPublicInputsV1,
 ) -> Option<SccpCounterpartySubmissionPackageV1> {
-    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked(bundle)?;
+    let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_len_checked(bundle)?;
     let source_verifier_material_hash = prefixed_blake2b(
         SCCP_TAIRA_TRON_XOR_DIAGNOSTIC_SOURCE_MATERIAL_PREFIX_V1,
         &canonical_sccp_message_transparent_public_inputs_bytes(public_inputs),
@@ -20611,11 +20700,12 @@ fn sccp_taira_tron_xor_diagnostic_submission_package(
     })
 }
 
-/// Build a TAIRA-testnet diagnostic transparent proof for TRON Nile -> TAIRA XOR messages.
+/// Build an adversarial TAIRA-testnet diagnostic proof fixture for TRON Nile -> TAIRA XOR messages.
 ///
-/// The returned artifact is only intended for a TAIRA testnet node whose
-/// `sccp_allow_unready_transparent_proofs` setting is enabled. Production
-/// non-SORA source lanes must continue to use governed source-adapter material.
+/// The returned artifact is intentionally available only to tests and fixture
+/// generation. Production non-SORA source lanes must use governed
+/// source-adapter material.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn build_sccp_taira_tron_xor_diagnostic_transparent_proof(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
@@ -20653,7 +20743,8 @@ pub fn build_sccp_taira_tron_xor_diagnostic_transparent_proof(
     })
 }
 
-/// Verify a TAIRA-testnet diagnostic transparent proof for the TRON Nile XOR route.
+/// Verify the adversarial TAIRA-testnet diagnostic proof fixture for the TRON Nile XOR route.
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn verify_sccp_taira_tron_xor_diagnostic_transparent_proof(
     artifact: &NexusSccpMessageTransparentProofV1,
 ) -> bool {
@@ -20874,10 +20965,11 @@ fn build_nexus_sccp_message_transparent_proof_internal(
 ) -> Option<NexusSccpMessageTransparentProofV1> {
     let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
     let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    let allow_unready_source_proof = sccp_allow_unready_source_proof_bypass_enabled(allow_unready);
     if !sccp_manifest_allows_transparent_proofs(&manifest, allow_unready) {
         return None;
     }
-    if !allow_unready
+    if !allow_unready_source_proof
         && !sccp_bundle_source_proof_satisfies_production_build_gate(
             bundle,
             source_material,
@@ -21435,6 +21527,8 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
     source_material: Option<&SccpSourceVerifierMaterialV1>,
     source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> bool {
+    let allow_unready_source_proof =
+        sccp_allow_unready_source_proof_bypass_enabled(allow_unready_source_proof);
     if proof.version != 1
         || proof.local_domain != SCCP_DOMAIN_SORA
         || proof.proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1
@@ -22299,8 +22393,15 @@ fn evm_recoverable_signature_is_canonical(signature: &[u8; 65]) -> bool {
         && secp256k1_recoverable_signature_s_is_low(signature)
 }
 
+fn evm_recoverable_signature_slice_is_canonical(signature: &[u8]) -> bool {
+    let Ok(signature) = <[u8; 65]>::try_from(signature) else {
+        return false;
+    };
+    evm_recoverable_signature_is_canonical(&signature)
+}
+
 fn tron_recoverable_signature_is_canonical(signature: &[u8; 65]) -> bool {
-    matches!(signature[64], 0..=3 | 27..=30)
+    matches!(signature[64], 0..=3)
         && secp256k1_recoverable_signature_r_is_valid(signature)
         && secp256k1_recoverable_signature_s_is_low(signature)
 }
@@ -22319,7 +22420,6 @@ fn tron_recoverable_signature_for_recovery(signature: &[u8; 65]) -> Option<[u8; 
     let mut normalized = *signature;
     normalized[64] = match signature[64] {
         0..=3 => signature[64].checked_add(27)?,
-        27..=30 => signature[64],
         _ => return None,
     };
     Some(normalized)
@@ -22579,6 +22679,10 @@ fn h256_merkle_branch_is_nonempty_and_bounded(inclusion_branch: &[Vec<u8>]) -> b
     !inclusion_branch.is_empty() && h256_merkle_branch_siblings_are_bounded(inclusion_branch)
 }
 
+fn h256_merkle_leaf_index_is_canonical_for_depth(leaf_index: u64, depth: usize) -> bool {
+    depth >= u64::BITS as usize || leaf_index < (1u64 << depth)
+}
+
 fn push_h256_inclusion_branch(out: &mut Vec<u8>, inclusion_branch: &[Vec<u8>]) -> Option<()> {
     if !h256_merkle_branch_siblings_are_bounded(inclusion_branch) {
         return None;
@@ -22615,7 +22719,9 @@ fn ssz_merkleize_chunks(mut chunks: Vec<H256>) -> Option<H256> {
 }
 
 fn ssz_merkle_root_from_branch(leaf: H256, leaf_index: u64, branch: &[Vec<u8>]) -> Option<H256> {
-    if !h256_merkle_branch_siblings_are_bounded(branch) {
+    if !h256_merkle_branch_siblings_are_bounded(branch)
+        || !h256_merkle_leaf_index_is_canonical_for_depth(leaf_index, branch.len())
+    {
         return None;
     }
     let mut current = leaf;
@@ -23680,6 +23786,7 @@ fn sccp_eth_source_adapter_shape_is_bounded(adapter: &SccpEvmBeaconSourceProofV1
         && !adapter.execution_header_rlp.is_empty()
         && adapter.execution_header_rlp.len() <= SCCP_EVM_MAX_HEADER_RLP_BYTES
         && h256_merkle_branch_siblings_are_bounded(&adapter.execution_payload_branch)
+        && verify_sccp_eth_beacon_execution_header_root_binding(adapter)
         && mpt_proof_nodes_are_bounded(&adapter.receipt_trie_proof_nodes)
         && sccp_eth_sync_committee_binding_shape_is_bounded(adapter)
         && sccp_eth_sync_committee_transition_chain_shape_is_bounded(adapter)
@@ -23707,7 +23814,7 @@ fn sccp_bsc_validator_set_seal_shape_is_bounded(seal: &SccpBscValidatorSetSealPr
         || seal
             .signatures
             .iter()
-            .any(|signature| signature.len() != 65)
+            .any(|signature| !evm_recoverable_signature_slice_is_canonical(signature))
     {
         return false;
     }
@@ -23759,7 +23866,9 @@ fn sccp_bsc_validator_set_seal_binding_shape_is_bounded(
         return false;
     }
 
-    sccp_bsc_commit_seal_transcript_hash(seal, validator_set_hash) == adapter.commit_seal_hash
+    verify_sccp_bsc_validator_set_seal_signatures(seal, validator_set_hash)
+        && sccp_bsc_commit_seal_transcript_hash(seal, validator_set_hash)
+            == adapter.commit_seal_hash
 }
 
 fn sccp_bsc_validator_storage_proof_shape_is_bounded(
@@ -23885,6 +23994,10 @@ fn sccp_bsc_validator_set_transition_shape_is_bounded(
         && expected_transition_message_hash == transition.transition_message_hash
         && transition.seal_proof.commit_message_hash == expected_transition_message_hash
         && expected_transition_seal_hash == transition.transition_seal_hash
+        && verify_sccp_bsc_validator_set_seal_signatures(
+            &transition.seal_proof,
+            transition.parent_validator_set_hash,
+        )
 }
 
 fn sccp_bsc_validator_set_transition_chain_shape_is_bounded(
@@ -23976,9 +24089,7 @@ fn sccp_source_state_verification_proof_is_present(
 fn sccp_source_state_verification_proof_encoding_shape_is_bounded(
     proof: &SccpSourceStateVerificationProofV1,
 ) -> bool {
-    proof.proof_family.len() <= SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES
-        && proof.circuit_id.len() <= SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES
-        && proof.proof_bytes.len() <= SCCP_SOURCE_STATE_MAX_PROOF_BYTES
+    sccp_source_state_verification_proof_shape_is_bounded(proof)
 }
 
 fn sccp_solana_fixed_width_vectors_are_bounded(fields: &[Vec<u8>], max_fields: usize) -> bool {
@@ -24293,6 +24404,8 @@ fn sccp_solana_source_adapter_encoding_shape_is_bounded(
         && adapter.emitter_program_id.len() == SCCP_SOLANA_PROGRAM_ID_BYTES
         && sccp_solana_finality_context_shape_is_bounded(&adapter.finality_context)
         && sccp_solana_vote_proof_encoding_shape_is_bounded(&adapter.vote_proof)
+        && verify_sccp_solana_finality_context_shape(adapter)
+        && sccp_solana_validator_account_witnesses_are_consistent(adapter)
 }
 
 fn sccp_solana_source_adapter_shape_is_bounded(adapter: &SccpSolanaFinalizedSourceProofV1) -> bool {
@@ -24331,6 +24444,8 @@ fn sccp_solana_source_adapter_shape_is_bounded(adapter: &SccpSolanaFinalizedSour
         && adapter.finality_context.parent_bank_hash != adapter.bank_hash
         && sccp_solana_finality_context_shape_is_bounded(&adapter.finality_context)
         && sccp_solana_vote_proof_shape_is_bounded(&adapter.vote_proof)
+        && verify_sccp_solana_finality_context_shape(adapter)
+        && sccp_solana_validator_account_witnesses_are_consistent(adapter)
         && adapter.vote_proof.vote_message_hash
             == sccp_solana_vote_message_hash(
                 adapter.source_domain,
@@ -24428,7 +24543,9 @@ fn sccp_tron_witness_seal_binding_shape_is_bounded(adapter: &SccpTronDposSourceP
         return false;
     }
 
-    sccp_tron_witness_seal_transcript_hash(seal, witness_schedule_hash) == adapter.witness_seal_hash
+    verify_sccp_tron_witness_seal_signatures(seal, witness_schedule_hash)
+        && sccp_tron_witness_seal_transcript_hash(seal, witness_schedule_hash)
+            == adapter.witness_seal_hash
 }
 
 fn sccp_tron_solid_block_header_shape_is_bounded(header: &SccpTronSolidBlockHeaderProofV1) -> bool {
@@ -24518,11 +24635,17 @@ fn sccp_tron_witness_schedule_transition_shape_is_bounded(
     ) else {
         return false;
     };
+    let Some(expected_transition_seal_hash) =
+        sccp_tron_witness_schedule_transition_seal_hash(transition)
+    else {
+        return false;
+    };
 
     parent_witness_schedule_hash == transition.parent_witness_schedule_hash
         && next_witness_schedule_payload_hash == transition.next_witness_schedule_payload_hash
         && next_witness_schedule_hash == transition.next_witness_schedule_hash
         && expected_transition_message_hash == transition.transition_message_hash
+        && expected_transition_seal_hash == transition.transition_seal_hash
 }
 
 fn sccp_tron_witness_schedule_transition_chain_shape_is_bounded(
@@ -24539,6 +24662,11 @@ fn sccp_tron_witness_schedule_transition_chain_shape_is_bounded(
     for transition in &adapter.witness_schedule_transition_proofs {
         if !sccp_tron_witness_schedule_transition_shape_is_bounded(transition)
             || transition.transition_block_number > adapter.solid_block_number
+            || !sccp_tron_transition_block_hash_is_anchored(
+                adapter,
+                transition.transition_block_number,
+                transition.transition_block_hash,
+            )
             || expected_parent
                 .is_some_and(|parent| transition.parent_witness_schedule_hash != parent)
             || expected_from_epoch
@@ -24583,6 +24711,20 @@ fn sccp_tron_transaction_source_proof_shape_is_bounded(
             .transaction_merkle_branch
             .iter()
             .all(|sibling| sibling.len() == 32)
+        && sccp_tron_transaction_source_merkle_root_matches(adapter)
+}
+
+fn sccp_tron_transaction_source_merkle_root_matches(adapter: &SccpTronDposSourceProofV1) -> bool {
+    if !sccp_tron_transaction_source_proof_is_present(adapter) {
+        return true;
+    }
+    sccp_tron_transaction_merkle_root_from_branch(
+        sha256_bytes(&adapter.transaction_bytes),
+        adapter.transaction_index,
+        adapter.transaction_count,
+        &adapter.transaction_merkle_branch,
+    )
+    .is_some_and(|root| root == adapter.transaction_root)
 }
 
 fn sccp_tron_source_adapter_shape_is_bounded(adapter: &SccpTronDposSourceProofV1) -> bool {
@@ -24604,6 +24746,7 @@ fn sccp_tron_source_adapter_shape_is_bounded(adapter: &SccpTronDposSourceProofV1
         }
         && sccp_tron_transaction_source_proof_shape_is_bounded(adapter)
         && sccp_tron_solid_block_header_shape_is_bounded(&adapter.solid_block_header_proof)
+        && verify_sccp_tron_solid_block_header_proof(adapter, &adapter.witness_seal_proof)
         && adapter.solid_block_ancestor_headers.len() <= SCCP_TRON_MAX_SOLID_BLOCK_ANCESTOR_HEADERS
         && adapter
             .solid_block_ancestor_headers
@@ -24736,8 +24879,9 @@ fn sccp_ton_validator_signature_binding_shape_is_bounded(
         return false;
     }
 
-    sccp_ton_masterchain_signatures_hash(signatures_proof)
-        == Some(adapter.masterchain_signature_hash)
+    verify_sccp_ton_validator_signature_proof(signatures_proof, validator_set_hash)
+        && sccp_ton_masterchain_signatures_hash(signatures_proof)
+            == Some(adapter.masterchain_signature_hash)
 }
 
 fn sccp_ton_validator_set_transition_shape_is_bounded(
@@ -24748,6 +24892,10 @@ fn sccp_ton_validator_set_transition_shape_is_bounded(
         && transition.to_validator_set_seqno <= adapter_masterchain_seqno
         && sccp_ton_validator_signature_proof_shape_is_bounded(
             &transition.validator_signature_proof,
+        )
+        && verify_sccp_ton_validator_signature_proof(
+            &transition.validator_signature_proof,
+            transition.parent_validator_set_hash,
         )
         && sccp_ton_validator_set_transition_signature_hash(transition)
             == Some(transition.transition_signature_hash)
@@ -24814,6 +24962,9 @@ fn sccp_ton_source_adapter_shape_is_bounded(adapter: &SccpTonMasterchainSourcePr
             .len()
             <= SCCP_TON_MAX_BOC_BYTES
         && h256_merkle_branch_siblings_are_bounded(&adapter.shard_state_inclusion_branch)
+        && ton_shard_state_merkle_fields_are_canonical(adapter)
+        && verify_sccp_ton_shard_state_opening(adapter)
+        && verify_sccp_ton_masterchain_config_proof(adapter)
         && h256_merkle_branch_siblings_are_bounded(
             &adapter.masterchain_config_proof.config_inclusion_branch,
         )
@@ -24831,6 +24982,17 @@ fn sccp_ton_source_adapter_shape_is_bounded(adapter: &SccpTonMasterchainSourcePr
         )
         && sccp_ton_validator_signature_binding_shape_is_bounded(adapter)
         && sccp_ton_validator_set_transition_chain_shape_is_bounded(adapter)
+}
+
+fn ton_shard_state_merkle_fields_are_canonical(adapter: &SccpTonMasterchainSourceProofV1) -> bool {
+    if ton_shard_state_dictionary_opening_is_present(adapter) {
+        adapter.shard_state_leaf_index == 0 && adapter.shard_state_inclusion_branch.is_empty()
+    } else {
+        h256_merkle_leaf_index_is_canonical_for_depth(
+            adapter.shard_state_leaf_index,
+            adapter.shard_state_inclusion_branch.len(),
+        )
+    }
 }
 
 fn verify_sccp_mpt_inclusion(
@@ -32638,6 +32800,7 @@ pub fn canonical_sccp_ton_shard_proof_bytes_with_dictionary(
     if has_dictionary_opening {
         if !h256_is_nonzero(&shard_state_dictionary_root)
             || shard_state_dictionary_proof_boc.is_empty()
+            || shard_state_leaf_index != 0
             || !shard_state_inclusion_branch.is_empty()
             || !ton_hashmap_key_is_canonical(
                 shard_state_dictionary_key,
@@ -33217,7 +33380,9 @@ pub fn sccp_source_message_root_from_branch(
     leaf_index: u64,
     inclusion_branch: &[Vec<u8>],
 ) -> Option<H256> {
-    if !h256_merkle_branch_siblings_are_bounded(inclusion_branch) {
+    if !h256_merkle_branch_siblings_are_bounded(inclusion_branch)
+        || !h256_merkle_leaf_index_is_canonical_for_depth(leaf_index, inclusion_branch.len())
+    {
         return None;
     }
     let mut current = leaf_hash;
@@ -33701,16 +33866,59 @@ fn verify_nexus_commit_qc_bls_aggregate(_proof: &NexusBridgeFinalityProofV1) -> 
     false
 }
 
+fn source_adapter_placeholder_opening_is_well_bound(
+    proof: &SccpSourceChainProofEnvelopeV1,
+    consensus_proof: &SccpSourceConsensusProofV1,
+    expected_adapter_transcript_hash: H256,
+) -> bool {
+    if consensus_proof.adapter_verification_proof.version != 1
+        || consensus_proof.adapter_verification_proof.proof_family != SCCP_STARK_FRI_PROOF_FAMILY_V1
+        || consensus_proof.adapter_verification_proof.circuit_id
+            != SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1
+        || consensus_proof
+            .adapter_verification_proof
+            .proof_bytes
+            .is_empty()
+        || consensus_proof
+            .adapter_verification_proof
+            .proof_bytes
+            .iter()
+            .all(|byte| *byte == 0)
+        || consensus_proof.adapter_verification_proof.proof_bytes.len()
+            > SCCP_SOURCE_ADAPTER_MAX_PROOF_BYTES
+    {
+        return false;
+    }
+
+    let Some((env, open, raw_proof)) = decode_sccp_stark_open_verify_proof(
+        &consensus_proof.adapter_verification_proof.proof_bytes,
+    ) else {
+        return false;
+    };
+    let Some(expected_vk_hash) = sccp_source_adapter_fastpq_verifier_commitment(proof) else {
+        return false;
+    };
+    let verifier_evidence_hash =
+        sccp_source_verifier_evidence_hash(&consensus_proof.verifier_evidence);
+
+    env.circuit_id == SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1
+        && env.vk_hash == expected_vk_hash
+        && env.public_inputs == sccp_source_adapter_open_verify_schema_descriptor(proof)
+        && env.aux.is_empty()
+        && open.public_inputs
+            == sccp_source_adapter_public_input_columns(
+                proof,
+                expected_adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+        && raw_proof.public_io.tx_set_hash == expected_adapter_transcript_hash
+}
+
 fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment(
     proof: &SccpSourceChainProofEnvelopeV1,
     material: &SccpSourceVerifierMaterialV1,
     deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> bool {
-    if verify_ton_testnet_placeholder_source_proof_with_material_and_deployment(
-        proof, material, deployment,
-    ) {
-        return true;
-    }
     let Some(consensus_proof) = decode_sccp_source_consensus_proof(&proof.consensus_proof) else {
         return false;
     };
@@ -33762,22 +33970,11 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
     let placeholder_source_adapter_opening = deployment.is_none()
         && material.placeholder_material
         && proof.source_domain == SCCP_DOMAIN_BSC
-        && consensus_proof.adapter_verification_proof.version == 1
-        && consensus_proof.adapter_verification_proof.proof_family
-            == SCCP_STARK_FRI_PROOF_FAMILY_V1
-        && consensus_proof.adapter_verification_proof.circuit_id
-            == SCCP_SOURCE_ADAPTER_OPEN_VERIFY_CIRCUIT_ID_V1
-        && !consensus_proof
-            .adapter_verification_proof
-            .proof_bytes
-            .is_empty()
-        && consensus_proof
-            .adapter_verification_proof
-            .proof_bytes
-            .iter()
-            .any(|byte| *byte != 0)
-        && consensus_proof.adapter_verification_proof.proof_bytes.len()
-            <= SCCP_SOURCE_ADAPTER_MAX_PROOF_BYTES
+        && source_adapter_placeholder_opening_is_well_bound(
+            proof,
+            &consensus_proof,
+            expected_adapter_transcript_hash,
+        )
         && source_verifier_evidence_has_common_valid_shape(&consensus_proof.verifier_evidence);
     let source_adapter_opening_is_valid = placeholder_source_adapter_opening
         || verify_sccp_source_adapter_verification_proof(
@@ -33835,90 +34032,6 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
         && inclusion_proof.source_event_leaf_hash == expected_leaf_hash
         && inclusion_proof.receipt_or_message_root == proof.receipt_or_message_root
         && reconstructed_root == proof.receipt_or_message_root
-}
-
-fn ton_testnet_placeholder_source_proofs_allowed() -> bool {
-    std::env::var("IROHA_SCCP_ALLOW_TON_TESTNET_SOURCE_PLACEHOLDER")
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
-
-fn ton_testnet_placeholder_source_proof_shape_is_valid(
-    proof: &SccpSourceChainProofEnvelopeV1,
-) -> bool {
-    if !ton_testnet_placeholder_source_proofs_allowed()
-        || proof.source_domain != SCCP_DOMAIN_TON
-        || proof.target_domain != SCCP_DOMAIN_SORA
-        || proof.source_chain != "ton"
-        || proof.source_proof_plan != SccpSourceProofPlanV1::TonMasterchainShardProof
-        || proof.finality_model != SccpProofFinalityModelV1::TonMasterchain
-        || proof.finality_height == 0
-        || !proof
-            .consensus_proof
-            .starts_with(b"sccp:ton:testnet-placeholder-consensus:v1")
-        || !proof
-            .message_inclusion_proof
-            .starts_with(b"sccp:ton:testnet-placeholder-inclusion:v1")
-    {
-        return false;
-    }
-    if proof.source_event_digest
-        != sccp_source_event_digest(
-            proof.source_domain,
-            proof.target_domain,
-            proof.message_id,
-            proof.payload_hash,
-        )
-    {
-        return false;
-    }
-    if proof.finalized_header_hash
-        != sccp_source_finalized_header_hash(
-            proof.source_domain,
-            proof.finality_model,
-            proof.finality_height,
-            proof.finality_block_hash,
-            proof.receipt_or_message_root,
-        )
-    {
-        return false;
-    }
-    let Some(root) = sccp_source_message_root_from_branch(
-        sccp_source_event_leaf_hash(proof.source_event_digest),
-        0,
-        &proof.inclusion_branch,
-    ) else {
-        return false;
-    };
-    root == proof.receipt_or_message_root
-}
-
-fn verify_ton_testnet_placeholder_source_proof_with_material_and_deployment(
-    proof: &SccpSourceChainProofEnvelopeV1,
-    material: &SccpSourceVerifierMaterialV1,
-    deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
-) -> bool {
-    if !ton_testnet_placeholder_source_proof_shape_is_valid(proof)
-        || material.source_domain != SCCP_DOMAIN_TON
-        || material.source_chain != "ton"
-        || material.source_proof_plan != SccpSourceProofPlanV1::TonMasterchainShardProof
-        || material.finality_model != SccpProofFinalityModelV1::TonMasterchain
-    {
-        return false;
-    }
-    deployment.is_none_or(|deployment| {
-        source_adapter_deployment_has_standalone_valid_shape(deployment)
-            && deployment.source_domain == proof.source_domain
-            && deployment.target_domain == proof.target_domain
-            && deployment.source_chain == proof.source_chain
-            && deployment.source_proof_plan == proof.source_proof_plan
-            && deployment.finality_model == proof.finality_model
-    })
 }
 
 fn verify_sccp_source_chain_proof_material_with_material(
@@ -34735,6 +34848,7 @@ fn verify_sccp_ton_shard_state_opening(adapter: &SccpTonMasterchainSourceProofV1
         if !h256_is_nonzero(&adapter.shard_state_dictionary_root)
             || adapter.shard_state_dictionary_proof_boc.is_empty()
             || adapter.shard_state_proof_boc.is_empty()
+            || adapter.shard_state_leaf_index != 0
             || !adapter.shard_state_inclusion_branch.is_empty()
             || adapter.shard_state_dictionary_key_bit_len != SCCP_TON_SHARD_ACCOUNT_KEY_BITS
             || !ton_hashmap_key_is_canonical(
@@ -35646,6 +35760,38 @@ fn verify_sccp_tron_witness_schedule_transition_step(
         transition.parent_witness_schedule_hash,
     )
 }
+
+fn sccp_solana_validator_account_witnesses_are_consistent(
+    adapter: &SccpSolanaFinalizedSourceProofV1,
+) -> bool {
+    let vote = &adapter.vote_proof;
+    verify_sccp_solana_account_opening_hashes(
+        &vote.validator_vote_account_addresses,
+        &vote.validator_vote_account_hashes,
+        &vote.validator_vote_account_openings,
+        &SCCP_SOLANA_VOTE_PROGRAM_ID,
+    ) && verify_sccp_solana_account_opening_hashes(
+        &vote.validator_stake_account_addresses,
+        &vote.validator_stake_account_hashes,
+        &vote.validator_stake_account_openings,
+        &SCCP_SOLANA_STAKE_PROGRAM_ID,
+    ) && verify_sccp_solana_vote_account_data_hashes(
+        &adapter.finality_context,
+        &vote.validator_public_keys,
+        &vote.validator_vote_account_openings,
+        &vote.validator_vote_account_data,
+        &vote.validator_vote_account_raw_data,
+    ) && verify_sccp_solana_stake_account_data_hashes(
+        &vote.validator_delegated_stakes,
+        &vote.validator_activation_epochs,
+        &vote.validator_deactivation_epochs,
+        &vote.validator_vote_account_addresses,
+        &vote.validator_stake_account_openings,
+        &vote.validator_stake_account_data,
+        &vote.validator_stake_account_raw_data,
+    )
+}
+
 fn verify_sccp_solana_finality_context_shape(adapter: &SccpSolanaFinalizedSourceProofV1) -> bool {
     let context = &adapter.finality_context;
     let Some(epoch_stake_root) = sccp_solana_epoch_stake_root(
@@ -36442,6 +36588,14 @@ fn verify_sccp_source_adapter_proof_binding(
 fn verify_sccp_source_chain_proof_envelope_base_shape(
     proof: &SccpSourceChainProofEnvelopeV1,
 ) -> bool {
+    verify_sccp_source_chain_proof_envelope_statement_shape(proof)
+        && !proof.consensus_proof.is_empty()
+        && !proof.message_inclusion_proof.is_empty()
+}
+
+fn verify_sccp_source_chain_proof_envelope_statement_shape(
+    proof: &SccpSourceChainProofEnvelopeV1,
+) -> bool {
     let Some(source_chain) = sccp_chain_key_for_domain(proof.source_domain) else {
         return false;
     };
@@ -36461,9 +36615,22 @@ fn verify_sccp_source_chain_proof_envelope_base_shape(
         && h256_is_nonzero(&proof.finality_block_hash)
         && h256_is_nonzero(&proof.finalized_header_hash)
         && h256_is_nonzero(&proof.receipt_or_message_root)
-        && !proof.consensus_proof.is_empty()
-        && !proof.message_inclusion_proof.is_empty()
+        && sccp_source_chain_proof_envelope_role_hashes_are_separated(proof)
         && h256_merkle_branch_is_nonempty_and_bounded(&proof.inclusion_branch)
+}
+
+fn sccp_source_chain_proof_envelope_role_hashes_are_separated(
+    proof: &SccpSourceChainProofEnvelopeV1,
+) -> bool {
+    sccp_nonzero_h256_values_are_pairwise_distinct(&[
+        proof.message_id,
+        proof.payload_hash,
+        proof.source_event_digest,
+        proof.commitment_root,
+        proof.finality_block_hash,
+        proof.finalized_header_hash,
+        proof.receipt_or_message_root,
+    ])
 }
 
 fn sccp_source_chain_proof_has_generic_source_event_digest(
@@ -36605,9 +36772,7 @@ pub fn verify_sccp_source_chain_proof_envelope_production_with_material(
 ) -> bool {
     verify_sccp_source_chain_proof_envelope_structure_with_material(proof, material)
         && sccp_source_chain_proof_in_inbound_launch_scope_v1(proof)
-        && (sccp_source_adapter_ready_with_material_for_domain(proof.source_domain, material)
-            || (proof.source_domain == SCCP_DOMAIN_BSC
-                && sccp_bsc_material_only_source_adapter_is_production_ready(material)))
+        && sccp_source_adapter_ready_with_material_for_domain(proof.source_domain, material)
 }
 
 pub fn verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
@@ -36698,9 +36863,7 @@ fn verify_sccp_source_chain_proof_binding_for_production_with_material(
     verify_sccp_source_chain_proof_envelope_structure_for_bundle_with_material(
         proof, bundle, material,
     ) && sccp_source_chain_proof_in_inbound_launch_scope_v1(proof)
-        && (sccp_source_adapter_ready_with_material_for_domain(proof.source_domain, material)
-            || (proof.source_domain == SCCP_DOMAIN_BSC
-                && sccp_bsc_material_only_source_adapter_is_production_ready(material)))
+        && sccp_source_adapter_ready_with_material_for_domain(proof.source_domain, material)
         && proof.source_domain == source_domain
         && proof.target_domain == target_domain
         && proof.message_id == bundle.commitment.message_id
@@ -38112,7 +38275,7 @@ pub mod tests {
             version: 1,
             source_domain: SCCP_DOMAIN_ETH,
             target_domain: SCCP_DOMAIN_SORA,
-            source_chain: "ethereum".to_owned(),
+            source_chain: "eth".to_owned(),
             source_proof_plan: SccpSourceProofPlanV1::EthereumBeaconReceiptProof,
             finality_model: SccpProofFinalityModelV1::EthereumBeaconExecution,
             message_id: [0x11; 32],
@@ -38134,7 +38297,7 @@ pub mod tests {
             version: 1,
             source_domain: SCCP_DOMAIN_SOL,
             target_domain: SCCP_DOMAIN_SORA,
-            source_chain: "solana".to_owned(),
+            source_chain: "sol".to_owned(),
             source_proof_plan: SccpSourceProofPlanV1::SolanaFinalizedTransactionProof,
             finality_model: SccpProofFinalityModelV1::SolanaFinalizedSlot,
             message_id: [0x12; 32],
@@ -38178,15 +38341,109 @@ pub mod tests {
 
     #[test]
     fn sccp_checked_bundle_encoder_matches_legacy_canonical_bytes() {
-        let bundle = sample_taira_tron_xor_diagnostic_bundle(
-            SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.as_bytes(),
-            SCCP_TAIRA_XOR_ASSET_KEY_V1.as_bytes(),
-        );
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON, 371);
 
         assert_eq!(
             canonical_nexus_sccp_message_bundle_bytes_checked(&bundle)
-                .expect("sample bundle is length-canonical"),
+                .expect("sample bundle is structurally canonical"),
             canonical_nexus_sccp_message_bundle_bytes(&bundle),
+        );
+    }
+
+    #[test]
+    fn sccp_checked_bundle_encoder_rejects_structure_drift() {
+        let valid = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON, 372);
+        assert!(verify_message_bundle_structure(&valid));
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&valid).is_some(),
+            "valid SORA-origin bundle must remain encodable"
+        );
+
+        let assert_sora_bundle_rejected =
+            |label: &str, expected_marker: &str, mutate: fn(&mut NexusSccpMessageProofV1)| {
+                let mut drifted = valid.clone();
+                mutate(&mut drifted);
+                let len_only = canonical_nexus_sccp_message_bundle_bytes_len_checked(&drifted)
+                    .expect("drifted bundle remains length-serializable");
+                assert!(
+                    !len_only.is_empty(),
+                    "{label} fixture should exercise serialized adversarial bytes"
+                );
+                assert!(
+                    !verify_message_bundle_structure(&drifted),
+                    "{label} must break the bundle structure gate"
+                );
+                assert!(
+                    canonical_nexus_sccp_message_bundle_bytes_checked(&drifted).is_none(),
+                    "{expected_marker}"
+                );
+                assert!(
+                    canonical_nexus_sccp_message_bundle_bytes(&drifted).is_empty(),
+                    "unchecked compatibility facade must fail closed for {label}"
+                );
+            };
+
+        assert_sora_bundle_rejected(
+            "version drift",
+            "checked bundle bytes must reject version drift",
+            |bundle| bundle.version = 2,
+        );
+        assert_sora_bundle_rejected(
+            "opaque SORA finality bytes",
+            "checked bundle bytes must reject opaque SORA finality bytes",
+            |bundle| {
+                bundle.finality_proof = vec![0xA5; 32];
+            },
+        );
+        assert_sora_bundle_rejected(
+            "SORA finality commitment-root drift",
+            "checked bundle bytes must reject SORA finality commitment-root drift",
+            |bundle| {
+                bundle.finality_proof = sample_finality_proof([0xAB; 32]);
+            },
+        );
+        assert_sora_bundle_rejected(
+            "commitment payload-hash drift",
+            "checked bundle bytes must reject commitment payload-hash drift",
+            |bundle| {
+                bundle.commitment.payload_hash[0] ^= 0x01;
+            },
+        );
+        assert_sora_bundle_rejected(
+            "Merkle commitment-root drift",
+            "checked bundle bytes must reject Merkle commitment-root drift",
+            |bundle| {
+                bundle.commitment_root[0] ^= 0x01;
+            },
+        );
+        assert_sora_bundle_rejected(
+            "payload structure drift",
+            "checked bundle bytes must reject payload structure drift",
+            |bundle| {
+                let SccpPayloadV1::Transfer(transfer) = &mut bundle.payload else {
+                    unreachable!("sample SORA-origin bundle is a transfer");
+                };
+                transfer.amount = 0;
+            },
+        );
+
+        let valid_remote = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_TON, 373);
+        assert!(verify_message_bundle_structure(&valid_remote));
+        let mut opaque_remote_source_proof = valid_remote.clone();
+        opaque_remote_source_proof.finality_proof = vec![0x5A; 32];
+        assert!(
+            !verify_message_bundle_structure(&opaque_remote_source_proof),
+            "remote-source bundles must decode canonical source-proof envelopes"
+        );
+        assert!(
+            !canonical_nexus_sccp_message_bundle_bytes_len_checked(&opaque_remote_source_proof)
+                .expect("opaque remote source proof remains length-serializable")
+                .is_empty()
+        );
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&opaque_remote_source_proof)
+                .is_none(),
+            "checked bundle bytes must reject opaque non-SORA source proofs"
         );
     }
 
@@ -38207,9 +38464,74 @@ pub mod tests {
     }
 
     #[test]
+    fn sccp_checked_source_envelope_encoder_rejects_base_shape_drift() {
+        let valid = sample_checked_source_chain_proof_envelope();
+        assert!(
+            canonical_sccp_source_chain_proof_envelope_bytes_checked(&valid).is_some(),
+            "sample checked source envelope must satisfy the base shape gate",
+        );
+
+        let mut malformed = valid.clone();
+        malformed.consensus_proof.clear();
+        assert!(
+            canonical_sccp_source_chain_proof_envelope_bytes_checked(&malformed).is_none(),
+            "checked source envelope encoder must reject empty consensus proof bytes",
+        );
+        assert!(
+            sccp_source_chain_proof_envelope_hash_checked(&malformed).is_none(),
+            "checked source envelope hash must reject empty consensus proof bytes",
+        );
+
+        let mut malformed = valid.clone();
+        malformed.message_inclusion_proof.clear();
+        assert!(
+            canonical_sccp_source_chain_proof_envelope_bytes_checked(&malformed).is_none(),
+            "checked source envelope encoder must reject empty message-inclusion proof bytes",
+        );
+        assert!(
+            sccp_source_chain_proof_envelope_hash_checked(&malformed).is_none(),
+            "checked source envelope hash must reject empty message-inclusion proof bytes",
+        );
+
+        let mut malformed = valid.clone();
+        malformed.inclusion_branch.clear();
+        assert!(
+            canonical_sccp_source_chain_proof_envelope_bytes_checked(&malformed).is_none(),
+            "checked source envelope encoder must reject empty inclusion branches",
+        );
+        assert!(
+            sccp_source_chain_proof_envelope_hash_checked(&malformed).is_none(),
+            "checked source envelope hash must reject empty inclusion branches",
+        );
+
+        let mut malformed = valid.clone();
+        malformed.source_chain = "ethereum-mainnet".to_owned();
+        assert!(
+            canonical_sccp_source_chain_proof_envelope_bytes_checked(&malformed).is_none(),
+            "checked source envelope encoder must reject source-chain label drift",
+        );
+        assert!(
+            sccp_source_chain_proof_envelope_hash_checked(&malformed).is_none(),
+            "checked source envelope hash must reject source-chain label drift",
+        );
+
+        let mut malformed = valid.clone();
+        malformed.receipt_or_message_root = malformed.finality_block_hash;
+        assert!(
+            canonical_sccp_source_chain_proof_envelope_bytes_checked(&malformed).is_none(),
+            "checked source envelope encoder must reject role-hash aliasing",
+        );
+        assert!(
+            sccp_source_chain_proof_envelope_hash_checked(&malformed).is_none(),
+            "checked source envelope hash must reject role-hash aliasing",
+        );
+    }
+
+    #[test]
     fn sccp_checked_source_adapter_verification_encoders_match_legacy_bytes() {
-        let envelope = sample_checked_solana_source_chain_proof_envelope();
-        let adapter = sample_checked_solana_source_adapter_proof();
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_SOL, SCCP_DOMAIN_SORA, 713);
+        let envelope = source_chain_proof_from_bundle(&bundle);
+        let adapter = source_consensus_proof_from_envelope(&envelope).adapter_proof;
         let adapter_transcript_hash = [0xBC; 32];
         let verifier_evidence_hash = [0xCD; 32];
 
@@ -38298,6 +38620,103 @@ pub mod tests {
                 verifier_evidence_hash,
             )
             .is_some()
+        );
+    }
+
+    #[test]
+    fn sccp_checked_source_adapter_statement_rejects_role_hash_drift() {
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_SOL, SCCP_DOMAIN_SORA, 714);
+        let envelope = source_chain_proof_from_bundle(&bundle);
+        let adapter = source_consensus_proof_from_envelope(&envelope).adapter_proof;
+        let adapter_transcript_hash = [0xBC; 32];
+        let verifier_evidence_hash = [0xCD; 32];
+
+        for (label, transcript_hash, evidence_hash) in [
+            ("zero transcript hashes", [0u8; 32], verifier_evidence_hash),
+            (
+                "zero verifier evidence hashes",
+                adapter_transcript_hash,
+                [0u8; 32],
+            ),
+            (
+                "transcript hash/message id role replay",
+                envelope.message_id,
+                verifier_evidence_hash,
+            ),
+            (
+                "verifier evidence/payload hash role replay",
+                adapter_transcript_hash,
+                envelope.payload_hash,
+            ),
+            (
+                "transcript/evidence role aliasing",
+                adapter_transcript_hash,
+                adapter_transcript_hash,
+            ),
+        ] {
+            assert!(
+                canonical_sccp_source_adapter_verification_statement_bytes_checked(
+                    &envelope,
+                    &adapter,
+                    transcript_hash,
+                    evidence_hash,
+                )
+                .is_none(),
+                "checked source-adapter statement must reject {label}",
+            );
+            assert!(
+                canonical_sccp_source_adapter_verification_context_bytes_checked(
+                    &envelope,
+                    &adapter,
+                    transcript_hash,
+                    evidence_hash,
+                )
+                .is_none(),
+                "checked source-adapter context must reject {label}",
+            );
+            assert!(
+                build_sccp_source_adapter_fastpq_batch(
+                    &envelope,
+                    &adapter,
+                    transcript_hash,
+                    evidence_hash,
+                )
+                .is_none(),
+                "source-adapter FastPQ batch must reject {label}",
+            );
+        }
+
+        let mut drifted_envelope = envelope.clone();
+        drifted_envelope.source_chain = "solana".to_owned();
+        assert!(
+            canonical_sccp_source_adapter_verification_statement_bytes_checked(
+                &drifted_envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+            .is_none(),
+            "checked source-adapter statement must reject base envelope shape drift",
+        );
+        assert!(
+            canonical_sccp_source_adapter_verification_context_bytes_checked(
+                &drifted_envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+            .is_none(),
+            "checked source-adapter context must reject base envelope shape drift",
+        );
+        assert!(
+            build_sccp_source_adapter_fastpq_batch(
+                &drifted_envelope,
+                &adapter,
+                adapter_transcript_hash,
+                verifier_evidence_hash,
+            )
+            .is_none(),
+            "source-adapter FastPQ batch must reject base envelope shape drift",
         );
     }
 
@@ -38541,6 +38960,17 @@ pub mod tests {
         out.to_vec()
     }
 
+    fn legacy_tron_recovery_id_alias_signature(signature: &[u8]) -> Vec<u8> {
+        let mut out = <[u8; 65]>::try_from(signature).expect("recoverable signature");
+        out[64] = match out[64] {
+            0..=3 => out[64] + 27,
+            27..=30 => out[64],
+            recovery => panic!("unexpected recovery id {recovery}"),
+        };
+        assert!(!tron_recoverable_signature_is_canonical(&out));
+        out.to_vec()
+    }
+
     fn switch_tron_adapter_signatures_to_java_tron_recovery_ids(
         adapter: &mut SccpTronDposSourceProofV1,
     ) {
@@ -38561,14 +38991,40 @@ pub mod tests {
             *signature = java_tron_recovery_id_signature(signature);
         }
         adapter.witness_seal_hash = sccp_tron_witness_seal_hash(&adapter.witness_seal_proof)
-            .expect("TRON witness seal hash accepts java-tron recovery ids");
+            .expect("TRON witness seal hash accepts raw java-tron recovery ids");
         for transition in &mut adapter.witness_schedule_transition_proofs {
             for signature in &mut transition.seal_proof.signatures {
                 *signature = java_tron_recovery_id_signature(signature);
             }
             transition.transition_seal_hash =
                 sccp_tron_witness_schedule_transition_seal_hash(transition)
-                    .expect("TRON transition seal hash accepts java-tron recovery ids");
+                    .expect("TRON transition seal hash accepts raw java-tron recovery ids");
+        }
+    }
+
+    #[test]
+    fn tron_recoverable_signature_rejects_legacy_recovery_id_aliases() {
+        let signer = sample_tron_transaction_signer();
+        let digest = [0x42; 32];
+        let signature = java_tron_recovery_id_signature(
+            &sccp_evm_sign_digest(&signer, &digest).expect("TRON recoverable signature"),
+        );
+        let signature = <[u8; 65]>::try_from(signature).expect("recoverable signature array");
+        assert!(matches!(signature[64], 0..=3));
+        assert!(tron_recoverable_signature_is_canonical(&signature));
+        assert!(tron_recoverable_signature_for_recovery(&signature).is_some());
+
+        for legacy_recovery_id in 27..=30 {
+            let mut legacy_alias = signature;
+            legacy_alias[64] = legacy_recovery_id;
+            assert!(
+                !tron_recoverable_signature_is_canonical(&legacy_alias),
+                "legacy TRON recovery id {legacy_recovery_id} must not be canonical"
+            );
+            assert!(
+                tron_recoverable_signature_for_recovery(&legacy_alias).is_none(),
+                "legacy TRON recovery id {legacy_recovery_id} must fail before recovery"
+            );
         }
     }
 
@@ -39147,15 +39603,18 @@ pub mod tests {
     fn sample_tron_transaction_signature(raw_data: &[u8]) -> Vec<u8> {
         let raw_data_hash = sha256_bytes(raw_data);
         let signer = sample_tron_transaction_signer();
-        let signature =
-            sccp_evm_sign_digest(&signer, &raw_data_hash).expect("TRON transaction signature");
-        assert!(tron_recoverable_signature_is_canonical(&signature));
+        let signature = java_tron_recovery_id_signature(
+            &sccp_evm_sign_digest(&signer, &raw_data_hash).expect("TRON transaction signature"),
+        );
+        let signature_array =
+            <[u8; 65]>::try_from(signature.as_slice()).expect("recoverable signature array");
+        assert!(tron_recoverable_signature_is_canonical(&signature_array));
         assert!(verify_sccp_tron_transaction_signatures(
             raw_data_hash,
             &[signature.as_slice()],
             sample_tron_source_bridge_owner_address(),
         ));
-        signature.to_vec()
+        signature
     }
 
     fn sample_tron_transaction_raw_data(transaction: &[u8]) -> Vec<u8> {
@@ -39568,6 +40027,27 @@ pub mod tests {
             execution_payload_branch,
             beacon_finalized_root,
         )
+    }
+
+    #[test]
+    fn eth_ssz_merkle_root_rejects_noncanonical_field_index_alias() {
+        let leaf = [0x19; 32];
+        let branch = vec![
+            vec![0x21; 32],
+            vec![0x22; 32],
+            vec![0x23; 32],
+            vec![0x24; 32],
+        ];
+        let canonical_root =
+            ssz_merkle_root_from_branch(leaf, SCCP_ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX, &branch);
+        assert!(canonical_root.is_some());
+
+        let alias_index = SCCP_ETH_EXECUTION_PAYLOAD_BODY_FIELD_INDEX
+            + (1u64 << SCCP_ETH_EXECUTION_PAYLOAD_BODY_BRANCH_DEPTH);
+        assert!(
+            ssz_merkle_root_from_branch(leaf, alias_index, &branch).is_none(),
+            "SSZ Merkle roots must reject non-canonical high-bit leaf indexes"
+        );
     }
 
     fn sample_eth_sync_committee_keypairs() -> &'static [KeyPair] {
@@ -40224,9 +40704,10 @@ pub mod tests {
 
         let raw_data_hash = sha256_bytes(&raw_data);
         let block_id = sccp_tron_block_id_from_raw_data_hash(block_number, raw_data_hash);
-        let witness_signature = sccp_evm_sign_digest(&signers[signer_index], &raw_data_hash)
-            .expect("TRON signed block-header signature")
-            .to_vec();
+        let witness_signature = java_tron_recovery_id_signature(
+            &sccp_evm_sign_digest(&signers[signer_index], &raw_data_hash)
+                .expect("TRON signed block-header signature"),
+        );
         SccpTronSignedBlockHeaderProofV1 {
             version: 1,
             raw_data,
@@ -40345,9 +40826,10 @@ pub mod tests {
         let parent_raw_data_hash = sha256_bytes(&parent_raw_data);
         let parent_block_id =
             sccp_tron_block_id_from_raw_data_hash(parent_block_number, parent_raw_data_hash);
-        let parent_witness_signature = sccp_evm_sign_digest(&signers[0], &parent_raw_data_hash)
-            .expect("TRON parent block-header signature")
-            .to_vec();
+        let parent_witness_signature = java_tron_recovery_id_signature(
+            &sccp_evm_sign_digest(&signers[0], &parent_raw_data_hash)
+                .expect("TRON parent block-header signature"),
+        );
         let raw_data = canonical_sccp_tron_raw_block_header_bytes(
             block_number,
             tx_trie_root,
@@ -40360,9 +40842,10 @@ pub mod tests {
         .expect("TRON raw block-header bytes");
         let raw_data_hash = sha256_bytes(&raw_data);
         let block_id = sccp_tron_block_id_from_raw_data_hash(block_number, raw_data_hash);
-        let witness_signature = sccp_evm_sign_digest(&signers[0], &raw_data_hash)
-            .expect("TRON witness block-header signature")
-            .to_vec();
+        let witness_signature = java_tron_recovery_id_signature(
+            &sccp_evm_sign_digest(&signers[0], &raw_data_hash)
+                .expect("TRON witness block-header signature"),
+        );
         SccpTronSolidBlockHeaderProofV1 {
             version: 1,
             raw_data,
@@ -40412,9 +40895,10 @@ pub mod tests {
         let signatures = signers[..3]
             .iter()
             .map(|signer| {
-                sccp_evm_sign_digest(signer, &solid_block_message_hash)
-                    .expect("TRON witness seal signature")
-                    .to_vec()
+                java_tron_recovery_id_signature(
+                    &sccp_evm_sign_digest(signer, &solid_block_message_hash)
+                        .expect("TRON witness seal signature"),
+                )
             })
             .collect::<Vec<_>>();
         SccpTronDposWitnessSealProofV1 {
@@ -40478,9 +40962,10 @@ pub mod tests {
         let signatures = parent_signers[..3]
             .iter()
             .map(|signer| {
-                sccp_evm_sign_digest(signer, &transition_message_hash)
-                    .expect("TRON witness-schedule transition signature")
-                    .to_vec()
+                java_tron_recovery_id_signature(
+                    &sccp_evm_sign_digest(signer, &transition_message_hash)
+                        .expect("TRON witness-schedule transition signature"),
+                )
             })
             .collect::<Vec<_>>();
         let mut proof = SccpTronWitnessScheduleTransitionProofV1 {
@@ -43388,11 +43873,9 @@ pub mod tests {
 
     fn sample_account_bytes(domain: u32) -> Vec<u8> {
         match domain {
-            SCCP_DOMAIN_SORA => format!(
-                "account@{}",
-                sccp_chain_key_for_domain(domain).expect("domain chain key")
-            )
-            .into_bytes(),
+            SCCP_DOMAIN_SORA => {
+                b"sorau\xef\xbe\x9b1N\xef\xbe\x97hBUd2B\xef\xbe\x82\xef\xbd\xa6\xef\xbe\x84i\xef\xbe\x94\xef\xbe\x86\xef\xbe\x82\xef\xbe\x87KS\xef\xbe\x83a\xef\xbe\x98\xef\xbe\x92\xef\xbe\x93Q\xef\xbe\x97r\xef\xbe\x92o\xef\xbe\x98\xef\xbe\x85n\xef\xbd\xb3\xef\xbe\x98bQ\xef\xbd\xb3QJ\xef\xbe\x86LJ5HSE".to_vec()
+            }
             SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
                 b"0x1111111111111111111111111111111111111111".to_vec()
             }
@@ -44189,6 +44672,7 @@ pub mod tests {
         assert!(!verify_message_bundle_structure(&bundle), "{proof:?}");
     }
 
+    #[track_caller]
     fn assert_source_envelope_rejects_structure_mutation<F>(
         valid: &SccpSourceChainProofEnvelopeV1,
         mutate: F,
@@ -44199,7 +44683,7 @@ pub mod tests {
         mutate(&mut proof);
         assert!(
             !verify_sccp_source_chain_proof_envelope_structure(&proof),
-            "{proof:?}"
+            "source-chain proof structure mutation unexpectedly verified"
         );
     }
 
@@ -47786,6 +48270,23 @@ pub mod tests {
             wrong_epoch_stake_root.message_proof_hash,
             sccp_solana_finality_context_hash(&wrong_epoch_stake_root.finality_context),
         );
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
+                    wrong_epoch_stake_root.clone(),
+                ),
+            ),
+            "Solana structural preflight must reject finality-context stake-root drift after vote-message refresh"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
+                    wrong_epoch_stake_root.clone(),
+                ),
+            )
+            .is_none(),
+            "Solana checked adapter encoding must reject finality-context stake-root drift after vote-message refresh"
+        );
         assert!(!verify_sccp_solana_finalized_vote_proof(
             &wrong_epoch_stake_root,
             &valid,
@@ -47921,6 +48422,23 @@ pub mod tests {
             .vote_proof
             .validator_vote_account_data[0]
             .authorized_voter[0] ^= 0x01;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
+                    wrong_vote_account_data.clone(),
+                ),
+            ),
+            "Solana structural preflight must reject vote-account data drift before source verification"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
+                    wrong_vote_account_data.clone(),
+                ),
+            )
+            .is_none(),
+            "Solana checked adapter encoding must reject vote-account data drift before source verification"
+        );
         assert!(!verify_sccp_solana_finalized_vote_proof(
             &wrong_vote_account_data,
             &valid,
@@ -47932,6 +48450,23 @@ pub mod tests {
             .vote_proof
             .validator_stake_account_data[0]
             .delegated_stake += 1;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
+                    wrong_stake_account_data.clone(),
+                ),
+            ),
+            "Solana structural preflight must reject stake-account data drift before source verification"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
+                    wrong_stake_account_data.clone(),
+                ),
+            )
+            .is_none(),
+            "Solana checked adapter encoding must reject stake-account data drift before source verification"
+        );
         assert!(!verify_sccp_solana_finalized_vote_proof(
             &wrong_stake_account_data,
             &valid,
@@ -48524,14 +49059,49 @@ pub mod tests {
 
         let mut wrong_execution_branch = adapter.clone();
         wrong_execution_branch.execution_payload_branch[0][0] ^= 0x01;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::EthereumBeaconReceipt(wrong_execution_branch.clone(),),
+            ),
+            "ETH structural preflight must reject stale execution-payload branches"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::EthereumBeaconReceipt(wrong_execution_branch.clone(),),
+            )
+            .is_none(),
+            "ETH checked adapter encoding must reject stale execution-payload branches"
+        );
         assert!(!verify_sccp_eth_beacon_sync_committee_proof(
             &wrong_execution_branch,
             &valid,
             &material,
         ));
 
+        let mut short_execution_branch = adapter.clone();
+        short_execution_branch.execution_payload_branch.pop();
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::EthereumBeaconReceipt(short_execution_branch.clone(),),
+            ),
+            "ETH structural preflight must reject non-fixed-depth execution-payload branches"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::EthereumBeaconReceipt(short_execution_branch.clone(),),
+            )
+            .is_none(),
+            "ETH checked adapter encoding must reject non-fixed-depth execution-payload branches"
+        );
+
         let mut wrong_beacon_header = adapter.clone();
         wrong_beacon_header.beacon_parent_root[0] ^= 0x01;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::EthereumBeaconReceipt(wrong_beacon_header.clone(),),
+            ),
+            "ETH structural preflight must reject stale beacon-header roots"
+        );
         assert!(!verify_sccp_eth_beacon_sync_committee_proof(
             &wrong_beacon_header,
             &valid,
@@ -49349,8 +49919,43 @@ pub mod tests {
 
         let mut wrong_signature = adapter.clone();
         wrong_signature.seal_proof.signatures[0][0] ^= 0x01;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::BscValidatorSetReceipt(wrong_signature.clone()),
+            ),
+            "BSC structural preflight must reject validator-set seal signatures that recover to the wrong validator"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::BscValidatorSetReceipt(wrong_signature.clone()),
+            )
+            .is_none(),
+            "BSC checked adapter encoding must reject validator-set seal signatures that recover to the wrong validator"
+        );
         assert!(!verify_sccp_bsc_validator_set_seal_proof(
             &wrong_signature,
+            &valid,
+            &material,
+        ));
+
+        let mut high_s_signature = adapter.clone();
+        high_s_signature.seal_proof.signatures[0] =
+            high_s_recoverable_signature(&high_s_signature.seal_proof.signatures[0]);
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::BscValidatorSetReceipt(high_s_signature.clone()),
+            ),
+            "BSC structural preflight must reject high-S validator-set seal signatures"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::BscValidatorSetReceipt(high_s_signature.clone()),
+            )
+            .is_none(),
+            "BSC checked adapter encoding must reject high-S validator-set seal signatures"
+        );
+        assert!(!verify_sccp_bsc_validator_set_seal_proof(
+            &high_s_signature,
             &valid,
             &material,
         ));
@@ -49912,6 +50517,37 @@ pub mod tests {
             &material,
         ));
 
+        let mut high_s_transition_signature = adapter.clone();
+        high_s_transition_signature.validator_set_transition_proofs[0]
+            .seal_proof
+            .signatures[0] = high_s_recoverable_signature(
+            &high_s_transition_signature.validator_set_transition_proofs[0]
+                .seal_proof
+                .signatures[0],
+        );
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::BscValidatorSetReceipt(
+                    high_s_transition_signature.clone(),
+                ),
+            ),
+            "BSC structural preflight must reject high-S transition-seal signatures"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::BscValidatorSetReceipt(
+                    high_s_transition_signature.clone(),
+                ),
+            )
+            .is_none(),
+            "BSC checked adapter encoding must reject high-S transition-seal signatures"
+        );
+        assert!(!verify_sccp_bsc_validator_set_seal_proof(
+            &high_s_transition_signature,
+            &valid,
+            &material,
+        ));
+
         let mut wrong_transition_signature = adapter;
         wrong_transition_signature.validator_set_transition_proofs[0]
             .seal_proof
@@ -49921,6 +50557,23 @@ pub mod tests {
                 &wrong_transition_signature.validator_set_transition_proofs[0],
             )
             .expect("BSC transition seal hash");
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::BscValidatorSetReceipt(
+                    wrong_transition_signature.clone(),
+                ),
+            ),
+            "BSC structural preflight must reject transition-seal signatures that recover to the wrong validator"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::BscValidatorSetReceipt(
+                    wrong_transition_signature.clone(),
+                ),
+            )
+            .is_none(),
+            "BSC checked adapter encoding must reject transition-seal signatures that recover to the wrong validator"
+        );
         assert!(!verify_sccp_bsc_validator_set_seal_proof(
             &wrong_transition_signature,
             &valid,
@@ -50285,6 +50938,15 @@ pub mod tests {
         };
         adapter.shard_state_dictionary_proof_boc[12] ^= 0x01;
         assert!(!verify_sccp_ton_shard_state_opening(adapter));
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(&wrong_shard_state_dictionary_proof),
+            "TON structural preflight must reject shard-state dictionary proof BOC drift"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(&wrong_shard_state_dictionary_proof,)
+                .is_none(),
+            "TON checked adapter encoding must reject shard-state dictionary proof BOC drift"
+        );
         assert!(!verify_sccp_source_adapter_proof_binding(
             &wrong_shard_state_dictionary_proof,
             &valid,
@@ -50298,6 +50960,15 @@ pub mod tests {
         };
         adapter.masterchain_config_proof.config_dictionary_proof_boc[12] ^= 0x01;
         assert!(!verify_sccp_ton_masterchain_config_proof(adapter));
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(&wrong_config_dictionary_proof),
+            "TON structural preflight must reject masterchain config proof BOC drift"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(&wrong_config_dictionary_proof)
+                .is_none(),
+            "TON checked adapter encoding must reject masterchain config proof BOC drift"
+        );
         assert!(!verify_sccp_source_adapter_proof_binding(
             &wrong_config_dictionary_proof,
             &valid,
@@ -51087,6 +51758,9 @@ pub mod tests {
             &inclusion_branch,
         )
         .unwrap_or([0u8; 32]);
+        assert!(!sccp_ton_source_adapter_shape_is_bounded(
+            &unused_state_branch
+        ));
         assert!(
             !verify_sccp_ton_shard_state_opening(&unused_state_branch),
             "dictionary-backed TON proofs must not carry unused shard-state branches"
@@ -51111,6 +51785,62 @@ pub mod tests {
                 &dictionary_boc,
                 0,
                 &[vec![0x12; 32]],
+                &inclusion_branch,
+            )
+            .is_none()
+        );
+
+        let mut unused_state_leaf_index = adapter.clone();
+        unused_state_leaf_index.shard_state_leaf_index = 1;
+        unused_state_leaf_index.shard_proof_hash = sccp_ton_shard_proof_hash_with_dictionary(
+            [0x34; 32],
+            19,
+            [0xaa; 32],
+            unused_state_leaf_index.shard_workchain_id,
+            unused_state_leaf_index.shard_shard,
+            unused_state_leaf_index.shard_seqno,
+            unused_state_leaf_index.shard_block_hash,
+            unused_state_leaf_index.shard_file_hash,
+            unused_state_leaf_index.shard_state_root,
+            unused_state_leaf_index.transaction_root,
+            unused_state_leaf_index.transaction_lt,
+            &unused_state_leaf_index.shard_state_proof_boc,
+            unused_state_leaf_index.shard_state_dictionary_root,
+            unused_state_leaf_index.shard_state_dictionary_key_bit_len,
+            &unused_state_leaf_index.shard_state_dictionary_key,
+            &unused_state_leaf_index.shard_state_dictionary_proof_boc,
+            unused_state_leaf_index.shard_state_leaf_index,
+            &unused_state_leaf_index.shard_state_inclusion_branch,
+            &inclusion_branch,
+        )
+        .unwrap_or([0u8; 32]);
+        assert!(!sccp_ton_source_adapter_shape_is_bounded(
+            &unused_state_leaf_index
+        ));
+        assert!(
+            !verify_sccp_ton_shard_state_opening(&unused_state_leaf_index),
+            "dictionary-backed TON proofs must not carry unused shard-state leaf indexes"
+        );
+        assert!(
+            sccp_ton_shard_proof_hash_with_dictionary(
+                [0x34; 32],
+                19,
+                [0xaa; 32],
+                shard_workchain_id,
+                shard_shard,
+                shard_seqno,
+                shard_block_hash,
+                shard_file_hash,
+                shard_state_root,
+                transaction_root,
+                transaction_lt,
+                &shard_state_proof_boc,
+                dictionary_root,
+                SCCP_TON_SHARD_ACCOUNT_KEY_BITS,
+                &selected_key,
+                &dictionary_boc,
+                1,
+                &[],
                 &inclusion_branch,
             )
             .is_none()
@@ -51305,6 +52035,19 @@ pub mod tests {
         wrong_signature.masterchain_signature_hash =
             sccp_ton_masterchain_signatures_hash(&wrong_signature.validator_signature_proof)
                 .expect("TON masterchain signature hash");
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TonMasterchainShard(wrong_signature.clone()),
+            ),
+            "TON structural preflight must reject validator signatures that fail deterministic verification"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TonMasterchainShard(wrong_signature.clone()),
+            )
+            .is_none(),
+            "TON checked adapter encoding must reject validator signatures that fail deterministic verification"
+        );
         assert!(!verify_sccp_ton_masterchain_validator_signatures_proof(
             &wrong_signature,
             &valid,
@@ -51991,6 +52734,19 @@ pub mod tests {
                 &wrong_transition_signature.validator_set_transition_proofs[0],
             )
             .expect("TON validator-set transition signature hash");
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TonMasterchainShard(wrong_transition_signature.clone(),),
+            ),
+            "TON structural preflight must reject transition signatures that fail deterministic verification"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TonMasterchainShard(wrong_transition_signature.clone(),),
+            )
+            .is_none(),
+            "TON checked adapter encoding must reject transition signatures that fail deterministic verification"
+        );
         assert!(!verify_sccp_ton_masterchain_validator_signatures_proof(
             &wrong_transition_signature,
             &valid,
@@ -54106,9 +54862,10 @@ pub mod tests {
             b"iroha:sccp:test:tron-non-owner-transaction-signer".to_vec(),
             Algorithm::Secp256k1,
         );
-        let wrong_owner_signature =
-            sccp_evm_sign_digest(&wrong_signer, &sha256_bytes(&expected_raw_data))
-                .expect("wrong-owner TRON transaction signature");
+        let wrong_owner_signature = java_tron_recovery_id_signature(
+            &sccp_evm_sign_digest(&wrong_signer, &sha256_bytes(&expected_raw_data))
+                .expect("wrong-owner TRON transaction signature"),
+        );
         let wrong_owner_transaction = sample_tron_source_trigger_transaction_from_raw_data(
             expected_raw_data.clone(),
             1,
@@ -54563,6 +55320,29 @@ pub mod tests {
             ),
             "TRON source-call proofs must reject out-of-range transaction recovery ids"
         );
+
+        for legacy_recovery_id in 27..=30 {
+            let mut legacy_recovery_id_signature = expected_signature.clone();
+            legacy_recovery_id_signature[64] = legacy_recovery_id;
+            let legacy_recovery_id_transaction =
+                sample_tron_source_trigger_transaction_with_signature(
+                    contract_address,
+                    &expected_call_data,
+                    1,
+                    &legacy_recovery_id_signature,
+                );
+            assert!(
+                !verify_sccp_tron_transaction_bytes_source_call(
+                    &legacy_recovery_id_transaction,
+                    SCCP_DOMAIN_TRON,
+                    SCCP_DOMAIN_SORA,
+                    source_event_digest,
+                    Some(contract_address),
+                    Some(owner_address),
+                ),
+                "TRON source-call proofs must reject legacy transaction recovery id {legacy_recovery_id}"
+            );
+        }
 
         let failed_transaction = sample_tron_source_trigger_transaction_with_call_data(
             contract_address,
@@ -56340,6 +57120,19 @@ pub mod tests {
 
         let mut wrong_header_raw_data = adapter.clone();
         wrong_header_raw_data.solid_block_header_proof.raw_data[0] ^= 0x01;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_header_raw_data.clone()),
+            ),
+            "TRON structural preflight must reject stale solid-block header raw data"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_header_raw_data.clone()),
+            )
+            .is_none(),
+            "TRON checked adapter encoding must reject stale solid-block header raw data"
+        );
         assert!(!verify_sccp_tron_dpos_witness_seal_proof(
             &wrong_header_raw_data,
             &valid,
@@ -56599,6 +57392,19 @@ pub mod tests {
         wrong_header_transaction_root
             .solid_block_header_proof
             .tx_trie_root[0] ^= 0x01;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_header_transaction_root.clone(),),
+            ),
+            "TRON structural preflight must reject solid-block transaction-root drift"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_header_transaction_root.clone(),),
+            )
+            .is_none(),
+            "TRON checked adapter encoding must reject solid-block transaction-root drift"
+        );
         assert!(!verify_sccp_tron_dpos_witness_seal_proof(
             &wrong_header_transaction_root,
             &valid,
@@ -56680,6 +57486,19 @@ pub mod tests {
 
         let mut wrong_signature = adapter.clone();
         wrong_signature.witness_seal_proof.signatures[0][0] ^= 0x01;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_signature.clone()),
+            ),
+            "TRON structural preflight must reject witness-seal signatures that recover to the wrong witness"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_signature.clone()),
+            )
+            .is_none(),
+            "TRON checked adapter encoding must reject witness-seal signatures that recover to the wrong witness"
+        );
         assert!(!verify_sccp_tron_dpos_witness_seal_proof(
             &wrong_signature,
             &valid,
@@ -56846,6 +57665,30 @@ pub mod tests {
         .unwrap_or(adapter.receipt_proof_hash);
         assert!(!verify_sccp_source_adapter_proof_binding(
             &wrong_transaction_index,
+            &valid,
+        ));
+
+        let mut unexpected_transaction_branch = consensus.adapter_proof.clone();
+        let SccpSourceAdapterProofV1::TronDposReceipt(adapter) = &mut unexpected_transaction_branch
+        else {
+            panic!("expected TRON adapter proof");
+        };
+        adapter.transaction_merkle_branch = vec![vec![0xAA; 32]];
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TronDposReceipt(adapter.clone()),
+            ),
+            "TRON structural preflight must reject transaction Merkle roots that do not match transaction bytes"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TronDposReceipt(adapter.clone()),
+            )
+            .is_none(),
+            "TRON checked adapter encoding must reject transaction Merkle roots that do not match transaction bytes"
+        );
+        assert!(!verify_sccp_source_adapter_proof_binding(
+            &unexpected_transaction_branch,
             &valid,
         ));
 
@@ -57037,6 +57880,70 @@ pub mod tests {
             &valid,
         ));
 
+        for legacy_recovery_id in 27..=30 {
+            let mut legacy_witness_seal_recovery_id = adapter.clone();
+            legacy_witness_seal_recovery_id
+                .witness_seal_proof
+                .signatures[0][64] = legacy_recovery_id;
+            assert!(
+                sccp_tron_witness_seal_hash(&legacy_witness_seal_recovery_id.witness_seal_proof,)
+                    .is_none(),
+                "TRON witness seals must reject legacy recovery id {legacy_recovery_id}"
+            );
+            assert!(
+                !verify_sccp_tron_dpos_witness_seal_proof(
+                    &legacy_witness_seal_recovery_id,
+                    &valid,
+                    &material,
+                ),
+                "TRON DPoS proofs must reject legacy witness-seal recovery id {legacy_recovery_id}"
+            );
+        }
+
+        let mut legacy_header_recovery_id = adapter.clone();
+        let legacy_witness_signature = legacy_tron_recovery_id_alias_signature(
+            &legacy_header_recovery_id
+                .solid_block_header_proof
+                .witness_signature,
+        );
+        legacy_header_recovery_id
+            .solid_block_header_proof
+            .witness_signature = legacy_witness_signature;
+        assert!(
+            sccp_tron_solid_block_header_proof_hash(
+                &legacy_header_recovery_id.solid_block_header_proof,
+            )
+            .is_none(),
+            "TRON solid-block header proofs must reject legacy witness recovery ids"
+        );
+        assert!(!verify_sccp_tron_dpos_witness_seal_proof(
+            &legacy_header_recovery_id,
+            &valid,
+            &material,
+        ));
+
+        let mut legacy_parent_header_recovery_id = adapter.clone();
+        let legacy_parent_witness_signature = legacy_tron_recovery_id_alias_signature(
+            &legacy_parent_header_recovery_id
+                .solid_block_header_proof
+                .parent_witness_signature,
+        );
+        legacy_parent_header_recovery_id
+            .solid_block_header_proof
+            .parent_witness_signature = legacy_parent_witness_signature;
+        assert!(
+            sccp_tron_solid_block_header_proof_hash(
+                &legacy_parent_header_recovery_id.solid_block_header_proof,
+            )
+            .is_none(),
+            "TRON solid-block header proofs must reject legacy parent witness recovery ids"
+        );
+        assert!(!verify_sccp_tron_dpos_witness_seal_proof(
+            &legacy_parent_header_recovery_id,
+            &valid,
+            &material,
+        ));
+
         let mut invalid_recovery_id = adapter.clone();
         invalid_recovery_id.witness_seal_proof.signatures[0][64] = 31;
         assert!(sccp_tron_witness_seal_hash(&invalid_recovery_id.witness_seal_proof).is_none());
@@ -57081,6 +57988,19 @@ pub mod tests {
 
         let mut wrong_signature = adapter.clone();
         wrong_signature.witness_seal_proof.signatures[0][0] ^= 0x01;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_signature.clone()),
+            ),
+            "TRON structural preflight must reject witness-seal signatures that recover to the wrong witness"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_signature.clone()),
+            )
+            .is_none(),
+            "TRON checked adapter encoding must reject witness-seal signatures that recover to the wrong witness"
+        );
         assert!(!verify_sccp_tron_dpos_witness_seal_proof(
             &wrong_signature,
             &valid,
@@ -57323,6 +58243,27 @@ pub mod tests {
             &material,
         ));
 
+        let mut legacy_transition_recovery_id = adapter.clone();
+        let legacy_transition_signature = legacy_tron_recovery_id_alias_signature(
+            &legacy_transition_recovery_id.witness_schedule_transition_proofs[0]
+                .seal_proof
+                .signatures[0],
+        );
+        legacy_transition_recovery_id.witness_schedule_transition_proofs[0]
+            .seal_proof
+            .signatures[0] = legacy_transition_signature;
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TronDposReceipt(legacy_transition_recovery_id.clone(),),
+            ),
+            "TRON witness-schedule transitions must reject legacy recovery ids"
+        );
+        assert!(!verify_sccp_tron_dpos_witness_seal_proof(
+            &legacy_transition_recovery_id,
+            &valid,
+            &material,
+        ));
+
         let mut too_many_transitions = adapter.clone();
         too_many_transitions.witness_schedule_transition_proofs = vec![
             adapter.witness_schedule_transition_proofs[0].clone();
@@ -57518,6 +58459,23 @@ pub mod tests {
             "the transition is otherwise self-consistent and signed"
         );
         assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TronDposReceipt(
+                    unanchored_transition_block_hash.clone(),
+                ),
+            ),
+            "TRON structural preflight must reject witness-schedule transition block hashes not anchored to the proven header chain"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TronDposReceipt(
+                    unanchored_transition_block_hash.clone(),
+                ),
+            )
+            .is_none(),
+            "TRON checked adapter encoding must reject witness-schedule transition block hashes not anchored to the proven header chain"
+        );
+        assert!(
             !verify_sccp_tron_dpos_witness_seal_proof(
                 &unanchored_transition_block_hash,
                 &valid,
@@ -57556,6 +58514,19 @@ pub mod tests {
             )
             .is_none(),
             "TRON witness-schedule transition seal hash must reject mismatched signatures"
+        );
+        assert!(
+            !sccp_source_adapter_proof_shape_is_bounded(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_transition_signature.clone()),
+            ),
+            "TRON structural preflight must reject witness-schedule transition signatures that recover to the wrong witness"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TronDposReceipt(wrong_transition_signature.clone()),
+            )
+            .is_none(),
+            "TRON checked adapter encoding must reject witness-schedule transition signatures that recover to the wrong witness"
         );
         assert!(!verify_sccp_tron_dpos_witness_seal_proof(
             &wrong_transition_signature,
@@ -57846,6 +58817,30 @@ pub mod tests {
             inclusion.leaf_index = 1;
             replace_source_inclusion_proof(proof, &inclusion);
         });
+        let noncanonical_leaf_index = inclusion.leaf_index
+            + (1u64
+                .checked_shl(
+                    u32::try_from(valid.inclusion_branch.len()).expect("branch length fits u32"),
+                )
+                .expect("sample branch depth is below u64 width"));
+        assert!(
+            sccp_source_message_root_from_branch(
+                inclusion.source_event_leaf_hash,
+                noncanonical_leaf_index,
+                &valid.inclusion_branch,
+            )
+            .is_none(),
+            "source message roots must reject non-canonical high-bit leaf indexes"
+        );
+        assert_source_envelope_rejects_structure_mutation(&valid, |proof| {
+            let mut inclusion = source_inclusion_proof_from_envelope(proof);
+            inclusion.leaf_index += 1u64
+                .checked_shl(
+                    u32::try_from(proof.inclusion_branch.len()).expect("branch length fits u32"),
+                )
+                .expect("sample branch depth is below u64 width");
+            replace_source_inclusion_proof(proof, &inclusion);
+        });
     }
 
     #[test]
@@ -58108,7 +59103,7 @@ pub mod tests {
             );
 
             let malformed_outer_envelope_cases: [(&str, fn(&mut SccpSourceChainProofEnvelopeV1));
-                4] = [
+                7] = [
                 ("outer version drift", |proof| {
                     proof.version = 2;
                 }),
@@ -58117,6 +59112,28 @@ pub mod tests {
                 }),
                 ("source-event digest drift", |proof| {
                     proof.source_event_digest[0] ^= 0x01;
+                }),
+                ("message id replayed as payload hash", |proof| {
+                    proof.payload_hash = proof.message_id;
+                    proof.source_event_digest = sccp_source_event_digest(
+                        proof.source_domain,
+                        proof.target_domain,
+                        proof.message_id,
+                        proof.payload_hash,
+                    );
+                }),
+                ("finality block replayed as receipt root", |proof| {
+                    proof.receipt_or_message_root = proof.finality_block_hash;
+                    proof.finalized_header_hash = sccp_source_finalized_header_hash(
+                        proof.source_domain,
+                        proof.finality_model,
+                        proof.finality_height,
+                        proof.finality_block_hash,
+                        proof.receipt_or_message_root,
+                    );
+                }),
+                ("finalized header replayed as commitment root", |proof| {
+                    proof.commitment_root = proof.finalized_header_hash;
                 }),
                 ("empty inclusion branch", |proof| {
                     proof.inclusion_branch.clear();
@@ -58138,7 +59155,7 @@ pub mod tests {
                 );
             }
 
-            let malformed_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 7] = [
+            let malformed_evidence_cases: [(&str, fn(&mut SccpSourceVerifierEvidenceV1)); 10] = [
                 ("unpaired deployment hash", |evidence| {
                     evidence.source_adapter_deployment_hash = [0x44; 32];
                     evidence.source_adapter_deployment_receipt_hash = [0; 32];
@@ -58153,6 +59170,26 @@ pub mod tests {
                 ("zero adapter transcript hash", |evidence| {
                     evidence.adapter_transcript_hash = [0; 32];
                 }),
+                (
+                    "source verifier evidence reused adapter/source trust hashes",
+                    |evidence| {
+                        evidence.adapter_proof_hash = evidence.source_trust_anchor_hash;
+                    },
+                ),
+                (
+                    "source verifier evidence reused transcript/consensus hashes",
+                    |evidence| {
+                        evidence.adapter_transcript_hash = evidence.consensus_verifier_hash;
+                    },
+                ),
+                (
+                    "source verifier evidence adapter proof reused template hash",
+                    |evidence| {
+                        evidence.adapter_proof_hash =
+                            source_verifier_material_template(evidence.source_domain)
+                                .source_trust_anchor_hash;
+                    },
+                ),
                 (
                     "deployment hash pair without deployment-bound source roles",
                     |evidence| {
@@ -58358,9 +59395,20 @@ pub mod tests {
             let replay_envelope = source_chain_proof_from_bundle(&replay_bundle);
             let replay_consensus = source_consensus_proof_from_envelope(&replay_envelope);
 
-            assert_source_envelope_rejects_structure_mutation(&valid, |proof| {
-                replace_source_adapter_proof(proof, wrong_adapter_variant_for(proof));
-            });
+            let mut wrong_adapter_variant = valid.clone();
+            replace_source_adapter_proof(
+                &mut wrong_adapter_variant,
+                wrong_adapter_variant_for(&valid),
+            );
+            assert!(
+                !verify_sccp_source_chain_proof_material(&wrong_adapter_variant),
+                "source-chain material verification must reject wrong adapter proof variants"
+            );
+            assert!(
+                sccp_source_chain_proof_adapter_verifier_commitment(&wrong_adapter_variant)
+                    .is_none(),
+                "adapter verifier commitment helper must reject wrong adapter proof variants"
+            );
             assert_source_envelope_rejects_structure_mutation(&valid, |proof| {
                 let mut consensus = source_consensus_proof_from_envelope(proof);
                 consensus.verifier_evidence = replay_consensus.verifier_evidence.clone();
@@ -59576,7 +60624,7 @@ pub mod tests {
         assert_eq!(
             request.request_hash,
             decode_fixed_hex_bytes::<32>(
-                "0xd2c3eafee9352447d7018a388623663c8e5278fd3ab6d2818bf4d29c6221f701"
+                "0xe76aab334eecb60e67095e914cb7d0f8f68a4d9f2f36aa2cd1487d06532ac816"
             )
             .expect("cross-SDK TON proof request hash vector")
         );
@@ -59586,9 +60634,117 @@ pub mod tests {
         assert_eq!(
             proof_result.envelope_hash,
             decode_fixed_hex_bytes::<32>(
-                "0x44122c13a9521e270a8d3a2367045aefdf203a718bc4f9edb21ddec0f7346d25",
+                "0xab72b76e921fbf835a9a07d892a283ecee90338944c673dfcf7cff1df7d7f993",
             )
             .expect("cross-SDK TON proof result envelope hash vector")
+        );
+    }
+
+    #[test]
+    fn sccp_proof_requests_reject_sora_bundle_finality_drift() {
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON, 328);
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("TON public inputs");
+        let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&bundle);
+        let deployment_binding = SccpSourceAdapterDeploymentBindingV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_TON,
+            target_domain: SCCP_DOMAIN_SORA,
+            source_adapter_deployment_hash: [0xAA; 32],
+            source_adapter_deployment_receipt_hash: [0xBB; 32],
+        };
+        let statement_hash = [0x55; 32];
+        let destination_binding_hash = [0x66; 32];
+        let source_state_verifier_hash = [0x42; 32];
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &bundle_bytes,
+                None,
+                statement_hash,
+                destination_binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_some(),
+            "valid SORA-origin proof request fixture must still build",
+        );
+
+        let mut opaque_finality = bundle.clone();
+        opaque_finality.finality_proof = vec![0xA5; 32];
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&opaque_finality).is_none(),
+            "checked canonical bundle bytes must reject opaque SORA finality"
+        );
+        let opaque_finality_bytes =
+            canonical_nexus_sccp_message_bundle_bytes_len_checked(&opaque_finality)
+                .expect("opaque SORA finality fixture remains length-serializable");
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &opaque_finality_bytes,
+                None,
+                statement_hash,
+                destination_binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "proof-request bundle matcher must reject opaque SORA finality bytes",
+        );
+
+        let mut wrong_root = bundle.clone();
+        wrong_root.finality_proof = sample_finality_proof([0xAB; 32]);
+        assert!(
+            canonical_nexus_sccp_message_bundle_bytes_checked(&wrong_root).is_none(),
+            "checked canonical bundle bytes must reject SORA finality commitment-root drift"
+        );
+        let wrong_root_bytes = canonical_nexus_sccp_message_bundle_bytes_len_checked(&wrong_root)
+            .expect("SORA finality root-drift fixture remains length-serializable");
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &wrong_root_bytes,
+                None,
+                statement_hash,
+                destination_binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "proof-request bundle matcher must reject SORA finality commitment-root drift",
+        );
+
+        let mut wrong_height = public_inputs.clone();
+        wrong_height.finality_height = wrong_height.finality_height.saturating_add(1);
+        assert!(
+            build_sccp_ton_proof_request(
+                &wrong_height,
+                &bundle_bytes,
+                None,
+                statement_hash,
+                destination_binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "proof-request bundle matcher must reject SORA finality height drift",
+        );
+
+        let mut wrong_block_hash = public_inputs;
+        wrong_block_hash.finality_block_hash[0] ^= 0x01;
+        assert!(
+            build_sccp_ton_proof_request(
+                &wrong_block_hash,
+                &bundle_bytes,
+                None,
+                statement_hash,
+                destination_binding_hash,
+                source_state_verifier_hash,
+                &deployment_binding,
+            )
+            .is_none(),
+            "proof-request bundle matcher must reject SORA finality block-hash drift",
         );
     }
 
@@ -59741,6 +60897,65 @@ pub mod tests {
             .is_none(),
             "TON proof requests must reject arbitrary non-canonical SCCP bundle bytes"
         );
+
+        let diagnostic_zero_deployment_binding = SccpSourceAdapterDeploymentBindingV1 {
+            source_adapter_deployment_hash: [0u8; 32],
+            source_adapter_deployment_receipt_hash: [0u8; 32],
+            ..deployment_binding.clone()
+        };
+        assert!(
+            sccp_source_adapter_deployment_binding_hash(&diagnostic_zero_deployment_binding)
+                .is_some(),
+            "zero/zero deployment bindings remain canonical for structural fixtures"
+        );
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &bundle_bytes,
+                None,
+                inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &diagnostic_zero_deployment_binding,
+            )
+            .is_none(),
+            "TON proof requests must reject diagnostic zero/zero source-adapter deployment bindings"
+        );
+
+        let mut wrong_source_deployment_binding = deployment_binding.clone();
+        wrong_source_deployment_binding.source_domain = SCCP_DOMAIN_SOL;
+        assert!(
+            build_sccp_ton_proof_request(
+                &public_inputs,
+                &bundle_bytes,
+                None,
+                inner.statement_hash,
+                manifest.destination_binding.binding_hash,
+                source_state_verifier_hash,
+                &wrong_source_deployment_binding,
+            )
+            .is_none(),
+            "TON proof requests must reject source-adapter deployment bindings from another source lane"
+        );
+
+        let mut stale_deployment_binding_hash = request.clone();
+        stale_deployment_binding_hash.source_adapter_deployment_binding_hash[0] ^= 0x01;
+        stale_deployment_binding_hash.request_hash = sccp_ton_proof_request_hash(
+            &stale_deployment_binding_hash.public_inputs_bytes,
+            &stale_deployment_binding_hash.bundle_bytes,
+            &stale_deployment_binding_hash.source_proof_bytes,
+            &stale_deployment_binding_hash.source_state_verifier_id,
+            stale_deployment_binding_hash.source_state_verifier_hash,
+            stale_deployment_binding_hash.statement_hash,
+            stale_deployment_binding_hash.destination_binding_hash,
+            stale_deployment_binding_hash.source_adapter_deployment_binding_hash,
+        );
+        assert!(
+            wrap_sccp_ton_proof_result(&recursive_proof_bytes, &stale_deployment_binding_hash)
+                .is_none(),
+            "wrapped TON proof results must recompute and bind source-adapter deployment binding hashes"
+        );
+
         let swapped_bundle = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON, 29);
         let swapped_bundle_bytes = canonical_nexus_sccp_message_bundle_bytes(&swapped_bundle);
         assert!(
@@ -60178,6 +61393,11 @@ pub mod tests {
         assert_eq!(
             SccpLaunchModeV1::default(),
             SccpLaunchModeV1::EthereumMainnetLane
+        );
+        let retired_env_override = ["IROHA", "_SCCP", "_LAUNCH", "_MODE", "_V1"].concat();
+        assert!(
+            !include_str!("lib.rs").contains(&retired_env_override),
+            "SCCP production policy must not depend on process environment overrides"
         );
         let policy = sccp_production_policy_v1();
         assert_eq!(policy.launch_mode, SccpLaunchModeV1::EthereumMainnetLane);
@@ -61910,7 +63130,18 @@ pub mod tests {
     #[test]
     fn source_adapter_deployment_unblock_policy_is_explicit_per_domain() {
         for (domain, label) in [(SCCP_DOMAIN_ETH, "ETH"), (SCCP_DOMAIN_BSC, "BSC")] {
-            let source_material =
+            let source_material = if domain == SCCP_DOMAIN_BSC {
+                sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
+                    [0x11; 32],
+                    [0x12; 32],
+                    [0x13; 32],
+                    [0x14; 32],
+                    sample_evm_message_emitter_address(domain),
+                    sample_evm_source_bridge_code_hash(domain),
+                    sccp_bsc_mainnet_network_id_word_v1(),
+                    sample_bsc_source_bridge_owner_address(),
+                )
+            } else {
                 sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
                     domain,
                     [0x11; 32],
@@ -61920,7 +63151,8 @@ pub mod tests {
                     sample_evm_message_emitter_address(domain),
                     sample_evm_source_bridge_code_hash(domain),
                 )
-                .expect("EVM source material");
+            }
+            .expect("EVM source material");
             let source_deployment = sccp_source_adapter_engine_deployment_from_material_v1(
                 &source_material,
                 [0x15; 32],
@@ -62297,17 +63529,17 @@ pub mod tests {
 
     #[test]
     fn bsc_lane_readiness_with_exact_deployment_materials_rejects_replayed_profiles() {
-        let source_material =
-            sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
-                SCCP_DOMAIN_BSC,
-                sample_bsc_validator_set_hash(),
-                [0x62; 32],
-                [0x63; 32],
-                [0x64; 32],
-                sample_evm_message_emitter_address(SCCP_DOMAIN_BSC),
-                sample_evm_source_bridge_code_hash(SCCP_DOMAIN_BSC),
-            )
-            .expect("BSC source material");
+        let source_material = sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
+            sample_bsc_validator_set_hash(),
+            [0x62; 32],
+            [0x63; 32],
+            [0x64; 32],
+            sample_evm_message_emitter_address(SCCP_DOMAIN_BSC),
+            sample_evm_source_bridge_code_hash(SCCP_DOMAIN_BSC),
+            sccp_bsc_mainnet_network_id_word_v1(),
+            sample_bsc_source_bridge_owner_address(),
+        )
+        .expect("BSC source material");
         let source_deployment =
             build_sccp_bsc_mainnet_source_adapter_deployment(&source_material, [0x65; 32])
                 .expect("BSC source deployment");
@@ -63882,17 +65114,29 @@ pub mod tests {
             ),
             (
                 SCCP_DOMAIN_BSC,
-                "1630e4d75e2676cc443e07b0477303240ae4cff13bdf9fe61725b4a9a4ee959a",
-                "7d47ade779a5bddb3a5f283600af677db8605b75a00516a4328f3823ff28fb2d",
+                "b0740a8c667eabd8f59ba81a983560e671ceb2c66824bcadef2af77e4de4711e",
+                "6013045c3c18206e8211f2bd7bdfd3fa6820852fb18c84580eaae98ae43d4eac",
             ),
         ];
 
         for (domain, expected_material_hash, expected_deployment_hash) in vectors {
-            let material =
+            let material = if domain == SCCP_DOMAIN_BSC {
+                sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
+                    [0x44; 32],
+                    [0x55; 32],
+                    [0x66; 32],
+                    [0x88; 32],
+                    [0x11; 20],
+                    [0x77; 32],
+                    sccp_bsc_mainnet_network_id_word_v1(),
+                    sample_bsc_source_bridge_owner_address(),
+                )
+            } else {
                 sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
                     domain, [0x44; 32], [0x55; 32], [0x66; 32], [0x88; 32], [0x11; 20], [0x77; 32],
                 )
-                .expect("EVM-family source verifier material");
+            }
+            .expect("EVM-family source verifier material");
             let deployment =
                 sccp_source_adapter_engine_deployment_from_material_v1(&material, [0xaa; 32])
                     .expect("EVM-family source adapter deployment");
@@ -64752,7 +65996,7 @@ pub mod tests {
     }
 
     #[test]
-    fn bsc_material_only_profile_cannot_be_relabelled_as_deployment_material() {
+    fn bsc_material_only_profile_cannot_be_production_or_deployment_material() {
         let mut material = sccp_evm_family_mainnet_source_verifier_material_v1(SCCP_DOMAIN_BSC)
             .expect("BSC material-only profile");
         material.placeholder_material = true;
@@ -64761,10 +66005,13 @@ pub mod tests {
         material.source_bridge_emitter_code_hash =
             sample_evm_source_bridge_code_hash(SCCP_DOMAIN_BSC);
 
-        assert!(sccp_bsc_material_only_source_adapter_is_production_ready(
-            &material
-        ));
-        assert!(sccp_source_verifier_material_is_production_ready(&material));
+        // Keep recognizing the legacy BSC material-only source-proof profile
+        // as adversarial input; deployment-bound production admission must
+        // continue to reject it.
+        assert!(
+            !sccp_source_verifier_material_is_production_ready(&material),
+            "BSC material-only source material must not be production-ready without governed deployment evidence"
+        );
         assert!(
             !sccp_source_verifier_material_can_back_source_adapter_deployment(&material),
             "BSC material-only source material must stay separate from governed deployment material"
@@ -64772,6 +66019,54 @@ pub mod tests {
         assert!(
             sccp_source_adapter_engine_deployment_from_material_v1(&material, [0x6A; 32]).is_none(),
             "BSC material-only source material must not mint governed deployment descriptors"
+        );
+        let bundle = sample_transfer_bundle_with_source_material(
+            SCCP_DOMAIN_BSC,
+            SCCP_DOMAIN_SORA,
+            706,
+            Some(&material),
+        );
+        let source_proof = source_chain_proof_from_bundle(&bundle);
+        assert!(
+            verify_sccp_source_chain_proof_envelope_structure_with_material(
+                &source_proof,
+                &material
+            ),
+            "BSC material-only profile remains structurally valid for negative coverage"
+        );
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_production_with_material(
+                &source_proof,
+                &material
+            ),
+            "BSC material-only source proofs must not satisfy production without deployment evidence"
+        );
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_BSC).expect("BSC manifest");
+        let public_inputs = sccp_message_transparent_public_inputs_with_source_verifier_material(
+            &bundle, &material,
+        )
+        .expect("BSC material-only public inputs");
+        assert!(
+            !sccp_local_admission_is_allowed(
+                &manifest,
+                &public_inputs,
+                &bundle,
+                Some(&material),
+                None,
+            ),
+            "BSC material-only source proofs must not satisfy local admission without deployment evidence"
+        );
+        assert!(
+            build_sccp_local_admission_submission_package(
+                &manifest,
+                &[0xAA],
+                &public_inputs,
+                &bundle,
+                &material,
+                None,
+            )
+            .is_none(),
+            "BSC material-only source material must not package local admission without deployment evidence"
         );
 
         let forged_deployment = SccpSourceAdapterEngineDeploymentV1 {
@@ -65113,6 +66408,34 @@ pub mod tests {
                     deployment.deployment_receipt_hash = deployment.source_trust_anchor_hash
                 },
                 "source-adapter deployments must keep deployment receipt hashes role-separated from source roles",
+            );
+            assert!(
+                sccp_source_adapter_engine_deployment_from_material_v1(
+                    &material,
+                    source_verifier_material_template(domain).consensus_verifier_hash,
+                )
+                .is_none(),
+                "source-adapter deployment builders must reject template-derived deployment receipt hashes"
+            );
+            assert!(
+                sccp_source_adapter_engine_deployment_from_material_v1(
+                    &material,
+                    sccp_source_verifier_material_for_domain(domain)
+                        .expect("built-in placeholder material")
+                        .consensus_verifier_hash,
+                )
+                .is_none(),
+                "source-adapter deployment builders must reject built-in placeholder deployment receipt hashes"
+            );
+            assert_deployment_drift_rejected(
+                domain,
+                &material,
+                &deployment,
+                |deployment| {
+                    deployment.deployment_receipt_hash =
+                        source_verifier_material_template(domain).consensus_verifier_hash;
+                },
+                "source-adapter deployments must reject template-derived deployment receipt hashes",
             );
             assert_deployment_drift_rejected(
                 domain,
@@ -65716,6 +67039,45 @@ pub mod tests {
                     evidence.source_adapter_deployment_hash;
             },
             "deployment hash as deployment receipt",
+        );
+        assert_deployment_bound_evidence_replay_rejected(
+            deployment_bound_proof.clone(),
+            |evidence| {
+                evidence.adapter_proof_hash = evidence.source_adapter_deployment_hash;
+            },
+            "deployment hash as adapter proof hash",
+        );
+        assert_deployment_bound_evidence_replay_rejected(
+            deployment_bound_proof.clone(),
+            |evidence| {
+                evidence.adapter_transcript_hash = evidence.source_adapter_deployment_receipt_hash;
+            },
+            "deployment receipt as adapter transcript hash",
+        );
+        assert_deployment_bound_evidence_replay_rejected(
+            deployment_bound_proof.clone(),
+            |evidence| {
+                evidence.consensus_verifier_hash =
+                    source_verifier_material_template(SCCP_DOMAIN_ETH).consensus_verifier_hash;
+            },
+            "template source role as evidence consensus verifier",
+        );
+        assert_deployment_bound_evidence_replay_rejected(
+            deployment_bound_proof.clone(),
+            |evidence| {
+                evidence.adapter_transcript_hash =
+                    source_verifier_material_template(SCCP_DOMAIN_ETH)
+                        .message_inclusion_verifier_hash;
+            },
+            "template source role as adapter transcript hash",
+        );
+        assert_deployment_bound_evidence_replay_rejected(
+            deployment_bound_proof.clone(),
+            |evidence| {
+                evidence.source_adapter_deployment_receipt_hash =
+                    source_verifier_material_template(SCCP_DOMAIN_ETH).consensus_verifier_hash;
+            },
+            "template source role as deployment receipt",
         );
 
         let legacy_receipt_bundle = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 8803);
@@ -67782,6 +69144,146 @@ pub mod tests {
     }
 
     #[test]
+    fn source_verifier_material_constructors_reject_builtin_placeholder_hash_replay() {
+        for source_domain in SCCP_CORE_REMOTE_DOMAINS {
+            let placeholder = sccp_source_verifier_material_for_domain(source_domain)
+                .expect("built-in placeholder material");
+            let placeholder_role_hash = placeholder.consensus_verifier_hash;
+            assert!(h256_is_nonzero(&placeholder_role_hash));
+
+            match source_domain {
+                SCCP_DOMAIN_ETH => {
+                    assert!(
+                        sccp_evm_family_mainnet_source_verifier_material_with_hashes_v1(
+                            SCCP_DOMAIN_ETH,
+                            placeholder_role_hash,
+                            [0x12; 32],
+                            [0x13; 32],
+                            [0x14; 32],
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder role hash replay"
+                    );
+                    assert!(
+                        sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                            SCCP_DOMAIN_ETH,
+                            sample_eth_sync_committee_hash(),
+                            [0x12; 32],
+                            [0x13; 32],
+                            [0x14; 32],
+                            sample_evm_message_emitter_address(SCCP_DOMAIN_ETH),
+                            placeholder_role_hash,
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder source bridge code hash replay"
+                    );
+                }
+                SCCP_DOMAIN_BSC => {
+                    assert!(
+                        sccp_evm_family_mainnet_source_verifier_material_with_hashes_v1(
+                            SCCP_DOMAIN_BSC,
+                            placeholder_role_hash,
+                            [0x16; 32],
+                            [0x17; 32],
+                            [0x18; 32],
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder role hash replay"
+                    );
+                    assert!(
+                        sccp_bsc_source_verifier_material_with_hashes_emitter_and_config_v1(
+                            sample_bsc_validator_set_hash(),
+                            [0x16; 32],
+                            [0x17; 32],
+                            [0x18; 32],
+                            sample_evm_message_emitter_address(SCCP_DOMAIN_BSC),
+                            placeholder_role_hash,
+                            sccp_bsc_mainnet_network_id_word_v1(),
+                            sample_bsc_source_bridge_owner_address(),
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder source bridge code hash replay"
+                    );
+                }
+                SCCP_DOMAIN_SOL => {
+                    assert!(
+                        sccp_solana_mainnet_source_verifier_material_with_hashes_v1(
+                            placeholder_role_hash,
+                            [0xB2; 32],
+                            [0xC3; 32],
+                            [0xD4; 32],
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder role hash replay"
+                    );
+                    assert!(
+                        sccp_solana_mainnet_source_verifier_material_with_hashes_and_accounts_db_v1(
+                            sample_solana_vote_roster_hash(),
+                            [0xB2; 32],
+                            [0xC3; 32],
+                            placeholder_role_hash,
+                            [0xD4; 32],
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder source-state hash replay"
+                    );
+                }
+                SCCP_DOMAIN_TON => {
+                    assert!(
+                        sccp_ton_mainnet_source_verifier_material_with_hashes_v1(
+                            placeholder_role_hash,
+                            [0x22; 32],
+                            [0x23; 32],
+                            [0x24; 32],
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder role hash replay"
+                    );
+                    assert!(
+                        sccp_ton_mainnet_source_verifier_material_with_hashes_and_shard_state_v1(
+                            sample_ton_validator_set_hash(),
+                            [0x22; 32],
+                            [0x23; 32],
+                            placeholder_role_hash,
+                            [0x24; 32],
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder source-state hash replay"
+                    );
+                }
+                SCCP_DOMAIN_TRON => {
+                    assert!(
+                        sccp_tron_mainnet_source_verifier_material_with_hashes_v1(
+                            placeholder_role_hash,
+                            [0x32; 32],
+                            [0x33; 32],
+                            [0x34; 32],
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder role hash replay"
+                    );
+                    assert!(
+                        sccp_tron_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
+                            sample_tron_witness_schedule_hash(),
+                            [0x32; 32],
+                            [0x33; 32],
+                            sample_tron_message_emitter_address(),
+                            placeholder_role_hash,
+                            sample_tron_source_bridge_network_id(),
+                            sample_tron_source_bridge_owner_address(),
+                            sample_tron_source_bridge_config_hash(),
+                            [0x34; 32],
+                        )
+                        .is_none(),
+                        "domain {source_domain} constructors must reject built-in placeholder source bridge code hash replay"
+                    );
+                }
+                _ => panic!("unsupported SCCP source domain {source_domain}"),
+            }
+        }
+    }
+
+    #[test]
     fn source_verifier_material_rejects_cross_lane_profile_template_hash_replay() {
         for source_domain in SCCP_CORE_REMOTE_DOMAINS {
             let material = sample_production_source_verifier_material(source_domain);
@@ -67850,12 +69352,18 @@ pub mod tests {
         assert!(source_adapter_deployment_has_standalone_valid_shape(
             &solana_deployment
         ));
+        let solana_base_deployment =
+            build_sccp_solana_mainnet_source_adapter_deployment(&solana_material, [0xE6; 32])
+                .expect("Solana source adapter deployment without audit hashes");
 
         let ton_material = sample_production_source_verifier_material(SCCP_DOMAIN_TON);
         let ton_deployment = sample_production_source_adapter_deployment(&ton_material);
         assert!(source_adapter_deployment_has_standalone_valid_shape(
             &ton_deployment
         ));
+        let ton_base_deployment =
+            build_sccp_ton_mainnet_source_adapter_deployment(&ton_material, [0x29; 32])
+                .expect("TON source adapter deployment without audit hashes");
 
         for template_domain in SCCP_CORE_REMOTE_DOMAINS {
             let template = source_verifier_material_template(template_domain);
@@ -67916,6 +69424,58 @@ pub mod tests {
                 );
             }
         }
+
+        for placeholder_domain in SCCP_CORE_REMOTE_DOMAINS {
+            let placeholder = sccp_source_verifier_material_for_domain(placeholder_domain)
+                .expect("built-in placeholder material");
+            let replayed_hash = placeholder.consensus_verifier_hash;
+            assert!(h256_is_nonzero(&replayed_hash));
+
+            assert!(
+                sccp_solana_full_light_client_gate_hash_v1(
+                    &solana_material,
+                    &solana_base_deployment,
+                    replayed_hash,
+                    [0xC8; 32],
+                    [0xD9; 32],
+                )
+                .is_none(),
+                "Solana full-light-client gate hash must reject built-in placeholder audit hash replay"
+            );
+            assert!(
+                build_sccp_solana_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                    &solana_material,
+                    [0xE6; 32],
+                    replayed_hash,
+                    [0xC8; 32],
+                    [0xD9; 32],
+                )
+                .is_none(),
+                "Solana audited deployment builder must reject built-in placeholder audit hash replay"
+            );
+            assert!(
+                sccp_ton_full_light_client_gate_hash_v1(
+                    &ton_material,
+                    &ton_base_deployment,
+                    replayed_hash,
+                    [0x27; 32],
+                    [0x28; 32],
+                )
+                .is_none(),
+                "TON full-light-client gate hash must reject built-in placeholder audit hash replay"
+            );
+            assert!(
+                build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                    &ton_material,
+                    [0x29; 32],
+                    replayed_hash,
+                    [0x27; 32],
+                    [0x28; 32],
+                )
+                .is_none(),
+                "TON audited deployment builder must reject built-in placeholder audit hash replay"
+            );
+        }
     }
 
     #[test]
@@ -67955,6 +69515,12 @@ pub mod tests {
             let mut replay = deployment.clone();
             replay.finality_policy_hash = template.finality_policy_hash;
             replay_cases.push(("finality_policy_hash", replay));
+            let mut replay = deployment.clone();
+            replay.adapter_verifier_vk_hash = template.consensus_verifier_hash;
+            replay_cases.push(("adapter_verifier_vk_hash", replay));
+            let mut replay = deployment.clone();
+            replay.deployment_receipt_hash = template.consensus_verifier_hash;
+            replay_cases.push(("deployment_receipt_hash", replay));
             if sccp_source_state_verifier_required(source_domain) {
                 let mut replay = deployment.clone();
                 replay.source_state_verifier_hash = template.source_state_verifier_hash;
@@ -68037,6 +69603,9 @@ pub mod tests {
             let mut replay = deployment.clone();
             replay.finality_policy_hash = placeholder.finality_policy_hash;
             placeholder_replay_cases.push(("finality_policy_hash", replay));
+            let mut replay = deployment.clone();
+            replay.deployment_receipt_hash = placeholder.consensus_verifier_hash;
+            placeholder_replay_cases.push(("deployment_receipt_hash", replay));
 
             if sccp_source_state_verifier_required(source_domain) {
                 let mut replay = deployment.clone();
@@ -69730,11 +71299,12 @@ pub mod tests {
             .is_some()
         );
         assert!(
-            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+            !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
                 SCCP_DOMAIN_SOL,
                 &material,
                 &request_hash_reused_audit_deployment,
-            )
+            ),
+            "Solana readiness must reject verifier hashes replayed from request-bound audit statement hashes"
         );
         assert!(
             build_sccp_solana_tower_replay_verification_proof(
@@ -69793,10 +71363,19 @@ pub mod tests {
         assert!(
             !sccp_source_adapter_proof_shape_is_bounded(
                 &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
-                    all_zero_accounts_lt_hash_proof,
+                    all_zero_accounts_lt_hash_proof.clone(),
                 ),
             ),
             "Solana source-adapter preflight must reject all-zero nested proof capsules"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
+                    all_zero_accounts_lt_hash_proof,
+                ),
+            )
+            .is_none(),
+            "Solana checked adapter encoding must reject all-zero nested proof capsules"
         );
 
         let mut opaque_accounts_lt_hash_proof = solana_adapter.clone();
@@ -69816,10 +71395,19 @@ pub mod tests {
         assert!(
             !sccp_source_adapter_proof_shape_is_bounded(
                 &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
-                    opaque_accounts_lt_hash_proof,
+                    opaque_accounts_lt_hash_proof.clone(),
                 ),
             ),
             "Solana source-adapter preflight must reject opaque nested proof capsules"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
+                    opaque_accounts_lt_hash_proof,
+                ),
+            )
+            .is_none(),
+            "Solana checked adapter encoding must reject opaque nested proof capsules"
         );
 
         let mut invalid_accounts_lt_hash_proof = solana_adapter.clone();
@@ -69890,6 +71478,15 @@ pub mod tests {
                 ),
             ),
             "Solana source-adapter preflight must reject all-zero audit role proof capsules"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::SolanaFinalizedTransaction(
+                    all_zero_tower_replay_capsule.clone(),
+                ),
+            )
+            .is_none(),
+            "Solana checked adapter encoding must reject all-zero audit role proof capsules"
         );
         assert!(
             !verify_sccp_solana_full_light_client_audit_verification_proofs(
@@ -70016,12 +71613,12 @@ pub mod tests {
                 "Solana {label} replay remains a well-shaped audited deployment"
             );
             assert!(
-                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
                     SCCP_DOMAIN_SOL,
                     &material,
                     &replayed_audit_deployment,
                 ),
-                "Solana {label} replay remains generally source-adapter ready"
+                "Solana {label} replay must not satisfy governed source-adapter readiness"
             );
             assert!(
                 !sccp_source_chain_proof_matches_adapter_deployment(
@@ -70716,9 +72313,18 @@ pub mod tests {
         );
         assert!(
             !sccp_source_adapter_proof_shape_is_bounded(
-                &SccpSourceAdapterProofV1::TonMasterchainShard(all_zero_shard_state_capsule),
+                &SccpSourceAdapterProofV1::TonMasterchainShard(
+                    all_zero_shard_state_capsule.clone(),
+                ),
             ),
             "TON source-adapter preflight must reject all-zero shard-state proof capsules"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TonMasterchainShard(all_zero_shard_state_capsule),
+            )
+            .is_none(),
+            "TON checked adapter encoding must reject all-zero shard-state proof capsules"
         );
 
         let mut opaque_shard_state_capsule = ton_adapter.clone();
@@ -70735,9 +72341,16 @@ pub mod tests {
         );
         assert!(
             !sccp_source_adapter_proof_shape_is_bounded(
-                &SccpSourceAdapterProofV1::TonMasterchainShard(opaque_shard_state_capsule),
+                &SccpSourceAdapterProofV1::TonMasterchainShard(opaque_shard_state_capsule.clone(),),
             ),
             "TON source-adapter preflight must reject opaque shard-state proof capsules"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TonMasterchainShard(opaque_shard_state_capsule),
+            )
+            .is_none(),
+            "TON checked adapter encoding must reject opaque shard-state proof capsules"
         );
 
         let mut all_zero_masterchain_config_capsule = ton_adapter.clone();
@@ -70758,9 +72371,20 @@ pub mod tests {
         );
         assert!(
             !sccp_source_adapter_proof_shape_is_bounded(
-                &SccpSourceAdapterProofV1::TonMasterchainShard(all_zero_masterchain_config_capsule),
+                &SccpSourceAdapterProofV1::TonMasterchainShard(
+                    all_zero_masterchain_config_capsule.clone(),
+                ),
             ),
             "TON source-adapter preflight must reject all-zero audit role proof capsules"
+        );
+        assert!(
+            canonical_sccp_source_adapter_proof_bytes_checked(
+                &SccpSourceAdapterProofV1::TonMasterchainShard(
+                    all_zero_masterchain_config_capsule,
+                ),
+            )
+            .is_none(),
+            "TON checked adapter encoding must reject all-zero audit role proof capsules"
         );
 
         let mut missing_config_capsule = ton_adapter.clone();
@@ -70931,6 +72555,91 @@ pub mod tests {
                 &partial_audit_deployment,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn ton_testnet_placeholder_source_proofs_are_not_admitted() {
+        let material = sccp_ton_mainnet_source_verifier_material_with_hashes_and_shard_state_v1(
+            sample_ton_validator_set_hash(),
+            [0x22; 32],
+            [0x23; 32],
+            [0x25; 32],
+            [0x24; 32],
+        )
+        .expect("TON mainnet deployed source material");
+        let deployment =
+            build_sccp_ton_mainnet_source_adapter_deployment_with_full_light_client_audit(
+                &material, [0x29; 32], [0x26; 32], [0x27; 32], [0x28; 32],
+            )
+            .expect("audited TON source adapter deployment");
+
+        let message_id = [0x41; 32];
+        let payload_hash = [0x42; 32];
+        let source_event_digest =
+            sccp_source_event_digest(SCCP_DOMAIN_TON, SCCP_DOMAIN_SORA, message_id, payload_hash);
+        let inclusion_branch = vec![vec![0x77; 32]];
+        let receipt_or_message_root = sccp_source_message_root_from_branch(
+            sccp_source_event_leaf_hash(source_event_digest),
+            0,
+            &inclusion_branch,
+        )
+        .expect("source message root");
+        let finality_height = 12_345;
+        let finality_block_hash = [0x43; 32];
+        let proof = SccpSourceChainProofEnvelopeV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_TON,
+            target_domain: SCCP_DOMAIN_SORA,
+            source_chain: "ton".to_owned(),
+            source_proof_plan: SccpSourceProofPlanV1::TonMasterchainShardProof,
+            finality_model: SccpProofFinalityModelV1::TonMasterchain,
+            message_id,
+            payload_hash,
+            source_event_digest,
+            commitment_root: [0x44; 32],
+            finality_height,
+            finality_block_hash,
+            finalized_header_hash: sccp_source_finalized_header_hash(
+                SCCP_DOMAIN_TON,
+                SccpProofFinalityModelV1::TonMasterchain,
+                finality_height,
+                finality_block_hash,
+                receipt_or_message_root,
+            ),
+            receipt_or_message_root,
+            consensus_proof: b"sccp:ton:testnet-placeholder-consensus:v1:removed".to_vec(),
+            message_inclusion_proof: b"sccp:ton:testnet-placeholder-inclusion:v1:removed".to_vec(),
+            inclusion_branch,
+        };
+
+        assert!(
+            !sccp_source_chain_proof_matches_adapter_deployment(&proof, &deployment),
+            "TON placeholder source proofs must not satisfy deployment matching"
+        );
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+                &proof,
+                &material,
+                &deployment,
+            ),
+            "TON placeholder source proofs must not satisfy structural verification"
+        );
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_production_with_material_and_deployment(
+                &proof,
+                &material,
+                &deployment,
+            ),
+            "TON placeholder source proofs must not satisfy production verification"
+        );
+        assert!(
+            !verify_sccp_ton_mainnet_source_chain_proof_envelope_production(
+                &proof,
+                &material,
+                &deployment,
+            ),
+            "TON domain facade must reject placeholder source proofs"
         );
     }
 
@@ -74188,6 +75897,22 @@ pub mod tests {
 
         production.verifier_backend = reference.verifier_backend;
         assert!(!sccp_manifest_is_production_ready(&production));
+    }
+
+    #[test]
+    fn unready_manifest_bypass_is_test_gated() {
+        let reference = sample_reference_evm_attestation_manifest();
+        assert!(!sccp_manifest_is_production_ready(&reference));
+        assert!(!sccp_manifest_allows_transparent_proofs(&reference, false));
+        assert!(sccp_allow_unready_transparent_proof_bypass_enabled(true));
+        assert!(sccp_manifest_allows_transparent_proofs(&reference, true));
+        assert!(!sccp_allow_unready_transparent_proof_bypass_enabled(false));
+    }
+
+    #[test]
+    fn unready_source_proof_bypass_is_test_gated() {
+        assert!(sccp_allow_unready_source_proof_bypass_enabled(true));
+        assert!(!sccp_allow_unready_source_proof_bypass_enabled(false));
     }
 
     #[test]

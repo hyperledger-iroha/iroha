@@ -771,15 +771,12 @@ export const SCCP_SOURCE_ADAPTER_FASTPQ_PARAMETER_SET_V1: "fastpq-lane-balanced"
 export const SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1: "evm-groth16-bn254-v1";
 export const SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1: "sccp-native-evm-groth16-prover-bundle-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-cross-sdk-parity-v1";
-export const SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-ethereum-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1: "sccp-bsc-testnet-native-evm-cross-sdk-parity-v1";
-export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-testnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-cross-sdk-parity-v1";
-export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1";
 export const SCCP_BSC_GROTH16_PROOF_SELF_TEST_SCHEMA_V1: "iroha-sccp-bsc-groth16-proof-self-test/v1";
@@ -1146,7 +1143,7 @@ export interface TairaXorTonToTairaSourceProofPackageInput {
   settlement_defaults?: TairaXorTonToTairaSettlementFragment;
 }
 
-export interface BscPlaceholderSourceChainProofEnvelopeInput {
+export interface BscSourceChainProofEnvelopeInput {
   messageId?: string;
   message_id?: string;
   payloadHash?: string;
@@ -1231,7 +1228,7 @@ export interface BscPlaceholderSourceChainProofEnvelopeInput {
   validator_powers?: readonly (string | number | bigint)[];
 }
 
-export interface BscPlaceholderSourceChainProofEnvelopeResult {
+export interface BscSourceChainProofEnvelopeResult {
   readonly sourceProofHex: string;
   readonly sourceProofBytes: Uint8Array;
   readonly sourceEventDigest: string;
@@ -1244,39 +1241,6 @@ export interface BscPlaceholderSourceChainProofEnvelopeResult {
   readonly validatorSetHash: string;
   readonly receiptRootIndex: string;
   readonly syntheticRootMarker: boolean;
-}
-
-export interface TonTestnetPlaceholderSourceChainProofEnvelopeInput {
-  messageId?: string;
-  message_id?: string;
-  payloadHash?: string;
-  payload_hash?: string;
-  commitmentRoot?: string;
-  commitment_root?: string;
-  txId?: string;
-  txID?: string;
-  transactionHash?: string;
-  transaction_hash?: string;
-  transactionId?: string;
-  transaction_id?: string;
-  finalityHeight?: string | number | bigint;
-  finality_height?: string | number | bigint;
-  finalityBlockHash?: string;
-  finality_block_hash?: string;
-  blockHash?: string;
-  block_hash?: string;
-}
-
-export interface TonTestnetPlaceholderSourceChainProofEnvelopeResult {
-  readonly sourceProofHex: string;
-  readonly sourceProofBytes: Uint8Array;
-  readonly sourceEventDigest: string;
-  readonly sourceEventLeafHash: string;
-  readonly receiptOrMessageRoot: string;
-  readonly finalityHeight: string;
-  readonly finalityBlockHash: string;
-  readonly finalizedHeaderHash: string;
-  readonly txId: string;
 }
 
 export interface TairaXorTronToTairaBoundSourceProofPackage {
@@ -4822,8 +4786,7 @@ export interface EthereumMainnetNativeEvmProverParitySdkResultInput {
 }
 
 export type EthereumMainnetNativeEvmProverParitySchema =
-  | typeof SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1
-  | typeof SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  typeof SCCP_ETH_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1;
 
 export interface EthereumMainnetNativeEvmProverParityFixtureInput {
   schema?: EthereumMainnetNativeEvmProverParitySchema;
@@ -5336,8 +5299,7 @@ export type BscTestnetNativeEvmProverParitySdkResultInput =
 export type BscTestnetNativeEvmProverParitySdkResult =
   EthereumMainnetNativeEvmProverParitySdkResult;
 export type BscTestnetNativeEvmProverParitySchema =
-  | typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1
-  | typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  typeof SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1;
 
 export interface BscTestnetNativeEvmProverParityFixtureInput
   extends Omit<
@@ -5637,8 +5599,7 @@ export type BscMainnetNativeEvmProverParitySdkResultInput =
 export type BscMainnetNativeEvmProverParitySdkResult =
   EthereumMainnetNativeEvmProverParitySdkResult;
 export type BscMainnetNativeEvmProverParitySchema =
-  | typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1
-  | typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1;
 
 export interface BscMainnetNativeEvmProverParityFixtureInput
   extends Omit<
@@ -7603,14 +7564,8 @@ export function canonicalEvmReceiptRootMptValue(
   receiptRoot: string,
 ): Uint8Array;
 export function buildBscSourceChainProofEnvelope(
-  input: BscPlaceholderSourceChainProofEnvelopeInput,
-): BscPlaceholderSourceChainProofEnvelopeResult;
-export function buildBscPlaceholderSourceChainProofEnvelope(
-  input: BscPlaceholderSourceChainProofEnvelopeInput,
-): BscPlaceholderSourceChainProofEnvelopeResult;
-export function buildTonTestnetPlaceholderSourceChainProofEnvelope(
-  input: TonTestnetPlaceholderSourceChainProofEnvelopeInput,
-): TonTestnetPlaceholderSourceChainProofEnvelopeResult;
+  input: BscSourceChainProofEnvelopeInput,
+): BscSourceChainProofEnvelopeResult;
 export function canonicalEthSyncCommitteePayloadBytes(
   input: EthSyncCommitteePayloadInput,
 ): Uint8Array;

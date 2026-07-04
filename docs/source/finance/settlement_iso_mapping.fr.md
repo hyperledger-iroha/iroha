@@ -52,7 +52,7 @@ obligations que le pont Norito ↔ ISO 20022 doit faire respecter avant d'émet
     absent, portez des identifiants propriétaires avec des étiquettes `Prtry` claires et incluez le BIC dans les métadonnées.[^iso_cr]
 - **Lieu d'établissement / lieu** → **MIC** pour le lieu et **BIC** pour le CSD.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` et `colr.007` (gestion du collatéral)
+##### `colr.010` / `.011` / `.012` (gestion du collatéral)
 
 - Suivez les mêmes règles d'instrument que `sese.*` (ISIN préféré).
 - Les parties utilisent **BIC** par défaut ; **LEI** est acceptable là où le schéma l'expose.[^swift_bic]
@@ -227,7 +227,7 @@ iroha app settlement dvp \
   --iso-xml-out sese023_preview.xml
 ```
 
-### Substitution de garanties de pension → `colr.007`| Champ / contexte du dépôt | Chemin ISO 20022 | Remarques |
+### Substitution de garanties de pension → `colr.012`| Champ / contexte du dépôt | Chemin ISO 20022 | Remarques |
 |-------------------------------------------------|-----------------------------------|--------|
 | `agreement_id` (`RepoIsi` / `ReverseRepoIsi`) | `OblgtnId` | Identifiant du contrat de pension |
 | Identifiant Tx de substitution de garantie | `TxId` | Généré par substitution |

@@ -323,6 +323,46 @@ fn cuda_ed25519_does_not_accept_adversarial_public_key_bytes() {
     );
 }
 
+#[test]
+fn cuda_public_ed25519_helpers_reject_malformed_signature_r_before_device_dispatch() {
+    use ed25519_dalek::{Signer, SigningKey};
+
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    let keypair = SigningKey::from_bytes(&[0x48; 32]);
+    let message = b"cuda public malformed signature r";
+    let valid_signature = keypair.sign(message).to_bytes();
+    let public_key = keypair.verifying_key().to_bytes();
+    let hram = [0x24_u8; 32];
+
+    for (label, replacement_r) in [
+        ("small-order", SMALL_ORDER_ED25519_R),
+        ("noncanonical", NONCANONICAL_ED25519_R),
+    ] {
+        let mut malformed_signature = valid_signature;
+        malformed_signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+
+        assert_eq!(
+            ivm::ed25519_verify_cuda(message, &malformed_signature, &public_key),
+            Some(false),
+            "{label} signature R must reject before single CUDA dispatch"
+        );
+        assert_eq!(
+            ivm::ed25519_verify_batch_cuda(&[malformed_signature], &[public_key], &[hram]),
+            Some(vec![false]),
+            "{label} signature R must reject before batch CUDA dispatch"
+        );
+    }
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 fn test_cuda_ed25519_verify_batch() {

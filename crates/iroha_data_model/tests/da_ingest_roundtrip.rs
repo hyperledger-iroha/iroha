@@ -21,7 +21,7 @@ fn sample_signature(seed: u8) -> Signature {
         let offset = u8::try_from(idx).expect("signature index fits in u8");
         *byte = seed.wrapping_add(offset);
     }
-    Signature::from_bytes(&payload)
+    Signature::try_from_bytes(&payload).expect("DA ingest fixture signature must pass admission")
 }
 
 fn sample_public_key() -> PublicKey {

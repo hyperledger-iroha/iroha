@@ -751,7 +751,7 @@ evidence guarantees that every repo change satisfies the roadmap F1 governance
   测试涵盖了新的矩阵策略。
 - **ISO 20022 映射：** 构建 ISO 信封或协调外部时
   系统，重用记录在
-  `docs/source/finance/settlement_iso_mapping.md` (`colr.007`, `sese.023`,
+  `docs/source/finance/settlement_iso_mapping.md` (`colr.012`, `sese.023`,
   `sese.025`），因此 Norito 有效负载和 ISO 确认保持同步。
 
 ## 5. 操作清单

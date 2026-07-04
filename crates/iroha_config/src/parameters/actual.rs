@@ -3098,7 +3098,7 @@ pub struct Nexus {
 impl Default for Nexus {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: defaults::nexus::ENABLED,
             storage: NexusStorage::default(),
             staking: NexusStaking::default(),
             fees: NexusFees::default(),
@@ -7813,10 +7813,6 @@ pub struct IsoBridgeProfile {
     pub x509_require_ocsp_revocation_check: bool,
     /// Base64 DER OCSP responses accepted as rail-profile revocation material.
     pub x509_ocsp_response_der_base64: Vec<String>,
-    /// Backward-compatible SHA-256 pins of raw XMLDSig public keys accepted by this profile.
-    pub trusted_public_key_sha256: Vec<String>,
-    /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
-    pub trusted_certificate_sha256: Vec<String>,
     /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
     pub revoked_certificate_sha256: Vec<String>,
     /// Required reference datasets for this profile.
@@ -7957,8 +7953,6 @@ pub struct Zk {
     pub bridge_proof_max_past_age_blocks: u64,
     /// Maximum future drift (in blocks) a bridge proof's end height may lead the current block (0 = unlimited).
     pub bridge_proof_max_future_drift_blocks: u64,
-    /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
-    pub sccp_allow_unready_transparent_proofs: bool,
     /// SCCP source-chain verifier material that can enable non-SORA source lanes.
     pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
     /// SCCP source adapter engine deployments that can enable non-SORA source lanes.

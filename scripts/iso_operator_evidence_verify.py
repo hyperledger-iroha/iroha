@@ -110,7 +110,6 @@ STAGE_RECEIPT_KINDS = {
 }
 RECEIPT_PATH_SUFFIX = ".receipt.json"
 SUMMARY_DIGEST_FIELD = "summary_sha256"
-LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
 SUPPORTED_RAIL_MESSAGE_TYPES = {
     "pacs.008",
     "pacs.009",
@@ -120,11 +119,16 @@ SUPPORTED_RAIL_MESSAGE_TYPES = {
     "sese.023",
     "sese.024",
     "sese.025",
-    "colr.007",
     "colr.012",
 }
 RAIL_MESSAGE_TYPES = {
-    "generic-iso20022": SUPPORTED_RAIL_MESSAGE_TYPES - LEGACY_RAIL_MESSAGE_TYPES,
+    "generic-iso20022": {
+        "pacs.008",
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
     "swift-cbpr-plus": {
         "pacs.008",
         "pacs.009",
@@ -150,10 +154,6 @@ RAIL_MESSAGE_TYPES = {
         "pacs.002",
         "pacs.004",
         "camt.056",
-        "sese.023",
-        "sese.024",
-        "sese.025",
-        "colr.012",
     },
 }
 MAX_TRUST_DER_BLOBS = 8
@@ -240,7 +240,6 @@ EXPECTED_STAGE_FLAGS = {
     "rail": {
         "--allow-default-profile",
         "--allow-insecure-http",
-        "--allow-legacy-colr007",
         "--bearer-token-file",
         "--dry-run",
         "--inbox-dir",
@@ -266,7 +265,6 @@ EXPECTED_STAGE_FLAGS = {
         "--allow-failed",
         "--allow-default-profile",
         "--allow-insecure-http",
-        "--allow-legacy-colr007",
         "--receipt",
         "--receipt-dir",
         "--require-source-files",
@@ -279,7 +277,6 @@ STAGE_SINGLETON_FLAGS = {
         "--allow-failed",
         "--allow-default-profile",
         "--allow-insecure-http",
-        "--allow-legacy-colr007",
         "--require-source-files",
     },
 }
@@ -287,7 +284,6 @@ STAGE_BOOLEAN_FLAGS = {
     "rail": {
         "--allow-default-profile",
         "--allow-insecure-http",
-        "--allow-legacy-colr007",
         "--dry-run",
     },
     "notary": {
@@ -299,7 +295,6 @@ STAGE_BOOLEAN_FLAGS = {
         "--allow-failed",
         "--allow-default-profile",
         "--allow-insecure-http",
-        "--allow-legacy-colr007",
         "--require-source-files",
     },
 }
@@ -399,7 +394,6 @@ RECEIPT_SUMMARY_KEYS = {
     "receipt_kind",
     "allow_failed",
     "allow_insecure_http",
-    "allow_legacy_colr007",
     "allow_default_profile",
     "require_source_files",
     "receipts",
@@ -483,9 +477,7 @@ TRUST_PROFILE_OVERRIDE_KEYS = {
     "rail",
     "embedded_signature_policy",
     "signature_public_key_sha256_pins",
-    "trusted_public_key_sha256",
     "x509_trust_anchor_sha256_pins",
-    "trusted_certificate_sha256",
     "revoked_certificate_sha256",
     "x509_required_certificate_policy_oids",
     "x509_require_crl_revocation_check",
@@ -1888,7 +1880,6 @@ def _verify_receipt_entry_metadata(
     entry_label: str,
     *,
     receipt_kind: str,
-    allow_legacy_colr007: bool,
     allow_default_profile: bool,
     require_source_files: bool,
 ) -> None:
@@ -1942,10 +1933,6 @@ def _verify_receipt_entry_metadata(
         message_type = _required_message_type(receipt_entry, "message_type", entry_label)
         if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
             raise EvidenceError(f"{entry_label}.message_type is unsupported")
-        if message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
-            raise EvidenceError(
-                f"{entry_label}.message_type uses legacy rail message type"
-            )
         _required_sha256(receipt_entry, "payload_sha256", entry_label)
         if "profile" not in receipt_entry:
             raise EvidenceError(f"{entry_label}.profile must be recorded")
@@ -2783,9 +2770,6 @@ def _verify_receipt_verifier_summary(
     allow_insecure_http = _required_bool(receipt_obj, "allow_insecure_http", label)
     if allow_insecure_http and not args.allow_insecure_http:
         raise EvidenceError(f"{label} allowed insecure HTTP receipts")
-    allow_legacy_colr007 = _required_bool(receipt_obj, "allow_legacy_colr007", label)
-    if allow_legacy_colr007 and not args.allow_legacy_colr007:
-        raise EvidenceError(f"{label} allowed legacy colr.007 receipts")
     allow_default_profile = _required_bool(receipt_obj, "allow_default_profile", label)
     if allow_default_profile and not args.allow_default_profile:
         raise EvidenceError(f"{label} allowed default rail profile fallback")
@@ -2949,7 +2933,6 @@ def _verify_receipt_verifier_summary(
             receipt_entry,
             entry_label,
             receipt_kind=entry_kind,
-            allow_legacy_colr007=allow_legacy_colr007,
             allow_default_profile=allow_default_profile,
             require_source_files=require_source_files,
         )
@@ -3014,7 +2997,6 @@ def _verify_receipt_verifier_summary(
         "receipt_kind": sorted(receipt_kind_set),
         "allow_failed": allow_failed,
         "allow_insecure_http": allow_insecure_http,
-        "allow_legacy_colr007": allow_legacy_colr007,
         "allow_default_profile": allow_default_profile,
         "require_source_files": require_source_files,
         "receipts": receipt_entries,
@@ -3354,7 +3336,6 @@ def _check_command_policy(
     allow_insecure_http: bool,
     allow_default_profile: bool,
     allow_failed_receipts: bool,
-    allow_legacy_colr007: bool,
 ) -> None:
     if not command:
         raise EvidenceError(f"{label}.command must not be empty")
@@ -3391,8 +3372,6 @@ def _check_command_policy(
         raise EvidenceError(f"{label} used --allow-default-profile")
     if _command_has_flag(command, "--allow-failed") and not allow_failed_receipts:
         raise EvidenceError(f"{label} allowed failed receipts")
-    if _command_has_flag(command, "--allow-legacy-colr007") and not allow_legacy_colr007:
-        raise EvidenceError(f"{label} used --allow-legacy-colr007")
 
 
 def _check_stage_script(stage_name: str, command: list[str], label: str) -> None:
@@ -3621,7 +3600,6 @@ def _check_receipt_stdout_policy_binding(
     checks = (
         ("--allow-failed", "allow_failed"),
         ("--allow-insecure-http", "allow_insecure_http"),
-        ("--allow-legacy-colr007", "allow_legacy_colr007"),
         ("--allow-default-profile", "allow_default_profile"),
         ("--require-source-files", "require_source_files"),
     )
@@ -3834,7 +3812,6 @@ def _stage_summary(
         allow_insecure_http=args.allow_insecure_http,
         allow_default_profile=args.allow_default_profile,
         allow_failed_receipts=args.allow_failed_receipts,
-        allow_legacy_colr007=args.allow_legacy_colr007,
     )
     command_uses_dry_run = _command_has_flag(command, "--dry-run")
     command_uses_insecure_http = _command_uses_insecure_http_policy(command, label)
@@ -3893,10 +3870,6 @@ def _stage_summary(
             command,
             "--allow-default-profile",
         ),
-        "_uses_legacy_colr007_policy": _command_has_flag(
-            command,
-            "--allow-legacy-colr007",
-        ),
         "_requires_insecure_http_receipt_kind": STAGE_RECEIPT_KINDS.get(name)
         if command_uses_insecure_http
         else None,
@@ -3929,7 +3902,6 @@ def _planned_stage_summary(
         allow_insecure_http=args.allow_insecure_http,
         allow_default_profile=args.allow_default_profile,
         allow_failed_receipts=args.allow_failed_receipts,
-        allow_legacy_colr007=args.allow_legacy_colr007,
     )
     command_uses_dry_run = _command_has_flag(command, "--dry-run")
     if dry_run != command_uses_dry_run:
@@ -4129,18 +4101,6 @@ def _receipt_summary_has_default_profile(
     )
 
 
-def _receipt_summary_has_legacy_colr007(
-    receipt_summary: dict[str, Any] | None,
-) -> bool:
-    if receipt_summary is None:
-        return False
-    return any(
-        receipt["receipt_kind"] == "iso-rail-gateway"
-        and receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES
-        for receipt in receipt_summary["receipts"]
-    )
-
-
 def _check_rail_receipt_policy_binding(
     path: str,
     stage_results: list[dict[str, Any]],
@@ -4158,9 +4118,7 @@ def _check_rail_receipt_policy_binding(
         return
 
     receipt_has_default_profile = _receipt_summary_has_default_profile(receipt_summary)
-    receipt_has_legacy_colr007 = _receipt_summary_has_legacy_colr007(receipt_summary)
     rail_uses_default_profile = rail_stage["_uses_default_profile_policy"]
-    rail_uses_legacy_colr007 = rail_stage["_uses_legacy_colr007_policy"]
 
     if receipt_has_default_profile and not rail_uses_default_profile:
         raise EvidenceError(
@@ -4171,16 +4129,6 @@ def _check_rail_receipt_policy_binding(
         raise EvidenceError(
             f"{path}.stages rail command used --allow-default-profile but "
             "receipt_summary has no default-profile rail receipt"
-        )
-    if receipt_has_legacy_colr007 and not rail_uses_legacy_colr007:
-        raise EvidenceError(
-            f"{path}.receipt_summary records legacy colr.007 but rail command "
-            "omitted --allow-legacy-colr007"
-        )
-    if rail_uses_legacy_colr007 and not receipt_has_legacy_colr007:
-        raise EvidenceError(
-            f"{path}.stages rail command used --allow-legacy-colr007 but "
-            "receipt_summary has no legacy colr.007 rail receipt"
         )
 
 
@@ -5015,17 +4963,7 @@ def _check_trust_bundle(
         "signature_public_key_sha256_pins",
         f"{label}.profile_overrides",
     )
-    override_legacy_public_pins = _required_sha256_list(
-        profile_overrides,
-        "trusted_public_key_sha256",
-        f"{label}.profile_overrides",
-    )
-    _reject_sha256_overlap(
-        override_public_pins,
-        override_legacy_public_pins,
-        f"{label}.profile_overrides.signature_public_key_sha256_pins/trusted_public_key_sha256",
-    )
-    if len(override_public_pins) + len(override_legacy_public_pins) != signature_pin_count:
+    if len(override_public_pins) != signature_pin_count:
         raise EvidenceError(
             f"{label}.profile_overrides public-key pin count does not match material"
         )
@@ -5034,17 +4972,7 @@ def _check_trust_bundle(
         "x509_trust_anchor_sha256_pins",
         f"{label}.profile_overrides",
     )
-    override_legacy_anchor_pins = _required_sha256_list(
-        profile_overrides,
-        "trusted_certificate_sha256",
-        f"{label}.profile_overrides",
-    )
-    _reject_sha256_overlap(
-        override_anchor_pins,
-        override_legacy_anchor_pins,
-        f"{label}.profile_overrides.x509_trust_anchor_sha256_pins/trusted_certificate_sha256",
-    )
-    if len(override_anchor_pins) + len(override_legacy_anchor_pins) != x509_anchor_pin_count:
+    if len(override_anchor_pins) != x509_anchor_pin_count:
         raise EvidenceError(
             f"{label}.profile_overrides X.509 trust-anchor pin count does not match material"
         )
@@ -5058,18 +4986,18 @@ def _check_trust_bundle(
             f"{label}.profile_overrides revoked-certificate pin count does not match material"
         )
     _reject_sha256_overlap(
-        override_anchor_pins + override_legacy_anchor_pins,
+        override_anchor_pins,
         override_revoked_pins,
         f"{label}.profile_overrides trusted/revoked certificate pins",
     )
     _reject_sha256_overlap(
-        override_public_pins + override_legacy_public_pins,
-        override_anchor_pins + override_legacy_anchor_pins + override_revoked_pins,
+        override_public_pins,
+        override_anchor_pins + override_revoked_pins,
         f"{label}.profile_overrides public-key/certificate SHA-256 pins",
     )
     _require_summary_digests_in_pins(
         trust_anchor_der_entries,
-        override_anchor_pins + override_legacy_anchor_pins,
+        override_anchor_pins,
         f"{label}.x509_trust_anchors",
         f"{label}.profile_overrides X.509 trust-anchor pins",
     )
@@ -5161,9 +5089,7 @@ def _check_trust_bundle(
     )
     _reject_sha256_overlap(
         override_public_pins
-        + override_legacy_public_pins
         + override_anchor_pins
-        + override_legacy_anchor_pins
         + override_revoked_pins,
         list(crl_der_entries) + list(ocsp_der_entries),
         f"{label}.profile_overrides trust pin/revocation DER SHA-256 roles",
@@ -5462,8 +5388,6 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
         command.append("--allow-failed")
     if args.allow_insecure_http:
         command.append("--allow-insecure-http")
-    if args.allow_legacy_colr007:
-        command.append("--allow-legacy-colr007")
     if args.allow_default_profile:
         command.append("--allow-default-profile")
     if not args.allow_receipt_source_missing:
@@ -5606,17 +5530,6 @@ def _compact_receipt_summaries(
         if type(canary_receipt_summary) is dict:
             summaries.append(canary_receipt_summary)
     return summaries
-
-
-def _receipt_summaries_have_legacy_colr007(
-    receipt_summaries: list[dict[str, Any]],
-) -> bool:
-    return any(
-        receipt.get("receipt_kind") == "iso-rail-gateway"
-        and receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES
-        for summary in receipt_summaries
-        for receipt in summary["receipts"]
-    )
 
 
 def _receipt_summaries_have_default_profile(
@@ -5851,6 +5764,64 @@ def _trusts_have_missing_source(trusts: list[dict[str, Any]]) -> bool:
     )
 
 
+def _trusted_profile_rails_by_environment(
+    trusts: list[dict[str, Any]],
+) -> dict[tuple[str, str], set[str]]:
+    trusted_profile_rails: dict[tuple[str, str], set[str]] = {}
+    for trust in trusts:
+        for profile in trust["profiles"]:
+            key = (profile["profile_id"], profile["environment"])
+            trusted_profile_rails.setdefault(key, set()).add(profile["rail"])
+    return trusted_profile_rails
+
+
+def _reject_rail_receipt_without_trust(
+    receipt: dict[str, Any],
+    *,
+    label: str,
+    environment: str,
+    environment_label: str,
+    trusted_profile_rails_by_environment: dict[tuple[str, str], set[str]],
+    args: argparse.Namespace,
+) -> None:
+    if receipt["receipt_kind"] != "iso-rail-gateway":
+        return
+    profile_id = receipt["profile"]
+    if profile_id is None:
+        if args.default_rail_profile is None:
+            raise EvidenceError(
+                f"{label}.profile uses default rail profile without "
+                "--default-rail-profile"
+            )
+        profile_id = args.default_rail_profile
+    candidate_rails = trusted_profile_rails_by_environment.get(
+        (profile_id, environment),
+        set(),
+    )
+    if profile_id in KNOWN_RAILS:
+        matching_rails = candidate_rails & {profile_id}
+    else:
+        matching_rails = candidate_rails
+    if not matching_rails:
+        raise EvidenceError(
+            f"{label}.profile has no matching trust profile "
+            f"coverage for {environment_label}"
+        )
+    message_type = receipt.get("message_type")
+    if (
+        isinstance(message_type, str)
+        and MESSAGE_TYPE_RE.fullmatch(message_type) is not None
+        and not any(
+            message_type in RAIL_MESSAGE_TYPES.get(rail, set())
+            for rail in matching_rails
+        )
+    ):
+        raise EvidenceError(
+            f"{label}.message_type has no matching trust "
+            "profile rail coverage"
+        )
+
+
 def _reject_canary_rail_receipts_without_trust(
     canaries: list[dict[str, Any]],
     trusts: list[dict[str, Any]],
@@ -5858,63 +5829,45 @@ def _reject_canary_rail_receipts_without_trust(
 ) -> None:
     """Reject canary rail receipts that lack matching trust material."""
 
-    trusted_profile_rails_by_environment: dict[tuple[str, str], set[str]] = {}
-    for trust in trusts:
-        for profile in trust["profiles"]:
-            key = (profile["profile_id"], profile["environment"])
-            trusted_profile_rails_by_environment.setdefault(key, set()).add(
-                profile["rail"]
-            )
+    trusted_profile_rails_by_environment = _trusted_profile_rails_by_environment(trusts)
     for canary_offset, canary in enumerate(canaries):
         receipt_summary = canary.get("receipt_summary")
         if receipt_summary is None:
             continue
         canary_environment = canary["environment"]
         for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
-            if receipt["receipt_kind"] != "iso-rail-gateway":
-                continue
-            if (
-                args.allow_legacy_colr007
-                and receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES
-            ):
-                continue
-            profile_id = receipt["profile"]
-            if profile_id is None:
-                if args.default_rail_profile is None:
-                    raise EvidenceError(
-                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
-                        f"[{receipt_offset}].profile uses default rail profile without "
-                        "--default-rail-profile"
-                    )
-                profile_id = args.default_rail_profile
-            candidate_rails = trusted_profile_rails_by_environment.get(
-                (profile_id, canary_environment),
-                set(),
+            _reject_rail_receipt_without_trust(
+                receipt,
+                label=(
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}]"
+                ),
+                environment=canary_environment,
+                environment_label="canary environment",
+                trusted_profile_rails_by_environment=trusted_profile_rails_by_environment,
+                args=args,
             )
-            if profile_id in KNOWN_RAILS:
-                matching_rails = candidate_rails & {profile_id}
-            else:
-                matching_rails = candidate_rails
-            if not matching_rails:
-                raise EvidenceError(
-                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
-                    f"[{receipt_offset}].profile has no matching trust profile "
-                    "coverage for canary environment"
-                )
-            message_type = receipt.get("message_type")
-            if (
-                isinstance(message_type, str)
-                and MESSAGE_TYPE_RE.fullmatch(message_type) is not None
-                and not any(
-                    message_type in RAIL_MESSAGE_TYPES.get(rail, set())
-                    for rail in matching_rails
-                )
-            ):
-                raise EvidenceError(
-                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
-                    f"[{receipt_offset}].message_type has no matching trust "
-                    "profile rail coverage"
-                )
+
+
+def _reject_archive_rail_receipts_without_trust(
+    receipt_summary: dict[str, Any] | None,
+    trusts: list[dict[str, Any]],
+    args: argparse.Namespace,
+) -> None:
+    """Reject archive rail receipts that lack matching trust material."""
+
+    if receipt_summary is None:
+        return
+    trusted_profile_rails_by_environment = _trusted_profile_rails_by_environment(trusts)
+    for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
+        _reject_rail_receipt_without_trust(
+            receipt,
+            label=f"receipt_verification.receipts[{receipt_offset}]",
+            environment=args.environment,
+            environment_label="evidence environment",
+            trusted_profile_rails_by_environment=trusted_profile_rails_by_environment,
+            args=args,
+        )
 
 
 def _require_policy_booleans(args: argparse.Namespace) -> None:
@@ -5922,7 +5875,6 @@ def _require_policy_booleans(args: argparse.Namespace) -> None:
         "allow_plan_only",
         "allow_dry_run",
         "allow_insecure_http",
-        "allow_legacy_colr007",
         "allow_default_profile",
         "allow_failed_receipts",
         "allow_partial_canary",
@@ -6113,13 +6065,6 @@ def run(args: argparse.Namespace) -> int:
             receipt_summary,
         )
     receipt_summaries = _compact_receipt_summaries(canaries, receipt_summary)
-    if args.allow_legacy_colr007 and not _receipt_summaries_have_legacy_colr007(
-        receipt_summaries
-    ):
-        raise EvidenceError(
-            "--allow-legacy-colr007 requires at least one rail receipt with "
-            "legacy colr.007 message_type"
-        )
     if args.allow_default_profile and not _receipt_summaries_have_default_profile(
         receipt_summaries
     ):
@@ -6167,6 +6112,7 @@ def run(args: argparse.Namespace) -> int:
             "with source=null"
         )
     _reject_canary_rail_receipts_without_trust(canaries, trusts, args)
+    _reject_archive_rail_receipts_without_trust(receipt_summary, trusts, args)
     public_canaries = sorted(
         (_public_canary_summary(canary) for canary in canaries),
         key=_compact_summary_order_key,
@@ -6187,7 +6133,6 @@ def run(args: argparse.Namespace) -> int:
             "allow_plan_only": args.allow_plan_only,
             "allow_dry_run": args.allow_dry_run,
             "allow_insecure_http": args.allow_insecure_http,
-            "allow_legacy_colr007": args.allow_legacy_colr007,
             "allow_default_profile": args.allow_default_profile,
             "allow_failed_receipts": args.allow_failed_receipts,
             "allow_partial_canary": args.allow_partial_canary,
@@ -6305,11 +6250,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow receipt verifier runs configured with --allow-failed.",
     )
     parser.add_argument(
-        "--allow-legacy-colr007",
-        action="store_true",
-        help="Allow local diagnostic evidence that used legacy colr.007 rail receipts.",
-    )
-    parser.add_argument(
         "--allow-partial-canary",
         action="store_true",
         help="Allow canaries with only rail or only notary plus verify.",
@@ -6382,7 +6322,6 @@ def main(argv: list[str] | None = None) -> int:
                 "--allow-dry-run",
                 "--allow-failed-receipts",
                 "--allow-insecure-http",
-                "--allow-legacy-colr007",
                 "--allow-missing-trust-source",
                 "--allow-partial-canary",
                 "--allow-plan-only",

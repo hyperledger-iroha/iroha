@@ -161,7 +161,7 @@ iroha --config client.toml --output \
 * CLI 调用今天发出空指令元数据；在结算级别时使用Python助手
   需要附加元数据。
 * 请参阅 [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) 了解 ISO 20022 字段映射
-  支持这些指令（`sese.023`、`sese.025`、`colr.007`、`pacs.009`、`camt.054`）。
+  支持这些指令（`sese.023`、`sese.025`、`colr.012`、`pacs.009`、`camt.054`）。
 * 传递 `--iso-xml-out <path>` 以使 CLI 与 Norito 一起发出规范的 XML 预览
   指示；该文件遵循上面的映射（DvP 为 `sese.023`，PvP`为 `sese.025`）。配对
   带有 `--iso-reference-crosswalk <path>` 标记，以便 CLI 对照 `--delivery-instrument-id` 进行验证

@@ -1233,17 +1233,32 @@ mod tests {
             .expect("fixture seed must derive a valid BLS keypair")
     }
 
+    fn checked_mldsa_keypair(seed: impl Into<Vec<u8>>) -> KeyPair {
+        KeyPair::try_from_seed(seed.into(), Algorithm::MlDsa)
+            .expect("fixture seed must derive a valid ML-DSA keypair")
+    }
+
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
 
-    fn signature_payload_with_malformed_ed25519_r(keypair: &KeyPair, preimage: &[u8]) -> Vec<u8> {
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_payload_with_malformed_ed25519_r(
+        keypair: &KeyPair,
+        preimage: &[u8],
+        replacement_r: &[u8; 32],
+    ) -> Vec<u8> {
         let mut signature = iroha_crypto::Signature::try_new(keypair.private_key(), preimage)
             .expect("fixture payload must sign")
             .payload()
             .to_vec();
-        signature[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        signature[..replacement_r.len()].copy_from_slice(replacement_r);
         signature
     }
 
@@ -1335,14 +1350,19 @@ mod tests {
             signature: Vec::new(),
         };
         let preimage = rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready);
-        ready.signature = signature_payload_with_malformed_ed25519_r(&keypair, &preimage);
 
-        assert!(!rbc_ready_signature_valid(
-            &ready,
-            &topology,
-            &chain,
-            PERMISSIONED_TAG
-        ));
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            ready.signature =
+                signature_payload_with_malformed_ed25519_r(&keypair, &preimage, &replacement_r);
+
+            assert!(
+                !rbc_ready_signature_valid(&ready, &topology, &chain, PERMISSIONED_TAG),
+                "{label} RBC ready signature R was not rejected"
+            );
+        }
     }
 
     #[test]
@@ -1395,14 +1415,119 @@ mod tests {
             ready_signatures: Vec::new(),
         };
         let preimage = rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver);
-        deliver.signature = signature_payload_with_malformed_ed25519_r(&keypair, &preimage);
 
-        assert!(!rbc_deliver_signature_valid(
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            deliver.signature =
+                signature_payload_with_malformed_ed25519_r(&keypair, &preimage, &replacement_r);
+
+            assert!(
+                !rbc_deliver_signature_valid(&deliver, &topology, &chain, PERMISSIONED_TAG),
+                "{label} RBC deliver signature R was not rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rbc_signature_valid_rejects_malformed_mldsa_signature_lengths() {
+        let chain: ChainId = "rbc-malformed-mldsa-length-helper"
+            .parse()
+            .expect("chain id");
+        let keypair = checked_mldsa_keypair(b"rbc-malformed-mldsa-length-helper".to_vec());
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            keypair.public_key().clone(),
+        )]);
+
+        let mut ready = RbcReady {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x4C; Hash::LENGTH],
+            )),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            roster_hash: Hash::new(&topology.as_ref().to_vec().encode()),
+            chunk_root: Hash::prehashed([0x4D; Hash::LENGTH]),
+            sender: 0,
+            signature: Vec::new(),
+        };
+        let ready_preimage = rbc_ready_preimage(&chain, PERMISSIONED_TAG, &ready);
+        let ready_signature =
+            iroha_crypto::Signature::try_new(keypair.private_key(), &ready_preimage)
+                .expect("sign RBC ready")
+                .payload()
+                .to_vec();
+        ready.signature = ready_signature.clone();
+        assert!(rbc_ready_signature_valid(
+            &ready,
+            &topology,
+            &chain,
+            PERMISSIONED_TAG
+        ));
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                ready_signature[..ready_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = ready_signature.clone();
+                payload.push(0x5D);
+                payload
+            }),
+        ] {
+            ready.signature = replacement_signature;
+            assert!(
+                !rbc_ready_signature_valid(&ready, &topology, &chain, PERMISSIONED_TAG),
+                "{label} RBC ready ML-DSA signature length was not rejected"
+            );
+        }
+
+        let mut deliver = RbcDeliver {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x4E; Hash::LENGTH],
+            )),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            roster_hash: Hash::new(&topology.as_ref().to_vec().encode()),
+            chunk_root: Hash::prehashed([0x4F; Hash::LENGTH]),
+            sender: 0,
+            signature: Vec::new(),
+            ready_signatures: Vec::new(),
+        };
+        let deliver_preimage = rbc_deliver_preimage(&chain, PERMISSIONED_TAG, &deliver);
+        let deliver_signature =
+            iroha_crypto::Signature::try_new(keypair.private_key(), &deliver_preimage)
+                .expect("sign RBC deliver")
+                .payload()
+                .to_vec();
+        deliver.signature = deliver_signature.clone();
+        assert!(rbc_deliver_signature_valid(
             &deliver,
             &topology,
             &chain,
             PERMISSIONED_TAG
         ));
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                deliver_signature[..deliver_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = deliver_signature.clone();
+                payload.push(0x6D);
+                payload
+            }),
+        ] {
+            deliver.signature = replacement_signature;
+            assert!(
+                !rbc_deliver_signature_valid(&deliver, &topology, &chain, PERMISSIONED_TAG),
+                "{label} RBC deliver ML-DSA signature length was not rejected"
+            );
+        }
     }
 
     #[test]
@@ -2037,6 +2162,7 @@ pub(super) fn rbc_deliver_signature_valid(
 fn rbc_signature_for_peer(payload: &[u8], peer: &PeerId) -> Option<Signature> {
     match peer.public_key().try_algorithm().ok()? {
         iroha_crypto::Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(payload).ok(),
+        iroha_crypto::Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(payload).ok(),
         _ => Signature::try_from_bytes(payload).ok(),
     }
 }

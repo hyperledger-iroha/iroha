@@ -780,8 +780,8 @@ mod tests {
             },
             opening: RamLfeOutputOpening {
                 payload: opening_payload_from_fixture(fixture_object(opening, "payload")),
-                signature: Signature::from_hex(fixture_str(opening, "signature"))
-                    .expect("valid opening signature hex"),
+                signature: Signature::try_from_hex(fixture_str(opening, "signature"))
+                    .expect("valid checked opening signature hex"),
             },
             opaque_id: OpaqueAccountId::from_str(fixture_str(payload, "opaque_id"))
                 .expect("valid opaque id"),
@@ -810,8 +810,8 @@ mod tests {
     fn attestation_from_fixture(attestation: &norito::json::Value) -> RamLfeReceiptAttestation {
         match fixture_str(attestation, "kind") {
             "signed" => RamLfeReceiptAttestation::Signed(
-                Signature::from_hex(fixture_str(attestation, "signature"))
-                    .expect("valid receipt signature hex"),
+                Signature::try_from_hex(fixture_str(attestation, "signature"))
+                    .expect("valid checked receipt signature hex"),
             ),
             other => panic!("unsupported fixture attestation kind `{other}`"),
         }
@@ -1187,6 +1187,59 @@ mod tests {
             err,
             IdentifierResolutionError::InvalidOutputOpening(_)
         ));
+    }
+
+    #[test]
+    fn derive_rejects_malformed_output_opening_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_R: [u8; 32] = [
+            0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let service = IdentifierResolutionService::new();
+            let owner = checked_fixture_account(0x5D);
+            let signer = checked_fixture_ed25519_keypair(0x5E);
+            let policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
+            let secret = b"hidden-phone-policy".to_vec();
+            let (policy, program_policy) = sample_policy_bundle(policy_id, owner, &signer, &secret);
+            service.register_program_runtime(
+                program_policy.program_id.clone(),
+                secret,
+                default_bfv_programmed_hidden_program(),
+                signer.clone(),
+                Some(30_000),
+            );
+
+            let ciphertext = encrypted_identifier(
+                &program_policy,
+                b"+15551234567",
+                b"malformed-opening-signature-r",
+            );
+            let execution = service
+                .execute_encrypted(&program_policy, &ciphertext)
+                .expect("execute encrypted input");
+            let mut opening = opening_for_execution(&program_policy, &signer, &execution);
+            let mut signature = opening.signature.payload().to_vec();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            opening.signature = Signature::from_bytes(&signature);
+
+            let err = service
+                .derive_encrypted(&policy, &program_policy, &ciphertext, opening)
+                .expect_err("malformed output-opening signature R must fail admission");
+            assert!(
+                matches!(err, IdentifierResolutionError::InvalidOutputOpening(_)),
+                "{label} R produced unexpected error: {err:?}"
+            );
+        }
     }
 
     #[test]

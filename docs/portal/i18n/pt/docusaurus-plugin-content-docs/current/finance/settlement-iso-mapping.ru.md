@@ -60,7 +60,7 @@ obrigações que a ponte Norito ↔ ISO 20022 deve cumprir antes de emitir mens
     ausente, carregue IDs proprietários com rótulos `Prtry` claros e inclua BIC nos metadados.[^iso_cr]
 - **Local de liquidação/local** → **MIC** para o local e **BIC** para o CSD.[^iso_mic]
 
-##### `colr.010` / `.011` / `.012` e `colr.007` (gestão de garantias)
+##### `colr.010` / `.011` / `.012` (gestão de garantias)
 
 - Siga as mesmas regras do instrumento `sese.*` (preferencialmente ISIN).
 - As partes usam **BIC** por padrão; **LEI** é aceitável onde o esquema o expõe.[^swift_bic]
@@ -212,7 +212,7 @@ status (por exemplo, `ConfSts = ACCP`) em vez do “objetivo” do PvP.
 | Status `plan.atomicity` (`ConfSts`) | `ConfSts` | `ACCP` quando combinado; ponte emite códigos de falha na rejeição |
 | Identificadores de contraparte | `AddtlInf` JSON | A ponte atual serializa tuplas completas de AccountId/BIC em metadados |
 
-### Substituição de garantia de recompra → `colr.007`
+### Substituição de garantia de recompra → `colr.012`
 
 | Campo / contexto do repositório | Caminho ISO 20022 | Notas |
 |-------------------------------------------------|-----------------------------------|-------|

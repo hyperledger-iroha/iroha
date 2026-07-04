@@ -731,8 +731,14 @@ fn verify_policy_signature(
     public_key: &PublicKey,
     payload: &ValidationFeePolicySigningPayloadV1,
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    match public_key.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(public_key, payload)
 }
@@ -757,6 +763,11 @@ mod tests {
 
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair")
+    }
+
+    fn key_pair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm)
+            .unwrap_or_else(|err| panic!("{algorithm:?} validation-fee key pair: {err}"))
     }
 
     fn fee_asset() -> AssetDefinitionId {
@@ -1025,6 +1036,39 @@ mod tests {
                 invalid_signed.verify_against_keyset(&keyset),
                 Err(ValidationFeePolicySignatureError::InvalidSignature),
                 "{label} validation-fee policy signature R was not rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn signed_policy_rejects_malformed_mldsa_signature_lengths() {
+        let first = key_pair_with_algorithm(Algorithm::MlDsa);
+        let keyset = keyset(&[&first], 1);
+        let signed = signed_policy(policy(), &[&first]);
+        signed
+            .verify_against_keyset(&keyset)
+            .expect("valid ML-DSA validation-fee policy signature verifies");
+        let valid_signature = signed.signatures[0].signature.payload().to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x5D);
+                payload
+            }),
+        ] {
+            let mut invalid_signed = signed.clone();
+            invalid_signed.signatures[0].signature =
+                SignatureOf::from_signature(Signature::from_bytes(&replacement_signature));
+
+            assert_eq!(
+                invalid_signed.verify_against_keyset(&keyset),
+                Err(ValidationFeePolicySignatureError::InvalidSignature),
+                "{label} validation-fee policy ML-DSA signature length was not rejected"
             );
         }
     }

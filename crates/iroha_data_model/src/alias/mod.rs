@@ -225,8 +225,9 @@ mod tests {
             alias.clone(),
             owner,
             {
-                let sig_bytes = [0u8; 64];
-                Signature::from_bytes(&sig_bytes)
+                let sig_bytes = [0xAA_u8; 64];
+                Signature::try_from_bytes(&sig_bytes)
+                    .expect("alias attestation tracking fixture signature passes admission")
             },
             Vec::new(),
         );

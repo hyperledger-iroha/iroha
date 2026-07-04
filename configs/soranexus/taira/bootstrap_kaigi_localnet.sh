@@ -322,35 +322,10 @@ def ensure_sumeragi_block_budget(text: str) -> str:
         return text[: anchor.start()] + updated + "\n" + text[anchor.start() :]
     return text.rstrip() + "\n\n" + updated
 
-def ensure_zk_localnet_overrides(text: str) -> str:
-    section = re.compile(r"(?ms)^\[zk\]\n.*?(?=^\[|\Z)")
-    match = section.search(text)
-    if match:
-        block = match.group(0)
-        if re.search(r"(?m)^sccp_allow_unready_transparent_proofs\s*=", block):
-            updated = re.sub(
-                r"(?m)^sccp_allow_unready_transparent_proofs\s*=.*$",
-                "sccp_allow_unready_transparent_proofs = true",
-                block,
-                count=1,
-            )
-        else:
-            lines = block.rstrip().splitlines()
-            lines.append("sccp_allow_unready_transparent_proofs = true")
-            updated = "\n".join(lines) + "\n"
-        return text[: match.start()] + updated + text[match.end() :]
-
-    anchor = re.search(r"(?m)^\[zk\.halo2\]$", text)
-    block = "[zk]\nsccp_allow_unready_transparent_proofs = true\n\n"
-    if anchor:
-        return text[: anchor.start()] + block + text[anchor.start() :]
-    return text.rstrip() + "\n\n" + block
-
 for path in sorted(localnet_dir.glob("peer*.toml")):
     text = path.read_text()
     text = ensure_torii_max_content_len(text)
     text = ensure_sumeragi_block_budget(text)
-    text = ensure_zk_localnet_overrides(text)
     text = replace_or_insert(text, "sorafs.quota", quota_block)
     text = replace_or_insert(text, "torii.onboarding", onboarding_block)
     text = replace_or_insert(text, "torii.faucet", faucet_block)

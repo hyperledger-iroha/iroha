@@ -28,6 +28,20 @@ def load_evidence_module():
     return module
 
 
+class HostileExpectedRecordHash:
+    def __str__(self):
+        raise AssertionError("secret-token ETH expected record hash was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token ETH expected record hash was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token ETH expected record hash was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token ETH expected record hash was compared")
+
+
 def eth_args(module):
     return SimpleNamespace(
         source_domain=1,
@@ -783,6 +797,63 @@ def test_eth_source_json_summary_rejects_non_boolean_readiness_helpers(monkeypat
             else:
                 raise AssertionError(
                     f"ETH source summary accepted non-boolean {helper_name}"
+                )
+
+
+def test_eth_source_bridge_rejects_hostile_expected_record_hashes_without_hooks():
+    module = load_evidence_module()
+    cases = (
+        (
+            "expected_source_verifier_material_hash",
+            HostileExpectedRecordHash,
+            "--expected-source-verifier-material-hash must be bytes",
+        ),
+        (
+            "expected_source_verifier_material_hash",
+            lambda: b"\x00" * 32,
+            "--expected-source-verifier-material-hash must not be zero",
+        ),
+        (
+            "expected_source_verifier_material_hash",
+            lambda: b"\x11" * 31,
+            "--expected-source-verifier-material-hash must be 32 bytes",
+        ),
+        (
+            "expected_source_adapter_engine_deployment_hash",
+            HostileExpectedRecordHash,
+            "--expected-source-adapter-engine-deployment-hash must be bytes",
+        ),
+        (
+            "expected_source_adapter_engine_deployment_hash",
+            lambda: b"\x00" * 32,
+            "--expected-source-adapter-engine-deployment-hash must not be zero",
+        ),
+        (
+            "expected_source_adapter_engine_deployment_hash",
+            lambda: b"\x11" * 31,
+            "--expected-source-adapter-engine-deployment-hash must be 32 bytes",
+        ),
+    )
+    actions = (
+        ("_json_summary", module._json_summary),
+        ("_require_expected_record_hashes", module._require_expected_record_hashes),
+    )
+
+    for field, make_value, expected_error in cases:
+        for action_name, action in actions:
+            args = eth_args(module)
+            setattr(args, field, make_value())
+
+            try:
+                action(args)
+            except ValueError as exc:
+                message = str(exc)
+                assert expected_error in message
+                assert "secret-token" not in message
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    f"ETH source {action_name} accepted malformed {field}"
                 )
 
 

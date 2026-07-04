@@ -7,7 +7,7 @@
 //! payloads so the treasury can remunerate reliable relays deterministically while exposing the
 //! necessary observability hooks.
 
-use iroha_crypto::Signature;
+use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
 use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -26,6 +26,42 @@ use crate::{
 
 /// Identifier assigned to blinded measurement clients.
 pub type MeasurementId = Digest32;
+
+/// Canonical payload signed by a blinded measurement client for relay bandwidth proofs.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct RelayBandwidthProofPayloadV1 {
+    /// Relay fingerprint for which the bandwidth was measured.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub relay_id: RelayId,
+    /// Identifier of the blinded measurement flow.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub measurement_id: MeasurementId,
+    /// Epoch against which the measurement is recorded.
+    pub epoch: u32,
+    /// Total verified bytes relayed during the measurement window.
+    pub verified_bytes: u128,
+    /// Account authorised to operate the measurement client.
+    pub verifier_id: AccountId,
+    /// Timestamp (seconds since UNIX epoch) when the proof was sealed.
+    pub issued_at_unix: u64,
+    /// Confidence metadata associated with the measurement window.
+    pub confidence: BandwidthConfidenceV1,
+    /// Optional metadata surfaced to treasury/observability dashboards.
+    #[norito(default)]
+    pub metadata: Metadata,
+}
+
+/// Errors raised during relay bandwidth proof signature verification.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RelayBandwidthProofSignatureError {
+    /// The verifier account is not single-signatory, so the embedded signature has no verifier.
+    #[error("relay bandwidth proof verifier account has no single signatory")]
+    MissingVerifierSignatory,
+    /// The verifier signature is malformed or does not verify.
+    #[error("relay bandwidth proof signature verification failed: {0}")]
+    Signature(#[from] iroha_crypto::Error),
+}
 
 /// Configuration knobs controlling relay bonding and slashing policy.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -150,6 +186,69 @@ pub struct RelayBandwidthProofV1 {
 }
 
 impl RelayBandwidthProofV1 {
+    /// Build and sign a relay bandwidth proof from its canonical payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`iroha_crypto::Error::Other`] when the payload verifier does not match the signing
+    /// key, or a signing error when the cryptographic backend rejects the private key.
+    pub fn try_sign(
+        payload: RelayBandwidthProofPayloadV1,
+        private_key: &PrivateKey,
+    ) -> Result<Self, iroha_crypto::Error> {
+        let verifier_public_key = PublicKey::from(private_key.clone());
+        if payload.verifier_id.try_signatory() != Some(&verifier_public_key) {
+            return Err(iroha_crypto::Error::Other(
+                "relay bandwidth proof verifier_id does not match signing private key".to_owned(),
+            ));
+        }
+        let signature = SignatureOf::try_new(private_key, &payload)?.into();
+        Ok(Self {
+            relay_id: payload.relay_id,
+            measurement_id: payload.measurement_id,
+            epoch: payload.epoch,
+            verified_bytes: payload.verified_bytes,
+            verifier_id: payload.verifier_id,
+            issued_at_unix: payload.issued_at_unix,
+            confidence: payload.confidence,
+            signature,
+            metadata: payload.metadata,
+        })
+    }
+
+    /// Return the canonical signed payload view of this proof.
+    #[must_use]
+    pub fn payload(&self) -> RelayBandwidthProofPayloadV1 {
+        RelayBandwidthProofPayloadV1 {
+            relay_id: self.relay_id,
+            measurement_id: self.measurement_id,
+            epoch: self.epoch,
+            verified_bytes: self.verified_bytes,
+            verifier_id: self.verifier_id.clone(),
+            issued_at_unix: self.issued_at_unix,
+            confidence: self.confidence,
+            metadata: self.metadata.clone(),
+        }
+    }
+
+    /// Verify the blinded measurement client signature over the canonical proof payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RelayBandwidthProofSignatureError`] when the verifier account is not
+    /// single-signatory, the signature payload is malformed, or signature verification fails.
+    pub fn verify_signature(&self) -> Result<(), RelayBandwidthProofSignatureError> {
+        let verifier_public_key = self
+            .verifier_id
+            .try_signatory()
+            .ok_or(RelayBandwidthProofSignatureError::MissingVerifierSignatory)?;
+        let signature =
+            super::signature_for_public_key_algorithm(verifier_public_key, &self.signature)?;
+        SignatureOf::<RelayBandwidthProofPayloadV1>::from_signature(signature)
+            .verify(verifier_public_key, &self.payload())
+            .map_err(RelayBandwidthProofSignatureError::Signature)
+    }
+
     /// Returns `true` when the proof falls within the supplied epoch window.
     #[must_use]
     pub fn matches_epoch(&self, epoch: u32) -> bool {
@@ -440,16 +539,60 @@ mod tests {
     use super::*;
     use crate::{domain::DomainId, isi::TransferBox, name::Name};
 
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn numeric(value: u64) -> Numeric {
         Numeric::from(value)
     }
 
+    fn sample_keypair(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked Soranet incentives fixture account keypair")
+    }
+
     fn sample_account(seed: u8) -> AccountId {
         let _domain = DomainId::try_new("sora", "universal").expect("domain id");
-        let (public_key, _) = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("derive checked Soranet incentives fixture account keypair")
-            .into_parts();
-        AccountId::new(public_key)
+        AccountId::new(sample_keypair(seed).public_key().clone())
+    }
+
+    fn sample_bandwidth_payload() -> RelayBandwidthProofPayloadV1 {
+        RelayBandwidthProofPayloadV1 {
+            relay_id: [0_u8; 32],
+            measurement_id: [1_u8; 32],
+            epoch: 42,
+            verified_bytes: 1_024,
+            verifier_id: sample_account(1),
+            issued_at_unix: 5,
+            confidence: BandwidthConfidenceV1 {
+                sample_count: 16,
+                jitter_p95_ms: 20,
+                confidence_per_mille: 800,
+            },
+            metadata: Metadata::default(),
+        }
+    }
+
+    fn signed_bandwidth_proof() -> RelayBandwidthProofV1 {
+        let verifier = sample_keypair(1);
+        RelayBandwidthProofV1::try_sign(sample_bandwidth_payload(), verifier.private_key())
+            .expect("sign checked SoraNet bandwidth proof")
+    }
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
+        let mut payload = signature.payload().to_vec();
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
+        Signature::from_bytes(&payload)
     }
 
     #[test]
@@ -529,23 +672,75 @@ mod tests {
 
     #[test]
     fn bandwidth_proof_epoch_matching() {
-        let proof = RelayBandwidthProofV1 {
-            relay_id: [0_u8; 32],
-            measurement_id: [1_u8; 32],
-            epoch: 42,
-            verified_bytes: 1_024,
-            verifier_id: sample_account(1),
-            issued_at_unix: 5,
-            confidence: BandwidthConfidenceV1 {
-                sample_count: 16,
-                jitter_p95_ms: 20,
-                confidence_per_mille: 800,
-            },
-            signature: Signature::from_bytes(&[2_u8; 64]),
-            metadata: Metadata::default(),
-        };
+        let proof = signed_bandwidth_proof();
         assert!(proof.matches_epoch(42));
         assert!(!proof.matches_epoch(41));
+    }
+
+    #[test]
+    fn bandwidth_proof_signature_verifies_payload() {
+        signed_bandwidth_proof()
+            .verify_signature()
+            .expect("checked bandwidth proof signature verifies");
+    }
+
+    #[test]
+    fn bandwidth_proof_try_sign_rejects_verifier_private_key_mismatch() {
+        let wrong_key = sample_keypair(2);
+        let err =
+            RelayBandwidthProofV1::try_sign(sample_bandwidth_payload(), wrong_key.private_key())
+                .expect_err("verifier mismatch must reject before signing");
+
+        assert!(matches!(err, iroha_crypto::Error::Other(_)));
+    }
+
+    #[test]
+    fn bandwidth_proof_signature_rejects_tampered_payload() {
+        let mut proof = signed_bandwidth_proof();
+        proof.verified_bytes += 1;
+
+        assert!(matches!(
+            proof.verify_signature(),
+            Err(RelayBandwidthProofSignatureError::Signature(
+                iroha_crypto::Error::BadSignature
+            ))
+        ));
+    }
+
+    #[test]
+    fn bandwidth_proof_signature_rejects_all_zero_signature_material() {
+        let mut proof = signed_bandwidth_proof();
+        proof.signature = Signature::from_bytes(&[0u8; 64]);
+
+        assert!(matches!(
+            proof.verify_signature(),
+            Err(RelayBandwidthProofSignatureError::Signature(
+                iroha_crypto::Error::BadSignature
+            ))
+        ));
+    }
+
+    #[test]
+    fn bandwidth_proof_signature_rejects_malformed_ed25519_signature_r() {
+        let valid_signature = signed_bandwidth_proof().signature;
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut proof = signed_bandwidth_proof();
+            proof.signature = signature_with_malformed_ed25519_r(&valid_signature, &replacement_r);
+
+            assert!(
+                matches!(
+                    proof.verify_signature(),
+                    Err(RelayBandwidthProofSignatureError::Signature(
+                        iroha_crypto::Error::BadSignature
+                    ))
+                ),
+                "{label} bandwidth proof signature R must fail Ed25519 admission"
+            );
+        }
     }
 
     #[test]

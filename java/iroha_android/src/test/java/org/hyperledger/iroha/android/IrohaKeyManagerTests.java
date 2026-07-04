@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.android;
 
+import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.Signature;
@@ -85,6 +86,7 @@ public final class IrohaKeyManagerTests {
     shouldGenerateAttestationViaManager();
     shouldSignPayloadViaAlias();
     shouldGenerateMlDsaKeysWhenConfigured();
+    shouldRejectMalformedMlDsaSignatures();
     shouldRejectMlDsaHardwarePreferences();
     System.out.println("[IrohaAndroid] Key manager smoke tests passed.");
   }
@@ -339,6 +341,42 @@ public final class IrohaKeyManagerTests {
             IrohaHash.prehash(message),
             signature);
     assert verified : "Generated ML-DSA signature must verify via the native bridge";
+  }
+
+  private static void shouldRejectMalformedMlDsaSignatures() throws Exception {
+    if (!NativeSignerBridge.isNativeAvailable()) {
+      System.out.println(
+          "[IrohaAndroid] Skipping ML-DSA malformed signature test (native bridge unavailable).");
+      return;
+    }
+    final byte[] seed = new byte[32];
+    Arrays.fill(seed, (byte) 0x44);
+    final NativeSignerBridge.KeypairBytes pair =
+        NativeSignerBridge.keypairFromSeed(SigningAlgorithm.ML_DSA, seed);
+    final byte[] message =
+        IrohaHash.prehash(
+            "java-android-ml-dsa-signature-admission".getBytes(StandardCharsets.UTF_8));
+    final byte[] signature =
+        NativeSignerBridge.signDetached(SigningAlgorithm.ML_DSA, pair.privateKey(), message);
+
+    assert NativeSignerBridge.verifyDetached(
+            SigningAlgorithm.ML_DSA, pair.publicKey(), message, signature)
+        : "Valid ML-DSA signature must verify via the native bridge";
+
+    final byte[] shortSignature = Arrays.copyOf(signature, signature.length - 1);
+    final byte[] overlongSignature = Arrays.copyOf(signature, signature.length + 1);
+    overlongSignature[overlongSignature.length - 1] = 0x42;
+    final byte[] allZeroSignature = new byte[signature.length];
+
+    assert !NativeSignerBridge.verifyDetached(
+            SigningAlgorithm.ML_DSA, pair.publicKey(), message, shortSignature)
+        : "Short ML-DSA signature must not verify";
+    assert !NativeSignerBridge.verifyDetached(
+            SigningAlgorithm.ML_DSA, pair.publicKey(), message, overlongSignature)
+        : "Overlong ML-DSA signature must not verify";
+    assert !NativeSignerBridge.verifyDetached(
+            SigningAlgorithm.ML_DSA, pair.publicKey(), message, allZeroSignature)
+        : "All-zero ML-DSA signature must not verify";
   }
 
   private static void shouldRejectMlDsaHardwarePreferences() throws Exception {

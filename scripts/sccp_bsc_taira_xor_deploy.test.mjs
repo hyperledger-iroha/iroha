@@ -13,10 +13,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
-  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
   SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
@@ -65,6 +65,9 @@ import {
   unsafeSecretReason,
   validateBscReadbackEvidence,
 } from "./sccp_bsc_taira_xor_deploy.mjs";
+
+const LEGACY_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
+  "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
 
 const BSC_BRIDGE_ADDRESS = "0x1111111111111111111111111111111111111111";
 const BSC_TOKEN_ADDRESS = "0x2222222222222222222222222222222222222222";
@@ -5053,9 +5056,7 @@ test("BSC local deploy smoke verifier shape is valid but not fixture-shaped", ()
 });
 
 test("BSC route-config writes backend-compatible TOML with BSC deployment evidence", () => {
-  const toml = buildBscTairaXorRouteConfigToml(routeManifest(), {
-    "allow-unready": "true",
-  });
+  const toml = buildBscTairaXorRouteConfigToml(productionReadyRouteManifest());
 
   assert.match(toml, /route_id = "taira_bsc_xor"/u);
   assert.match(toml, /asset_key = "xor"/u);
@@ -5066,7 +5067,7 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
   assert.match(toml, /explorer_host = "testnet\.bscscan\.com"/u);
   assert.match(toml, /counterparty_domain = 2/u);
   assert.match(toml, /verifier_target = "EvmContract"/u);
-  assert.match(toml, /sccp_allow_unready_transparent_proofs = true/u);
+  assert.doesNotMatch(toml, /sccp_allow_unready_transparent_proofs/u);
   assert.match(
     toml,
     new RegExp(`taira_xor_token_address = "${BSC_TOKEN_ADDRESS}"`, "u"),
@@ -5101,7 +5102,7 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
   assert.doesNotMatch(toml, /(^|\n)prover_artifact_hash =/u);
   assert.doesNotMatch(toml, /(^|\n)circuit_artifact_hash =/u);
   assert.match(toml, new RegExp(`proving_key_hash = "${HASH_55}"`, "u"));
-  assert.doesNotMatch(toml, /native_evm_prover_bundle_hash/u);
+  assert.match(toml, /native_evm_prover_bundle_hash/u);
   assert.match(
     toml,
     new RegExp(`destination_binding_hash = "${bindingHash()}"`, "u"),
@@ -5113,7 +5114,7 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
       "u",
     ),
   );
-  assert.match(toml, /post_deploy_full_toml_ready = false/u);
+  assert.match(toml, /post_deploy_full_toml_ready = true/u);
   assert.match(
     toml,
     new RegExp(
@@ -5134,9 +5135,7 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
 test("BSC route-config rejects route material supplied only by prototypes", () => {
   assert.throws(
     () =>
-      buildBscTairaXorRouteConfigToml(Object.create(routeManifest()), {
-        "allow-unready": "true",
-      }),
+      buildBscTairaXorRouteConfigToml(Object.create(routeManifest())),
     /route manifest schema/u,
   );
 
@@ -5151,17 +5150,14 @@ test("BSC route-config rejects route material supplied only by prototypes", () =
     productionReady: false,
   });
   assert.throws(
-    () =>
-      buildBscTairaXorRouteConfigToml(ownRouteWithoutRolloutOrReady, {
-        "allow-unready": "true",
-      }),
+    () => buildBscTairaXorRouteConfigToml(ownRouteWithoutRolloutOrReady),
     /route manifest destinationRollout/u,
   );
 });
 
 test("BSC route-config ignores accessor-backed scalar aliases before data aliases", () => {
-  const manifest = routeManifest({
-    production_ready: false,
+  const manifest = productionReadyRouteManifest({
+    production_ready: true,
     counterparty_domain: SCCP_DOMAIN_BSC,
     destinationRollout: {
       source_domain: SCCP_DOMAIN_SORA,
@@ -5171,7 +5167,7 @@ test("BSC route-config ignores accessor-backed scalar aliases before data aliase
       gas_limit: 2_000_000,
     },
     postDeployLiveEvidence: {
-      full_toml_ready: false,
+      full_toml_ready: true,
     },
   });
   delete manifest.productionReady;
@@ -5194,13 +5190,11 @@ test("BSC route-config ignores accessor-backed scalar aliases before data aliase
     defineThrowingAccessors(manifest.postDeployLiveEvidence, ["fullTomlReady"]),
   ];
 
-  const toml = buildBscTairaXorRouteConfigToml(manifest, {
-    "allow-unready": "true",
-  });
-  assert.match(toml, /production_ready = false/u);
+  const toml = buildBscTairaXorRouteConfigToml(manifest);
+  assert.match(toml, /production_ready = true/u);
   assert.match(toml, /counterparty_domain = 2/u);
   assert.match(toml, /taira_burn_record_gas_limit = 2000000/u);
-  assert.match(toml, /post_deploy_full_toml_ready = false/u);
+  assert.match(toml, /post_deploy_full_toml_ready = true/u);
   assert.equal(
     readCounts.reduce((sum, readCount) => sum + readCount(), 0),
     0,
@@ -5287,10 +5281,7 @@ test("BSC route-config rejects duplicate required route manifest string aliases"
     ],
   ]) {
     assert.throws(
-      () =>
-        buildBscTairaXorRouteConfigToml(manifest, {
-          "allow-unready": "true",
-        }),
+      () => buildBscTairaXorRouteConfigToml(manifest),
       pattern,
       name,
     );
@@ -5506,10 +5497,7 @@ test("BSC route-config rejects duplicate route manifest container and scalar ali
     ],
   ]) {
     assert.throws(
-      () =>
-        buildBscTairaXorRouteConfigToml(manifest, {
-          "allow-unready": "true",
-        }),
+      () => buildBscTairaXorRouteConfigToml(manifest),
       pattern,
       name,
     );
@@ -5886,18 +5874,18 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
   );
 });
 
-test("BSC route-config refuses allow-unready for production-ready manifests", () => {
+test("BSC route-config rejects removed allow-unready option", () => {
   const manifest = productionReadyRouteManifest();
   const toml = buildBscTairaXorRouteConfigToml(manifest);
   assert.match(toml, /production_ready = true/u);
-  assert.match(toml, /sccp_allow_unready_transparent_proofs = false/u);
+  assert.doesNotMatch(toml, /sccp_allow_unready_transparent_proofs/u);
 
   assert.throws(
     () =>
       buildBscTairaXorRouteConfigToml(manifest, {
         "allow-unready": "true",
       }),
-    /production-ready route manifests cannot enable --allow-unready/u,
+    /--allow-unready was removed/u,
   );
   assert.throws(
     () =>
@@ -5908,17 +5896,21 @@ test("BSC route-config refuses allow-unready for production-ready manifests", ()
           "allow-unready": "true",
         },
       ),
-    /production-ready route manifests cannot enable --allow-unready/u,
+    /--allow-unready was removed/u,
+  );
+  assert.throws(
+    () => buildBscTairaXorRouteConfigToml(routeManifest()),
+    /route-config requires production-ready route manifests/u,
   );
 });
 
-test("BSC route-config rejects malformed allow-unready option values", () => {
+test("BSC route-config rejects any allow-unready option value", () => {
   const manifest = productionReadyRouteManifest();
   for (const value of malformedBooleanOptionValues) {
     assert.throws(
       () =>
         buildBscTairaXorRouteConfigToml(manifest, { "allow-unready": value }),
-      /--allow-unready must be true or false/u,
+      /--allow-unready was removed/u,
     );
     assert.throws(
       () =>
@@ -5927,12 +5919,12 @@ test("BSC route-config rejects malformed allow-unready option values", () => {
           manifest,
           { "allow-unready": value },
         ),
-      /--allow-unready must be true or false/u,
+      /--allow-unready was removed/u,
     );
   }
 });
 
-test("BSC route-config CLI rejects malformed allow-unready before writing artifacts", async () => {
+test("BSC route-config CLI rejects removed allow-unready before writing artifacts", async () => {
   const dir = await mkdtemp(join(tmpdir(), "iroha-bsc-route-config-boolean-"));
   const manifestPath = join(dir, "route.manifest.json");
   await writeFile(
@@ -5958,7 +5950,7 @@ test("BSC route-config CLI rejects malformed allow-unready before writing artifa
           "--allow-unready",
           value,
         ]),
-      /--allow-unready must be true or false/u,
+      /--allow-unready was removed/u,
     );
     assert.equal(await readFile(out, "utf8"), sentinel);
   }
@@ -6071,7 +6063,7 @@ test("BSC route-config validates explorer URLs against the selected network", ()
     verifierCodeHash: HASH_11,
     verifierKeyHash: HASH_22,
   });
-  const mainnetManifest = routeManifest({
+  const mainnetManifest = productionReadyRouteManifest({
     bscNetwork: "mainnet",
     chain: "bsc-mainnet",
     chainIdHex: "0x38",
@@ -6092,11 +6084,32 @@ test("BSC route-config validates explorer URLs against the selected network", ()
       sourceEventExplorerUrl: MAINNET_SOURCE_EVENT_EXPLORER_URL,
       routeCanaryExplorerUrl: MAINNET_ROUTE_CANARY_EXPLORER_URL,
     },
+    bundleOverrides: {
+      bundle_id: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+      chain: "bsc-mainnet",
+      proof_artifact: "artifacts/bsc-mainnet/proof-artifact.r1cs",
+      proving_key: "artifacts/bsc-mainnet/proving-key.zkey",
+      verifier_key: "artifacts/bsc-mainnet/verifier-key.json",
+      cross_sdk_parity_artifact:
+        "artifacts/bsc-mainnet/cross-sdk-parity.json",
+      native_prover_self_test_artifact:
+        "artifacts/bsc-mainnet/native-prover-self-test.json",
+      groth16_proof_self_test_artifact:
+        "artifacts/bsc-mainnet/groth16-proof-self-test.json",
+      native_sdk_artifacts: Object.entries(
+        SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+      ).map(([sdk, implementation], index) => ({
+        sdk,
+        implementation,
+        prover_artifact_hash: HASH_44,
+        proving_key_hash: HASH_55,
+        implementation_artifact: `artifacts/bsc-mainnet/${sdk}-implementation.bin`,
+        implementation_hash: hex32((0x91 + index).toString(16)),
+      })),
+    },
   });
 
-  const toml = buildBscTairaXorRouteConfigToml(mainnetManifest, {
-    "allow-unready": "true",
-  });
+  const toml = buildBscTairaXorRouteConfigToml(mainnetManifest);
   assert.match(
     toml,
     new RegExp(
@@ -6122,7 +6135,6 @@ test("BSC route-config validates explorer URLs against the selected network", ()
             sourceEventExplorerUrl: SOURCE_EVENT_EXPLORER_URL,
           },
         },
-        { "allow-unready": "true" },
       ),
     /BSC mainnet explorer/u,
   );
@@ -6610,12 +6622,12 @@ test("BSC native-prover-bundle rejects legacy fixture parity schemas for product
   const fixture = await writeNativeProverFixtureFiles();
   const parityPath = join(fixture.artifactRoot, "cross-sdk-parity.json");
   const parity = JSON.parse(await readFile(parityPath, "utf8"));
-  parity.schema = SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  parity.schema = LEGACY_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
   await writeFile(parityPath, `${JSON.stringify(parity, null, 2)}\n`);
 
   await assert.rejects(
     () => buildBscNativeEvmProverBundleFromArtifacts(fixture.options),
-    /crossSdkParityBytes schema must be sccp-bsc-testnet-native-evm-cross-sdk-parity-v1; legacy fixture schema sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1 is not valid for verified production native EVM prover artifacts/u,
+    /schema must be sccp-bsc-testnet-native-evm-cross-sdk-parity-v1/u,
   );
 });
 
@@ -9517,17 +9529,10 @@ test("BSC route-config refuses production-ready manifests with disabled reasons"
   );
 });
 
-test("BSC route-config refuses non-production manifests unless explicitly allowed", () => {
+test("BSC route-config refuses non-production manifests", () => {
   assert.throws(
-    () =>
-      buildBscTairaXorRouteConfigToml(routeManifest(), {
-        "allow-unready": "false",
-      }),
-    /allow-unready/u,
-  );
-  assert.match(
-    buildBscTairaXorRouteConfigToml(routeManifest()),
-    /allow_unready/u,
+    () => buildBscTairaXorRouteConfigToml(routeManifest()),
+    /route-config requires production-ready route manifests/u,
   );
 });
 
@@ -9551,15 +9556,14 @@ test("BSC route-config refuses production-ready diagnostic verifier manifests", 
     /productionReady.*diagnostic BSC verifier material/u,
   );
 
-  const diagnosticDisabledToml = buildBscTairaXorRouteConfigToml(
-    {
-      ...diagnosticProductionManifest,
-      productionReady: false,
-    },
-    { "allow-unready": "true" },
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml({
+        ...diagnosticProductionManifest,
+        productionReady: false,
+      }),
+    /route-config requires production-ready route manifests/u,
   );
-  assert.match(diagnosticDisabledToml, /production_ready = false/u);
-  assert.match(diagnosticDisabledToml, /diagnostic and must be replaced/u);
 });
 
 test("BSC route-config refuses production-ready manifests with handoff placeholders", () => {
@@ -9889,18 +9893,15 @@ test("BSC route-config can merge into TAIRA config while preserving zk settings"
     'address = "127.0.0.1:8080"',
     "",
   ].join("\n");
-  const merged = buildMergedBscTairaXorRouteConfigToml(base, routeManifest(), {
-    "allow-unready": "true",
-  });
+  const merged = buildMergedBscTairaXorRouteConfigToml(
+    base,
+    productionReadyRouteManifest(),
+  );
 
-  assert.match(merged, /\[zk\]\nsccp_allow_unready_transparent_proofs = true/u);
   assert.match(merged, /other_setting = true/u);
   assert.match(merged, /\[\[zk\.sccp_route_manifests\]\]/u);
   assert.match(merged, /\[torii\]/u);
-  assert.equal(
-    merged.match(/sccp_allow_unready_transparent_proofs\s*=/gu)?.length,
-    1,
-  );
+  assert.doesNotMatch(merged, /sccp_allow_unready_transparent_proofs/u);
   assert.throws(
     () =>
       buildMergedBscTairaXorRouteConfigToml(
@@ -10242,10 +10243,7 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
 
   for (const [overrides, reason] of cases) {
     assert.throws(
-      () =>
-        buildBscTairaXorRouteConfigToml(routeManifest(overrides), {
-          "allow-unready": "true",
-        }),
+      () => buildBscTairaXorRouteConfigToml(routeManifest(overrides)),
       reason,
     );
   }
@@ -10257,7 +10255,7 @@ test("BSC route-config command writes an operator overlay", async () => {
   const out = join(dir, "route.toml");
   await writeFile(
     manifestPath,
-    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+    `${JSON.stringify(productionReadyRouteManifest(), null, 2)}\n`,
   );
 
   const result = await main([
@@ -10266,8 +10264,6 @@ test("BSC route-config command writes an operator overlay", async () => {
     manifestPath,
     "--out",
     out,
-    "--allow-unready",
-    "true",
   ]);
   assert.equal(result.ok, true);
   assert.equal(result.mode, "overlay");
@@ -10296,7 +10292,7 @@ test("BSC route-config command reports the exact merged full-config hash", async
   const out = join(dir, "full-config.toml");
   await writeFile(
     manifestPath,
-    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+    `${JSON.stringify(productionReadyRouteManifest(), null, 2)}\n`,
   );
   await writeFile(
     baseConfigPath,
@@ -10305,7 +10301,7 @@ test("BSC route-config command reports the exact merged full-config hash", async
       'address = "127.0.0.1:1337"',
       "",
       "[zk]",
-      "sccp_allow_unready_transparent_proofs = false",
+      "sccp_source_verifier_materials = []",
       "",
       "[torii]",
       'address = "127.0.0.1:8080"',
@@ -10321,19 +10317,29 @@ test("BSC route-config command reports the exact merged full-config hash", async
     baseConfigPath,
     "--out",
     out,
-    "--allow-unready",
-    "true",
   ]);
   const toml = await readFile(out, "utf8");
   const expectedHash = sha256Hex(Buffer.from(toml, "utf8"));
+  const expectedOfflineHash = sha256Hex(
+    Buffer.from(
+      toml
+        .split("\n")
+        .filter(
+          (line) => !/^\s*post_deploy_offline_full_toml_sha256\s*=/u.test(line),
+        )
+        .join("\n"),
+      "utf8",
+    ),
+  );
 
   assert.equal(result.ok, true);
   assert.equal(result.mode, "merged-full-config");
   assert.equal(result.baseConfig, baseConfigPath);
   assert.equal(result.renderedTomlSha256, expectedHash);
-  assert.equal(result.offlineFullTomlSha256, expectedHash);
+  assert.equal(result.offlineFullTomlSha256, expectedOfflineHash);
   assert.match(toml, /\[network\]/u);
   assert.match(toml, /\[\[zk\.sccp_route_manifests\]\]/u);
+  assert.doesNotMatch(toml, /sccp_allow_unready_transparent_proofs/u);
 });
 
 test("BSC route-config command accepts redacted secret placeholders in public base configs", async () => {
@@ -10370,8 +10376,6 @@ test("BSC route-config command accepts redacted secret placeholders in public ba
     baseConfigPath,
     "--out",
     out,
-    "--allow-unready",
-    "true",
   ]);
   const toml = await readFile(out, "utf8");
 
@@ -10489,7 +10493,7 @@ test("BSC route-config command refuses offline full TOML evidence without full c
   const manifestPath = join(dir, "manifest.json");
   await writeFile(
     manifestPath,
-    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+    `${JSON.stringify(productionReadyRouteManifest(), null, 2)}\n`,
   );
 
   await assert.rejects(
@@ -10500,8 +10504,6 @@ test("BSC route-config command refuses offline full TOML evidence without full c
         manifestPath,
         "--out",
         join(dir, "route.toml"),
-        "--allow-unready",
-        "true",
         "--write-offline-full-toml-evidence",
         join(dir, "full-config.evidence.json"),
       ]),
@@ -10582,7 +10584,7 @@ test("BSC route-config command validates canonical offline evidence before writi
   await rm(evidenceOut, { force: true });
   await writeFile(
     manifestPath,
-    `${JSON.stringify(routeManifest(), null, 2)}\n`,
+    `${JSON.stringify(productionReadyRouteManifest(), null, 2)}\n`,
   );
   await writeFile(
     baseConfigPath,
@@ -10607,8 +10609,6 @@ test("BSC route-config command validates canonical offline evidence before writi
           baseConfigPath,
           "--out",
           out,
-          "--allow-unready",
-          "true",
           "--write-offline-full-toml-evidence",
           evidenceOut,
         ]),
@@ -10635,10 +10635,8 @@ test("BSC route-config command refuses draft manifests in the canonical default 
         "route-config",
         "--manifest",
         manifestPath,
-        "--allow-unready",
-        "true",
       ]),
-    /cannot be written to canonical BSC production artifact path.*not productionReady true/u,
+    /route-config requires production-ready route manifests/u,
   );
 });
 
@@ -10663,8 +10661,6 @@ test("BSC route-config command rejects duplicate JSON keys in manifests", async 
         manifestPath,
         "--out",
         join(dir, "route.toml"),
-        "--allow-unready",
-        "true",
       ]),
     /BSC route manifest is not valid JSON: BSC route manifest contains a duplicate JSON object key/u,
   );
@@ -10685,8 +10681,6 @@ test("BSC route-config command rejects non-object JSON manifests", async () => {
         manifestPath,
         "--out",
         join(dir, "route.toml"),
-        "--allow-unready",
-        "true",
       ]),
     /BSC route manifest is not valid JSON: BSC route manifest must be a JSON object/u,
   );
@@ -10715,8 +10709,6 @@ test("BSC route-config command rejects oversized base TAIRA configs before mergi
         baseConfigPath,
         "--out",
         join(dir, "route.toml"),
-        "--allow-unready",
-        "true",
       ]),
     /base TAIRA config could not be read: path is .*maximum allowed/u,
   );
@@ -11013,7 +11005,7 @@ test("BSC deployment helper subcommand help does not touch operator inputs", asy
 
   const routeConfig = await main(["help", "route-config"]);
   assert.match(routeConfig.help, /route-config \[--manifest/u);
-  assert.match(routeConfig.help, /--allow-unready true/u);
+  assert.doesNotMatch(routeConfig.help, /--allow-unready/u);
 
   const publishRouteManifest = await main(["help", "publish-route-manifest"]);
   assert.match(publishRouteManifest.help, /--gas-limit 2000000/u);

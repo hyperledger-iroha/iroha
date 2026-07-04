@@ -161,7 +161,7 @@ iroha --config client.toml --output \
 * קריאות CLI פולטות מטא נתונים ריקים של הוראות היום; השתמש בעוזרים של Python ברמת ההתנחלות
   יש לצרף מטא נתונים.
 * ראה [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) למיפוי שדות ISO 20022 ש
-  תומך בהוראות אלה (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
+  תומך בהוראות אלה (`sese.023`, `sese.025`, `colr.012`, `pacs.009`, `camt.054`).
 * עוברים את `--iso-xml-out <path>` כדי שה-CLI ישדר תצוגה מקדימה של XML קנונית לצד Norito
   הוראה; הקובץ עוקב אחר המיפוי שלמעלה (`sese.023` עבור DvP, `sese.025` עבור PvP`). זוג את
   דגל עם `--iso-reference-crosswalk <path>` כך שה-CLI מאמת את `--delivery-instrument-id` מול

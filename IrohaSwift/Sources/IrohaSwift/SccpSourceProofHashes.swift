@@ -1876,10 +1876,10 @@ public func canonicalBscCommitSealBytes(_ proof: BscCommitSealProof) throws -> D
     for (signatureIndex, pair) in zip(proof.signatures, signerIndices).enumerated() {
         let signature = pair.0
         let signerIndex = pair.1
-        guard sourceProofTronRecoverableSignatureIsCanonical(signature) else {
+        guard sourceProofBscRecoverableSignatureIsCanonical(signature) else {
             throw SccpSourceProofHashError.invalidValidatorSet("signatures[\(signatureIndex)]")
         }
-        guard let recoveredAddress = sourceProofTronRecoveredSignerAddress20(
+        guard let recoveredAddress = sourceProofBscRecoveredSignerAddress20(
             messageHash: commitMessageHash,
             signature: signature
         ), recoveredAddress == validatorAddresses[signerIndex] else {
@@ -2857,12 +2857,8 @@ private func sourceProofTronBlockId(number: UInt64, rawDataHash: Data) -> Data {
     return blockId
 }
 
-private func sourceProofTronRecoverableSignatureIsCanonical(_ signature: Data) -> Bool {
+private func sourceProofRecoverableSignatureScalarsAreCanonical(_ signature: Data) -> Bool {
     guard signature.count == 65 else {
-        return false
-    }
-    let recoveryId = signature[signature.index(signature.startIndex, offsetBy: 64)]
-    guard (0...3).contains(Int(recoveryId)) || (27...30).contains(Int(recoveryId)) else {
         return false
     }
     let rValue = signature.subdata(in: 0..<32)
@@ -2871,6 +2867,22 @@ private func sourceProofTronRecoverableSignatureIsCanonical(_ signature: Data) -
         sourceProofCompareBytes(rValue, sccpSecp256k1ScalarOrderBe) < 0 &&
         !sValue.allSatisfy({ $0 == 0 }) &&
         sourceProofCompareBytes(sValue, sccpSecp256k1ScalarHalfOrderBe) <= 0
+}
+
+private func sourceProofTronRecoverableSignatureIsCanonical(_ signature: Data) -> Bool {
+    guard signature.count == 65 else {
+        return false
+    }
+    let recoveryId = Int(signature[signature.index(signature.startIndex, offsetBy: 64)])
+    return (0...3).contains(recoveryId) && sourceProofRecoverableSignatureScalarsAreCanonical(signature)
+}
+
+private func sourceProofBscRecoverableSignatureIsCanonical(_ signature: Data) -> Bool {
+    guard signature.count == 65 else {
+        return false
+    }
+    let recoveryId = Int(signature[signature.index(signature.startIndex, offsetBy: 64)])
+    return (27...28).contains(recoveryId) && sourceProofRecoverableSignatureScalarsAreCanonical(signature)
 }
 
 private struct SourceProofBigUInt: Equatable {
@@ -3493,15 +3505,17 @@ private func sourceProofSecpScalarMultiply(_ scalar: SourceProofBigUInt,
     return result
 }
 
-private func sourceProofTronRecoveredSignerAddress20(messageHash: Data, signature: Data) -> Data? {
+private func sourceProofRecoveredSignerAddress20(
+    messageHash: Data,
+    signature: Data,
+    recoveryId: Int
+) -> Data? {
     guard messageHash.count == 32,
-          sourceProofTronRecoverableSignatureIsCanonical(signature) else {
+          signature.count == 65 else {
         return nil
     }
     let r = SourceProofBigUInt(bigEndian: signature.subdata(in: 0..<32))
     let s = SourceProofBigUInt(bigEndian: signature.subdata(in: 32..<64))
-    let recoveryByte = Int(signature[signature.index(signature.startIndex, offsetBy: 64)])
-    let recoveryId = recoveryByte >= 27 ? recoveryByte - 27 : recoveryByte
     var x = r
     if recoveryId >= 2 {
         x = x.adding(sourceProofSecpScalarOrder)
@@ -3537,6 +3551,29 @@ private func sourceProofTronRecoveredSignerAddress20(messageHash: Data, signatur
     var uncompressed = publicKey.x.fixedBigEndianData(byteCount: 32)
     uncompressed.append(publicKey.y.fixedBigEndianData(byteCount: 32))
     return Data(irohaKeccak256(uncompressed).suffix(20))
+}
+
+private func sourceProofTronRecoveredSignerAddress20(messageHash: Data, signature: Data) -> Data? {
+    guard sourceProofTronRecoverableSignatureIsCanonical(signature) else {
+        return nil
+    }
+    return sourceProofRecoveredSignerAddress20(
+        messageHash: messageHash,
+        signature: signature,
+        recoveryId: Int(signature[signature.index(signature.startIndex, offsetBy: 64)])
+    )
+}
+
+private func sourceProofBscRecoveredSignerAddress20(messageHash: Data, signature: Data) -> Data? {
+    guard sourceProofBscRecoverableSignatureIsCanonical(signature) else {
+        return nil
+    }
+    let recoveryByte = Int(signature[signature.index(signature.startIndex, offsetBy: 64)])
+    return sourceProofRecoveredSignerAddress20(
+        messageHash: messageHash,
+        signature: signature,
+        recoveryId: recoveryByte - 27
+    )
 }
 
 private func sourceProofIsNonZeroTronAddress(_ address: Data) -> Bool {

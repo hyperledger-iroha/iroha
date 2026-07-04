@@ -15,7 +15,9 @@ use std::{
     sync::OnceLock,
 };
 
-use iroha_crypto::{Algorithm, HashOf, Signature, ed25519_parse_signature};
+use iroha_crypto::{
+    Algorithm, HashOf, Signature, ed25519_parse_signature, mldsa65_parse_signature,
+};
 use iroha_data_model::{
     jurisdiction::{
         JdgAttestation, JdgCommitteeId, JdgSdnKeyRecord, JdgSdnPolicy, JdgSdnRegistry,
@@ -640,10 +642,10 @@ impl JdgAttestationGuard {
                             actual: attestation.signature.signatures.len(),
                         },
                     )?;
-                    let signature = if signer.try_algorithm() == Ok(Algorithm::Ed25519) {
-                        ed25519_parse_signature(raw_sig)
-                    } else {
-                        Signature::try_from_bytes(raw_sig).map_err(Into::into)
+                    let signature = match signer.try_algorithm() {
+                        Ok(Algorithm::Ed25519) => ed25519_parse_signature(raw_sig),
+                        Ok(Algorithm::MlDsa) => mldsa65_parse_signature(raw_sig),
+                        _ => Signature::try_from_bytes(raw_sig).map_err(Into::into),
                     }
                     .map_err(|_| JdgAttestationGuardError::SignatureInvalid { index: sig_idx })?;
                     if signature.verify(signer, hash_bytes).is_ok() {
@@ -1097,6 +1099,11 @@ mod tests {
         iroha_crypto::KeyPair::try_random().expect("generate checked JDG fixture keypair")
     }
 
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> iroha_crypto::KeyPair {
+        iroha_crypto::KeyPair::try_random_with_algorithm(algorithm)
+            .expect("generate checked JDG fixture keypair")
+    }
+
     #[cfg(feature = "bls")]
     fn checked_random_bls_keypair() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -1132,7 +1139,10 @@ mod tests {
             version: iroha_data_model::jurisdiction::JDG_SDN_COMMITMENT_VERSION_V1,
             scope: scope.clone(),
             encrypted_payload_hash: Hash::prehashed([0x77; 32]),
-            seal: SignatureOf::from_signature(Signature::from_bytes(&[0u8])),
+            seal: SignatureOf::from_signature(
+                Signature::try_from_bytes(&[0x42u8; 64])
+                    .expect("nonzero JDG SDN commitment seal fixture"),
+            ),
             sdn_public_key: sdn_keypair.public_key().clone(),
         };
         let seal = SignatureOf::try_from_hash(sdn_keypair.private_key(), commitment.signing_hash())
@@ -1347,12 +1357,30 @@ mod tests {
         threshold: u16,
         member_count: usize,
     ) -> (JdgCommitteeRecord, Vec<iroha_crypto::KeyPair>) {
+        committee_with_algorithm_members(
+            dataspace,
+            activation,
+            retire,
+            threshold,
+            member_count,
+            Algorithm::Ed25519,
+        )
+    }
+
+    fn committee_with_algorithm_members(
+        dataspace: DataSpaceId,
+        activation: u64,
+        retire: u64,
+        threshold: u16,
+        member_count: usize,
+        algorithm: Algorithm,
+    ) -> (JdgCommitteeRecord, Vec<iroha_crypto::KeyPair>) {
         assert!(
             member_count >= usize::from(threshold),
             "member count must cover threshold"
         );
         let signers: Vec<_> = (0..member_count)
-            .map(|_| checked_random_keypair())
+            .map(|_| checked_random_keypair_with_algorithm(algorithm))
             .collect();
         let mut committee_id_bytes = [0u8; 32];
         committee_id_bytes[..8].copy_from_slice(&dataspace.as_u64().to_le_bytes());
@@ -1650,6 +1678,50 @@ mod tests {
             assert!(
                 matches!(err, JdgAttestationGuardError::SignatureInvalid { index: 0 }),
                 "{label} Ed25519 signature R should fail admission: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn attestation_guard_rejects_malformed_mldsa_simple_threshold_signature_lengths() {
+        let dataspace = DataSpaceId::new(15);
+        let (committee, signers) =
+            committee_with_algorithm_members(dataspace, 1, 5, 1, 2, Algorithm::MlDsa);
+        let manifest = JdgCommitteeManifest {
+            dataspace,
+            committees: vec![committee.clone()],
+        };
+        let schedule =
+            JdgCommitteeSchedule::from_manifests(vec![manifest], 0).expect("schedule builds");
+        let guard = JdgAttestationGuard::new(schedule, None, 32_768, 4, simple_signature_schemes());
+        let attestation =
+            signed_attestation_for_committee(&committee, &signers, &[0], dataspace, 2, 8, 0);
+
+        guard
+            .validate(&attestation, dataspace, 3)
+            .expect("valid ML-DSA simple-threshold signature should verify");
+
+        let valid_signature = &attestation.signature.signatures[0];
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x7A);
+                payload
+            }),
+        ] {
+            let mut malformed = attestation.clone();
+            malformed.signature.signatures[0] = replacement_signature;
+
+            let err = guard
+                .validate(&malformed, dataspace, 3)
+                .expect_err("malformed ML-DSA signature length must reject");
+            assert!(
+                matches!(err, JdgAttestationGuardError::SignatureInvalid { index: 0 }),
+                "{label} ML-DSA signature should fail admission: {err:?}"
             );
         }
     }

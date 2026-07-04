@@ -784,6 +784,11 @@ fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> 
     Signature::try_new(private_key, payload).expect("test fixture signing should succeed")
 }
 
+fn checked_da_ack_signature(byte: u8) -> Signature {
+    Signature::try_from_bytes(&[byte; 64])
+        .expect("checked Sumeragi DA acknowledgement signature fixture")
+}
+
 fn checked_signature_of_hash<T>(
     private_key: &iroha_crypto::PrivateKey,
     hash: HashOf<T>,
@@ -2350,7 +2355,7 @@ fn sample_da_record(proof_digest: Option<Hash>) -> DaCommitmentRecord {
         proof_digest,
         RetentionClass::default(),
         StorageTicketId::new([0x55; 32]),
-        Signature::from_bytes(&[0x66; 64]),
+        checked_da_ack_signature(0x66),
     )
 }
 
@@ -2430,7 +2435,7 @@ fn sample_da_receipt_for_record(record: &DaCommitmentRecord) -> DaIngestReceipt 
         stripe_layout: DaStripeLayout::default(),
         queued_at_unix: 1,
         rent_quote: DaRentQuote::default(),
-        operator_signature: Signature::from_bytes(&[0x78; 64]),
+        operator_signature: checked_da_ack_signature(0x78),
     }
 }
 
@@ -72229,7 +72234,7 @@ async fn assemble_proposal_rejects_corrupt_da_receipt_file() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn assemble_proposal_rejects_conflicting_da_receipt_evidence() {
+async fn assemble_proposal_rejects_duplicate_da_receipt_key() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
     actor.state.nexus.write().enabled = true;
@@ -72259,11 +72264,11 @@ async fn assemble_proposal_rejects_conflicting_da_receipt_evidence() {
             None,
             Instant::now(),
         )
-        .expect_err("conflicting DA receipt evidence must fail proposal assembly");
+        .expect_err("duplicate DA receipt keys must fail proposal assembly");
     let message = err.to_string();
     assert!(
-        message.contains("receipt evidence conflict"),
-        "expected receipt evidence conflict, got {message}"
+        message.contains("duplicate DA receipt key"),
+        "expected duplicate DA receipt key rejection, got {message}"
     );
 
     harness.shutdown.send();
@@ -72416,7 +72421,7 @@ async fn internal_proposal_work_ignores_committed_da_commitments() {
     record.manifest_hash = ManifestDigest::new([0x92; 32]);
     record.chunk_root = Hash::prehashed([0x93; 32]);
     record.storage_ticket = StorageTicketId::new([0x95; 32]);
-    record.acknowledgement_sig = Signature::from_bytes(&[0x96; 64]);
+    record.acknowledgement_sig = checked_da_ack_signature(0x96);
     write_da_commitment_spool_file(&spool_dir, &record, [0x97; 32]);
 
     let _ = actor.state.da_commitments();
@@ -202061,7 +202066,7 @@ fn payload_canonical_da_bundle(seed: u8) -> DaCommitmentBundle {
         Some(Hash::prehashed([seed.wrapping_add(4); 32])),
         RetentionPolicy::default(),
         StorageTicketId::new([seed.wrapping_add(5); 32]),
-        Signature::from_bytes(&[seed.wrapping_add(6); 64]),
+        checked_da_ack_signature(seed.wrapping_add(6)),
     );
     DaCommitmentBundle::new(vec![record])
 }

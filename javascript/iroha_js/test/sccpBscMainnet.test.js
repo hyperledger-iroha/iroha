@@ -13,13 +13,11 @@ import {
   SCCP_BSC_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
-  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_EVM_CHAIN_ID,
   SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
-  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_ETH,
@@ -40,6 +38,7 @@ import {
   bscMainnetSccpDestinationBinding,
   bscTestnetSccpDestinationBinding,
   bscSccpReceiptProofHash,
+  buildBscSourceChainProofEnvelope,
   buildBscMainnetSccpLocalAdmissionSubmission,
   buildBscMainnetSccpDestinationProofRequest,
   buildBscTestnetSccpLocalAdmissionSubmission,
@@ -76,6 +75,8 @@ import {
 } from "../src/sccp.js";
 
 const hex32 = (byte) => `0x${byte.repeat(32)}`;
+const LEGACY_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 =
+  "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
 const sha256Hex = (bytes) =>
   `0x${createHash("sha256").update(Buffer.from(bytes)).digest("hex")}`;
 const fixtureHash = (label) => sha256Hex(Buffer.from(label, "utf8"));
@@ -231,6 +232,34 @@ const sourceEventLog = (overrides = {}) => ({
   blockNumber: "0x1234",
   topics: [evmSccpSourceEventTopic(), SOURCE_EVENT_DIGEST],
   data: "0x",
+  ...overrides,
+});
+
+const fullBscReceipt = (index, overrides = {}) => ({
+  type: "0x2",
+  transactionHash: index === 0 ? TX_HASH : hex32("ac"),
+  transactionIndex: `0x${index.toString(16)}`,
+  blockHash: BLOCK_HASH,
+  blockNumber: "0x1234",
+  status: "0x1",
+  cumulativeGasUsed: `0x${(21_000 * (index + 1)).toString(16)}`,
+  logsBloom: `0x${"00".repeat(256)}`,
+  logs: index === 0 ? [sourceEventLog()] : [],
+  ...overrides,
+});
+
+const sampleBscSourceChainProofInput = (overrides = {}) => ({
+  messageId: hex32("51"),
+  payloadHash: hex32("52"),
+  commitmentRoot: hex32("53"),
+  sourceEventDigest: SOURCE_EVENT_DIGEST,
+  finalityHeight: "7200",
+  finalityBlockHash: BLOCK_HASH,
+  sourceBridgeEmitterAddress: SOURCE_BRIDGE_ADDRESS,
+  sourceBridgeEmitterCodeHash: hex32("45"),
+  receiptRootIndex: 0,
+  blockReceipts: [fullBscReceipt(0), fullBscReceipt(1)],
+  sourceValidatorPrivateKeys: [`0x${"1".padStart(64, "0")}`],
   ...overrides,
 });
 
@@ -981,6 +1010,35 @@ const structuredGroth16ProofFromBytes = (bytes) => ({
     ["1", "0"],
   ],
   pi_c: [hexWordAt(bytes, 10), hexWordAt(bytes, 11), "1"],
+});
+
+test("BSC source-chain proof builder requires validator keys and block receipts", () => {
+  const input = sampleBscSourceChainProofInput();
+  const proof = buildBscSourceChainProofEnvelope(input);
+
+  assert.equal(proof.syntheticRootMarker, false);
+  assert.equal(proof.sourceEventDigest, SOURCE_EVENT_DIGEST);
+  assert.equal(proof.receiptRootIndex, "0");
+  assert.ok(proof.sourceProofBytes instanceof Uint8Array);
+  assert.ok(proof.sourceProofBytes.length > 0);
+
+  const withoutKeys = { ...input };
+  delete withoutKeys.sourceValidatorPrivateKeys;
+  assert.throws(
+    () => buildBscSourceChainProofEnvelope(withoutKeys),
+    /BSC source-chain proof requires sourceValidatorPrivateKeys/u,
+  );
+
+  const withoutReceipts = { ...input };
+  delete withoutReceipts.blockReceipts;
+  assert.throws(
+    () => buildBscSourceChainProofEnvelope(withoutReceipts),
+    /BSC source-chain proof requires blockReceipts/u,
+  );
+  assert.throws(
+    () => buildBscSourceChainProofEnvelope({ ...input, blockReceipts: [] }),
+    /BSC source-chain proof requires blockReceipts/u,
+  );
 });
 
 test("BscMainnetSccp validates EIP-1193 execution providers as BSC mainnet", async () => {
@@ -1833,9 +1891,21 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
     parityDescriptor.schema,
     SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1,
   );
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverParityFixture(
+        sampleBscTestnetNativeEvmProverParityFixture(fixture.bundle, {
+          schema: LEGACY_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+        }),
+        fixture.bundle,
+      ),
+    new RegExp(
+      `schema must be ${SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1}`,
+    ),
+  );
   const legacyParityBytes = sampleBscTestnetNativeEvmProverParityFixtureBytes(
     fixture.bundle,
-    { schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 },
+    { schema: LEGACY_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1 },
   );
   assert.throws(
     () =>
@@ -1859,7 +1929,9 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
         },
         { destinationBinding: fixture.destinationBinding },
       ),
-    /legacy fixture schema .* is not valid for verified production native EVM prover artifacts/u,
+    new RegExp(
+      `schema must be ${SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_SCHEMA_V1}`,
+    ),
   );
   assert.throws(
     () =>

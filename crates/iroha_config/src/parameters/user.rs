@@ -4401,21 +4401,18 @@ pub struct SccpRouteBrowserProverManifestRef {
 impl SccpRouteBrowserProverManifestRef {
     fn is_public_dns_domain(domain: &str) -> bool {
         let lower = domain.to_ascii_lowercase();
+        let top_level_label = lower.rsplit('.').next();
         !lower.is_empty()
             && lower != "localhost"
-            && !lower.ends_with(".local")
+            && top_level_label != Some("local")
             && lower.contains('.')
             && lower.parse::<IpAddr>().is_err()
             && lower.split('.').all(|label| {
                 let bytes = label.as_bytes();
                 !label.is_empty()
                     && label.len() <= 63
-                    && bytes
-                        .first()
-                        .is_some_and(|byte| byte.is_ascii_alphanumeric())
-                    && bytes
-                        .last()
-                        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+                    && matches!(bytes.first(), Some(byte) if byte.is_ascii_alphanumeric())
+                    && matches!(bytes.last(), Some(byte) if byte.is_ascii_alphanumeric())
                     && bytes
                         .iter()
                         .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
@@ -5646,13 +5643,13 @@ impl SccpRouteManifest {
     pub fn parse(self) -> actual::SccpRouteManifest {
         let is_bsc_route = self.counterparty_domain == Self::BSC_COUNTERPARTY_DOMAIN;
         let is_ton_route = self.counterparty_domain == Self::TON_COUNTERPARTY_DOMAIN;
-        let is_tron_route = self.counterparty_domain == Self::TRON_COUNTERPARTY_DOMAIN;
-        let strict_route_hashes = is_bsc_route || is_ton_route || is_tron_route;
+        let uses_tron_counterparty = self.counterparty_domain == Self::TRON_COUNTERPARTY_DOMAIN;
+        let strict_route_hashes = is_bsc_route || is_ton_route || uses_tron_counterparty;
         let chain_id_hex = if is_bsc_route {
             Self::normalize_bsc_chain_id_hex(&self.chain_id_hex)
         } else if is_ton_route {
             Self::normalize_ton_chain_id_hex(&self.chain_id_hex)
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_chain_id_hex(&self.chain_id_hex)
         } else {
             self.chain_id_hex.trim().to_owned()
@@ -5730,7 +5727,7 @@ impl SccpRouteManifest {
                 "taira_xor_token_address",
                 &self.taira_xor_token_address,
             )
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_base58_address(
                 "taira_xor_token_address",
                 &self.taira_xor_token_address,
@@ -5745,7 +5742,7 @@ impl SccpRouteManifest {
                 "taira_xor_bridge_address",
                 &self.taira_xor_bridge_address,
             )
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_base58_address(
                 "taira_xor_bridge_address",
                 &self.taira_xor_bridge_address,
@@ -6198,14 +6195,14 @@ impl SccpRouteManifest {
             !(self.production_ready && is_ton_route && deployment_evidence_sha256.is_none()),
             "SCCP TON route manifest production_ready requires deployment_evidence_sha256"
         );
-        let trim_address_aliases = !(is_bsc_route || is_ton_route || is_tron_route);
+        let trim_address_aliases = !(is_bsc_route || is_ton_route || uses_tron_counterparty);
         let source_bridge_address = self.source_bridge_address(trim_address_aliases);
         let destination_verifier_address = self.destination_verifier_address(trim_address_aliases);
         let source_bridge_address = if is_bsc_route {
             Self::normalize_evm_address("source bridge address", &source_bridge_address)
         } else if is_ton_route {
             Self::normalize_ton_raw_address("source bridge address", &source_bridge_address)
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_base58_address("source bridge address", &source_bridge_address)
         } else {
             source_bridge_address
@@ -6220,7 +6217,7 @@ impl SccpRouteManifest {
                 "destination verifier address",
                 &destination_verifier_address,
             )
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_base58_address(
                 "destination verifier address",
                 &destination_verifier_address,
@@ -6228,7 +6225,7 @@ impl SccpRouteManifest {
         } else {
             destination_verifier_address
         };
-        if is_bsc_route || is_ton_route || is_tron_route {
+        if is_bsc_route || is_ton_route || uses_tron_counterparty {
             let route_family = if is_bsc_route {
                 "BSC"
             } else if is_ton_route {
@@ -6252,7 +6249,7 @@ impl SccpRouteManifest {
             "BSC"
         } else if is_ton_route {
             "TON"
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             "TRON"
         } else {
             "generic"
@@ -6352,11 +6349,11 @@ impl SccpRouteManifest {
         assert!(
             !(self.production_ready
                 && self.route_id == Self::TRON_TAIRA_XOR_ROUTE_ID
-                && !is_tron_route),
+                && !uses_tron_counterparty),
             "SCCP TRON route manifest production_ready requires counterparty_domain = {}",
             Self::TRON_COUNTERPARTY_DOMAIN
         );
-        if self.production_ready && is_tron_route {
+        if self.production_ready && uses_tron_counterparty {
             self.validate_tron_production_metadata(
                 &chain_id_hex,
                 &network_id_hex,
@@ -8316,9 +8313,6 @@ pub struct Zk {
         default = "defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS"
     )]
     pub bridge_proof_max_future_drift_blocks: u64,
-    /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
-    #[config(default = "false")]
-    pub sccp_allow_unready_transparent_proofs: bool,
     /// SCCP source-chain verifier material that can enable non-SORA source lanes.
     #[config(default = "Vec::new()")]
     pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
@@ -8366,7 +8360,6 @@ impl Zk {
             bridge_proof_max_range_len: self.bridge_proof_max_range_len,
             bridge_proof_max_past_age_blocks: self.bridge_proof_max_past_age_blocks,
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
-            sccp_allow_unready_transparent_proofs: self.sccp_allow_unready_transparent_proofs,
             sccp_source_verifier_materials: self
                 .sccp_source_verifier_materials
                 .into_iter()
@@ -22703,7 +22696,7 @@ pub struct IsoBridge {
 }
 
 /// User-level ISO bridge rail profile override.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone)]
 pub struct IsoBridgeProfile {
     /// Stable profile identifier.
     pub id: String,
@@ -22712,41 +22705,26 @@ pub struct IsoBridgeProfile {
     /// Optional profile-level embedded XML signature policy.
     pub embedded_signature_policy: Option<String>,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// SHA-256 pins for accepted XMLDSig signer public-key bytes.
     pub signature_public_key_sha256_pins: Vec<String>,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// SHA-256 pins for accepted X.509 trust-anchor certificate DER bytes.
     pub x509_trust_anchor_sha256_pins: Vec<String>,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// Certificate-policy OIDs required on accepted X.509 signer certificates.
     pub x509_required_certificate_policy_oids: Vec<String>,
     #[config(default = "false")]
-    #[norito(default)]
     /// Whether X.509 signer certificates must be covered by a fresh verified CRL.
     pub x509_require_crl_revocation_check: bool,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// Base64 DER CRLs accepted as rail-profile revocation material.
     pub x509_crl_der_base64: Vec<String>,
     #[config(default = "false")]
-    #[norito(default)]
     /// Whether X.509 signer certificates must be covered by a fresh verified OCSP response.
     pub x509_require_ocsp_revocation_check: bool,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// Base64 DER OCSP responses accepted as rail-profile revocation material.
     pub x509_ocsp_response_der_base64: Vec<String>,
-    #[config(default = "Vec::new()")]
-    #[norito(default)]
-    /// Backward-compatible SHA-256 pins of raw XMLDSig public keys accepted by this profile.
-    pub trusted_public_key_sha256: Vec<String>,
-    #[config(default = "Vec::new()")]
-    #[norito(default)]
-    /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
-    pub trusted_certificate_sha256: Vec<String>,
     #[config(default = "Vec::new()")]
     /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
     pub revoked_certificate_sha256: Vec<String>,
@@ -22756,6 +22734,152 @@ pub struct IsoBridgeProfile {
     #[config(default = "Vec::new()")]
     /// Message profiles owned by this rail profile.
     pub message_profiles: Vec<IsoMessageProfile>,
+}
+
+impl json::JsonDeserialize for IsoBridgeProfile {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let mut visitor = json::MapVisitor::new(parser)?;
+        let mut id: Option<String> = None;
+        let mut rail: Option<String> = None;
+        let mut embedded_signature_policy: Option<Option<String>> = None;
+        let mut signature_public_key_sha256_pins: Option<Vec<String>> = None;
+        let mut x509_trust_anchor_sha256_pins: Option<Vec<String>> = None;
+        let mut x509_required_certificate_policy_oids: Option<Vec<String>> = None;
+        let mut x509_require_crl_revocation_check: Option<bool> = None;
+        let mut x509_crl_der_base64: Option<Vec<String>> = None;
+        let mut x509_require_ocsp_revocation_check: Option<bool> = None;
+        let mut x509_ocsp_response_der_base64: Option<Vec<String>> = None;
+        let mut revoked_certificate_sha256: Option<Vec<String>> = None;
+        let mut required_reference_datasets: Option<Vec<String>> = None;
+        let mut message_profiles: Option<Vec<IsoMessageProfile>> = None;
+
+        while let Some(key) = visitor.next_key()? {
+            match key.as_str() {
+                "id" => {
+                    if id.is_some() {
+                        return Err(json::MapVisitor::duplicate_field("id"));
+                    }
+                    id = Some(visitor.parse_value::<String>()?);
+                }
+                "rail" => {
+                    if rail.is_some() {
+                        return Err(json::MapVisitor::duplicate_field("rail"));
+                    }
+                    rail = Some(visitor.parse_value::<String>()?);
+                }
+                "embedded_signature_policy" => {
+                    if embedded_signature_policy.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "embedded_signature_policy",
+                        ));
+                    }
+                    embedded_signature_policy = Some(visitor.parse_value::<Option<String>>()?);
+                }
+                "signature_public_key_sha256_pins" => {
+                    if signature_public_key_sha256_pins.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "signature_public_key_sha256_pins",
+                        ));
+                    }
+                    signature_public_key_sha256_pins = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "x509_trust_anchor_sha256_pins" => {
+                    if x509_trust_anchor_sha256_pins.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_trust_anchor_sha256_pins",
+                        ));
+                    }
+                    x509_trust_anchor_sha256_pins = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "x509_required_certificate_policy_oids" => {
+                    if x509_required_certificate_policy_oids.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_required_certificate_policy_oids",
+                        ));
+                    }
+                    x509_required_certificate_policy_oids =
+                        Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "x509_require_crl_revocation_check" => {
+                    if x509_require_crl_revocation_check.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_require_crl_revocation_check",
+                        ));
+                    }
+                    x509_require_crl_revocation_check = Some(visitor.parse_value::<bool>()?);
+                }
+                "x509_crl_der_base64" => {
+                    if x509_crl_der_base64.is_some() {
+                        return Err(json::MapVisitor::duplicate_field("x509_crl_der_base64"));
+                    }
+                    x509_crl_der_base64 = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "x509_require_ocsp_revocation_check" => {
+                    if x509_require_ocsp_revocation_check.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_require_ocsp_revocation_check",
+                        ));
+                    }
+                    x509_require_ocsp_revocation_check = Some(visitor.parse_value::<bool>()?);
+                }
+                "x509_ocsp_response_der_base64" => {
+                    if x509_ocsp_response_der_base64.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_ocsp_response_der_base64",
+                        ));
+                    }
+                    x509_ocsp_response_der_base64 = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "revoked_certificate_sha256" => {
+                    if revoked_certificate_sha256.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "revoked_certificate_sha256",
+                        ));
+                    }
+                    revoked_certificate_sha256 = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "required_reference_datasets" => {
+                    if required_reference_datasets.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "required_reference_datasets",
+                        ));
+                    }
+                    required_reference_datasets = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "message_profiles" => {
+                    if message_profiles.is_some() {
+                        return Err(json::MapVisitor::duplicate_field("message_profiles"));
+                    }
+                    message_profiles = Some(visitor.parse_value::<Vec<IsoMessageProfile>>()?);
+                }
+                other => return Err(json::MapVisitor::unknown_field(other)),
+            }
+        }
+
+        visitor.finish()?;
+
+        Ok(Self {
+            id: id.ok_or_else(|| json::MapVisitor::missing_field("id"))?,
+            rail: rail.ok_or_else(|| json::MapVisitor::missing_field("rail"))?,
+            embedded_signature_policy: embedded_signature_policy.unwrap_or(None),
+            signature_public_key_sha256_pins: signature_public_key_sha256_pins.unwrap_or_default(),
+            x509_trust_anchor_sha256_pins: x509_trust_anchor_sha256_pins.unwrap_or_default(),
+            x509_required_certificate_policy_oids: x509_required_certificate_policy_oids
+                .unwrap_or_default(),
+            x509_require_crl_revocation_check: x509_require_crl_revocation_check.unwrap_or(false),
+            x509_crl_der_base64: x509_crl_der_base64.unwrap_or_default(),
+            x509_require_ocsp_revocation_check: x509_require_ocsp_revocation_check.unwrap_or(false),
+            x509_ocsp_response_der_base64: x509_ocsp_response_der_base64.unwrap_or_default(),
+            revoked_certificate_sha256: revoked_certificate_sha256
+                .ok_or_else(|| json::MapVisitor::missing_field("revoked_certificate_sha256"))?,
+            required_reference_datasets: required_reference_datasets
+                .ok_or_else(|| json::MapVisitor::missing_field("required_reference_datasets"))?,
+            message_profiles: message_profiles
+                .ok_or_else(|| json::MapVisitor::missing_field("message_profiles"))?,
+        })
+    }
 }
 
 /// User-level message-specific ISO bridge profile override.
@@ -24730,8 +24854,6 @@ impl IsoBridgeProfile {
             x509_crl_der_base64: self.x509_crl_der_base64,
             x509_require_ocsp_revocation_check: self.x509_require_ocsp_revocation_check,
             x509_ocsp_response_der_base64: self.x509_ocsp_response_der_base64,
-            trusted_public_key_sha256: self.trusted_public_key_sha256,
-            trusted_certificate_sha256: self.trusted_certificate_sha256,
             revoked_certificate_sha256: self.revoked_certificate_sha256,
             required_reference_datasets: self.required_reference_datasets,
             message_profiles: self
@@ -25125,10 +25247,10 @@ mod offline_cfg_tests {
                     "id": "swift-cbpr-plus",
                     "rail": "swift-cbpr-plus",
                     "embedded_signature_policy": "reject-unsupported",
-                    "trusted_public_key_sha256": [
+                    "signature_public_key_sha256_pins": [
                         "1111111111111111111111111111111111111111111111111111111111111111"
                     ],
-                    "trusted_certificate_sha256": [
+                    "x509_trust_anchor_sha256_pins": [
                         "2222222222222222222222222222222222222222222222222222222222222222"
                     ],
                     "revoked_certificate_sha256": [
@@ -25210,6 +25332,68 @@ mod offline_cfg_tests {
         assert!(parsed.reference_data.csd_venue_path.is_none());
         assert!(parsed.reference_data.securities_account_path.is_none());
         assert!(parsed.reference_data.cash_leg_path.is_none());
+    }
+
+    #[test]
+    fn iso_bridge_json_rejects_legacy_xml_signature_pin_aliases() {
+        for legacy_field in ["trusted_public_key_sha256", "trusted_certificate_sha256"] {
+            let json = format!(
+                r#"{{
+                    "enabled": false,
+                    "dedupe_ttl_secs": 120,
+                    "default_profile": "generic-iso20022",
+                    "profiles": [
+                        {{
+                            "id": "legacy-pins",
+                            "rail": "generic-iso20022",
+                            "revoked_certificate_sha256": [],
+                            "required_reference_datasets": [],
+                            "message_profiles": [
+                                {{
+                                    "message_type": "pacs.008",
+                                    "direction": "inbound",
+                                    "versions": ["pacs.008.001.08"],
+                                    "business_services": [],
+                                    "require_app_header": false,
+                                    "require_business_service": false,
+                                    "require_uetr": false,
+                                    "structured_address_mode": "permissive",
+                                    "supplementary_data_max_bytes": 4096,
+                                    "amount_minor_units": []
+                                }}
+                            ],
+                            "{legacy_field}": [
+                                "1111111111111111111111111111111111111111111111111111111111111111"
+                            ]
+                        }}
+                    ],
+                    "store_dir": null,
+                    "store_retention_secs": 86400,
+                    "store_max_records": 1000,
+                    "audit_export_dir": null,
+                    "embedded_signature_policy": null,
+                    "signer": null,
+                    "account_aliases": [],
+                    "currency_assets": [],
+                    "reference_data": {{
+                        "refresh_interval_secs": 3600,
+                        "isin_crosswalk_path": null,
+                        "bic_lei_path": null,
+                        "mic_directory_path": null,
+                        "csd_venue_path": null,
+                        "securities_account_path": null,
+                        "cash_leg_path": null
+                    }}
+                }}"#
+            );
+
+            let err = norito::json::from_json::<IsoBridge>(&json)
+                .expect_err("legacy XML signature pin aliases must be rejected");
+            assert!(
+                err.to_string().contains(legacy_field),
+                "unexpected legacy alias error for {legacy_field}: {err}"
+            );
+        }
     }
 
     #[test]

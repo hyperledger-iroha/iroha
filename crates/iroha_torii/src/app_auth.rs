@@ -494,10 +494,10 @@ fn validate_freshness(
     Ok(())
 }
 
-fn decode_signature_value(
+fn decode_signature_bytes_value(
     signature_b64: &str,
     context: &'static str,
-) -> Result<Signature, crate::Error> {
+) -> Result<Vec<u8>, crate::Error> {
     let signature_bytes = BASE64_STANDARD.decode(signature_b64).map_err(|_| {
         crate::Error::Query(ValidationFail::NotPermitted(format!(
             "invalid base64 in {context}"
@@ -508,11 +508,35 @@ fn decode_signature_value(
             "noncanonical base64 in {context}"
         ))));
     }
-    Signature::try_from_bytes(&signature_bytes).map_err(|_| {
-        crate::Error::Query(ValidationFail::NotPermitted(format!(
-            "invalid {context} payload"
-        )))
-    })
+    Ok(signature_bytes)
+}
+
+fn checked_app_auth_signature_from_bytes(
+    signature_bytes: &[u8],
+    signer: &PublicKey,
+    signature_context: &'static str,
+) -> Result<Signature, crate::Error> {
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature_bytes).map_err(|err| {
+                crate::Error::Query(ValidationFail::NotPermitted(format!(
+                    "invalid {signature_context}: Ed25519 signature failed admission: {err}"
+                )))
+            })
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature_bytes).map_err(|err| {
+                crate::Error::Query(ValidationFail::NotPermitted(format!(
+                    "invalid {signature_context}: ML-DSA signature failed admission: {err}"
+                )))
+            })
+        }
+        _ => Signature::try_from_bytes(signature_bytes).map_err(|_| {
+            crate::Error::Query(ValidationFail::NotPermitted(format!(
+                "invalid {signature_context}"
+            )))
+        }),
+    }
 }
 
 fn verify_app_auth_signature(
@@ -534,16 +558,23 @@ fn validate_app_auth_signature_for_signer(
     signer: &PublicKey,
     signature_context: &'static str,
 ) -> Result<(), crate::Error> {
-    if !matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        return Ok(());
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => iroha_crypto::ed25519_parse_signature(signature.payload())
+            .map(|_| ())
+            .map_err(|err| {
+                crate::Error::Query(ValidationFail::NotPermitted(format!(
+                    "invalid {signature_context}: Ed25519 signature failed admission: {err}"
+                )))
+            }),
+        Ok(Algorithm::MlDsa) => iroha_crypto::mldsa65_parse_signature(signature.payload())
+            .map(|_| ())
+            .map_err(|err| {
+                crate::Error::Query(ValidationFail::NotPermitted(format!(
+                    "invalid {signature_context}: ML-DSA signature failed admission: {err}"
+                )))
+            }),
+        _ => Ok(()),
     }
-    iroha_crypto::ed25519_parse_signature(signature.payload())
-        .map(|_| ())
-        .map_err(|err| {
-            crate::Error::Query(ValidationFail::NotPermitted(format!(
-                "invalid {signature_context}: Ed25519 signature failed admission: {err}"
-            )))
-        })
 }
 
 fn decode_witness_value(
@@ -573,7 +604,7 @@ fn decode_witness_value(
 fn verify_single_signature_authorization(
     state: &Arc<CoreState>,
     account: &AccountId,
-    signature: &Signature,
+    signature_bytes: &[u8],
     message: &[u8],
     signature_context: &'static str,
 ) -> Result<PublicKey, crate::Error> {
@@ -586,7 +617,9 @@ fn verify_single_signature_authorization(
 
     match account_entry.id.controller() {
         AccountController::Single(pk) => {
-            verify_app_auth_signature(signature, pk, message, signature_context)?;
+            let signature =
+                checked_app_auth_signature_from_bytes(signature_bytes, pk, signature_context)?;
+            verify_app_auth_signature(&signature, pk, message, signature_context)?;
             Ok(pk.clone())
         }
         AccountController::Multisig(_) => Err(crate::Error::Query(ValidationFail::NotPermitted(
@@ -743,7 +776,7 @@ pub(crate) fn verify_canonical_body_request(
 
     match auth.proof {
         CanonicalRequestBodyProof::SignatureBase64(signature_b64) => {
-            let signature = decode_signature_value(signature_b64, "signature_base64")?;
+            let signature_bytes = decode_signature_bytes_value(signature_b64, "signature_base64")?;
             let message = canonical_request_signature_message(
                 method,
                 uri,
@@ -754,7 +787,7 @@ pub(crate) fn verify_canonical_body_request(
             let signer = verify_single_signature_authorization(
                 state,
                 &account,
-                &signature,
+                &signature_bytes,
                 &message,
                 "signature_base64 payload",
             )?;
@@ -1012,21 +1045,7 @@ pub fn verify_canonical_request(
     validate_freshness(&auth_config, timestamp_ms, &nonce, "X-Iroha-Nonce")?;
 
     let signature_b64 = parse_required_header_exact_text(headers, HEADER_SIGNATURE)?;
-    let signature_bytes = BASE64_STANDARD.decode(&signature_b64).map_err(|_| {
-        crate::Error::Query(ValidationFail::NotPermitted(
-            "invalid base64 in X-Iroha-Signature".to_owned(),
-        ))
-    })?;
-    if BASE64_STANDARD.encode(&signature_bytes) != signature_b64 {
-        return Err(crate::Error::Query(ValidationFail::NotPermitted(
-            "noncanonical base64 in X-Iroha-Signature".to_owned(),
-        )));
-    }
-    let signature = Signature::try_from_bytes(&signature_bytes).map_err(|_| {
-        crate::Error::Query(ValidationFail::NotPermitted(
-            "invalid X-Iroha-Signature payload".to_owned(),
-        ))
-    })?;
+    let signature_bytes = decode_signature_bytes_value(&signature_b64, "X-Iroha-Signature")?;
     let message = canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
 
     let world = state.world_view();
@@ -1038,6 +1057,11 @@ pub fn verify_canonical_request(
 
     let signer = match account_entry.id.controller() {
         AccountController::Single(pk) => {
+            let signature = checked_app_auth_signature_from_bytes(
+                &signature_bytes,
+                pk,
+                "X-Iroha-Signature payload",
+            )?;
             verify_app_auth_signature(&signature, pk, &message, "X-Iroha-Signature payload")?;
             pk.clone()
         }
@@ -1190,6 +1214,118 @@ mod tests {
             .expect("app auth fixture key advertises a valid algorithm");
 
         assert_eq!(actual, Algorithm::default());
+    }
+
+    #[test]
+    fn checked_app_auth_signature_from_bytes_rejects_malformed_ed25519_r_before_wrapping() {
+        let valid_signature = checked_signature(
+            ALICE_KEYPAIR.private_key(),
+            b"app-auth checked signature admission helper",
+        );
+
+        for (label, replacement_r) in [
+            ("small-order", ED25519_SMALL_ORDER_POINT),
+            ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
+        ] {
+            let mut payload = valid_signature.payload().to_vec();
+            payload[..ed25519_dalek::PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
+
+            let err = checked_app_auth_signature_from_bytes(
+                &payload,
+                ALICE_KEYPAIR.public_key(),
+                "helper signature payload",
+            )
+            .expect_err("malformed Ed25519 R must fail before opaque signature wrapping");
+
+            match err {
+                crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                    assert!(
+                        msg.contains("helper signature payload")
+                            && msg.contains("Ed25519 signature failed admission"),
+                        "{label} signature failed with unexpected error: {msg}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn checked_app_auth_signature_from_bytes_rejects_malformed_mldsa_signature_lengths_before_wrapping()
+     {
+        let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
+            .expect("generate checked app auth ML-DSA fixture key");
+        let valid_signature = checked_signature(
+            key_pair.private_key(),
+            b"app-auth checked ML-DSA signature admission helper",
+        );
+
+        let mut extended = valid_signature.payload().to_vec();
+        extended.push(0);
+        for (label, payload) in [
+            (
+                "truncated",
+                valid_signature.payload()[..valid_signature.payload().len() - 1].to_vec(),
+            ),
+            ("extended", extended),
+        ] {
+            let err = checked_app_auth_signature_from_bytes(
+                &payload,
+                key_pair.public_key(),
+                "helper ML-DSA signature payload",
+            )
+            .expect_err("malformed ML-DSA length must fail before opaque signature wrapping");
+
+            match err {
+                crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                    assert!(
+                        msg.contains("helper ML-DSA signature payload")
+                            && msg.contains("ML-DSA signature failed admission"),
+                        "{label} signature failed with unexpected error: {msg}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn validate_app_auth_signature_for_signer_rejects_malformed_mldsa_signature_lengths() {
+        let key_pair = KeyPair::try_random_with_algorithm(Algorithm::MlDsa)
+            .expect("generate checked app auth ML-DSA validation fixture key");
+        let valid_signature = checked_signature(
+            key_pair.private_key(),
+            b"app-auth wrapped ML-DSA signature admission helper",
+        );
+
+        let mut extended = valid_signature.payload().to_vec();
+        extended.push(0);
+        for (label, payload) in [
+            (
+                "truncated",
+                valid_signature.payload()[..valid_signature.payload().len() - 1].to_vec(),
+            ),
+            ("extended", extended),
+        ] {
+            let signature = Signature::from_bytes(&payload);
+            let err = validate_app_auth_signature_for_signer(
+                &signature,
+                key_pair.public_key(),
+                "wrapped ML-DSA signature payload",
+            )
+            .expect_err("malformed wrapped ML-DSA length must fail admission");
+
+            match err {
+                crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                    assert!(
+                        msg.contains("wrapped ML-DSA signature payload")
+                            && msg.contains("ML-DSA signature failed admission"),
+                        "{label} signature failed with unexpected error: {msg}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
     }
 
     #[test]

@@ -5,8 +5,8 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Collections;
+import java.util.List;
 import java.util.function.Consumer;
 import org.bouncycastle.crypto.digests.KeccakDigest;
 import org.hyperledger.iroha.android.crypto.Blake2b;
@@ -18,6 +18,8 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 public final class TronSccpProverTests {
   private static final String TEST_SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA =
       "iroha_sccp::SccpSourceChainProofEnvelopeV1";
+  private static final String TEST_NEXUS_BRIDGE_FINALITY_PROOF_SCHEMA =
+      "iroha_sccp::NexusBridgeFinalityProofV1";
 
   private TronSccpProverTests() {}
 
@@ -219,6 +221,99 @@ public final class TronSccpProverTests {
       threw = ex.getMessage().contains("sourceProofBytes must be empty for SORA source bundle");
     }
     assert threw : "TRON proof requests must reject source proof bytes for SORA bundles";
+
+    final SampleBundleFixture opaqueSoraFinalityBundle =
+        sampleBundleFixture(TronSccpProver.DOMAIN_SORA, 327L, new byte[] {0x01, 0x02, 0x03});
+    threw = false;
+    try {
+      TronSccpProver.buildProofRequest(
+          new TronSccpProver.ProofRequestInput(
+              opaqueSoraFinalityBundle.publicInputs,
+              opaqueSoraFinalityBundle.bundleBytes,
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              TronSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains(
+              "bundleBytes.finality_proof must decode as NexusBridgeFinalityProofV1");
+    }
+    assert threw : "SORA bundle finality proof must decode as NexusBridgeFinalityProofV1";
+
+    final SampleBundleFixture wrongSoraRootBundle =
+        sampleBundleFixture(
+            TronSccpProver.DOMAIN_SORA,
+            327L,
+            testNexusBridgeFinalityProofBytes(
+                "0x" + repeat("ab", 32), "19", repeat("44", 32)));
+    threw = false;
+    try {
+      TronSccpProver.buildProofRequest(
+          new TronSccpProver.ProofRequestInput(
+              wrongSoraRootBundle.publicInputs,
+              wrongSoraRootBundle.bundleBytes,
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              TronSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.finality_proof must match SORA publicInputs");
+    }
+    assert threw : "SORA bundle finality proof commitment root must bind public inputs";
+
+    final SampleBundleFixture validSoraBundle =
+        sampleBundleFixture(TronSccpProver.DOMAIN_SORA, 327L);
+    final SampleBundleFixture wrongSoraHeightBundle =
+        sampleBundleFixture(
+            TronSccpProver.DOMAIN_SORA,
+            327L,
+            testNexusBridgeFinalityProofBytes(
+                validSoraBundle.publicInputs.commitmentRoot(),
+                "20",
+                validSoraBundle.publicInputs.finalityBlockHash()));
+    threw = false;
+    try {
+      TronSccpProver.buildProofRequest(
+          new TronSccpProver.ProofRequestInput(
+              wrongSoraHeightBundle.publicInputs,
+              wrongSoraHeightBundle.bundleBytes,
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              TronSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.finality_proof must match SORA publicInputs");
+    }
+    assert threw : "SORA bundle finality proof height must bind public inputs";
+
+    final SampleBundleFixture wrongSoraHashBundle =
+        sampleBundleFixture(
+            TronSccpProver.DOMAIN_SORA,
+            327L,
+            testNexusBridgeFinalityProofBytes(
+                validSoraBundle.publicInputs.commitmentRoot(),
+                validSoraBundle.publicInputs.finalityHeight(),
+                repeat("45", 32)));
+    threw = false;
+    try {
+      TronSccpProver.buildProofRequest(
+          new TronSccpProver.ProofRequestInput(
+              wrongSoraHashBundle.publicInputs,
+              wrongSoraHashBundle.bundleBytes,
+              new byte[0],
+              repeat("56", 32),
+              repeat("78", 32),
+              TronSccpProver.GROTH16_BN254_PROOF_BACKEND_V1,
+              TronSccpProver.DOMAIN_SORA));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.finality_proof must match SORA publicInputs");
+    }
+    assert threw : "SORA bundle finality proof block hash must bind public inputs";
+
     assert !request
         .requestHash()
         .equals(
@@ -1283,7 +1378,7 @@ public final class TronSccpProverTests {
   }
 
   private static SampleBundleFixture sampleBundleFixture(final int sourceDomain, final long nonce) {
-    return sampleBundleFixture(sourceDomain, nonce, new byte[] {0x01, 0x02, 0x03});
+    return sampleBundleFixture(sourceDomain, nonce, null);
   }
 
   private static SampleBundleFixture sampleBundleFixture(
@@ -1330,6 +1425,24 @@ public final class TronSccpProverTests {
         Blake2b.digest256(
             concatTestBytes("sccp:hub:leaf:v1".getBytes(StandardCharsets.UTF_8), commitmentBytes));
     final String commitmentRoot = "0x" + hexLower(currentRoot);
+    final TronSccpProver.PublicInputsInput publicInputs =
+        new TronSccpProver.PublicInputsInput(
+            1,
+            messageId,
+            payloadHash,
+            TronSccpProver.DOMAIN_TRON,
+            commitmentRoot,
+            "19",
+            repeat("44", 32));
+    final byte[] resolvedFinalityProofBytes =
+        finalityProofBytes != null
+            ? finalityProofBytes
+            : sourceDomain == TronSccpProver.DOMAIN_SORA
+                ? testNexusBridgeFinalityProofBytes(
+                    publicInputs.commitmentRoot(),
+                    publicInputs.finalityHeight(),
+                    publicInputs.finalityBlockHash())
+                : new byte[] {0x01, 0x02, 0x03};
 
     final ByteArrayOutputStream merkleProof = new ByteArrayOutputStream();
     writeTestU32Le(merkleProof, 0);
@@ -1340,18 +1453,9 @@ public final class TronSccpProverTests {
     writeTestBytes(bundle, commitmentBytes);
     writeTestBytes(bundle, merkleProof.toByteArray());
     writeTestBytes(bundle, payloadBytes);
-    writeTestBytes(bundle, finalityProofBytes);
+    writeTestBytes(bundle, resolvedFinalityProofBytes);
 
-    return new SampleBundleFixture(
-        new TronSccpProver.PublicInputsInput(
-            1,
-            messageId,
-            payloadHash,
-            TronSccpProver.DOMAIN_TRON,
-            commitmentRoot,
-            "19",
-            repeat("44", 32)),
-        bundle.toByteArray());
+    return new SampleBundleFixture(publicInputs, bundle.toByteArray());
   }
 
   private static final class TestSccpSourceChainProofEnvelope {
@@ -1406,6 +1510,92 @@ public final class TronSccpProverTests {
       this.messageInclusionProofBytes = messageInclusionProofBytes;
       this.inclusionBranch = inclusionBranch;
     }
+  }
+
+  private static final class TestNexusBridgeFinalityProof {
+    final String commitmentRoot;
+    final long finalityHeight;
+    final String finalityBlockHash;
+
+    TestNexusBridgeFinalityProof(
+        final String commitmentRoot, final long finalityHeight, final String finalityBlockHash) {
+      this.commitmentRoot = commitmentRoot;
+      this.finalityHeight = finalityHeight;
+      this.finalityBlockHash = finalityBlockHash;
+    }
+  }
+
+  private static final TypeAdapter<TestNexusBridgeFinalityProof>
+      TEST_NEXUS_BRIDGE_FINALITY_PROOF_ADAPTER =
+          new TypeAdapter<TestNexusBridgeFinalityProof>() {
+            @Override
+            public void encode(
+                final NoritoEncoder encoder, final TestNexusBridgeFinalityProof value) {
+              writeTestNoritoField(encoder, child -> child.writeUInt(1, 8));
+              writeTestNoritoField(
+                  encoder,
+                  child ->
+                      writeTestNoritoString(
+                          child, "00000000-0000-0000-0000-000000000753"));
+              writeTestNoritoField(encoder, child -> child.writeUInt(value.finalityHeight, 64));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalityBlockHash))));
+              writeTestNoritoField(
+                  encoder, child -> child.writeBytes(hexBytes(stripHex(value.commitmentRoot))));
+              writeTestNoritoField(
+                  encoder, child -> writeTestNoritoRawByteVec(child, new byte[] {0x21, 0x22}));
+              writeTestNoritoField(encoder, child -> writeTestNexusCommitQc(child, value));
+            }
+
+            @Override
+            public TestNexusBridgeFinalityProof decode(final NoritoDecoder decoder) {
+              throw new UnsupportedOperationException(
+                  "test Nexus finality proof decoding is not used");
+            }
+          };
+
+  private static byte[] testNexusBridgeFinalityProofBytes(
+      final String commitmentRoot, final String finalityHeight, final String finalityBlockHash) {
+    return NoritoCodec.encode(
+        new TestNexusBridgeFinalityProof(
+            commitmentRoot, Long.parseLong(finalityHeight), finalityBlockHash),
+        TEST_NEXUS_BRIDGE_FINALITY_PROOF_SCHEMA,
+        TEST_NEXUS_BRIDGE_FINALITY_PROOF_ADAPTER);
+  }
+
+  private static void writeTestNexusCommitQc(
+      final NoritoEncoder encoder, final TestNexusBridgeFinalityProof value) {
+    writeTestNoritoField(encoder, child -> child.writeUInt(1, 8));
+    writeTestNoritoField(encoder, child -> child.writeUInt(2, 32));
+    writeTestNoritoField(encoder, child -> child.writeUInt(value.finalityHeight, 64));
+    writeTestNoritoField(encoder, child -> child.writeUInt(0, 64));
+    writeTestNoritoField(encoder, child -> child.writeUInt(0, 64));
+    writeTestNoritoField(
+        encoder,
+        child -> writeTestNoritoString(child, "iroha2-consensus::permissioned-sumeragi@v1"));
+    writeTestNoritoField(
+        encoder, child -> child.writeBytes(hexBytes(stripHex(value.finalityBlockHash))));
+    writeTestNoritoField(encoder, child -> child.writeBytes(new byte[32]));
+    writeTestNoritoField(encoder, child -> child.writeBytes(new byte[32]));
+    writeTestNoritoField(encoder, child -> child.writeBytes(new byte[32]));
+    writeTestNoritoField(encoder, child -> child.writeUInt(0, 64));
+    writeTestNoritoField(encoder, child -> child.writeByte(0));
+    writeTestNoritoField(encoder, child -> child.writeBytes(filledBytes(32, 0x77)));
+    writeTestNoritoField(encoder, child -> child.writeUInt(1, 16));
+    writeTestNoritoField(
+        encoder,
+        child ->
+            writeTestNoritoStringSequence(
+                child,
+                Collections.singletonList(
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2")));
+    writeTestNoritoField(
+        encoder,
+        child ->
+            writeTestNoritoRawByteVecSequence(
+                child, Collections.singletonList(filledBytes(48, 0x01))));
+    writeTestNoritoField(encoder, child -> writeTestNoritoRawByteVec(child, new byte[] {0x01}));
+    writeTestNoritoField(encoder, child -> writeTestNoritoRawByteVec(child, filledBytes(96, 0x02)));
   }
 
   private static final TypeAdapter<TestSccpSourceChainProofEnvelope>
@@ -1562,6 +1752,18 @@ public final class TronSccpProverTests {
     final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
     encoder.writeLength(bytes.length, true);
     encoder.writeBytes(bytes);
+  }
+
+  private static void writeTestNoritoStringSequence(
+      final NoritoEncoder encoder, final List<String> values) {
+    encoder.writeLength(values.size(), false);
+    for (final String value : values) {
+      final NoritoEncoder child = encoder.childEncoder();
+      writeTestNoritoString(child, value);
+      final byte[] payload = child.toByteArray();
+      encoder.writeLength(payload.length, true);
+      encoder.writeBytes(payload);
+    }
   }
 
   private static void writeTestNoritoRawByteVec(final NoritoEncoder encoder, final byte[] value) {

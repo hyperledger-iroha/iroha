@@ -227,7 +227,7 @@ iroha app settlement dvp \
   --iso-xml-out sese023_preview.xml
 ```
 
-### རི་པོ་ ཁེ་དབང་ཚབ་བཙུགས་  `colr.007`| Repo field / སྐབས་དོན་ | ISO 20022 ལམ་ལུགས། | དྲན་ཐོ། |
+### རི་པོ་ ཁེ་དབང་ཚབ་བཙུགས་  `colr.012`| Repo field / སྐབས་དོན་ | ISO 20022 ལམ་ལུགས། | དྲན་ཐོ། |
 | |
 | `agreement_id` (`RepoIsi` / `ReverseRepoIsi`) | `OblgtnId` | Repo གན་རྒྱ་ངོས་འཛིན་པ་ |
 | བརྟན་བཞུགས་ཚབ་བཙུགས་ Tx ངོས་འཛིན་པ། | `TxId` | ཚབ་བཙུགས་ཏེ་ |

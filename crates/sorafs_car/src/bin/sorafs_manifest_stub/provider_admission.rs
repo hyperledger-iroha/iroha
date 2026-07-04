@@ -1172,6 +1172,9 @@ fn signing_key_from_bytes(bytes: &[u8]) -> Result<SigningKey, String> {
     }
     let mut seed = [0u8; 32];
     seed.copy_from_slice(bytes);
+    if seed.iter().all(|byte| *byte == 0) {
+        return Err("council secret key material must not be all zero".into());
+    }
     Ok(SigningKey::from_bytes(&seed))
 }
 
@@ -1192,4 +1195,17 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signing_key_from_bytes_rejects_all_zero_seed_material() {
+        match signing_key_from_bytes(&[0u8; 32]) {
+            Err(err) => assert!(err.contains("all zero"), "unexpected error: {err}"),
+            Ok(_) => panic!("all-zero council signing seed must fail"),
+        }
+    }
 }

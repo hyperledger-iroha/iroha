@@ -751,7 +751,7 @@ artifacts/finance/repo/<agreement-id>/governance/
   測試涵蓋了新的矩陣策略。
 - **ISO 20022 映射：** 構建 ISO 信封或協調外部時
   系統，重用記錄在
-  `docs/source/finance/settlement_iso_mapping.md` (`colr.007`, `sese.023`,
+  `docs/source/finance/settlement_iso_mapping.md` (`colr.012`, `sese.023`,
   `sese.025`），因此 Norito 有效負載和 ISO 確認保持同步。
 
 ## 5. 操作清單

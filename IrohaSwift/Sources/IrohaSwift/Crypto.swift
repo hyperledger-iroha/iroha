@@ -57,6 +57,131 @@ public enum SigningAlgorithm: UInt8, CaseIterable, Sendable {
     }
 }
 
+enum Ed25519CompressedPointAdmission {
+    static let compressedPointLength = 32
+    private static let fieldPrimeLittleEndian: [UInt8] = [
+        0xED, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
+    ]
+    private static let smallOrderCompressedPoints: [[UInt8]] = [
+        [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ],
+        [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,
+        ],
+        [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ],
+        [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,
+        ],
+        [
+            0xEC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F,
+        ],
+        [
+            0xEC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        ],
+        [
+            0x26, 0xE8, 0x95, 0x8F, 0xC2, 0xB2, 0x27, 0xB0,
+            0x45, 0xC3, 0xF4, 0x89, 0xF2, 0xEF, 0x98, 0xF0,
+            0xD5, 0xDF, 0xAC, 0x05, 0xD3, 0xC6, 0x33, 0x39,
+            0xB1, 0x38, 0x02, 0x88, 0x6D, 0x53, 0xFC, 0x05,
+        ],
+        [
+            0xC7, 0x17, 0x6A, 0x70, 0x3D, 0x4D, 0xD8, 0x4F,
+            0xBA, 0x3C, 0x0B, 0x76, 0x0D, 0x10, 0x67, 0x0F,
+            0x2A, 0x20, 0x53, 0xFA, 0x2C, 0x39, 0xCC, 0xC6,
+            0x4E, 0xC7, 0xFD, 0x77, 0x92, 0xAC, 0x03, 0x7A,
+        ],
+        [
+            0x13, 0x88, 0x8E, 0xCB, 0x61, 0xC5, 0xC9, 0x57,
+            0x39, 0xD9, 0x5C, 0x69, 0xCE, 0x51, 0x77, 0xC4,
+            0x50, 0xE9, 0x91, 0x28, 0xE7, 0xA9, 0x0B, 0x3E,
+            0xCB, 0xC5, 0x95, 0xE0, 0x35, 0xC1, 0x55, 0x00,
+        ],
+        [
+            0xB4, 0xDF, 0xC5, 0x3E, 0x58, 0x08, 0x02, 0x46,
+            0x83, 0x9B, 0x2C, 0x4E, 0x6F, 0x3D, 0xB6, 0x3E,
+            0x18, 0x5F, 0x6C, 0x73, 0x0B, 0x31, 0xE9, 0x90,
+            0xB6, 0xF3, 0xF2, 0x51, 0x92, 0x95, 0x55, 0x0F,
+        ],
+    ]
+
+    static func isValidCompressedPoint(_ compressed: Data) -> Bool {
+        let bytes = [UInt8](compressed)
+        return isCanonicalCompressedEdwardsY(bytes) && !isSmallOrderCompressedEdwardsY(bytes)
+    }
+
+    private static func isCanonicalCompressedEdwardsY(_ compressed: [UInt8]) -> Bool {
+        guard compressed.count == compressedPointLength else {
+            return false
+        }
+        var y = compressed
+        y[compressedPointLength - 1] &= 0x7F
+        for index in stride(from: compressedPointLength - 1, through: 0, by: -1) {
+            if y[index] < fieldPrimeLittleEndian[index] {
+                return true
+            }
+            if y[index] > fieldPrimeLittleEndian[index] {
+                return false
+            }
+        }
+        return false
+    }
+
+    private static func isSmallOrderCompressedEdwardsY(_ compressed: [UInt8]) -> Bool {
+        smallOrderCompressedPoints.contains { candidate in
+            candidate.elementsEqual(compressed)
+        }
+    }
+}
+
+enum Ed25519PublicKeyAdmission {
+    static let publicKeyLength = Ed25519CompressedPointAdmission.compressedPointLength
+
+    static func isValidPublicKey(_ publicKey: Data) -> Bool {
+        publicKey.count == publicKeyLength
+            && Ed25519CompressedPointAdmission.isValidCompressedPoint(publicKey)
+    }
+}
+
+enum Ed25519SignatureAdmission {
+    static let signatureLength = 64
+
+    static func isValidSignature(_ signature: Data) -> Bool {
+        guard signature.count == signatureLength else {
+            return false
+        }
+        let bytes = [UInt8](signature)
+        guard bytes.contains(where: { $0 != 0 }) else {
+            return false
+        }
+        let r = Data(bytes.prefix(Ed25519CompressedPointAdmission.compressedPointLength))
+        return Ed25519CompressedPointAdmission.isValidCompressedPoint(r)
+    }
+}
+
 public enum SigningStorageBackend: String, Sendable {
     case inMemory
     case secureEnclave
@@ -736,13 +861,21 @@ public enum MlDsaSuite: UInt8, CaseIterable, Sendable {
     case mlDsa65 = 1
     case mlDsa87 = 2
 
-    func parameters() throws -> MlDsaParameters {
-        guard let params = NoritoNativeBridge.shared.mldsaParameters(suiteId: rawValue) else {
-            throw MlDsaError.bridgeUnavailable
+    func parameters() -> MlDsaParameters {
+        switch self {
+        case .mlDsa44:
+            return MlDsaParameters(publicKeyLength: 1_312,
+                                   secretKeyLength: 2_560,
+                                   signatureLength: 2_420)
+        case .mlDsa65:
+            return MlDsaParameters(publicKeyLength: 1_952,
+                                   secretKeyLength: 4_032,
+                                   signatureLength: 3_309)
+        case .mlDsa87:
+            return MlDsaParameters(publicKeyLength: 2_592,
+                                   secretKeyLength: 4_896,
+                                   signatureLength: 4_627)
         }
-        return MlDsaParameters(publicKeyLength: params.publicKeyLength,
-                               secretKeyLength: params.secretKeyLength,
-                               signatureLength: params.signatureLength)
     }
 }
 
@@ -753,7 +886,7 @@ public struct MlDsaKeypair: Sendable {
     private let params: MlDsaParameters
 
     public init(suite: MlDsaSuite, publicKey: Data, secretKey: Data) throws {
-        let parameters = try suite.parameters()
+        let parameters = suite.parameters()
         guard publicKey.count == parameters.publicKeyLength,
               secretKey.count == parameters.secretKeyLength else {
             throw MlDsaError.invalidKeyLength
@@ -765,7 +898,10 @@ public struct MlDsaKeypair: Sendable {
     }
 
     public static func generate(suite: MlDsaSuite) throws -> MlDsaKeypair {
-        let parameters = try suite.parameters()
+        let parameters = suite.parameters()
+        guard NoritoNativeBridge.shared.mldsaSupported else {
+            throw MlDsaError.bridgeUnavailable
+        }
         guard let pair = NoritoNativeBridge.shared.mldsaGenerateKeypair(
             suiteId: suite.rawValue,
             publicKeyLength: parameters.publicKeyLength,
@@ -777,6 +913,9 @@ public struct MlDsaKeypair: Sendable {
     }
 
     public func sign(message: Data) throws -> Data {
+        guard NoritoNativeBridge.shared.mldsaSupported else {
+            throw MlDsaError.bridgeUnavailable
+        }
         guard let signature = NoritoNativeBridge.shared.mldsaSign(
             suiteId: suite.rawValue,
             secretKey: secretKey,
@@ -791,6 +930,9 @@ public struct MlDsaKeypair: Sendable {
     public func verify(message: Data, signature: Data) throws -> Bool {
         guard signature.count == params.signatureLength else {
             throw MlDsaError.invalidSignatureLength
+        }
+        guard NoritoNativeBridge.shared.mldsaSupported else {
+            throw MlDsaError.bridgeUnavailable
         }
         guard let result = NoritoNativeBridge.shared.mldsaVerify(
             suiteId: suite.rawValue,

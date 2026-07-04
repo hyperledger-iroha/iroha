@@ -194,9 +194,6 @@ fn resolve_contract_target(
     alias_resolve_timeout_ms: u64,
 ) -> Result<(ContractAddress, Option<ContractAlias>)> {
     match (contract_address, contract_alias) {
-        (Some(_), Some(_)) => Err(eyre!(
-            "provide exactly one contract target via --contract-address or --contract-alias"
-        )),
         (Some(raw), None) => Ok((
             raw.parse()
                 .wrap_err("invalid --contract-address canonical literal")?,
@@ -240,7 +237,7 @@ fn resolve_contract_target(
                 Some(alias),
             ))
         }
-        (None, None) => Err(eyre!(
+        (Some(_), Some(_)) | (None, None) => Err(eyre!(
             "provide exactly one contract target via --contract-address or --contract-alias"
         )),
     }

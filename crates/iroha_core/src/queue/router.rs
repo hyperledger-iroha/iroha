@@ -6706,7 +6706,7 @@ mod tests {
         for (idx, byte) in payload.iter_mut().enumerate() {
             *byte = seed.wrapping_add(u8::try_from(idx).expect("index fits into u8"));
         }
-        Signature::from_bytes(&payload)
+        Signature::try_from_bytes(&payload).expect("checked queue-router signature fixture")
     }
 
     fn dummy_zk_proof_attachment() -> ProofAttachment {

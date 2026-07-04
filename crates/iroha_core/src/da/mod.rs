@@ -1403,7 +1403,8 @@ mod tests {
             Some(Hash::prehashed([0x44; 32])),
             RetentionClass::default(),
             StorageTicketId::new([0x55; 32]),
-            Signature::from_bytes(&[0x66; 64]),
+            Signature::try_from_bytes(&[0x66; 64])
+                .expect("checked core DA Merkle acknowledgement signature fixture"),
         )
     }
 
@@ -1420,7 +1421,8 @@ mod tests {
             Some(Hash::prehashed([0xDD; 32])),
             RetentionClass::default(),
             StorageTicketId::new([0xEE; 32]),
-            Signature::from_bytes(&[0xFF; 64]),
+            Signature::try_from_bytes(&[0xFF; 64])
+                .expect("checked core DA KZG acknowledgement signature fixture"),
         )
     }
 
@@ -1965,7 +1967,8 @@ mod tests {
         let lane_config = lane_config_with(vec![ModelLaneConfig::default()]);
         let record = merkle_record(0);
         let duplicate = DaCommitmentRecord {
-            acknowledgement_sig: Signature::from_bytes(&[0x99; 64]),
+            acknowledgement_sig: Signature::try_from_bytes(&[0x99; 64])
+                .expect("checked core DA duplicate acknowledgement signature fixture"),
             ..record.clone()
         };
         let bundle = DaCommitmentBundle::new(vec![record, duplicate]);

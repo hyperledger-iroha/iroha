@@ -61,7 +61,6 @@ def receipt_stdout(
     verified_receipts=2,
     allow_failed=False,
     allow_insecure_http=False,
-    allow_legacy_colr007=False,
     allow_default_profile=False,
     require_source_files=True,
     endpoint_requires_insecure_http=False,
@@ -112,7 +111,6 @@ def receipt_stdout(
                     "receipt_kind": kinds,
                     "allow_failed": allow_failed,
                     "allow_insecure_http": allow_insecure_http,
-                    "allow_legacy_colr007": allow_legacy_colr007,
                     "allow_default_profile": allow_default_profile,
                     "require_source_files": require_source_files,
                     "receipts": receipts,
@@ -519,7 +517,7 @@ def replace_profile_der(summary, override_key, summary_key, der_b64):
     refresh_profile_json_sha256(summary)
 
 
-def write_https_receipt_dirs(root, *, legacy_colr007=False, default_profile=False):
+def write_https_receipt_dirs(root, *, default_profile=False):
     export_dir = root / "audit-export"
     export_dir.mkdir()
     audit_test.write_export(
@@ -555,14 +553,7 @@ def write_https_receipt_dirs(root, *, legacy_colr007=False, default_profile=Fals
 
     inbox = root / "rail-inbox"
     inbox.mkdir()
-    if legacy_colr007:
-        rail_test.write_message(
-            inbox,
-            message_type="colr.007",
-            profile="securities-csd",
-            payload=b"<Document><CollSbstitnConf/></Document>",
-        )
-    elif default_profile:
+    if default_profile:
         rail_test.write_message(inbox, profile=None)
         sidecar_path = inbox / "rail-status.xml.json"
         sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
@@ -578,8 +569,6 @@ def write_https_receipt_dirs(root, *, legacy_colr007=False, default_profile=Fals
             base_url,
             "--allow-insecure-http",
         ]
-        if legacy_colr007:
-            argv.append("--allow-legacy-colr007")
         if default_profile:
             argv.append("--allow-default-profile")
         rc, _stdout, stderr = rail_test.run_main(
@@ -588,11 +577,7 @@ def write_https_receipt_dirs(root, *, legacy_colr007=False, default_profile=Fals
     if rc != 0:
         raise AssertionError(stderr)
     rail_receipt = next((inbox / "receipts").glob("*.receipt.json"))
-    rail_endpoint = (
-        "https://torii.local-bank.bank/v1/iso20022/colr007"
-        if legacy_colr007
-        else "https://torii.local-bank.bank/v1/iso20022/pacs002"
-    )
+    rail_endpoint = "https://torii.local-bank.bank/v1/iso20022/pacs002"
     receipt_test.rewrite_receipt(
         rail_receipt,
         lambda body: body.update(
@@ -1885,7 +1870,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             ("allow_plan_only", "false", "--allow-plan-only must be a boolean"),
             ("allow_dry_run", "true", "--allow-dry-run must be a boolean"),
             ("allow_insecure_http", 1, "--allow-insecure-http must be a boolean"),
-            ("allow_legacy_colr007", "yes", "--allow-legacy-colr007 must be a boolean"),
             ("allow_default_profile", None, "--allow-default-profile must be a boolean"),
             ("allow_failed_receipts", "false", "--allow-failed-receipts must be a boolean"),
             ("allow_partial_canary", "false", "--allow-partial-canary must be a boolean"),
@@ -1936,7 +1920,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         allow_plan_only=False,
                         allow_dry_run=False,
                         allow_insecure_http=False,
-                        allow_legacy_colr007=False,
                         allow_default_profile=False,
                         allow_failed_receipts=False,
                         allow_partial_canary=False,
@@ -1988,7 +1971,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 allow_plan_only=False,
                 allow_dry_run=False,
                 allow_insecure_http=False,
-                allow_legacy_colr007=False,
                 allow_default_profile=False,
                 allow_failed_receipts=False,
                 allow_partial_canary=False,
@@ -2046,7 +2028,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         allow_plan_only=False,
                         allow_dry_run=False,
                         allow_insecure_http=False,
-                        allow_legacy_colr007=False,
                         allow_default_profile=True,
                         allow_failed_receipts=False,
                         allow_partial_canary=False,
@@ -2108,7 +2089,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         allow_plan_only=False,
                         allow_dry_run=False,
                         allow_insecure_http=False,
-                        allow_legacy_colr007=False,
                         allow_default_profile=False,
                         allow_failed_receipts=False,
                         allow_partial_canary=False,
@@ -2189,7 +2169,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         allow_plan_only=False,
                         allow_dry_run=False,
                         allow_insecure_http=False,
-                        allow_legacy_colr007=False,
                         allow_default_profile=False,
                         allow_failed_receipts=False,
                         allow_partial_canary=False,
@@ -2264,7 +2243,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                             allow_plan_only=False,
                             allow_dry_run=False,
                             allow_insecure_http=False,
-                            allow_legacy_colr007=False,
                             allow_default_profile=False,
                             allow_failed_receipts=False,
                             allow_partial_canary=False,
@@ -3793,11 +3771,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
             trust_path = write_trust_summary(root / "trust")
             cases = (
-                (
-                    "legacy",
-                    ["--allow-legacy-colr007"],
-                    "requires at least one rail receipt with legacy colr.007 message_type",
-                ),
                 (
                     "default-profile",
                     ["--allow-default-profile"],
@@ -6630,6 +6603,97 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertNotIn(hidden_message_type, stderr)
             self.assertNotIn(hidden_rail, stderr)
 
+    def test_default_securities_trust_does_not_cover_lifecycle_message_families(self):
+        lifecycle_message_types = ("sese.023", "sese.024", "sese.025", "colr.012")
+        for message_type in lifecycle_message_types:
+            with self.subTest(message_type=message_type):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    canary = valid_canary_summary()
+                    verify_stage = canary["stages"][2]
+                    receipt_summary = json.loads(verify_stage["stdout_preview"])
+                    rail_receipt = receipt_summary["receipts"][1]
+                    rail_receipt["profile"] = "securities-csd"
+                    rail_receipt["message_type"] = message_type
+                    rail_receipt["rail_message_id"] = (
+                        f"{message_type.replace('.', '-')}-drop"
+                    )
+                    rail_receipt["source_path"] = (
+                        f"/ops/iso/rail-inbox/{message_type.replace('.', '-')}.xml"
+                    )
+                    verify_stage["stdout_preview"] = (
+                        json.dumps(digest_receipt_summary(receipt_summary), sort_keys=True)
+                        + "\n"
+                    )
+                    canary_path = write_canary(root, digest_summary(canary))
+                    trust_path = write_trust_summary(
+                        root / "trust",
+                        profile_id="securities-csd",
+                        rail="securities-csd",
+                    )
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                            "--allow-canary-stage-receipts-only",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        "canary_summaries[0].receipt_summary.receipts[1].message_type "
+                        "has no matching trust profile rail coverage",
+                        stderr,
+                    )
+                    self.assertNotIn(message_type, stderr)
+                    self.assertNotIn("securities-csd", stderr)
+
+    def test_archive_lifecycle_receipt_without_schema_backed_trust_is_rejected(self):
+        args = argparse.Namespace(
+            default_rail_profile=None,
+            environment="preprod",
+        )
+        trusts = [
+            {
+                "profiles": [
+                    {
+                        "profile_id": "securities-csd",
+                        "environment": "preprod",
+                        "rail": "securities-csd",
+                    }
+                ]
+            }
+        ]
+        receipt_summary = {
+            "receipts": [
+                {
+                    "receipt_kind": "iso-rail-gateway",
+                    "profile": "securities-csd",
+                    "message_type": "colr.012",
+                }
+            ]
+        }
+
+        with self.assertRaisesRegex(
+            EVIDENCE.EvidenceError,
+            (
+                r"receipt_verification\.receipts\[0\]\.message_type has no "
+                r"matching trust profile rail coverage"
+            ),
+        ) as error:
+            EVIDENCE._reject_archive_rail_receipts_without_trust(
+                receipt_summary,
+                trusts,
+                args,
+            )
+
+        self.assertNotIn("colr.012", str(error.exception))
+        self.assertNotIn("securities-csd", str(error.exception))
+
     def test_custom_canary_profile_id_without_trust_profile_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -6758,7 +6822,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             )
             self.assertFalse(receipt_summary["allow_failed"])
             self.assertFalse(receipt_summary["allow_insecure_http"])
-            self.assertFalse(receipt_summary["allow_legacy_colr007"])
             self.assertFalse(receipt_summary["allow_default_profile"])
             self.assertTrue(receipt_summary["require_source_files"])
             self.assertEqual(len(receipt_summary["receipts"]), 2)
@@ -7504,7 +7567,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         args = argparse.Namespace(
             allow_failed_receipts=False,
             allow_insecure_http=False,
-            allow_legacy_colr007=False,
             allow_default_profile=False,
             allow_receipt_source_missing=False,
         )
@@ -7562,7 +7624,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         args = argparse.Namespace(
             allow_failed_receipts=False,
             allow_insecure_http=False,
-            allow_legacy_colr007=False,
             allow_default_profile=False,
             allow_receipt_source_missing=False,
         )
@@ -7648,7 +7709,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         args = argparse.Namespace(
             allow_failed_receipts=False,
             allow_insecure_http=False,
-            allow_legacy_colr007=False,
             allow_default_profile=False,
             allow_receipt_source_missing=False,
         )
@@ -7847,51 +7907,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("must not be a symlink", stderr)
-
-    def test_legacy_colr007_archive_receipts_require_explicit_local_override(self):
-        with tempfile.TemporaryDirectory() as raw_root:
-            root = Path(raw_root)
-            notary_receipts, rail_receipts = write_https_receipt_dirs(
-                root,
-                legacy_colr007=True,
-            )
-            receipt_entries = receipt_entries_from_dirs(notary_receipts, rail_receipts)
-            body = valid_canary_summary(receipt_entries=receipt_entries)
-            body["stages"][0]["command"].append("--allow-legacy-colr007")
-            body["stages"][2]["command"].append("--allow-legacy-colr007")
-            body["stages"][2]["stdout_preview"] = receipt_stdout(
-                receipt_entries=receipt_entries,
-                allow_legacy_colr007=True,
-            )
-            body.pop("summary_sha256")
-            canary_path = write_canary(root, digest_summary(body))
-            trust_path = write_trust_summary(root / "trust")
-            argv = [
-                "--canary-summary",
-                str(canary_path),
-                "--trust-summary",
-                str(trust_path),
-                "--receipt-dir",
-                str(notary_receipts),
-                "--receipt-dir",
-                str(rail_receipts),
-                "--provider",
-                "local-bank",
-                "--environment",
-                "preprod",
-            ]
-
-            rc, _stdout, stderr = run_evidence(argv)
-
-            self.assertEqual(rc, 2)
-            self.assertIn("--allow-legacy-colr007", stderr)
-
-            rc, stdout, stderr = run_evidence(argv + ["--allow-legacy-colr007"])
-
-            self.assertEqual(rc, 0, stderr)
-            summary = json.loads(stdout)
-            self.assertTrue(summary["policy"]["allow_legacy_colr007"])
-            self.assertTrue(summary["receipt_verification"]["allow_legacy_colr007"])
 
     def test_default_profile_archive_receipts_require_explicit_local_override(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -8284,67 +8299,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
-    def test_legacy_colr007_canary_summary_requires_explicit_local_override(self):
-        with tempfile.TemporaryDirectory() as raw_root:
-            root = Path(raw_root)
-            trust_path = write_trust_summary(root)
-            notary_receipts, rail_receipts = write_https_receipt_dirs(
-                root,
-                legacy_colr007=True,
-            )
-            receipt_entries = receipt_entries_from_dirs(notary_receipts, rail_receipts)
-            body = valid_canary_summary()
-            body["stages"][0]["command"].append("--allow-legacy-colr007")
-            body["stages"][2]["command"].append("--allow-legacy-colr007")
-            rail_receipts_for_stdout = [
-                entry["path"]
-                for entry in receipt_entries
-                if entry["receipt_kind"] == "iso-rail-gateway"
-            ]
-            notary_receipts_for_stdout = [
-                entry["path"]
-                for entry in receipt_entries
-                if entry["receipt_kind"] == "iso-audit-notary"
-            ]
-            body["stages"][0]["stdout_preview"] = rail_stdout(
-                receipts=rail_receipts_for_stdout,
-                submitted_messages=len(rail_receipts_for_stdout),
-            )
-            body["stages"][1]["stdout_preview"] = notary_stdout(
-                receipts=notary_receipts_for_stdout,
-                published_anchors=len(notary_receipts_for_stdout),
-            )
-            body["stages"][2]["stdout_preview"] = receipt_stdout(
-                allow_legacy_colr007=True,
-                receipt_entries=receipt_entries,
-            )
-            body.pop("summary_sha256")
-            canary_path = write_canary(root, digest_summary(body))
-            argv = [
-                "--canary-summary",
-                str(canary_path),
-                "--trust-summary",
-                str(trust_path),
-                "--receipt-dir",
-                str(notary_receipts),
-                "--receipt-dir",
-                str(rail_receipts),
-            ]
-
-            rc, _stdout, stderr = run_evidence(argv)
-
-            self.assertEqual(rc, 2)
-            self.assertIn("--allow-legacy-colr007", stderr)
-
-            rc, stdout, stderr = run_evidence(argv + ["--allow-legacy-colr007"])
-
-            self.assertEqual(rc, 0, stderr)
-            summary = json.loads(stdout)
-            self.assertTrue(summary["policy"]["allow_legacy_colr007"])
-            self.assertTrue(
-                summary["canary_summaries"][0]["receipt_summary"]["allow_legacy_colr007"]
-            )
-
     def test_insecure_http_and_default_profile_canaries_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -8359,10 +8313,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             default_profile["stages"][0]["command"].append("--allow-default-profile")
             default_profile.pop("summary_sha256")
             cases.append((digest_summary(default_profile), "--allow-default-profile"))
-            legacy_colr = valid_canary_summary()
-            legacy_colr["stages"][0]["command"].append("--allow-legacy-colr007")
-            legacy_colr.pop("summary_sha256")
-            cases.append((digest_summary(legacy_colr), "--allow-legacy-colr007"))
             for body, message in cases:
                 with self.subTest(message=message):
                     canary_path = write_canary(root, body)
@@ -8511,13 +8461,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     {"allow_default_profile": True},
                     "rail command omitted --allow-default-profile",
                 ),
-                (
-                    "legacy-colr007",
-                    {"legacy_colr007": True},
-                    "--allow-legacy-colr007",
-                    {"allow_legacy_colr007": True},
-                    "rail command omitted --allow-legacy-colr007",
-                ),
             )
             for name, receipt_kwargs, flag, stdout_kwargs, message in cases:
                 with self.subTest(name=name):
@@ -8538,11 +8481,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                             False,
                         ),
                     )
-                    if stdout_kwargs.get("allow_legacy_colr007", False):
-                        body["stages"][2]["stdout_preview"] = receipt_stdout(
-                            allow_legacy_colr007=True,
-                            receipt_entries=receipt_entries,
-                        )
                     body["stages"][2]["command"].append(flag)
                     body.pop("summary_sha256")
                     canary_path = write_canary(case_root, digest_summary(body))
@@ -8571,12 +8509,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "--allow-default-profile",
                     "rail command used --allow-default-profile but "
                     "receipt_summary has no default-profile rail receipt",
-                ),
-                (
-                    "legacy-colr007",
-                    "--allow-legacy-colr007",
-                    "rail command used --allow-legacy-colr007 but "
-                    "receipt_summary has no legacy colr.007 rail receipt",
                 ),
             )
             for name, flag, message in cases:
@@ -8613,12 +8545,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "--allow-default-profile",
                     {"allow_default_profile": True},
                 ),
-                (
-                    "legacy-colr007",
-                    {"legacy_colr007": True},
-                    "--allow-legacy-colr007",
-                    {"allow_legacy_colr007": True},
-                ),
             )
             for name, receipt_kwargs, flag, stdout_kwargs in cases:
                 with self.subTest(name=name):
@@ -8639,11 +8565,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                             False,
                         ),
                     )
-                    if stdout_kwargs.get("allow_legacy_colr007", False):
-                        body["stages"][2]["stdout_preview"] = receipt_stdout(
-                            allow_legacy_colr007=True,
-                            receipt_entries=receipt_entries,
-                        )
                     body["stages"][0]["command"].append(flag)
                     body["stages"][2]["command"].append(flag)
                     body.pop("summary_sha256")
@@ -8675,16 +8596,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         for receipt in receipt_summary["receipts"]
                         if receipt["receipt_kind"] == "iso-rail-gateway"
                     )
-                    if flag == "--allow-default-profile":
-                        self.assertEqual(
-                            summary["policy"]["default_rail_profile"],
-                            "swift-cbpr-plus",
-                        )
-                        self.assertTrue(receipt_summary["allow_default_profile"])
-                        self.assertIsNone(rail_receipt["profile"])
-                    else:
-                        self.assertTrue(receipt_summary["allow_legacy_colr007"])
-                        self.assertEqual(rail_receipt["message_type"], "colr.007")
+                    self.assertEqual(
+                        summary["policy"]["default_rail_profile"],
+                        "swift-cbpr-plus",
+                    )
+                    self.assertTrue(receipt_summary["allow_default_profile"])
+                    self.assertIsNone(rail_receipt["profile"])
 
     def test_archived_command_url_rejection_does_not_echo_secret_query(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -8727,10 +8644,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             allow_failed["stages"][2]["command"].append("--allow-failed=true")
             allow_failed.pop("summary_sha256")
             cases.append((digest_summary(allow_failed), "allowed failed receipts"))
-            legacy_colr = valid_canary_summary()
-            legacy_colr["stages"][0]["command"].append("--allow-legacy-colr007=true")
-            legacy_colr.pop("summary_sha256")
-            cases.append((digest_summary(legacy_colr), "--allow-legacy-colr007"))
             for body, message in cases:
                 with self.subTest(message=message):
                     canary_path = write_canary(root, body)
@@ -12518,12 +12431,24 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             allow_failed["stages"][2]["stdout_preview"] = receipt_stdout(allow_failed=True)
             allow_failed.pop("summary_sha256")
             cases.append((digest_summary(allow_failed), "allowed failed receipts"))
-            allow_legacy = valid_canary_summary()
-            allow_legacy["stages"][2]["stdout_preview"] = receipt_stdout(
-                allow_legacy_colr007=True
+            stale_legacy = valid_canary_summary()
+            stale_legacy_receipt = json.loads(receipt_stdout())
+            stale_legacy_receipt["allow_legacy_colr007"] = True
+            stale_legacy["stages"][2]["stdout_preview"] = (
+                json.dumps(
+                    digest_receipt_summary(stale_legacy_receipt),
+                    sort_keys=True,
+                )
+                + "\n"
             )
-            allow_legacy.pop("summary_sha256")
-            cases.append((digest_summary(allow_legacy), "allowed legacy colr.007 receipts"))
+            stale_legacy.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(stale_legacy),
+                    "contains unknown keys",
+                    "allow_legacy_colr007",
+                )
+            )
             for body, message, *hidden_values in cases:
                 with self.subTest(message=message):
                     canary_path = write_canary(root, body)
@@ -12965,10 +12890,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "stdout_preview.receipts[1].anchor_sha256 is not valid for iso-rail-gateway",
                 ),
                 (
-                    "rail-legacy-message-type",
+                    "rail-retired-message-type",
                     1,
                     lambda receipt: receipt.__setitem__("message_type", "colr.007"),
-                    "stdout_preview.receipts[1].message_type uses legacy rail message type",
+                    "stdout_preview.receipts[1].message_type is unsupported",
                 ),
             )
             for name, receipt_index, mutate, message in cases:
@@ -13006,7 +12931,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             for flag in (
                 "allow_failed",
                 "allow_insecure_http",
-                "allow_legacy_colr007",
                 "allow_default_profile",
                 "require_source_files",
             ):
@@ -13315,20 +13239,6 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     ),
                     ["--allow-insecure-http"],
                     "stdout_preview.allow_insecure_http does not match command --allow-insecure-http",
-                ),
-                (
-                    "command-legacy-hidden",
-                    lambda command: command.append("--allow-legacy-colr007"),
-                    lambda summary: None,
-                    ["--allow-legacy-colr007"],
-                    "stdout_preview.allow_legacy_colr007 does not match command --allow-legacy-colr007",
-                ),
-                (
-                    "stdout-legacy-without-command",
-                    lambda command: None,
-                    lambda summary: summary.__setitem__("allow_legacy_colr007", True),
-                    ["--allow-legacy-colr007"],
-                    "stdout_preview.allow_legacy_colr007 does not match command --allow-legacy-colr007",
                 ),
                 (
                     "command-default-profile-hidden",
@@ -14616,22 +14526,30 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "x509_trust_anchor_sha256_pins[0] must not be all zero",
                 ),
                 (
+                    "stale-public-pin-alias",
+                    lambda summary: summary["bundles"][0]["profile_overrides"].__setitem__(
+                        "trusted_public_key_sha256",
+                        ["1" * 64],
+                    ),
+                    "contains unknown keys",
+                ),
+                (
                     "public-overlap",
                     lambda summary: (
                         summary["bundles"][0]["profile_overrides"].__setitem__(
                             "signature_public_key_sha256_pins",
-                            ["1" * 64],
-                        ),
-                        summary["bundles"][0]["profile_overrides"].__setitem__(
-                            "trusted_public_key_sha256",
-                            ["1" * 64],
+                            [
+                                summary["bundles"][0]["profile_overrides"][
+                                    "x509_trust_anchor_sha256_pins"
+                                ][0]
+                            ],
                         ),
                         summary["bundles"][0]["material"].__setitem__(
                             "signature_public_key_pin_count",
-                            2,
+                            1,
                         ),
                     ),
-                    "signature_public_key_sha256_pins/trusted_public_key_sha256",
+                    "public-key/certificate SHA-256 pins",
                 ),
                 (
                     "all-zero-crl-summary-digest",
@@ -14707,7 +14625,7 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     "trust-pin-revocation-der-overlap",
                     lambda summary: (
                         summary["bundles"][0]["profile_overrides"].__setitem__(
-                            "trusted_public_key_sha256",
+                            "signature_public_key_sha256_pins",
                             [summary["bundles"][0]["x509_crls"][0]["sha256"]],
                         ),
                         summary["bundles"][0]["material"].__setitem__(

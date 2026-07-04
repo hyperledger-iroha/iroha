@@ -38,10 +38,11 @@ Tabela syscall canônica (subconjunto)| Hexágono | Nome | Argumentos (em `r10+`
 | 0x1A | SET_ACCOUNT_DETAIL | `&AccountId`, `&Name`, `&Json` | `u64=0` | `G_set_detail + bytes(val)` | Escreve um detalhe para a conta |
 | 0x22 | MINT_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_mint` | Cunha `amount` do ativo para contabilizar |
 | 0x23 | QUEIMAR_ASSET | `&AccountId`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_burn` | Queima `amount` da conta |
-| 0x24 | TRANSFER_ASSET | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Transferências `amount` entre contas |
+| 0x24 | TRANSFER_V1 | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)` | `u64=0` | `G_transfer` | Batch-internal FASTPQ transfer; `transfer_batch` coalesces entries on this path |
 | 0x29 | TRANSFER_V1_BATCH_BEGIN | – | `u64=0` | `G_transfer` | Iniciar escopo de lote de transferência FASTPQ |
 | 0x2A | TRANSFER_V1_BATCH_END | – | `u64=0` | `G_transfer` | Liberar lote de transferência FASTPQ acumulado |
 | 0x2B | TRANSFER_V1_BATCH_APPLY | `r10=&NoritoBytes(TransferAssetBatch)` | `u64=0` | `G_transfer` | Aplicar um lote codificado Norito em um único syscall |
+| 0x2C | TRANSFER_ASSET_SCOPED | `&AccountId(from)`, `&AccountId(to)`, `&AssetDefinitionId`, `&NoritoBytes(Numeric)`, `&DataSpaceId` | `u64=0` | `G_transfer` | Standalone `transfer_asset` path; global assets use global source balances and dataspace-restricted assets use `r14` |
 | 0x25 | NFT_MINT_ASSET | `&NftId`, `&AccountId(owner)` | `u64=0` | `G_nft_mint_asset` | Registra um novo NFT |
 | 0x26 | NFT_TRANSFER_ASSET | `&AccountId(from)`, `&NftId`, `&AccountId(to)` | `u64=0` | `G_nft_transfer_asset` | Transfere propriedade de NFT |
 | 0x27 | NFT_SET_METADATA | `&NftId`, `&Name`, `&Json` | `u64=0` | `G_nft_set_metadata` | Atualiza metadados NFT |

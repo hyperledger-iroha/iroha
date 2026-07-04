@@ -17,13 +17,11 @@ Tests use these full XSDs as stable MDR-derived fixtures for namespace,
 does not fetch schemas over the network.
 
 `fixture_manifest.json` records how checked-in XML fixtures map to the checked-in
-XSD corpus, plus reviewed schema-pending exceptions and audited public
-candidate sources that are blocked by redistribution terms. The
-`blocked_schema_sources` key must be present even when the reviewed blocker list
-is intentionally empty, so absence cannot be interpreted as a clean production
-gap review. All checked-in XSDs have standalone XML fixtures, so
-`--require-fixture-for-schema` is expected to pass. Verify the manifest offline
-with:
+XSD corpus. The `blocked_schema_sources` and `pending_schema_sources` keys must
+be present even when their reviewed lists are intentionally empty, so absence
+cannot be interpreted as a clean production gap review. All checked-in XSDs have
+standalone XML fixtures, so `--require-fixture-for-schema` is expected to pass.
+Verify the manifest offline with:
 
 ```bash
 python3 scripts/iso_xsd_fixture_verify.py \
@@ -59,7 +57,11 @@ separately. Blocked source entries use the same canonical GitHub/path/SHA
 checks, record audited restriction markers without checking in the restricted
 XSD bytes, must use unique `message_def_id` values, and must correspond to a
 current missing fixture/schema-only gap or, with `--profile-catalog`, a current
-missing profile-version gap. Pending source entries record official ISO
+missing profile-version gap. The first-release blocked public candidates are
+also exact-pinned by `message_def_id` to their audited repository, commit,
+source path, SHA-256, and restriction marker list, and message definitions
+already tracked as official ISO pending sources cannot be relabelled as
+blocked candidates. Pending source entries record official ISO
 catalogue or archive coordinates plus the direct `/message/<id>/download` URL
 for XSD downloads whose redistributable schema bytes are not checked in yet;
 they must use byte-stable official `www.iso20022.org` catalogue and download
@@ -95,7 +97,11 @@ pending-source catalogue/download provenance, and, when a
 profile catalog is supplied, both the profile source-file SHA-256 and embedded
 catalog JSON SHA-256. Final readiness rejects manifest digest reuse across
 schema, fixture, blocked-source, profile-catalog source, and profile-catalog JSON
-roles. The
+roles. Pending-source probe summaries are versioned separately; version 2 records the
+schema-root `target_namespace` extracted from the bounded sample and only treats
+a row as reachable when it equals
+`urn:iso:std:iso:20022:tech:xsd:<message_def_id>`. Final readiness replays that
+binding before pending-source probe evidence can cover a reviewed gap. The
 `profile_catalog` key is always recorded; it is
 `null` only when no profile catalog was checked, and readiness requires that
 explicit state plus the manifest path to remain present. Profile catalog
@@ -109,20 +115,18 @@ checked in, `--require-fixture-for-schema` rejects XSDs without a standalone
 checked-in XML fixture, `--require-profile-schema-backed-versions` rejects
 profile-advertised concrete message versions without schema-backed fixtures, and
 `--validate-xml-schema` validates every schema-backed XML fixture against its
-checked-in XSD. The schema-backed strict modes still fail until the remaining
-profile-advertised payment, securities, and collateral official XSD packages are
-checked in. The current checked-in manifest/profile pair reports 24
-per-profile missing versions across 10 unique message definitions, all with
-reviewed missing-schema, blocked-source, or pending-source evidence. Remaining
-blockers include restricted public candidates for
-`pacs.002.001.12`, `pacs.008.001.10`, and `pacs.009.001.10`, plus unavailable
-redistributable securities and collateral lifecycle packages such as
-`sese.023.001.11`, `sese.024.001.10`, `sese.025.001.11`, and
-`colr.012.001.05`. The pending official ISO source list also covers
-profile-only securities gaps `sese.023.001.09`, `sese.024.001.09`,
-`sese.025.001.08`, and `sese.025.001.10`. The older local `colr.007`
-collateral fixture is kept only
-as a legacy parser fixture and is not part of the production XSD manifest.
+checked-in XSD. For the first release, the checked-in release manifest and the
+embedded default rail profile catalog advertise only schema-backed concrete
+message definitions. The current checked-in manifest/profile pair passes all
+strict XSD gates with 7 schemas, 7 schema-backed XML fixtures, and 31
+schema-backed profile-advertised concrete versions. Broader runtime fixtures
+for securities and collateral lifecycle parsing, including `sese.*` and
+`colr.*` samples, remain outside the production XSD manifest and default rail
+catalog until redistributable official schemas are checked in. Restricted public
+candidates such as `pacs.002.001.12`, `pacs.008.001.10`, and
+`pacs.009.001.10` are likewise not release-advertised by default profiles. The
+older local `colr.007` collateral fixture is kept only as retired negative
+parser coverage and is not part of the production XSD manifest.
 Final readiness also emits a non-overridable
 `xsd.unreviewed_profile_schema_message_ids` blocker for unique
 profile-advertised message definitions that have no checked-in schema and no

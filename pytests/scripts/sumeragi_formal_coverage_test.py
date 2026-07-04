@@ -132,12 +132,24 @@ def test_documented_apalache_length_row_duplicates_are_visible(
 def test_command_modes_uses_requested_runner_regex(tmp_path: Path) -> None:
     module = load_coverage_module()
     script = tmp_path / "commands.sh"
+    workflow = tmp_path / "workflow.yml"
     script.write_text(
         "\n".join(
             [
                 "# bash scripts/formal/sumeragi_tlc.sh ignored-fast",
+                "prose says bash scripts/formal/sumeragi_apalache.sh prose-fast",
                 "bash scripts/formal/sumeragi_apalache.sh quorum-fast",
+                "run: bash scripts/formal/sumeragi_apalache.sh workflow-fast",
                 "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/sumeragi_apalache.sh workflow-fast",
+                "- run: bash scripts/formal/sumeragi_tlc.sh workflow-tlc-fast",
             ]
         ),
         encoding="utf-8",
@@ -145,6 +157,177 @@ def test_command_modes_uses_requested_runner_regex(tmp_path: Path) -> None:
 
     assert module.command_modes(script) == ["quorum-fast"]
     assert module.command_modes(script, module.TLC_COMMAND_RE) == ["frontier-fast"]
+    assert module.command_modes(workflow) == ["workflow-fast"]
+    assert module.command_modes(workflow, module.TLC_COMMAND_RE) == [
+        "workflow-tlc-fast"
+    ]
+
+
+def test_readme_formal_command_block_errors_require_shell_fences(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "\n".join(
+            [
+                "```bash",
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                "```",
+                "bash scripts/formal/sumeragi_apalache.sh prose-fast",
+                "```text",
+                "bash scripts/formal/sumeragi_tlc.sh text-fast",
+                "```",
+                "~~~shell",
+                "bash scripts/formal/sumeragi_tlc.sh shell-fast",
+                "~~~",
+                "```sh",
+                "bash scripts/formal/sumeragi_apalache.sh unclosed-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.readme_formal_command_block_errors(readme) == [
+        f"{readme}:4: README formal runner command must live in a shell "
+        "fenced code block: bash scripts/formal/sumeragi_apalache.sh "
+        "prose-fast",
+        f"{readme}:6: README formal runner command must live in a shell "
+        "fenced code block: bash scripts/formal/sumeragi_tlc.sh text-fast",
+        f"{readme}:11: README shell fenced code block containing formal "
+        "runner commands must be closed",
+    ]
+
+
+def test_active_command_modes_counts_only_direct_active_invocations(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "commands.sh"
+    workflow = tmp_path / "workflow.yml"
+    script.write_text(
+        "\n".join(
+            [
+                "# bash scripts/formal/sumeragi_apalache.sh commented-fast",
+                "description: bash scripts/formal/sumeragi_apalache.sh prose-fast",
+                "echo bash scripts/formal/sumeragi_apalache.sh echoed-fast",
+                "bash scripts/formal/sumeragi_apalache.sh direct-fast",
+                "  - run: bash scripts/formal/sumeragi_apalache.sh workflow-fast",
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/sumeragi_apalache.sh workflow-fast",
+                "- run: bash scripts/formal/sumeragi_tlc.sh workflow-tlc-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.active_command_modes(script) == ["direct-fast"]
+    assert module.active_command_modes(script, module.TLC_COMMAND_PREFIX) == [
+        "frontier-fast"
+    ]
+    assert module.active_command_modes(workflow) == ["workflow-fast"]
+    assert module.active_command_modes(workflow, module.TLC_COMMAND_PREFIX) == [
+        "workflow-tlc-fast"
+    ]
+
+
+def test_workflow_job_active_command_modes_scope_to_named_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  unrelated:",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh unrelated-fast",
+                "      - run: bash scripts/formal/sumeragi_tlc.sh unrelated-tlc-fast",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+                "      - run: bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+                "      - run: |",
+                "          bash scripts/formal/sumeragi_apalache.sh hidden-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.workflow_job_active_command_modes(
+        workflow, ("frontier-nightly",), module.APALACHE_COMMAND_PREFIX
+    ) == ["frontier-nightly"]
+    assert module.workflow_job_active_command_modes(
+        workflow, ("frontier-nightly",), module.TLC_COMMAND_PREFIX
+    ) == ["frontier-fast"]
+
+
+def test_workflow_job_active_command_modes_require_top_level_jobs_block(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "env:",
+                "  frontier-nightly:",
+                "    run: bash scripts/formal/sumeragi_apalache.sh hidden-fast",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.workflow_job_active_command_modes(
+        workflow, ("frontier-nightly",), module.APALACHE_COMMAND_PREFIX
+    ) == ["frontier-nightly"]
+
+
+def test_workflow_job_active_command_modes_normalizes_mapping_key_spacing(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "env :",
+                "  frontier-nightly :",
+                "    run: bash scripts/formal/sumeragi_apalache.sh hidden-fast",
+                "jobs :",
+                "  frontier-nightly :",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.workflow_job_active_command_modes(
+        workflow, ("frontier-nightly",), module.APALACHE_COMMAND_PREFIX
+    ) == ["frontier-nightly"]
+    assert module.formal_workflow_unscoped_command_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:4 must keep formal proof commands inside "
+        "checked jobs frontier-nightly: "
+        "run: bash scripts/formal/sumeragi_apalache.sh hidden-fast"
+    ]
 
 
 def test_command_shape_errors_rejects_malformed_mode_tokens(
@@ -175,6 +358,230 @@ def test_command_shape_errors_rejects_malformed_mode_tokens(
         "bash scripts/formal/sumeragi_apalache.sh quoted-fast extra",
         f"Apalache command {script}:5 has malformed command: "
         "bash scripts/formal/sumeragi_apalache.sh",
+    ]
+
+
+def test_command_shape_errors_rejects_embedded_formal_commands(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "commands.sh"
+    script.write_text(
+        "\n".join(
+            [
+                "description: bash scripts/formal/sumeragi_apalache.sh prose-fast",
+                "echo bash scripts/formal/sumeragi_apalache.sh echoed-fast",
+                "`bash scripts/formal/sumeragi_apalache.sh inline-fast`",
+                "- run: bash scripts/formal/sumeragi_apalache.sh workflow-fast",
+                "run: bash scripts/formal/sumeragi_apalache.sh run-fast",
+                "bash scripts/formal/sumeragi_apalache.sh direct-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.command_shape_errors(
+        script,
+        module.APALACHE_COMMAND_PREFIX,
+        "Apalache command",
+    ) == [
+        f"Apalache command {script}:1 must be a direct runner command: "
+        "description: bash scripts/formal/sumeragi_apalache.sh prose-fast",
+        f"Apalache command {script}:2 must be a direct runner command: "
+        "echo bash scripts/formal/sumeragi_apalache.sh echoed-fast",
+        f"Apalache command {script}:3 must be a direct runner command: "
+        "`bash scripts/formal/sumeragi_apalache.sh inline-fast`",
+        f"Apalache command {script}:4 must be a direct runner command: "
+        "- run: bash scripts/formal/sumeragi_apalache.sh workflow-fast",
+        f"Apalache command {script}:5 must be a direct runner command: "
+        "run: bash scripts/formal/sumeragi_apalache.sh run-fast",
+    ]
+
+
+def test_formal_command_shape_errors_scans_all_evidence_surfaces(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    pr_workflow = tmp_path / "pr.yml"
+    readme = tmp_path / "README.md"
+    fast_ci.write_text(
+        "\n".join(
+            [
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast extra",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/sumeragi_apalache.sh fast",
+                "run: bash scripts/formal/sumeragi_apalache.sh fast extra",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    readme.write_text(
+        "bash scripts/formal/sumeragi_tlc.sh malformed?mode\n",
+        encoding="utf-8",
+    )
+
+    assert module.formal_command_shape_errors((fast_ci, pr_workflow, readme)) == [
+        f"TLC command {fast_ci}:2 has malformed command: "
+        "bash scripts/formal/sumeragi_tlc.sh frontier-fast extra",
+        f"Apalache command {pr_workflow}:2 has malformed command: "
+        "run: bash scripts/formal/sumeragi_apalache.sh fast extra",
+        f"TLC command {readme}:1 has invalid mode token 'malformed?mode'",
+    ]
+
+
+def test_apalache_length_override_errors_allows_readme_prose(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    ci = tmp_path / "check_sumeragi_formal.sh"
+    readme.write_text(
+        "\n".join(
+            [
+                "`APALACHE_LENGTH=<n>` is for local exploration only.",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    ci.write_text(
+        "bash scripts/formal/sumeragi_apalache.sh fast\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        module.apalache_length_override_errors(
+            (readme, ci),
+            documentation_paths=(readme,),
+        )
+        == []
+    )
+
+
+def test_apalache_length_override_errors_rejects_formal_evidence_overrides(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    ci = tmp_path / "check_sumeragi_formal.sh"
+    workflow = tmp_path / "nightly.yml"
+    readme.write_text(
+        "APALACHE_LENGTH=1 bash scripts/formal/sumeragi_apalache.sh frontier-fast\n",
+        encoding="utf-8",
+    )
+    ci.write_text(
+        "APALACHE_LENGTH=0 bash scripts/formal/sumeragi_apalache.sh fast\n",
+        encoding="utf-8",
+    )
+    workflow.write_text(
+        "\n".join(
+            [
+                "env:",
+                "  APALACHE_LENGTH: 0",
+                "run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.apalache_length_override_errors(
+        (readme, ci, workflow),
+        documentation_paths=(readme,),
+    ) == [
+        f"{readme}:1 must not set APALACHE_LENGTH for Sumeragi formal proof "
+        "commands: APALACHE_LENGTH=1 "
+        "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+        f"{ci}:1 must not set APALACHE_LENGTH for Sumeragi formal proof "
+        "commands: APALACHE_LENGTH=0 "
+        "bash scripts/formal/sumeragi_apalache.sh fast",
+        f"{workflow}:2 must not set APALACHE_LENGTH for Sumeragi formal proof "
+        "commands: APALACHE_LENGTH: 0",
+    ]
+
+
+def test_formal_toolchain_override_errors_allows_readme_local_examples(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    ci = tmp_path / "check_sumeragi_formal.sh"
+    readme.write_text(
+        "\n".join(
+            [
+                "Set `TLC_JAR` only for local experiments.",
+                "APALACHE_BIN=/opt/apalache/bin/apalache-mc "
+                "scripts/formal/sumeragi_apalache.sh fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    ci.write_text(
+        "bash scripts/formal/sumeragi_apalache.sh fast\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        module.formal_toolchain_override_errors(
+            (readme, ci),
+            documentation_paths=(readme,),
+        )
+        == []
+    )
+
+
+def test_formal_toolchain_override_errors_rejects_evidence_overrides(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    ci = tmp_path / "check_sumeragi_formal.sh"
+    workflow = tmp_path / "nightly.yml"
+    readme.write_text(
+        "APALACHE_BIN=/tmp/apalache bash scripts/formal/sumeragi_apalache.sh fast\n",
+        encoding="utf-8",
+    )
+    ci.write_text(
+        "TLC_JAR=/tmp/tlc.jar bash scripts/formal/sumeragi_tlc.sh frontier-fast\n",
+        encoding="utf-8",
+    )
+    workflow.write_text(
+        "\n".join(
+            [
+                "env:",
+                "  APALACHE_VERSION: 0.53.0",
+                "  TLA2TOOLS_JAR: /tmp/tla2tools.jar",
+                "  APALACHE_DOCKER_IMAGE: example.invalid/apalache:latest",
+                "run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_toolchain_override_errors(
+        (readme, ci, workflow),
+        documentation_paths=(readme,),
+    ) == [
+        f"{readme}:1 must not set model-checker toolchain overrides for "
+        "Sumeragi formal proof commands: APALACHE_BIN=/tmp/apalache "
+        "bash scripts/formal/sumeragi_apalache.sh fast",
+        f"{ci}:1 must not set model-checker toolchain overrides for "
+        "Sumeragi formal proof commands: TLC_JAR=/tmp/tlc.jar "
+        "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+        f"{workflow}:2 must not set model-checker toolchain overrides for "
+        "Sumeragi formal proof commands: APALACHE_VERSION: 0.53.0",
+        f"{workflow}:3 must not set model-checker toolchain overrides for "
+        "Sumeragi formal proof commands: TLA2TOOLS_JAR: /tmp/tla2tools.jar",
+        f"{workflow}:4 must not set model-checker toolchain overrides for "
+        "Sumeragi formal proof commands: APALACHE_DOCKER_IMAGE: "
+        "example.invalid/apalache:latest",
     ]
 
 
@@ -266,7 +673,16 @@ def test_command_mode_duplicates_are_visible_to_guard(tmp_path: Path) -> None:
 def test_required_command_errors_reports_missing_entrypoint(tmp_path: Path) -> None:
     module = load_coverage_module()
     workflow = tmp_path / "pr.yml"
-    workflow.write_text("run: bash ci/other.sh\n", encoding="utf-8")
+    workflow.write_text(
+        "\n".join(
+            [
+                "# run: bash ci/check_sumeragi_formal.sh",
+                "description: bash ci/check_sumeragi_formal.sh",
+                "run: bash ci/other.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
     assert module.required_command_errors(
         workflow,
@@ -275,6 +691,85 @@ def test_required_command_errors_reports_missing_entrypoint(tmp_path: Path) -> N
     ) == [
         f"PR workflow {workflow} is missing command: "
         "bash ci/check_sumeragi_formal.sh"
+    ]
+
+
+def test_required_command_errors_ignore_workflow_block_scalar_bodies(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: |",
+                "          bash ci/check_sumeragi_formal.sh",
+                "      - run: bash ci/other.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.active_command_lines(workflow) == [
+        (7, "bash ci/other.sh"),
+    ]
+    assert module.required_command_errors(
+        workflow,
+        ("bash ci/check_sumeragi_formal.sh",),
+        "PR workflow",
+    ) == [
+        f"PR workflow {workflow} is missing command: "
+        "bash ci/check_sumeragi_formal.sh"
+    ]
+
+
+def test_required_command_errors_accepts_active_entrypoint_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    script = tmp_path / "check_sumeragi_formal.sh"
+    fake_script = tmp_path / "fake_check_sumeragi_formal.sh"
+    workflow.write_text(
+        "  - run: bash ci/check_sumeragi_formal.sh\n",
+        encoding="utf-8",
+    )
+    script.write_text(
+        "python3 scripts/formal/check_sumeragi_formal_coverage.py\n",
+        encoding="utf-8",
+    )
+    fake_script.write_text(
+        "run: python3 scripts/formal/check_sumeragi_formal_coverage.py\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        module.required_command_errors(
+            workflow,
+            ("bash ci/check_sumeragi_formal.sh",),
+            "PR workflow",
+        )
+        == []
+    )
+    assert (
+        module.required_command_errors(
+            script,
+            ("python3 scripts/formal/check_sumeragi_formal_coverage.py",),
+            "formal baseline script",
+        )
+        == []
+    )
+    assert module.required_command_errors(
+        fake_script,
+        ("python3 scripts/formal/check_sumeragi_formal_coverage.py",),
+        "formal baseline script",
+    ) == [
+        f"formal baseline script {fake_script} is missing command: "
+        "python3 scripts/formal/check_sumeragi_formal_coverage.py"
     ]
 
 
@@ -298,790 +793,181 @@ def test_required_text_errors_reports_missing_runner_semantics(
     ]
 
 
+def test_strict_shell_errors_require_bash_and_pipefail(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    valid = tmp_path / "valid.sh"
+    missing_pipefail = tmp_path / "missing_pipefail.sh"
+    wrong_shebang = tmp_path / "wrong_shebang.sh"
+    valid.write_text("#!/bin/bash\nset -euo pipefail\n", encoding="utf-8")
+    missing_pipefail.write_text("#!/bin/bash\nset -eu\n", encoding="utf-8")
+    wrong_shebang.write_text("#!/usr/bin/env bash\nset -euo pipefail\n", encoding="utf-8")
+
+    assert module.strict_shell_errors((valid,)) == []
+    assert module.strict_shell_errors((missing_pipefail, wrong_shebang)) == [
+        f"formal shell entrypoint {missing_pipefail} must set -euo pipefail "
+        "immediately after the shebang",
+        f"formal shell entrypoint {wrong_shebang} must start with #!/bin/bash",
+    ]
+
+
+def test_formal_ci_linear_script_errors_rejects_shell_control_flow(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    linear = tmp_path / "linear.sh"
+    conditional = tmp_path / "conditional.sh"
+    linear.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                "set -euo pipefail",
+                'repo_root="$(cd "$(dirname "$0")/.." && pwd)"',
+                'cd "$repo_root"',
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                'echo "[formal] sumeragi formal checks passed"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    conditional.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                "set -euo pipefail",
+                "if [[ -n ${SKIP_PROOFS:-} ]]; then",
+                "  bash scripts/formal/sumeragi_apalache.sh fast",
+                "fi",
+                "helper() {",
+                "  bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+                "}",
+                "cat <<'EOF'",
+                "bash scripts/formal/sumeragi_apalache.sh hidden-fast",
+                "EOF",
+                "set +e",
+                "trap 'true' EXIT",
+                "exit 0",
+                "exec true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_ci_linear_script_errors((linear,)) == []
+    assert module.formal_ci_linear_script_errors((conditional,)) == [
+        f"formal CI proof script {conditional}:3 must stay linear; "
+        "shell control flow is not allowed: if [[ -n ${SKIP_PROOFS:-} ]]; then",
+        f"formal CI proof script {conditional}:5 must stay linear; "
+        "shell control flow is not allowed: fi",
+        f"formal CI proof script {conditional}:6 must stay linear; "
+        "shell control flow is not allowed: helper() {",
+        f"formal CI proof script {conditional}:8 must stay linear; "
+        "shell control flow is not allowed: }",
+        f"formal CI proof script {conditional}:9 must stay linear; "
+        "here-documents are not allowed: cat <<'EOF'",
+        f"formal CI proof script {conditional}:11 must stay linear; "
+        "only allowlisted direct evidence commands are allowed: EOF",
+        f"formal CI proof script {conditional}:12 must stay linear; "
+        "early exits and error-handling overrides are not allowed: set +e",
+        f"formal CI proof script {conditional}:13 must stay linear; "
+        "early exits and error-handling overrides are not allowed: trap 'true' EXIT",
+        f"formal CI proof script {conditional}:14 must stay linear; "
+        "early exits and error-handling overrides are not allowed: exit 0",
+        f"formal CI proof script {conditional}:15 must stay linear; "
+        "early exits and error-handling overrides are not allowed: exec true",
+    ]
+
+
+def test_formal_ci_linear_script_errors_rejects_unallowlisted_commands(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    composed = tmp_path / "composed.sh"
+    composed.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                "set -euo pipefail",
+                'root_dir="$(cd "$(dirname "$0")/.." && pwd)"',
+                'cd "$root_dir"',
+                "APALACHE_BIN=/tmp/fake-apalache",
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py && true",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version || true",
+                "bash scripts/formal/sumeragi_apalache.sh fast || true",
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast &",
+                "printf '%s\\n' spoofed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_ci_linear_script_errors((composed,)) == [
+        f"formal CI proof script {composed}:5 must stay linear; "
+        "only allowlisted direct evidence commands are allowed: "
+        "APALACHE_BIN=/tmp/fake-apalache",
+        f"formal CI proof script {composed}:6 must stay linear; "
+        "only allowlisted direct evidence commands are allowed: "
+        "python3 scripts/formal/check_sumeragi_formal_coverage.py && true",
+        f"formal CI proof script {composed}:7 must stay linear; "
+        "only allowlisted direct evidence commands are allowed: "
+        "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version || true",
+        f"formal CI proof script {composed}:8 must stay linear; "
+        "only allowlisted direct evidence commands are allowed: "
+        "bash scripts/formal/sumeragi_apalache.sh fast || true",
+        f"formal CI proof script {composed}:9 must stay linear; "
+        "only allowlisted direct evidence commands are allowed: "
+        "bash scripts/formal/sumeragi_tlc.sh frontier-fast &",
+        f"formal CI proof script {composed}:10 must stay linear; "
+        "only allowlisted direct evidence commands are allowed: "
+        "printf '%s\\n' spoofed",
+    ]
+
+
+def test_expected_failure_tlc_inventory_errors_rejects_standalone_tlc_modes() -> None:
+    module = load_coverage_module()
+
+    assert module.expected_failure_tlc_inventory_errors(
+        [
+            "frontier-bug-stale-owner",
+            "frontier-bug-stale-owner",
+            "rbc-bug-missing-ready",
+        ]
+    ) == [
+        "Expected-failure CI invokes TLC modes; standalone mutation sweep "
+        "must stay Apalache-only:\n"
+        "  - frontier-bug-stale-owner\n"
+        "  - rbc-bug-missing-ready"
+    ]
+    assert module.expected_failure_tlc_inventory_errors([]) == []
+
+
 def test_formal_readme_guard_contract_snippets_pin_namespace_docs(
     tmp_path: Path,
 ) -> None:
     module = load_coverage_module()
     readme = tmp_path / "README.md"
-    readme.write_text(
-        "Constants and variables share a single TLA declaration namespace\n",
-        encoding="utf-8",
-    )
+    present_text = "Constants and variables share a single TLA declaration namespace\n"
+    readme.write_text(present_text, encoding="utf-8")
+
+    expected_errors = [
+        f"Sumeragi formal README {readme} is missing required text: {snippet}"
+        for snippet in module.FORMAL_README_GUARD_CONTRACT_SNIPPETS
+        if snippet not in present_text
+    ]
 
     assert module.required_text_errors(
         readme,
         module.FORMAL_README_GUARD_CONTRACT_SNIPPETS,
         "Sumeragi formal README",
-    ) == [
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Declared constants and variables must also remain",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "disjoint from top-level operator definitions and `RECURSIVE` declarations",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "same operator name must not be reused across behavior",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "constraint, and proof-check roles",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "TLA operator definitions must be non-LOCAL",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "TLA `RECURSIVE` declaration directives must be top-level",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed `RECURSIVE` starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator `RECURSIVE` starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "aliases must be duplicate-free",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "top-level proof-target operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "be duplicate-free, use non-reserved static module identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "be top-level",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "appear before declarations and definitions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "without `WITH` substitutions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed `EXTENDS`/`INSTANCE` starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "No-separator `EXTENDS`/`INSTANCE` starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed named `INSTANCE` aliases are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "No-separator named `INSTANCE` aliases are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "INSTANCE declarations must be non-LOCAL",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Local TLA dependency files are followed transitively",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "same module-header, declaration, and assumption/proof guards",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Assumption/proof directive starts are rejected even when indented",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "No-separator assumption/proof directive starts are rejected even when indented",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "TLA module headers and terminators must be top-level",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Decorative all-`=` separator lines are allowed before that terminator",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Decorative all-`=` separator lines must not have trailing content",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed TLA module header starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "No-separator TLA module header starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed TLA terminator starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "TLA constant and variable declaration directives must be top-level",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed TLA constant/variable declaration starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator TLA constant/variable declaration starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator TLA declaration block entries are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed TLA `vars` tuple starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Directive-prefixed TLA declaration block entries remain valid",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed supported CFG directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Directive-prefixed CFG block entries remain valid",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Indented no-separator supported CFG directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed CHECK_DEADLOCK starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed CFG constant binding starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator CFG constant binding starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Indented no-separator CFG constant binding directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Malformed CFG operator-reference directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level no-separator CFG operator-reference directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Indented no-separator CFG operator-reference directive starts are rejected",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "control-flow, implication, or equivalence exactness definitions must name",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "conjuncts must be named concrete predicates before composition",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "conjuncts must compose an existing concrete matches predicate directly",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "compose named predicates before the exactness bundle composes them",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized exactness conjuncts must be lifted behind zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized helper call checks parse expression arguments, including comparisons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound exactness helper operands must not hide expression-argument parameterized helper calls",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula exactness conjuncts must be lifted behind named",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Formula equality exactness conjuncts must be lifted behind named",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Formula equivalence exactness conjuncts must be lifted behind named",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Non-named exactness conjuncts are rejected even when mixed",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Named exactness predicates must not hide generic correctness",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive named exactness predicate chains must not hide generic correctness",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated exactness helper wrappers must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated exactness helper wrappers must not hide zero-arity helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated zero-arity helper alias checks recurse through nested identity gates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated exactness helper wrappers must not hide negated helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated negated helper operand checks recurse through nested identity gates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound exactness helper operands must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper conjunct repetition checks traverse unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Repeated helper same-polarity checks split top-level boolean operands before peeling temporal or negated wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide repeated helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper operand repetition checks traverse unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Repeated helper operand checks include chained implication and equivalence operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide contradictory helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide excluded-middle helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide complementary-equivalence helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Complementary-equivalence checks include chained equivalence operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper operand polarity checks traverse unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper operand polarity checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve quantified binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve unbounded quantified binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans reject relation-bearing quantified binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve tuple-pattern quantifier domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve LET binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve parameterized LET operator scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve CHOOSE binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve LAMBDA binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve standard TLA set/operator identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve CASE branch scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve relation operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve operator-call argument scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve arithmetic/set infix operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve sequence/function infix operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve explicit set literal element scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve unary set-operator operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve set-comprehension binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve set-comprehension outer enclosure scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve function-constructor binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve function-set domain and range scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve CASE domain branch arrows",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve record maplet CASE values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve record set/update CASE values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record set field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record update field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record selector field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve comma-shared set/function binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve operator parameter scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not be vacuous",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks reject pure top-level boolean compositions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks reject identity-literal gates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks propagate known truth values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula prefix scans preserve escaped string literal colons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula prefix scans preserve tuple literal maplet colons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper formula scans require scoped binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified bound identifier scans preserve escaped string literal domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks preserve escaped string literal domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks include comma-shared bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks skip tuple-pattern component domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper singleton-domain checks preserve tuple literal elements",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper vacuity checks include unbounded static bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Line comment scans preserve escaped string literal comment markers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static outer wrapper scans preserve escaped string literal parentheses",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Semantic identifier scans ignore escaped string literal contents",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level relation and boolean scans preserve tuple literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level relation scans reject whole-body control/action wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level boolean scans preserve escaped string literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level boolean/equality detector helpers preserve tuple literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level keyword scans preserve tuple literal keywords",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level CASE branch scans preserve tuple literal arms and conditions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level keyword and CASE branch scans preserve escaped string literal delimiters",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must use their bound identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not duplicate bound identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified unused-bound checks include later binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified unused-bound checks include unbounded bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified bound identifier scans include later tuple-pattern binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not select predicates with control flow",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas must not appear below top-level negation operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified exactness helper formulas are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Negated quantified helper checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Negated quantified helper checks split top-level boolean operands before peeling negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper body checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper body control-flow checks reject non-transparent `LET` bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Existential quantified exactness helper formulas must not weaken exactness chains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide whole-body control-flow predicate-selection helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide nested control-flow predicate-selection helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Nested control-flow predicate-selection checks unwrap one-line `LET` branch aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Control-flow predicate-selection checks unwrap one-line `LET` control aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Nested control-flow predicate-selection checks include non-branch control operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide control-flow predicate selection",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness LET-alias helper wrappers must name concrete model predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide whole-body raw-predicate boolean-composition helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Raw-predicate exactness boolean-composition helper operands are checked through top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Raw-predicate exactness boolean-composition helper operands are checked through stacked top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Raw-predicate exactness boolean-composition helper operands are checked through unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Raw-predicate exactness boolean-composition helper operands are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide whole-body parameterized-call boolean-composition helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized-call exactness boolean-composition helper operands are checked through top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized-call exactness boolean-composition helper operands are checked through stacked top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized-call exactness boolean-composition helper operands are checked through unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized-call exactness boolean-composition helper operands are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated parameterized-call exactness boolean-composition helper operands are checked through identity literals",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide parameterized helper calls",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide whole-body quantified-predicate boolean-composition helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified-predicate exactness boolean-composition helper operands are checked through top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified-predicate exactness boolean-composition helper operands are checked through stacked top-level negation",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified-predicate exactness boolean-composition helper operands are checked through unary-temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified-predicate exactness boolean-composition helper operands are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated quantified-predicate exactness boolean-composition helper operands are checked through identity literals",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Exactness boolean-composition checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal exactness helper wrappers must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static action/set/choice exactness helper wrappers must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static action/set/choice exactness helper wrappers traverse structured operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Structured exactness helper operands must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Structured exactness helper operands must not hide control-flow predicate selection",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal quantified, parameterized-call, and control-flow checks split top-level boolean operands before peeling temporal wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal quantified checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal parameterized-call checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide literal or alias helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide self-equality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must not hide self-inequality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal self-equality exactness helper wrappers count as self-equality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal self-inequality exactness helper wrappers count as self-inequality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Constant-relation exactness helpers count as literal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Constant-relation helper checks unwrap one-line `LET`, unary-temporal, and negated wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static and unary-temporal boolean-only exactness helper wrappers count as",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static IF literal exactness helpers count as literal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static temporal literal checks split top-level boolean operands before peeling temporal or negated wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Negated unary-temporal boolean-only helper wrappers count as literal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound boolean-only temporal helper wrappers count as literal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound exactness helper traversal includes disjunction, implication, equivalence, and negation operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Helper reference traversal unwraps one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Exactness vacuous-helper checks inspect static and structured operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET helper alias unwrapping preserves static unary result wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET binding scans preserve tuple literal definition bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET binding scans preserve escaped string literal definition bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET helper alias unwrapping resolves chained one-line bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET alias substitution respects later quantified binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET alias substitution respects escaped string literal domain binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET alias substitution preserves escaped string literal result bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "LET helper alias unwrapping substitutes simple chained binding references",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Temporal literal checks unwrap one-line `LET` helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Non-named correctness-envelope conjuncts are rejected even when mixed",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Allowlisted temporal correctness-envelope conjuncts must be non-literal",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Allowlisted temporal correctness-envelope conjuncts must be non-self-equality",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Allowlisted temporal correctness-envelope conjuncts must be non-self-inequality",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Whole-body control-flow temporal side conjuncts must name",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Whole-body boolean-composition temporal side conjuncts must name",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal boolean composition over temporal helpers must name",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary `[]`/`<>` boolean-only temporal wrappers count as literal temporal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static IF literal temporal helpers count as literal temporal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal correctness-envelope conjunct chains must not",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve quantified binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve unbounded quantified binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans reject relation-bearing quantified binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve tuple-pattern quantifier domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve LET binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve parameterized LET operator scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve CHOOSE binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve LAMBDA binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans reject relation-bearing CHOOSE/LAMBDA binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve standard TLA set/operator identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve ENABLED/UNCHANGED operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve CASE branch scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve relation operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve operator-call argument scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve arithmetic/set infix operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve sequence/function infix operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve explicit set literal element scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve unary set-operator operand scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve set-comprehension binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve set-comprehension outer enclosure scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve function-constructor binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve function-set domain and range scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve CASE domain branch arrows",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve record maplet CASE values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Function-set scans preserve record set/update CASE values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record set field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record update field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve record selector field label scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve comma-shared set/function binding scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Undefined helper scans preserve operator parameter scope",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not be vacuous",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper formulas must not restate empty-domain, singleton-domain, bound-domain, self-membership, or empty-set membership facts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks reject pure top-level boolean compositions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks reject identity-literal gates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper restatement checks propagate known truth values",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula prefix scans preserve escaped string literal colons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified formula prefix scans preserve tuple literal maplet colons",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper formula scans require scoped binding prefixes",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified bound identifier scans preserve escaped string literal domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks preserve escaped string literal domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks include comma-shared bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper bound-domain checks skip tuple-pattern component domains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper singleton-domain checks preserve tuple literal elements",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified helper vacuity checks include unbounded static bodies",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Line comment scans preserve escaped string literal comment markers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static outer wrapper scans preserve escaped string literal parentheses",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Semantic identifier scans ignore escaped string literal contents",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level relation and boolean scans preserve tuple literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level relation scans reject whole-body control/action wrappers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level boolean/equality detector helpers preserve tuple literal operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level keyword scans preserve tuple literal keywords",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level CASE branch scans preserve tuple literal arms and conditions",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Top-level CASE branch scans distinguish unary temporal boxes from arm separators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must use their bound identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not duplicate bound identifiers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified unused-bound checks include later binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified unused-bound checks include unbounded bindings",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified bound identifier scans include later tuple-pattern binding groups",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not select predicates with control flow",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas must not appear below top-level negation operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Quantified temporal helper formulas are checked through boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Existential quantified temporal helper formulas must not weaken allowlisted temporal chains",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper operands must not hide undefined helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Allowlisted temporal helper conjunct repetition checks use the same unary-temporal traversal",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide repeated helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide contradictory helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide excluded-middle helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide complementary-equivalence helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal temporal helper wrappers must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal temporal helper wrappers must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated temporal helper wrappers must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated temporal helper wrappers must not hide zero-arity helper aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Literal-gated temporal helper wrappers must not hide negated helper operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper operands must not hide repeated helper conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide whole-body control-flow predicate-selection helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide nested control-flow predicate-selection helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal temporal helper wrappers must not hide control-flow predicate selection",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static action/set/choice temporal helper wrappers must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Static action/set/choice temporal helper wrappers traverse structured operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Structured temporal helper operands must not hide quantified formulas",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Structured temporal helper operands must not hide control-flow predicate selection",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal temporal LET-alias helper wrappers must name concrete temporal predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide whole-body temporal-helper boolean-composition helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Temporal-helper boolean-composition checks traverse boolean operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Unary-temporal LET-alias temporal side conjuncts must name concrete temporal predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide literal or alias helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide single-helper conjunct aliases",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide self-equality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive allowlisted temporal helper chains must not hide self-inequality helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Constant-relation temporal helpers count as literal temporal helpers",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound `[]`/`<>` temporal helper bodies are traversed for helper references",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Parameterized temporal helper calls must be lifted behind zero-arity predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper traversal includes disjunction operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper traversal includes implication operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper traversal includes equivalence operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Compound temporal helper traversal includes negation operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Temporal vacuous-helper checks inspect static and structured operands",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Exactness and correctness-envelope conjunct references must resolve to zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Transitive exactness predicate chains must also resolve through zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every top-level Sumeragi property checked by the deep/TLC-fast configs must be reachable",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "from `SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope` through zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "operator references",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every non-TypeInvariant top-level Sumeragi invariant checked by the deep/TLC-fast configs must be reachable",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "from `SumeragiConsensusCoreStateMatchesEnvelope` through zero-arity",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "The consensus-core aggregate proof roots must keep their exact direct conjunct contracts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "The state+temporal, exactness, and fast roots keep their documented direct conjuncts",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every direct conjunct of `SumeragiConsensusCoreStateMatchesEnvelope` must be checked",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "as a top-level deep/TLC-fast `INVARIANT`",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`SumeragiConsensusCoreStateMatchesEnvelope` must keep the documented state direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every direct conjunct of `SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must be checked",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "as a top-level deep/TLC-fast `PROPERTY`",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Every direct conjunct of `RbcLifecycleAlwaysMatchesEndToEndEnvelope` must be checked",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Nested RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "First-level RBC lifecycle aggregate conjuncts use the same top-level `PROPERTY` coverage rule",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "RBC progress, corruption repair, chunk/ready/deliver, delivery-entry, and delivered-state roots stay decomposed",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Reachable aggregate temporal property roots recursively use the same top-level `PROPERTY` coverage rule",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Finalized certificate retention names the Byzantine commit-vote closure property directly",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Root coverage checks require each selected deep/TLC-fast CFG to carry every protected conjunct independently",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Correctness-root reachability requires the root property in every selected deep/TLC-fast CFG",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Correctness-root direct TypeInvariant stays a top-level `INVARIANT` in every selected deep/TLC-fast CFG",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Correctness-root direct temporal obligations stay top-level `PROPERTY` checks in every selected deep/TLC-fast CFG",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`EventuallyCommit` must keep the direct `[] (gst => <> committed)` liveness shape with exact lowercase state-variable names",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`CommitNeverRevoked` must keep the direct `[] (committed => [] committed)` finality-latch monotonicity shape with exact lowercase state-variable names",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Finality `AlwaysMatches` temporal wrappers must keep direct `[]` shapes over their matching zero-arity predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`TimeoutTickGateNeverBypassesStalledProgress` must keep the direct `[] TimeoutTickGateMatchesStalledProgress` timeout-gate wrapper shape",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Pre-commit handoff `Never`/`Always` predicate wrappers must keep direct `[] Predicate` shapes over their documented zero-arity predicates",
-        f"Sumeragi formal README {readme} is missing required text: "
-        '`CommittedPhaseNeverLeaves` must keep the direct `[] (phase = "Committed" => [] (phase = "Committed"))` phase permanence shape',
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Timeout-recovery action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "Pre-commit handoff action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`Committed*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredFinality*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredEvidenceNeverRegresses` and `RbcDeliveredPending*` lifecycle action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredPendingSpecStep*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveryEntry*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveryEntryCommitEvidenceBranch*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`DeliveredPendingCompleteWaitState*` action-wrapper temporal theorems must keep direct `[] [MatchingStep]_vars` shapes over their documented zero-arity step operators",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`PendingProtocolStepsNeverChangeGst` must keep the direct `[] [PendingProtocolStepsPreserveGst]_vars` GST-preservation action-wrapper shape",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`CommittedGstNeverEnablesActions` must keep the direct `[] CommittedGstDisablesEveryAction` terminal action-disable shape",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`CommittedStateAlwaysMatchesTerminalEnvelope` must keep the documented terminal-state direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`PostFinalityStateAlwaysMatchesStabilityEnvelope` must keep the documented post-finality stability direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`TimeoutRecoveryAlwaysMatchesViewChangeEnvelope` must keep the documented timeout-recovery direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`FinalityInstallationAlwaysMatchesCertifiedCommitEnvelope` must keep the documented certified-commit direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`PreCommitHandoffAlwaysMatchesProposalPrepareEnvelope` must keep the documented pre-commit handoff direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`CommitVoteHandoffAlwaysMatchesFinalityEnvelope` must keep the documented commit-vote handoff direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`FinalizedCertificateEvidenceAlwaysMatchesRetentionEnvelope` must keep the documented finalized-certificate retention direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredFinalityAlwaysMatchesCertifiedCommitEnvelope` must keep the documented RBC delivered-finality direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredStateAlwaysMatchesCompleteLifecycleEnvelope` must keep the documented RBC delivered-state lifecycle direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveredPendingSpecStepAlwaysMatchesCompleteHandoffEnvelope` must keep the documented RBC delivered-pending handoff direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`DeliveredPendingCompleteWaitStateAlwaysMatchesNamedActionEnvelope` must keep the documented delivered-pending complete wait-state direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveryEntryAlwaysMatchesCompleteOutcomeEnvelope` must keep the documented RBC delivery-entry outcome direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcDeliveryEntryCommitEvidenceBranchAlwaysMatchesContinuationEnvelope` must keep the documented RBC delivery-entry continuation direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcLifecycleAlwaysMatchesEndToEndEnvelope` must keep the documented RBC lifecycle direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcCorruptionRepairAlwaysMatchesFaultEnvelope` must keep the documented RBC corruption-repair direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcChunkReadyDeliverAlwaysMatchesAvailabilityEnvelope` must keep the documented RBC chunk/ready/deliver availability direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcProgressMutationAlwaysPreservesLiveEvidenceEnvelope` must keep the documented RBC progress-mutation direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcProgressMutationAlwaysMatchesLocalClassification` must keep the documented RBC progress local-classification direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcStartupAndDefensiveBoundaryAlwaysMatchesEnvelope` must keep the documented RBC startup-boundary direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcProgressStateEvidenceAlwaysMatchesEnvelope` must keep the documented RBC progress-state evidence direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`RbcLiveEvidenceCausalityAlwaysMatchesEnvelope` must keep the documented RBC live-evidence causality direct conjunct contract",
-        f"Sumeragi formal README {readme} is missing required text: "
-        "`SumeragiConsensusCoreAlwaysMatchesEndToEndSafetyEnvelope` must keep the documented end-to-end safety direct conjunct contract",
-    ]
+    ) == expected_errors
+    assert expected_errors
+    assert not any(
+        module.FORMAL_README_GUARD_CONTRACT_SNIPPETS[0] in error
+        or module.FORMAL_README_GUARD_CONTRACT_SNIPPETS[1] in error
+        for error in expected_errors
+    )
 
 
 def test_command_order_errors_require_guard_before_apalache(
@@ -1092,6 +978,8 @@ def test_command_order_errors_require_guard_before_apalache(
     script.write_text(
         "\n".join(
             [
+                "# python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py --dry-run",
                 "bash scripts/formal/sumeragi_apalache.sh fast",
                 "python3 scripts/formal/check_sumeragi_formal_coverage.py",
             ]
@@ -1111,18 +999,2515 @@ def test_command_order_errors_require_guard_before_apalache(
     ]
 
 
-def test_workflow_entrypoint_errors_require_install_before_baseline(
+def test_active_command_matches_keeps_prefix_matching_allowlisted() -> None:
+    module = load_coverage_module()
+
+    assert module.active_command_matches(
+        "bash scripts/formal/install_apalache.sh 0.52.2",
+        "bash scripts/formal/install_apalache.sh",
+    )
+    assert module.active_command_matches(
+        "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+        "bash scripts/formal/sumeragi_apalache.sh",
+    )
+    assert not module.active_command_matches(
+        "python3 scripts/formal/check_sumeragi_formal_coverage.py --dry-run",
+        "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+    )
+    assert not module.active_command_matches(
+        "bash ci/check_sumeragi_formal_expected_failures.sh --skip",
+        "bash ci/check_sumeragi_formal_expected_failures.sh",
+    )
+
+
+def test_formal_workflow_run_command_errors_rejects_wrapped_runs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  unrelated:",
+                "    steps:",
+                "      - run: |",
+                "          echo ignored",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "      - run: bash ci/check_sumeragi_formal.sh || true",
+                "      - run: |",
+                "          set +e",
+                "          bash ci/check_sumeragi_formal.sh",
+                "      - run: printf '%s\\n' spoofed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_command_errors(
+        ((workflow, ("sumeragi_formal",)),)
+    ) == [
+        f"formal workflow {workflow}:12 may contain only single-line "
+        "allowlisted run commands: bash ci/check_sumeragi_formal.sh || true",
+        f"formal workflow {workflow}:13 must use single-line allowlisted run "
+        "commands; block run commands are not allowed: - run: |",
+        f"formal workflow {workflow}:16 may contain only single-line "
+        "allowlisted run commands: printf '%s\\n' spoofed",
+    ]
+
+
+def test_formal_workflow_run_command_errors_rejects_ambiguous_steps(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - uses: actions/checkout@v4",
+                "        run: bash ci/check_sumeragi_formal.sh",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_command_errors(
+        ((workflow, ("sumeragi_formal",)),)
+    ) == [
+        f"formal workflow {workflow} checked formal job steps must set run "
+        "at most once:\n"
+        "  - 5: bash scripts/formal/install_apalache.sh 0.52.2\n"
+        "  - 6: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+        f"formal workflow {workflow} checked formal job steps must not combine "
+        "run and uses:\n"
+        "  - 8: bash ci/check_sumeragi_formal.sh\n"
+        "  - 7: actions/checkout@v4",
+    ]
+
+
+def test_formal_workflow_unscoped_command_errors_rejects_stray_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  unrelated:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: |",
+                "          bash ci/check_sumeragi_formal.sh",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_unscoped_command_errors(
+        ((workflow, ("sumeragi_formal",)),)
+    ) == [
+        f"formal workflow {workflow}:5 must keep formal proof commands inside "
+        "checked jobs sumeragi_formal: "
+        "- run: bash scripts/formal/install_apalache.sh 0.52.2",
+        f"formal workflow {workflow}:7 must keep formal proof commands inside "
+        "checked jobs sumeragi_formal: bash ci/check_sumeragi_formal.sh",
+    ]
+
+
+def test_formal_workflow_unscoped_command_errors_scans_all_workflows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    checked = tmp_path / "pr.yml"
+    stray = tmp_path / "other.yaml"
+    checked.write_text(
+        "\n".join(
+            [
+                "name: checked",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    stray.write_text(
+        "\n".join(
+            [
+                "name: stray",
+                "jobs:",
+                "  hidden:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_unscoped_command_errors(
+        workflow_paths=(checked, stray),
+        allowed_jobs_by_path={checked: ("sumeragi_formal",)},
+    ) == [
+        f"formal workflow {stray}:5 must keep formal proof commands inside "
+        "checked jobs the checked formal workflow jobs: "
+        "- run: bash ci/check_sumeragi_formal.sh"
+    ]
+
+
+def test_formal_workflow_unscoped_command_errors_rejects_fake_job_section(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "env:",
+                "  frontier-nightly:",
+                "    run: bash scripts/formal/sumeragi_apalache.sh hidden-fast",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_unscoped_command_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:4 must keep formal proof commands inside "
+        "checked jobs frontier-nightly: "
+        "run: bash scripts/formal/sumeragi_apalache.sh hidden-fast"
+    ]
+
+
+def test_formal_workflow_run_command_errors_accepts_nightly_allowlist(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+                "      - run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_command_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == []
+
+
+def test_formal_workflow_run_inventory_errors_accepts_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "formal.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+                "      - run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    "bash scripts/formal/install_apalache.sh 0.52.2",
+                    "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                    "bash ci/check_sumeragi_formal.sh",
+                ),
+            ),
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                (
+                    "bash scripts/formal/install_apalache.sh 0.52.2",
+                    "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                    "bash ci/check_sumeragi_formal.sh",
+                    "bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+                    "python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json",
+                ),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_run_inventory_errors_rejects_order_or_extra_runs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    "bash scripts/formal/install_apalache.sh 0.52.2",
+                    "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                    "bash ci/check_sumeragi_formal.sh",
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job {workflow} must use exact run command "
+        "inventory:\n"
+        "  - bash scripts/formal/install_apalache.sh 0.52.2\n"
+        "  - target/apalache/toolchains/v0.52.2/bin/apalache-mc --version\n"
+        "  - bash ci/check_sumeragi_formal.sh; found:\n"
+        "  - 5: bash scripts/formal/install_apalache.sh 0.52.2\n"
+        "  - 6: python3 ci/check_docs_i18n_metadata.py --paths docs/formal "
+        "--json-out target/docs-i18n/formal-metadata.json\n"
+        "  - 7: bash ci/check_sumeragi_formal.sh\n"
+        "  - 8: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+    ]
+
+
+def test_formal_workflow_name_errors_accepts_checked_names(tmp_path: Path) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_name_errors(
+        (
+            (pr_workflow, "PR formal workflow", "Pull Request CI"),
+            (nightly_workflow, "nightly formal workflow", "Nightly Sumeragi Formal"),
+        )
+    ) == []
+
+
+def test_formal_workflow_name_errors_rejects_name_drift(tmp_path: Path) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Sumeragi Formal",
+                "name: Nightly Sumeragi Formal Copy",
+                "on:",
+                "  workflow_dispatch:",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_name_errors(
+        ((workflow, "nightly formal workflow", "Nightly Sumeragi Formal"),)
+    ) == [
+        f"nightly formal workflow {workflow} must set exact workflow name: "
+        "Nightly Sumeragi Formal; found:\n"
+        "  - 1: Sumeragi Formal\n"
+        "  - 2: Nightly Sumeragi Formal Copy",
+    ]
+
+
+def test_formal_workflow_header_key_errors_accepts_checked_headers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: false",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_key_errors(
+        (
+            (pr_workflow, "PR formal workflow", ("name", "on", "concurrency", "env")),
+            (
+                nightly_workflow,
+                "nightly formal workflow",
+                ("name", "on", "concurrency"),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_header_key_errors_rejects_extra_or_duplicate_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "run-name: Sumeragi proof ${{ github.ref }}",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "env:",
+                "  NEXTEST_PROFILE: ci",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_key_errors(
+        ((workflow, "PR formal workflow", ("name", "on", "concurrency", "env")),)
+    ) == [
+        f"PR formal workflow {workflow} must keep exact top-level header keys:\n"
+        "  - name\n"
+        "  - on\n"
+        "  - concurrency\n"
+        "  - env; found:\n"
+        "  - 1: name\n"
+        "  - 2: run-name\n"
+        "  - 3: on\n"
+        "  - 5: concurrency\n"
+        "  - 8: env\n"
+        "  - 10: env",
+    ]
+
+
+def test_formal_workflow_trigger_errors_accepts_checked_triggers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "",
+                "on:",
+                "  workflow_dispatch:",
+                "  schedule:",
+                '    - cron: "43 3 * * *"',
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_trigger_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                ("on:", "  pull_request:", "    branches: [main]"),
+            ),
+            (
+                nightly_workflow,
+                "nightly formal workflow",
+                (
+                    "on:",
+                    "  workflow_dispatch:",
+                    "  schedule:",
+                    '    - cron: "43 3 * * *"',
+                ),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_trigger_errors_rejects_trigger_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  schedule:",
+                '    - cron: "0 0 * * *"',
+                "  workflow_dispatch:",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_trigger_errors(
+        (
+            (
+                workflow,
+                "nightly formal workflow",
+                (
+                    "on:",
+                    "  workflow_dispatch:",
+                    "  schedule:",
+                    '    - cron: "43 3 * * *"',
+                ),
+            ),
+        )
+    ) == [
+        f"nightly formal workflow {workflow} must keep exact top-level trigger "
+        "block:\n"
+        "  - on:\n"
+        "  -   workflow_dispatch:\n"
+        "  -   schedule:\n"
+        '  -     - cron: "43 3 * * *"; found:\n'
+        "  - 2: on:\n"
+        "  - 3:   schedule:\n"
+        '  - 4:     - cron: "0 0 * * *"\n'
+        "  - 5:   workflow_dispatch:",
+    ]
+
+
+def test_formal_workflow_trigger_errors_rejects_extra_nested_pr_filters(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "    types: [opened]",
+                "    paths_ignore:",
+                '      - ".github/workflows/publish*"',
+                '      - ".github/workflows/ci_image.yml"',
+                '      - "Dockerfile*"',
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_trigger_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (
+                    "on:",
+                    "  pull_request:",
+                    "    branches: [main]",
+                    "    paths_ignore:",
+                    '      - ".github/workflows/publish*"',
+                    '      - ".github/workflows/ci_image.yml"',
+                    '      - "Dockerfile*"',
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow {workflow} must keep exact top-level trigger "
+        "block:\n"
+        "  - on:\n"
+        "  -   pull_request:\n"
+        "  -     branches: [main]\n"
+        "  -     paths_ignore:\n"
+        '  -       - ".github/workflows/publish*"\n'
+        '  -       - ".github/workflows/ci_image.yml"\n'
+        '  -       - "Dockerfile*"; found:\n'
+        "  - 2: on:\n"
+        "  - 3:   pull_request:\n"
+        "  - 4:     branches: [main]\n"
+        "  - 5:     types: [opened]\n"
+        "  - 6:     paths_ignore:\n"
+        '  - 7:       - ".github/workflows/publish*"\n'
+        '  - 8:       - ".github/workflows/ci_image.yml"\n'
+        '  - 9:       - "Dockerfile*"',
+    ]
+
+
+def test_formal_workflow_on_event_errors_accepts_checked_events(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "  schedule:",
+                '    - cron: "43 3 * * *"',
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_on_event_errors(
+        (
+            (pr_workflow, "PR formal workflow", ("pull_request",)),
+            (
+                nightly_workflow,
+                "nightly formal workflow",
+                ("workflow_dispatch", "schedule"),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_on_event_errors_rejects_extra_events(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "  pull_request_target:",
+                "  push:",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_on_event_errors(
+        ((workflow, "PR formal workflow", ("pull_request",)),)
+    ) == [
+        f"PR formal workflow {workflow} must keep exact trigger events:\n"
+        "  - pull_request; found:\n"
+        "  - 3: pull_request\n"
+        "  - 5: pull_request_target\n"
+        "  - 6: push",
+    ]
+
+
+def test_formal_workflow_on_event_errors_rejects_inline_events(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on: [workflow_dispatch, schedule]",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_on_event_errors(
+        ((workflow, "nightly formal workflow", ("workflow_dispatch", "schedule")),)
+    ) == [
+        f"nightly formal workflow {workflow} must keep exact trigger events:\n"
+        "  - workflow_dispatch\n"
+        "  - schedule; found:\n"
+        "  - 2: <inline on: [workflow_dispatch, schedule]>",
+    ]
+
+
+def test_formal_workflow_paths_ignore_errors_accepts_reviewed_pr_filter(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "    paths_ignore:",
+                '      - ".github/workflows/publish*"',
+                '      - ".github/workflows/ci_image.yml"',
+                '      - "Dockerfile*"',
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_paths_ignore_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (
+                    ".github/workflows/publish*",
+                    ".github/workflows/ci_image.yml",
+                    "Dockerfile*",
+                ),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_paths_ignore_errors_rejects_broad_pr_filter(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "    paths_ignore:",
+                '      - ".github/workflows/publish*"',
+                '      - "docs/formal/**"',
+                '      - "scripts/formal/**"',
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_paths_ignore_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (
+                    ".github/workflows/publish*",
+                    ".github/workflows/ci_image.yml",
+                    "Dockerfile*",
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow {workflow} must keep exact paths_ignore entries:\n"
+        "  - .github/workflows/publish*\n"
+        "  - .github/workflows/ci_image.yml\n"
+        "  - Dockerfile*; found:\n"
+        "  - 6: .github/workflows/publish*\n"
+        "  - 7: docs/formal/**\n"
+        "  - 8: scripts/formal/**",
+    ]
+
+
+def test_formal_workflow_concurrency_errors_accepts_checked_headers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "  schedule:",
+                '    - cron: "43 3 * * *"',
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: false",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_concurrency_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: true",
+                ),
+            ),
+            (
+                nightly_workflow,
+                "nightly formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: false",
+                ),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_concurrency_errors_rejects_cancel_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "  schedule:",
+                '    - cron: "43 3 * * *"',
+                "concurrency:",
+                "  group: sumeragi-formal",
+                "  cancel-in-progress: true",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_concurrency_errors(
+        (
+            (
+                workflow,
+                "nightly formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: false",
+                ),
+            ),
+        )
+    ) == [
+        f"nightly formal workflow {workflow} must keep exact top-level "
+        "concurrency block:\n"
+        "  - concurrency:\n"
+        "  -   group: ${{ github.workflow }}-${{ github.ref }}\n"
+        "  -   cancel-in-progress: false; found:\n"
+        "  - 6: concurrency:\n"
+        "  - 7:   group: sumeragi-formal\n"
+        "  - 8:   cancel-in-progress: true",
+    ]
+
+
+def test_formal_workflow_concurrency_errors_rejects_extra_duplicate_blocks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "  max-parallel: 1",
+                "concurrency: sumeragi-formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_concurrency_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: true",
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow {workflow} must keep exact top-level "
+        "concurrency block:\n"
+        "  - concurrency:\n"
+        "  -   group: ${{ github.workflow }}-${{ github.ref }}\n"
+        "  -   cancel-in-progress: true; found:\n"
+        "  - 4: concurrency:\n"
+        "  - 5:   group: ${{ github.workflow }}-${{ github.ref }}\n"
+        "  - 6:   cancel-in-progress: true\n"
+        "  - 7:   max-parallel: 1\n"
+        "  - 8: concurrency: sumeragi-formal",
+    ]
+
+
+def test_formal_workflow_header_control_errors_allows_checked_headers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: false",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_control_errors(
+        (
+            (pr_workflow, ("sumeragi_formal",)),
+            (nightly_workflow, ("frontier-nightly",)),
+        )
+    ) == []
+
+
+def test_formal_workflow_header_control_errors_rejects_inherited_controls(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "permissions: read-all",
+                "defaults:",
+                "  run:",
+                "    shell: bash",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:4 must not set top-level permissions: "
+        "permissions: read-all",
+        f"formal workflow {workflow}:5 must not set top-level defaults: "
+        "defaults:",
+    ]
+
+
+def test_formal_workflow_header_env_errors_accepts_reviewed_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "  IROHA_CLI_DIR: /tmp/iroha",
+                "  DEFAULTS_DIR: defaults",
+                "  WASM_TARGET_DIR: wasm/target/prebuilt",
+                "  TEST_NETWORK_TMP_DIR: /tmp",
+                "  NEXTEST_PROFILE: ci",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                (
+                    "CARGO_TERM_COLOR",
+                    "IROHA_CLI_DIR",
+                    "DEFAULTS_DIR",
+                    "WASM_TARGET_DIR",
+                    "TEST_NETWORK_TMP_DIR",
+                    "NEXTEST_PROFILE",
+                ),
+            ),
+            (nightly_workflow, "nightly formal workflow", ()),
+        )
+    ) == []
+
+
+def test_formal_workflow_header_env_errors_rejects_inherited_env_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "  PATH: /tmp/fake/bin",
+                "  NEXTEST_PROFILE: ci",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "env: { BASH_ENV: /tmp/injected }",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                ("CARGO_TERM_COLOR", "NEXTEST_PROFILE"),
+            ),
+            (nightly_workflow, "nightly formal workflow", ()),
+        )
+    ) == [
+        f"PR formal workflow {pr_workflow} must keep exact top-level env keys:\n"
+        "  - CARGO_TERM_COLOR\n"
+        "  - NEXTEST_PROFILE; found:\n"
+        "  - 5: CARGO_TERM_COLOR\n"
+        "  - 6: PATH\n"
+        "  - 7: NEXTEST_PROFILE",
+        f"nightly formal workflow {nightly_workflow} must keep exact "
+        "top-level env keys: no top-level env keys; found:\n"
+        "  - 4: <inline env: { BASH_ENV: /tmp/injected }>",
+    ]
+
+
+def test_formal_workflow_header_env_binding_errors_accepts_reviewed_bindings(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                '  IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"',
+                "  DEFAULTS_DIR: defaults",
+                "  WASM_TARGET_DIR: wasm/target/prebuilt",
+                "  TEST_NETWORK_TMP_DIR: /tmp",
+                "  NEXTEST_PROFILE: ci",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_binding_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                (
+                    "CARGO_TERM_COLOR: always",
+                    'IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"',
+                    "DEFAULTS_DIR: defaults",
+                    "WASM_TARGET_DIR: wasm/target/prebuilt",
+                    "TEST_NETWORK_TMP_DIR: /tmp",
+                    "NEXTEST_PROFILE: ci",
+                ),
+            ),
+            (nightly_workflow, "nightly formal workflow", ()),
+        )
+    ) == []
+
+
+def test_formal_workflow_header_env_binding_errors_rejects_value_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "env:",
+                "  CARGO_TERM_COLOR: never",
+                "  NEXTEST_PROFILE: formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "env: { NEXTEST_PROFILE: nightly }",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_binding_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                ("CARGO_TERM_COLOR: always", "NEXTEST_PROFILE: ci"),
+            ),
+            (nightly_workflow, "nightly formal workflow", ()),
+        )
+    ) == [
+        f"PR formal workflow {pr_workflow} must keep exact top-level env bindings:\n"
+        "  - CARGO_TERM_COLOR: always\n"
+        "  - NEXTEST_PROFILE: ci; found:\n"
+        "  - 5: CARGO_TERM_COLOR: never\n"
+        "  - 6: NEXTEST_PROFILE: formal",
+        f"nightly formal workflow {nightly_workflow} must keep exact "
+        "top-level env bindings: no top-level env bindings; found:\n"
+        "  - 4: <inline env: { NEXTEST_PROFILE: nightly }>",
+    ]
+
+
+def test_formal_workflow_action_step_errors_accepts_allowlist(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses : actions/setup-java@v4",
+                "        with:",
+                "          distribution: temurin",
+                "          java-version: '17'",
+                "      - name: Upload formal docs metadata report",
+                "        uses: actions/upload-artifact@v4",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_step_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == []
+
+
+def test_formal_workflow_action_step_errors_rejects_unvetted_actions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses: example/setup-formal-env@v1",
+                "      - name: Local workspace mutator",
+                "        uses: ./ci/mutate-formal-env",
+                "      - uses : actions/cache@v5",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_step_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:6 may use only allowlisted action steps "
+        "in checked formal jobs: example/setup-formal-env@v1",
+        f"formal workflow {workflow}:8 may use only allowlisted action steps "
+        "in checked formal jobs: ./ci/mutate-formal-env",
+        f"formal workflow {workflow}:9 may use only allowlisted action steps "
+        "in checked formal jobs: actions/cache@v5",
+    ]
+
+
+def test_formal_workflow_action_step_errors_rejects_duplicate_uses_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "        uses: example/setup-formal-env@v1",
+                "      - name: Duplicate allowed actions",
+                "        uses: actions/setup-java@v4",
+                "        uses: actions/upload-artifact@v4",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_step_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow} checked formal job steps must set uses "
+        "at most once:\n"
+        "  - 5: actions/checkout@v4\n"
+        "  - 6: example/setup-formal-env@v1",
+        f"formal workflow {workflow}:6 may use only allowlisted action steps "
+        "in checked formal jobs: example/setup-formal-env@v1",
+        f"formal workflow {workflow} checked formal job steps must set uses "
+        "at most once:\n"
+        "  - 8: actions/setup-java@v4\n"
+        "  - 9: actions/upload-artifact@v4",
+    ]
+
+
+def test_formal_workflow_action_inventory_errors_accepts_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "formal.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "      - name: Upload formal docs metadata report",
+                "        uses: actions/upload-artifact@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                ("actions/checkout@v4", "actions/setup-java@v4"),
+            ),
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                (
+                    "actions/checkout@v4",
+                    "actions/setup-java@v4",
+                    "actions/upload-artifact@v4",
+                ),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_action_inventory_errors_rejects_order_or_extra_actions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/setup-java@v4",
+                "      - uses: actions/checkout@v4",
+                "      - uses: actions/upload-artifact@v4",
+                "      - uses: actions/setup-java@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_inventory_errors(
+        (
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                (
+                    "actions/checkout@v4",
+                    "actions/setup-java@v4",
+                    "actions/upload-artifact@v4",
+                ),
+            ),
+        )
+    ) == [
+        f"nightly formal workflow job {workflow} must use exact action step "
+        "inventory:\n"
+        "  - actions/checkout@v4\n"
+        "  - actions/setup-java@v4\n"
+        "  - actions/upload-artifact@v4; found:\n"
+        "  - 5: actions/setup-java@v4\n"
+        "  - 6: actions/checkout@v4\n"
+        "  - 7: actions/upload-artifact@v4\n"
+        "  - 8: actions/setup-java@v4",
+    ]
+
+
+def test_formal_workflow_action_input_errors_accepts_pinned_inputs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "        with :",
+                "          distribution: temurin",
+                "          java-version: '17'",
+                "      - name: Upload formal docs metadata report",
+                "        uses: actions/upload-artifact@v4",
+                "        with:",
+                "          name: formal-docs-i18n-metadata-nightly",
+                "          path: target/docs-i18n/formal-metadata.json",
+                "          if-no-files-found: ignore",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_input_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == []
+
+
+def test_formal_workflow_action_input_errors_rejects_input_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "        with:",
+                "          ref: refs/heads/main",
+                "      - uses: actions/setup-java@v4",
+                "        with:",
+                "          distribution: zulu",
+                "          java-version: '21'",
+                "      - name: Upload formal docs metadata report",
+                "        uses: actions/upload-artifact@v4",
+                "        with:",
+                "          name: formal-docs-i18n-metadata-nightly",
+                "          path: target/docs-i18n/formal-metadata.json",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_input_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:5 action 'actions/checkout@v4' must use "
+        "pinned inputs: no with inputs; found:\n"
+        "  - 7: ref: refs/heads/main",
+        f"formal workflow {workflow}:8 action 'actions/setup-java@v4' must use "
+        "pinned inputs:\n"
+        "  - distribution: temurin\n"
+        "  - java-version: '17'; found:\n"
+        "  - 10: distribution: zulu\n"
+        "  - 11: java-version: '21'",
+        f"formal workflow {workflow}:13 action 'actions/upload-artifact@v4' must use "
+        "pinned inputs:\n"
+        "  - name: formal-docs-i18n-metadata-nightly\n"
+        "  - path: target/docs-i18n/formal-metadata.json\n"
+        "  - if-no-files-found: ignore; found:\n"
+        "  - 15: name: formal-docs-i18n-metadata-nightly\n"
+        "  - 16: path: target/docs-i18n/formal-metadata.json",
+    ]
+
+
+def test_formal_workflow_action_input_errors_rejects_inline_with_values(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "        with: {ref: refs/heads/main}",
+                "      - uses: actions/setup-java@v4",
+                "        with : {distribution: temurin, java-version: '17'}",
+                "      - name: Upload formal docs metadata report",
+                "        uses: actions/upload-artifact@v4",
+                "        with: {name: formal-docs-i18n-metadata-nightly}",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_input_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:5 action 'actions/checkout@v4' must use "
+        "pinned inputs: no with inputs; found:\n"
+        "  - 6: with: {ref: refs/heads/main}",
+        f"formal workflow {workflow}:7 action 'actions/setup-java@v4' must use "
+        "pinned inputs:\n"
+        "  - distribution: temurin\n"
+        "  - java-version: '17'; found:\n"
+        "  - 8: with: {distribution: temurin, java-version: '17'}",
+        f"formal workflow {workflow}:10 action 'actions/upload-artifact@v4' must use "
+        "pinned inputs:\n"
+        "  - name: formal-docs-i18n-metadata-nightly\n"
+        "  - path: target/docs-i18n/formal-metadata.json\n"
+        "  - if-no-files-found: ignore; found:\n"
+        "  - 11: with: {name: formal-docs-i18n-metadata-nightly}",
+    ]
+
+
+def test_formal_workflow_setup_action_control_errors_allows_reporting_action_controls(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "        with:",
+                "          distribution: temurin",
+                "          java-version: '17'",
+                "      - name: Upload formal docs metadata report",
+                "        if: always()",
+                "        env:",
+                "          REPORT_ONLY: '1'",
+                "        uses: actions/upload-artifact@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_setup_action_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == []
+
+
+def test_formal_workflow_setup_action_control_errors_rejects_setup_controls(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - if: github.ref == 'refs/heads/main'",
+                "        uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "        timeout-minutes: 1",
+                "        env:",
+                "          JAVA_TOOL_OPTIONS: -Duser.language=tr",
+                "        with:",
+                "          distribution: temurin",
+                "          java-version: '17'",
+                "      - uses: actions/upload-artifact@v4",
+                "        continue-on-error: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_setup_action_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:5 setup action 'actions/checkout@v4' "
+        "at line 6 must not set if: - if: github.ref == 'refs/heads/main'",
+        f"formal workflow {workflow}:8 setup action 'actions/setup-java@v4' "
+        "at line 7 must not set timeout-minutes: timeout-minutes: 1",
+        f"formal workflow {workflow}:9 setup action 'actions/setup-java@v4' "
+        "at line 7 must not set env: env:",
+    ]
+
+
+def test_formal_workflow_runner_label_errors_accepts_pinned_runner(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    runs-on : ubuntu-latest",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_runner_label_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == []
+
+
+def test_formal_workflow_runner_label_errors_rejects_runner_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    runs-on: self-hosted",
+                "    runs-on: ubuntu-latest",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  hidden:",
+                "    runs-on: self-hosted",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_runner_label_errors(
+        ((workflow, ("frontier-nightly", "sumeragi_formal")),)
+    ) == [
+        f"formal workflow {workflow} checked job frontier-nightly must set "
+        "runs-on at most once:\n"
+        "  - 4: runs-on: self-hosted\n"
+        "  - 5: runs-on: ubuntu-latest",
+        f"formal workflow {workflow}:4 checked job frontier-nightly must set "
+        "runs-on: ubuntu-latest: runs-on: self-hosted",
+        f"formal workflow {workflow} checked job sumeragi_formal must set "
+        "runs-on: ubuntu-latest",
+    ]
+
+
+def test_formal_workflow_timeout_errors_accepts_pinned_budgets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "formal.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    timeout-minutes: 45",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  frontier-nightly:",
+                "    timeout-minutes : 90",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_timeout_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                "45",
+            ),
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                "90",
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_timeout_errors_rejects_budget_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    timeout-minutes: 45",
+                "    timeout-minutes : 90",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  hidden:",
+                "    timeout-minutes: 1",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_timeout_errors(
+        (
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                "90",
+            ),
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                "45",
+            ),
+        )
+    ) == [
+        f"nightly formal workflow job {workflow} checked job frontier-nightly "
+        "must set timeout-minutes at most once:\n"
+        "  - 4: timeout-minutes: 45\n"
+        "  - 5: timeout-minutes : 90",
+        f"nightly formal workflow job {workflow}:4 checked job "
+        "frontier-nightly must set timeout-minutes: 90: timeout-minutes: 45",
+        f"PR formal workflow job {workflow} checked job sumeragi_formal "
+        "must set timeout-minutes: 45",
+    ]
+
+
+def test_formal_workflow_proof_step_control_errors_allows_reporting_controls(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+                "      - name: Upload formal docs metadata report",
+                "        if: always()",
+                "        env:",
+                "          REPORT_ONLY: '1'",
+                "        uses: actions/upload-artifact@v4",
+                "        with:",
+                "          name: formal-docs-i18n-metadata-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_proof_step_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == []
+
+
+def test_formal_workflow_proof_step_control_errors_rejects_masked_proof_steps(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    if: github.event_name == 'workflow_dispatch'",
+                "    continue-on-error: true",
+                "    steps:",
+                "      - name: Install pinned Apalache",
+                "        if: github.ref == 'refs/heads/main'",
+                "        run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - name: Sumeragi formal baseline",
+                "        run: bash ci/check_sumeragi_formal.sh",
+                "        continue-on-error: true",
+                "      - continue-on-error: true",
+                "        run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+                "      - name: Formal docs metadata report",
+                "        if: always()",
+                "        run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_proof_step_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:4 checked job frontier-nightly must not set "
+        "if: if: github.event_name == 'workflow_dispatch'",
+        f"formal workflow {workflow}:5 checked job frontier-nightly must not set "
+        "continue-on-error: continue-on-error: true",
+        f"formal workflow {workflow}:8 proof step "
+        "'bash scripts/formal/install_apalache.sh 0.52.2' must not set if: "
+        "if: github.ref == 'refs/heads/main'",
+        f"formal workflow {workflow}:12 proof step "
+        "'bash ci/check_sumeragi_formal.sh' must not set continue-on-error: "
+        "continue-on-error: true",
+        f"formal workflow {workflow}:13 proof step "
+        "'bash scripts/formal/sumeragi_apalache.sh frontier-nightly' must not "
+        "set continue-on-error: - continue-on-error: true",
+    ]
+
+
+def test_formal_workflow_proof_step_control_errors_rejects_execution_modifiers(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    env:",
+                "      APALACHE_BIN: /tmp/apalache",
+                "    defaults:",
+                "      run:",
+                "        shell: bash {0}",
+                "    steps:",
+                "      - name: Install pinned Apalache",
+                "        run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "        env:",
+                "          INSTALL_APALACHE_FROM: /tmp",
+                "      - name: Sumeragi formal baseline",
+                "        shell: bash {0}",
+                "        run: bash ci/check_sumeragi_formal.sh",
+                "      - name: Sumeragi frontier nightly formal check",
+                "        timeout-minutes: 1",
+                "        working-directory: /tmp",
+                "        run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_proof_step_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:4 checked job frontier-nightly must not set "
+        "env: env:",
+        f"formal workflow {workflow}:6 checked job frontier-nightly must not set "
+        "defaults: defaults:",
+        f"formal workflow {workflow}:12 proof step "
+        "'bash scripts/formal/install_apalache.sh 0.52.2' must not set env: "
+        "env:",
+        f"formal workflow {workflow}:15 proof step "
+        "'bash ci/check_sumeragi_formal.sh' must not set shell: shell: bash {0}",
+        f"formal workflow {workflow}:18 proof step "
+        "'bash scripts/formal/sumeragi_apalache.sh frontier-nightly' must not "
+        "set timeout-minutes: timeout-minutes: 1",
+        f"formal workflow {workflow}:19 proof step "
+        "'bash scripts/formal/sumeragi_apalache.sh frontier-nightly' must not "
+        "set working-directory: working-directory: /tmp",
+    ]
+
+
+def test_formal_workflow_proof_step_control_errors_rejects_job_execution_context(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  unrelated:",
+                "    permissions:",
+                "      pull-requests: write",
+                "    steps:",
+                "      - run: printf '%s\\n' unrelated",
+                "  frontier-nightly:",
+                "    permissions: read-all",
+                "    container: example.invalid/formal:latest",
+                "    services:",
+                "      db:",
+                "        image: postgres:16",
+                "    strategy:",
+                "      matrix:",
+                "        shard: [a, b]",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_proof_step_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:9 checked job frontier-nightly must not set "
+        "permissions: permissions: read-all",
+        f"formal workflow {workflow}:10 checked job frontier-nightly must not set "
+        "container: container: example.invalid/formal:latest",
+        f"formal workflow {workflow}:11 checked job frontier-nightly must not set "
+        "services: services:",
+        f"formal workflow {workflow}:14 checked job frontier-nightly must not set "
+        "strategy: strategy:",
+    ]
+
+
+def test_formal_workflow_proof_step_control_errors_rejects_job_gates(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  unrelated:",
+                "    needs: preflight",
+                "    environment: staging",
+                "    steps:",
+                "      - run: printf '%s\\n' unrelated",
+                "  frontier-nightly:",
+                "    needs : [preflight]",
+                "    environment: formal-review",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_proof_step_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:9 checked job frontier-nightly must not set "
+        "needs: needs : [preflight]",
+        f"formal workflow {workflow}:10 checked job frontier-nightly must not set "
+        "environment: environment: formal-review",
+    ]
+
+
+def test_formal_workflow_proof_step_control_errors_normalizes_yaml_field_spacing(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    if : github.event_name == 'workflow_dispatch'",
+                "    steps:",
+                "      - name: Install pinned Apalache",
+                "        continue-on-error : true",
+                "        run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run : bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+                "        if : github.ref == 'refs/heads/main'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.workflow_job_active_command_modes(
+        workflow, ("frontier-nightly",), module.APALACHE_COMMAND_PREFIX
+    ) == ["frontier-nightly"]
+    assert module.formal_workflow_proof_step_control_errors(
+        ((workflow, ("frontier-nightly",)),)
+    ) == [
+        f"formal workflow {workflow}:4 checked job frontier-nightly must not set "
+        "if: if : github.event_name == 'workflow_dispatch'",
+        f"formal workflow {workflow}:7 proof step "
+        "'bash scripts/formal/install_apalache.sh 0.52.2' must not set "
+        "continue-on-error: continue-on-error : true",
+        f"formal workflow {workflow}:10 proof step "
+        "'bash scripts/formal/sumeragi_apalache.sh frontier-nightly' must not "
+        "set if: if : github.ref == 'refs/heads/main'",
+    ]
+
+
+def test_formal_workflow_job_entrypoint_errors_ignore_unrelated_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  unrelated:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: printf '%s\\n' placeholder",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_entrypoint_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    module.INSTALL_APALACHE_COMMAND_PREFIX,
+                    module.FORMAL_APALACHE_VERSION_COMMAND,
+                    module.FORMAL_BASELINE_COMMAND,
+                ),
+                (
+                    (
+                        module.INSTALL_APALACHE_COMMAND_PREFIX,
+                        module.FORMAL_APALACHE_VERSION_COMMAND,
+                    ),
+                    (
+                        module.FORMAL_APALACHE_VERSION_COMMAND,
+                        module.FORMAL_BASELINE_COMMAND,
+                    ),
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job {workflow} is missing command: "
+        "bash scripts/formal/install_apalache.sh",
+        f"PR formal workflow job {workflow} is missing command: "
+        "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+        f"PR formal workflow job {workflow} is missing command: "
+        "bash ci/check_sumeragi_formal.sh",
+    ]
+
+
+def test_formal_workflow_job_entrypoint_errors_require_job_order(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_entrypoint_errors(
+        (
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                (
+                    module.INSTALL_APALACHE_COMMAND_PREFIX,
+                    module.FORMAL_APALACHE_VERSION_COMMAND,
+                    module.FORMAL_BASELINE_COMMAND,
+                    module.FRONTIER_NIGHTLY_COMMAND,
+                ),
+                (
+                    (
+                        module.INSTALL_APALACHE_COMMAND_PREFIX,
+                        module.FORMAL_APALACHE_VERSION_COMMAND,
+                    ),
+                    (
+                        module.FORMAL_APALACHE_VERSION_COMMAND,
+                        module.FORMAL_BASELINE_COMMAND,
+                    ),
+                    (
+                        module.FORMAL_BASELINE_COMMAND,
+                        module.FRONTIER_NIGHTLY_COMMAND,
+                    ),
+                ),
+            ),
+        )
+    ) == [
+        f"nightly formal workflow job {workflow} must run "
+        "'target/apalache/toolchains/v0.52.2/bin/apalache-mc --version' "
+        "before 'bash ci/check_sumeragi_formal.sh'"
+    ]
+
+
+def test_formal_workflow_job_entrypoint_errors_reject_duplicate_entrypoints(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_entrypoint_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    module.INSTALL_APALACHE_COMMAND_PREFIX,
+                    module.FORMAL_APALACHE_VERSION_COMMAND,
+                    module.FORMAL_BASELINE_COMMAND,
+                ),
+                (
+                    (
+                        module.INSTALL_APALACHE_COMMAND_PREFIX,
+                        module.FORMAL_APALACHE_VERSION_COMMAND,
+                    ),
+                    (
+                        module.FORMAL_APALACHE_VERSION_COMMAND,
+                        module.FORMAL_BASELINE_COMMAND,
+                    ),
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job {workflow} must run "
+        "'bash scripts/formal/install_apalache.sh' at most once:\n"
+        "  - 5: bash scripts/formal/install_apalache.sh 0.52.2\n"
+        "  - 6: bash scripts/formal/install_apalache.sh 0.52.2"
+    ]
+
+
+def test_formal_ci_singleton_command_errors_reject_duplicate_preflights(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    expected_failure_ci = tmp_path / "check_sumeragi_formal_expected_failures.sh"
+    fast_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash ci/check_sumeragi_formal_expected_failures.sh",
+                'echo "[formal] sumeragi formal checks passed"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    expected_failure_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_ci_singleton_command_errors(
+        (
+            (
+                fast_ci,
+                "formal baseline script",
+                (
+                    module.FORMAL_COVERAGE_COMMAND,
+                    module.FORMAL_APALACHE_VERSION_COMMAND,
+                    module.FORMAL_EXPECTED_FAILURE_COMMAND,
+                    module.FORMAL_BASELINE_SUCCESS_COMMAND,
+                ),
+            ),
+            (
+                expected_failure_ci,
+                "formal expected-failure script",
+                (
+                    module.FORMAL_COVERAGE_COMMAND,
+                    module.FORMAL_APALACHE_VERSION_COMMAND,
+                    module.FORMAL_EXPECTED_FAILURE_SUCCESS_COMMAND,
+                ),
+            ),
+        )
+    ) == [
+        f"formal baseline script {fast_ci} must run "
+        "'python3 scripts/formal/check_sumeragi_formal_coverage.py' "
+        "at most once:\n"
+        "  - 1: python3 scripts/formal/check_sumeragi_formal_coverage.py\n"
+        "  - 2: python3 scripts/formal/check_sumeragi_formal_coverage.py",
+        f"formal baseline script {fast_ci} must run "
+        "'target/apalache/toolchains/v0.52.2/bin/apalache-mc --version' "
+        "at most once:\n"
+        "  - 3: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version\n"
+        "  - 4: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+        f"formal expected-failure script {expected_failure_ci} must run "
+        '\'echo "[formal] Sumeragi expected-failure checks behaved as expected"\' '
+        "at most once:\n"
+        '  - 3: echo "[formal] Sumeragi expected-failure checks behaved as expected"\n'
+        '  - 4: echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+    ]
+
+
+def test_command_after_all_errors_rejects_late_proof_after_terminal_sweep(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "formal.sh"
+    script.write_text(
+        "\n".join(
+            [
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                "bash ci/check_sumeragi_formal_expected_failures.sh",
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.command_after_all_errors(
+        script,
+        "bash ci/check_sumeragi_formal_expected_failures.sh",
+        (
+            "bash scripts/formal/sumeragi_apalache.sh",
+            "bash scripts/formal/sumeragi_tlc.sh",
+        ),
+        "formal baseline script",
+    ) == [
+        f"formal baseline script {script} must run "
+        "'bash ci/check_sumeragi_formal_expected_failures.sh' after all "
+        "'bash scripts/formal/sumeragi_apalache.sh', "
+        "'bash scripts/formal/sumeragi_tlc.sh' commands:\n"
+        "  - 3: bash scripts/formal/sumeragi_tlc.sh frontier-fast"
+    ]
+
+
+def test_workflow_entrypoint_errors_require_install_before_version_probe(
     tmp_path: Path,
 ) -> None:
     module = load_coverage_module()
     pr_workflow = tmp_path / "pr.yml"
     nightly_workflow = tmp_path / "nightly.yml"
     fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    expected_failure_ci = tmp_path / "check_sumeragi_formal_expected_failures.sh"
     pr_workflow.write_text(
         "\n".join(
             [
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
                 "run: bash ci/check_sumeragi_formal.sh",
                 "run: bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+                "run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fast_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                "bash ci/check_sumeragi_formal_expected_failures.sh",
+                'echo "[formal] sumeragi formal checks passed"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    expected_failure_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner",
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    module.PR_WORKFLOW = pr_workflow
+    module.NIGHTLY_WORKFLOW = nightly_workflow
+    module.FAST_CI = fast_ci
+    module.EXPECTED_FAILURE_CI = expected_failure_ci
+
+    assert module.workflow_entrypoint_errors() == [
+        f"PR workflow {pr_workflow} must run "
+        "'bash scripts/formal/install_apalache.sh' before "
+        "'target/apalache/toolchains/v0.52.2/bin/apalache-mc --version'"
+    ]
+
+
+def test_workflow_entrypoint_errors_require_version_probe_before_proofs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    expected_failure_ci = tmp_path / "check_sumeragi_formal_expected_failures.sh"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: bash ci/check_sumeragi_formal.sh",
             ]
         ),
         encoding="utf-8",
@@ -1141,8 +3526,21 @@ def test_workflow_entrypoint_errors_require_install_before_baseline(
         "\n".join(
             [
                 "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
                 "bash scripts/formal/sumeragi_apalache.sh fast",
                 "bash ci/check_sumeragi_formal_expected_failures.sh",
+                'echo "[formal] sumeragi formal checks passed"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    expected_failure_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner",
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
             ]
         ),
         encoding="utf-8",
@@ -1150,11 +3548,418 @@ def test_workflow_entrypoint_errors_require_install_before_baseline(
     module.PR_WORKFLOW = pr_workflow
     module.NIGHTLY_WORKFLOW = nightly_workflow
     module.FAST_CI = fast_ci
+    module.EXPECTED_FAILURE_CI = expected_failure_ci
 
     assert module.workflow_entrypoint_errors() == [
-        f"PR workflow {pr_workflow} must run "
-        "'bash scripts/formal/install_apalache.sh' before "
-        "'bash ci/check_sumeragi_formal.sh'"
+        f"PR workflow {pr_workflow} is missing command: "
+        "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+        f"nightly workflow {nightly_workflow} is missing command: "
+        "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+    ]
+
+
+def test_workflow_entrypoint_errors_require_coverage_before_all_baseline_evidence(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    expected_failure_ci = tmp_path / "check_sumeragi_formal_expected_failures.sh"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+                "run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fast_ci.write_text(
+        "\n".join(
+                [
+                    "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+                    "bash ci/check_sumeragi_formal_expected_failures.sh",
+                    "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                    "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                    'echo "[formal] sumeragi formal checks passed"',
+                ]
+            ),
+            encoding="utf-8",
+        )
+    expected_failure_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner",
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    module.PR_WORKFLOW = pr_workflow
+    module.NIGHTLY_WORKFLOW = nightly_workflow
+    module.FAST_CI = fast_ci
+    module.EXPECTED_FAILURE_CI = expected_failure_ci
+
+    assert module.workflow_entrypoint_errors() == [
+        f"formal baseline script {fast_ci} must run "
+        "'python3 scripts/formal/check_sumeragi_formal_coverage.py' before "
+        "'bash scripts/formal/sumeragi_tlc.sh'",
+        f"formal baseline script {fast_ci} must run "
+        "'python3 scripts/formal/check_sumeragi_formal_coverage.py' before "
+        "'bash ci/check_sumeragi_formal_expected_failures.sh'",
+        f"formal baseline script {fast_ci} must run "
+        "'target/apalache/toolchains/v0.52.2/bin/apalache-mc --version' before "
+        "'bash scripts/formal/sumeragi_tlc.sh'",
+        f"formal baseline script {fast_ci} must run "
+        "'target/apalache/toolchains/v0.52.2/bin/apalache-mc --version' before "
+        "'bash ci/check_sumeragi_formal_expected_failures.sh'",
+    ]
+
+
+def test_workflow_entrypoint_errors_require_baseline_version_probe_before_proofs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    expected_failure_ci = tmp_path / "check_sumeragi_formal_expected_failures.sh"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+                "run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fast_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+                "bash ci/check_sumeragi_formal_expected_failures.sh",
+                'echo "[formal] sumeragi formal checks passed"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    expected_failure_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner",
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    module.PR_WORKFLOW = pr_workflow
+    module.NIGHTLY_WORKFLOW = nightly_workflow
+    module.FAST_CI = fast_ci
+    module.EXPECTED_FAILURE_CI = expected_failure_ci
+
+    assert module.workflow_entrypoint_errors() == [
+        f"formal baseline script {fast_ci} must run "
+        "'target/apalache/toolchains/v0.52.2/bin/apalache-mc --version' before "
+        "'bash scripts/formal/sumeragi_apalache.sh'",
+    ]
+
+
+def test_workflow_entrypoint_errors_require_expected_failure_preflight_before_mutations(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    expected_failure_ci = tmp_path / "check_sumeragi_formal_expected_failures.sh"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+                "run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fast_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                "bash ci/check_sumeragi_formal_expected_failures.sh",
+                'echo "[formal] sumeragi formal checks passed"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    expected_failure_ci.write_text(
+        "\n".join(
+            [
+                "bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner",
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    module.PR_WORKFLOW = pr_workflow
+    module.NIGHTLY_WORKFLOW = nightly_workflow
+    module.FAST_CI = fast_ci
+    module.EXPECTED_FAILURE_CI = expected_failure_ci
+
+    assert module.workflow_entrypoint_errors() == [
+        f"formal expected-failure script {expected_failure_ci} must run "
+        "'python3 scripts/formal/check_sumeragi_formal_coverage.py' before "
+        "'bash scripts/formal/sumeragi_apalache.sh'",
+        f"formal expected-failure script {expected_failure_ci} must run "
+        "'target/apalache/toolchains/v0.52.2/bin/apalache-mc --version' before "
+        "'bash scripts/formal/sumeragi_apalache.sh'",
+    ]
+
+
+def test_workflow_entrypoint_errors_require_expected_failure_sweep_after_positive_proofs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    expected_failure_ci = tmp_path / "check_sumeragi_formal_expected_failures.sh"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+                "run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fast_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                "bash ci/check_sumeragi_formal_expected_failures.sh",
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+                'echo "[formal] sumeragi formal checks passed"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    expected_failure_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner",
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    module.PR_WORKFLOW = pr_workflow
+    module.NIGHTLY_WORKFLOW = nightly_workflow
+    module.FAST_CI = fast_ci
+    module.EXPECTED_FAILURE_CI = expected_failure_ci
+
+    assert module.workflow_entrypoint_errors() == [
+        f"formal baseline script {fast_ci} must run "
+        "'bash ci/check_sumeragi_formal_expected_failures.sh' after all "
+        "'bash scripts/formal/sumeragi_apalache.sh', "
+        "'bash scripts/formal/sumeragi_tlc.sh' commands:\n"
+        "  - 5: bash scripts/formal/sumeragi_tlc.sh frontier-fast"
+    ]
+
+
+def test_workflow_entrypoint_errors_require_success_marker_after_all_evidence(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    expected_failure_ci = tmp_path / "check_sumeragi_formal_expected_failures.sh"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+                "run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fast_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                'echo "[formal] sumeragi formal checks passed"',
+                "bash ci/check_sumeragi_formal_expected_failures.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    expected_failure_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner",
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    module.PR_WORKFLOW = pr_workflow
+    module.NIGHTLY_WORKFLOW = nightly_workflow
+    module.FAST_CI = fast_ci
+    module.EXPECTED_FAILURE_CI = expected_failure_ci
+
+    assert module.workflow_entrypoint_errors() == [
+        f"formal baseline script {fast_ci} must run "
+        '\'echo "[formal] sumeragi formal checks passed"\' after all '
+        "'bash scripts/formal/sumeragi_apalache.sh', "
+        "'bash scripts/formal/sumeragi_tlc.sh', "
+        "'bash ci/check_sumeragi_formal_expected_failures.sh' commands:\n"
+        "  - 5: bash ci/check_sumeragi_formal_expected_failures.sh"
+    ]
+
+
+def test_workflow_entrypoint_errors_require_expected_failure_success_marker_after_mutations(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    fast_ci = tmp_path / "check_sumeragi_formal.sh"
+    expected_failure_ci = tmp_path / "check_sumeragi_formal_expected_failures.sh"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "run: bash ci/check_sumeragi_formal.sh",
+                "run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fast_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "bash scripts/formal/sumeragi_apalache.sh fast",
+                "bash ci/check_sumeragi_formal_expected_failures.sh",
+                'echo "[formal] sumeragi formal checks passed"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    expected_failure_ci.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                'echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+                "bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    module.PR_WORKFLOW = pr_workflow
+    module.NIGHTLY_WORKFLOW = nightly_workflow
+    module.FAST_CI = fast_ci
+    module.EXPECTED_FAILURE_CI = expected_failure_ci
+
+    assert module.workflow_entrypoint_errors() == [
+        f"formal expected-failure script {expected_failure_ci} must run "
+        '\'echo "[formal] Sumeragi expected-failure checks behaved as expected"\' '
+        "after all 'bash scripts/formal/sumeragi_apalache.sh', "
+        "'bash scripts/formal/sumeragi_tlc.sh' commands:\n"
+        "  - 4: bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner"
     ]
 
 
@@ -1209,6 +4014,119 @@ def test_version_values_mismatch_errors_rejects_missing_and_mismatched_pin(
     ) == [
         f"workflow install command {mismatched} uses Apalache 0.53.0, "
         "expected 0.52.2"
+    ]
+
+
+def test_active_version_values_mismatch_errors_ignore_inactive_workflow_pins(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing = tmp_path / "missing.yml"
+    mismatched = tmp_path / "mismatched.yml"
+    valid = tmp_path / "valid.yml"
+    missing.write_text(
+        "\n".join(
+                [
+                    "# run: bash scripts/formal/install_apalache.sh 0.52.2",
+                    "name: bash scripts/formal/install_apalache.sh 0.52.2",
+                    "run: echo bash scripts/formal/install_apalache.sh 0.52.2",
+                ]
+            ),
+            encoding="utf-8",
+    )
+    mismatched.write_text(
+        "\n".join(
+            [
+                "# run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: bash scripts/formal/install_apalache.sh 0.53.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    valid.write_text(
+        "run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version\n",
+        encoding="utf-8",
+    )
+
+    assert module.active_version_values_mismatch_errors(
+        missing,
+        module.INSTALL_APALACHE_COMMAND_VERSION_RE,
+        "0.52.2",
+        "workflow install command",
+    ) == [f"workflow install command {missing} does not declare Apalache 0.52.2"]
+    assert module.active_version_values_mismatch_errors(
+        mismatched,
+        module.INSTALL_APALACHE_COMMAND_VERSION_RE,
+        "0.52.2",
+        "workflow install command",
+    ) == [
+        f"workflow install command {mismatched} uses Apalache 0.53.0, "
+        "expected 0.52.2"
+    ]
+    assert (
+        module.active_version_values_mismatch_errors(
+            valid,
+            module.APALACHE_TOOLCHAIN_PATH_VERSION_RE,
+            "0.52.2",
+            "workflow toolchain path",
+        )
+        == []
+    )
+
+
+def test_workflow_job_version_values_mismatch_errors_scope_to_named_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing = tmp_path / "missing.yml"
+    mismatched = tmp_path / "mismatched.yml"
+    missing.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  unrelated:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mismatched.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.53.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.workflow_job_version_values_mismatch_errors(
+        missing,
+        ("sumeragi_formal",),
+        module.INSTALL_APALACHE_COMMAND_VERSION_RE,
+        "0.52.2",
+        "PR formal workflow job install command",
+    ) == [
+        f"PR formal workflow job install command {missing} does not declare "
+        "Apalache 0.52.2"
+    ]
+    assert module.workflow_job_version_values_mismatch_errors(
+        mismatched,
+        ("sumeragi_formal",),
+        module.INSTALL_APALACHE_COMMAND_VERSION_RE,
+        "0.52.2",
+        "PR formal workflow job install command",
+    ) == [
+        f"PR formal workflow job install command {mismatched} uses "
+        "Apalache 0.53.0, expected 0.52.2"
     ]
 
 
@@ -1281,6 +4199,110 @@ def test_runner_invocation_errors_require_selected_proof_inputs(
         '--run-dir="$run_rel" "$spec_rel"',
         f"TLC runner invocation {tlc} is missing required text: "
         '-metadir "$run_dir"',
+        f"TLC runner invocation {tlc}:1 must run under set +e, pipe output "
+        "to $log_file, capture tlc_status=${PIPESTATUS[0]}, restore set -e, "
+        "and only then enter the expected-failure branch: "
+        'java ${TLC_JAVA_OPTS:-} -cp "$tlc_jar" tlc2.TLC',
+    ]
+
+
+def test_apalache_invocation_wrapper_errors_rejects_unwrapped_proof_commands(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    apalache = tmp_path / "sumeragi_apalache.sh"
+    apalache.write_text(
+        "\n".join(
+            [
+                '"$apalache_bin" --out-dir="$out_dir" check '
+                '--length="$apalache_length" --config="$cfg_file" '
+                '--run-dir="$run_dir" "$spec_file"',
+                "docker run --rm \\",
+                '  "$apalache_docker_image" \\',
+                '  apalache-mc --out-dir="$out_rel" typecheck "$spec_rel"',
+                'run_with_expected_status "$apalache_bin" '
+                '--out-dir="$out_dir" typecheck "$spec_file"',
+                "run_with_expected_status docker run --rm \\",
+                '  "$apalache_docker_image" \\',
+                '  apalache-mc --out-dir="$out_rel" check '
+                '--length="$apalache_length" --config="$cfg_rel" '
+                '--run-dir="$run_rel" "$spec_rel"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.apalache_invocation_wrapper_errors(apalache) == [
+        f"Apalache runner invocation {apalache}:1 must route proof command "
+        'through run_with_expected_status: "$apalache_bin" '
+        '--out-dir="$out_dir" check --length="$apalache_length" '
+        '--config="$cfg_file" --run-dir="$run_dir" "$spec_file"',
+        f"Apalache runner invocation {apalache}:2 must route proof command "
+        "through run_with_expected_status: docker run --rm "
+        '"$apalache_docker_image" apalache-mc --out-dir="$out_rel" '
+        'typecheck "$spec_rel"',
+    ]
+
+
+def test_tlc_invocation_status_capture_errors_require_ordered_status_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    valid = tmp_path / "valid_tlc.sh"
+    invalid = tmp_path / "invalid_tlc.sh"
+    valid.write_text(
+        "\n".join(
+            [
+                "set +e",
+                "(",
+                '  cd "$spec_dir"',
+                '  java ${TLC_JAVA_OPTS:-} -cp "$tlc_jar" tlc2.TLC \\',
+                "    -cleanup \\",
+                '    -workers "$workers" \\',
+                '    -metadir "$run_dir" \\',
+                '    -config "$cfg_file" \\',
+                '    "$module"',
+                ') 2>&1 | tee "$log_file"',
+                "tlc_status=${PIPESTATUS[0]}",
+                "set -e",
+                'if [[ "$expect_failure" -eq 1 ]]; then',
+                "  true",
+                "fi",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    invalid.write_text(
+        "\n".join(
+            [
+                "set +e",
+                "(",
+                '  cd "$spec_dir"',
+                '  java ${TLC_JAVA_OPTS:-} -cp "$tlc_jar" tlc2.TLC \\',
+                "    -cleanup \\",
+                '    -workers "$workers" \\',
+                '    -metadir "$run_dir" \\',
+                '    -config "$cfg_file" \\',
+                '    "$module"',
+                "tlc_status=${PIPESTATUS[0]}",
+                ') 2>&1 | tee "$log_file"',
+                "set -e",
+                'if [[ "$expect_failure" -eq 1 ]]; then',
+                "  true",
+                "fi",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tlc_invocation_status_capture_errors(valid) == []
+    assert module.tlc_invocation_status_capture_errors(invalid) == [
+        f"TLC runner invocation {invalid}:4 must run under set +e, pipe "
+        "output to $log_file, capture tlc_status=${PIPESTATUS[0]}, restore "
+        "set -e, and only then enter the expected-failure branch: "
+        'java ${TLC_JAVA_OPTS:-} -cp "$tlc_jar" tlc2.TLC -cleanup '
+        '-workers "$workers" -metadir "$run_dir" -config "$cfg_file" '
+        '"$module"',
     ]
 
 
@@ -1576,6 +4598,101 @@ def test_expected_failure_default_errors_rejects_global_downgrade(
     ]
 
 
+def test_tlc_constraint_default_errors_accepts_empty_top_level_default(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "sumeragi_tlc.sh"
+    script.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                'tlc_constraint=""',
+                'case "$mode" in',
+                "  certified-fetch-fast)",
+                '    tlc_constraint="TlcSingletonOrEmpty"',
+                "    ;;",
+                "esac",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tlc_constraint_default_errors(script) == []
+
+
+def test_tlc_constraint_default_errors_rejects_global_constraint(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "sumeragi_tlc.sh"
+    script.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                'tlc_constraint="GlobalConstraint"',
+                'tlc_constraint = ""',
+                'case "$mode" in',
+                "  certified-fetch-fast)",
+                '    tlc_constraint="TlcSingletonOrEmpty"',
+                "    ;;",
+                "esac",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tlc_constraint_default_errors(script) == [
+        f"TLC runner {script}:3 has malformed top-level "
+        'tlc_constraint assignment: tlc_constraint = ""',
+        f"TLC runner {script}:2 must set top-level tlc_constraint "
+        'default to ""',
+    ]
+
+
+def test_tlc_constraint_default_errors_rejects_missing_or_duplicate_defaults(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing = tmp_path / "missing_tlc_default.sh"
+    duplicate = tmp_path / "duplicate_tlc_default.sh"
+    missing.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                'case "$mode" in',
+                "  fast)",
+                "    ;;",
+                "esac",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    duplicate.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                'tlc_constraint=""',
+                'tlc_constraint=""',
+                'case "$mode" in',
+                "  fast)",
+                "    ;;",
+                "esac",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tlc_constraint_default_errors(missing) == [
+        f'TLC runner {missing} must declare exactly one top-level '
+        'tlc_constraint="" default, found 0'
+    ]
+    assert module.tlc_constraint_default_errors(duplicate) == [
+        f'TLC runner {duplicate} must declare exactly one top-level '
+        'tlc_constraint="" default, found 2'
+    ]
+
+
 def test_expected_failure_assignment_errors_rejects_malformed_case_assignment(
 ) -> None:
     module = load_coverage_module()
@@ -1644,6 +4761,7 @@ def test_apalache_typecheck_only_mode_errors_accepts_fast_smoke() -> None:
         module.apalache_typecheck_only_mode_errors(
             {"fast", "frontier-fast"},
             cases,
+            allowed_modes={"fast"},
         )
         == []
     )
@@ -1716,6 +4834,7 @@ def test_apalache_typecheck_only_mode_errors_rejects_unlisted_modes() -> None:
     assert module.apalache_typecheck_only_mode_errors(
         {"fast", "frontier-fast"},
         cases,
+        allowed_modes={"fast"},
     ) == [
         "frontier-fast: Apalache runner case 'frontier-fast' at line 20 "
         "sets typecheck_only=1 outside APALACHE_TYPECHECK_ONLY_MODES"
@@ -1743,6 +4862,7 @@ def test_apalache_typecheck_only_mode_errors_rejects_malformed_case_assignment(
     assert module.apalache_typecheck_only_mode_errors(
         {"fast", "frontier-fast"},
         cases,
+        allowed_modes={"fast"},
     ) == [
         "frontier-fast: Apalache runner case 'frontier-fast' line 21 "
         "has malformed typecheck_only assignment: typecheck_only = 1",
@@ -1761,9 +4881,61 @@ def test_apalache_typecheck_only_mode_errors_rejects_stale_allowlist() -> None:
     assert module.apalache_typecheck_only_mode_errors(
         {"fast", "frontier-fast"},
         cases,
+        allowed_modes={"fast"},
     ) == [
         "fast: listed in APALACHE_TYPECHECK_ONLY_MODES but Apalache runner "
         "case 'fast' at line 10 does not set typecheck_only=1"
+    ]
+
+
+def test_apalache_only_typecheck_contract_errors_accepts_top_corridor_alignment(
+) -> None:
+    module = load_coverage_module()
+
+    assert (
+        module.apalache_only_typecheck_contract_errors(
+            apalache_only_modes={
+                "deep",
+                "byzantine-delivered-first-top-fast",
+                "byzantine-vote-first-top-fast",
+            },
+            typecheck_only_modes={
+                "fast",
+                "byzantine-delivered-first-top-fast",
+                "byzantine-vote-first-top-fast",
+            },
+            bounded_exceptions={"deep"},
+        )
+        == []
+    )
+
+
+def test_apalache_only_typecheck_contract_errors_rejects_unbounded_only_mode(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.apalache_only_typecheck_contract_errors(
+        apalache_only_modes={"deep", "top-without-tlc-fast"},
+        typecheck_only_modes={"fast"},
+        bounded_exceptions={"deep"},
+    ) == [
+        "Apalache-only PR modes without TLC evidence must be typecheck-only "
+        "unless explicitly listed as bounded exceptions:\n"
+        "  - top-without-tlc-fast"
+    ]
+
+
+def test_apalache_only_typecheck_contract_errors_rejects_stale_exception(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.apalache_only_typecheck_contract_errors(
+        apalache_only_modes={"byzantine-direct-top-fast"},
+        typecheck_only_modes={"byzantine-direct-top-fast"},
+        bounded_exceptions={"deep"},
+    ) == [
+        "Apalache-only bounded PR exception entries are stale:\n"
+        "  - deep"
     ]
 
 
@@ -1835,6 +5007,5880 @@ def test_mutation_cfg_equivalence_rejects_unexpected_tlc_cfg() -> None:
         f"frontier-bug-stale-owner: Apalache cfg {apalache_cfg} "
         f"differs from TLC cfg {tlc_cfg}"
     ]
+
+
+def test_projection_clean_cfg_errors_accepts_required_fast_and_progress_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                *(
+                    f"{kind} {operator}"
+                    for operator, kind in module.PROJECTION_FAST_CFG_REQUIRED_CHECKS
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                *(
+                    f"{kind} {operator}"
+                    for operator, kind in module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == []
+
+
+def test_projection_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ProjectionBridgeMatchesInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projection_clean_cfg_errors(fast_cfg, progress_cfg)
+
+    assert (
+        f"{fast_cfg} checks PROPERTY ProjectionBridgeMatchesInterleavingExactness, "
+        "expected INVARIANT"
+    ) in errors
+    assert (
+        f"{progress_cfg} must check PROPERTY EventualProjectedCommitFinalityStack "
+        "for projection progress coverage"
+    ) in errors
+
+
+def test_projection_clean_cfg_errors_rejects_wrong_progress_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_cfg_with_behavior_and_checks(
+        progress_cfg,
+        (
+            "INIT Init",
+            "NEXT Next",
+            "CHECK_DEADLOCK FALSE",
+            'CONSTANT Bug = "none"',
+        ),
+        module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == [
+        f"{progress_cfg} must bind SPECIFICATION ProjectedCommitProgressSpec "
+        "for projection progress coverage",
+        f"{progress_cfg}:1 binds unexpected INIT Init; expected SPECIFICATION "
+        "ProjectedCommitProgressSpec for projection progress coverage",
+        f"{progress_cfg}:2 binds unexpected NEXT Next; expected SPECIFICATION "
+        "ProjectedCommitProgressSpec for projection progress coverage",
+    ]
+
+
+def test_projection_clean_cfg_errors_rejects_mutated_progress_bug_constant(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "finality_not_latched"',
+                *(
+                    f"{kind} {operator}"
+                    for operator, kind in module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == [
+        f'{progress_cfg}:3 binds constant Bug = "finality_not_latched", '
+        'expected "none" for projection progress coverage'
+    ]
+
+
+def test_projection_clean_cfg_errors_rejects_mutated_fast_bug_constant(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    write_cfg_with_behavior_and_checks(
+        fast_cfg,
+        ("INIT Init", "NEXT Next", 'CONSTANT Bug = "finality_not_latched"'),
+        module.PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "ProjectedCommitProgressSpec",
+        module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == [
+        f'{fast_cfg}:3 binds constant Bug = "finality_not_latched", '
+        'expected "none" for projection fast coverage'
+    ]
+
+
+def test_projection_clean_cfg_errors_rejects_wrong_fast_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress.cfg"
+    write_cfg_with_behavior_and_checks(
+        fast_cfg,
+        ("INIT Init", "NEXT StaleNext", 'CONSTANT Bug = "none"'),
+        module.PROJECTION_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "ProjectedCommitProgressSpec",
+        module.PROJECTION_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_clean_cfg_errors(fast_cfg, progress_cfg) == [
+        f"{fast_cfg}:2 binds NEXT StaleNext, expected Next "
+        "for projection fast coverage"
+    ]
+
+
+def write_cfg_with_checks(
+    path: Path,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    write_cfg_with_behavior_and_checks(
+        path,
+        ("INIT Init", "NEXT Next"),
+        required_checks,
+    )
+
+
+def write_clean_safety_cfg_with_checks(
+    path: Path,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    write_cfg_with_behavior_and_checks(
+        path,
+        ("INIT Init", "NEXT Next", 'CONSTANT Bug = "none"'),
+        required_checks,
+    )
+
+
+def write_cfg_with_behavior_and_checks(
+    path: Path,
+    behavior_lines: tuple[str, ...],
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    behavior_and_policy_lines = list(behavior_lines)
+    if (
+        any(line.startswith("SPECIFICATION ") for line in behavior_and_policy_lines)
+        and "CHECK_DEADLOCK FALSE" not in behavior_and_policy_lines
+    ):
+        behavior_and_policy_lines.append("CHECK_DEADLOCK FALSE")
+    path.write_text(
+        "\n".join(
+            [
+                *behavior_and_policy_lines,
+                *(f"{kind} {operator}" for operator, kind in required_checks),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_cfg_with_behavior_constants_and_checks(
+    path: Path,
+    behavior_lines: tuple[str, ...],
+    constant_values: tuple[tuple[str, str], ...],
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                *behavior_lines,
+                "CONSTANTS",
+                *(f"  {constant} = {value}" for constant, value in constant_values),
+                *(f"{kind} {operator}" for operator, kind in required_checks),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_clean_progress_cfg_with_checks(
+    path: Path,
+    specification: str,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    write_cfg_with_behavior_and_checks(
+        path,
+        (f"SPECIFICATION {specification}", 'CONSTANT Bug = "none"'),
+        required_checks,
+    )
+
+
+def write_progress_mutation_cfg_with_checks(
+    path: Path,
+    stem_prefix: str,
+    specification: str,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    assert path.stem.startswith(stem_prefix)
+    bug_suffix = path.stem[len(stem_prefix) :]
+    write_cfg_with_behavior_and_checks(
+        path,
+        (f"SPECIFICATION {specification}", f'CONSTANT Bug = "{bug_suffix}"'),
+        required_checks,
+    )
+
+
+def write_safety_mutation_cfg_with_checks(
+    path: Path,
+    required_checks: tuple[tuple[str, str], ...],
+) -> None:
+    marker = "_bug_"
+    assert marker in path.stem
+    bug_suffix = path.stem.split(marker, 1)[1]
+    write_cfg_with_behavior_and_checks(
+        path,
+        ("INIT Init", "NEXT Next", f'CONSTANT Bug = "{bug_suffix}"'),
+        required_checks,
+    )
+
+
+def test_cfg_required_behavior_contract_errors_accepts_supported_behavior_forms(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    spec_cfg = tmp_path / "progress.cfg"
+    init_next_cfg = tmp_path / "top.cfg"
+    spec_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    init_next_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT CorridorNext",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_required_behavior_contract_errors(
+            spec_cfg,
+            (("SPECIFICATION", "ProgressSpec"),),
+            "progress coverage",
+        )
+        == []
+    )
+    assert (
+        module.cfg_required_behavior_contract_errors(
+            init_next_cfg,
+            (("INIT", "Init"), ("NEXT", "CorridorNext")),
+            "top coverage",
+        )
+        == []
+    )
+
+
+def test_cfg_required_behavior_contract_errors_rejects_wrong_behavior_form(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "top.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION OldSpec",
+                "INIT Init",
+                "NEXT WrongNext",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_behavior_contract_errors(
+        cfg,
+        (("INIT", "Init"), ("NEXT", "ExpectedNext")),
+        "top coverage",
+    ) == [
+        f"{cfg}:1 binds unexpected SPECIFICATION OldSpec; expected INIT Init "
+        "and NEXT ExpectedNext for top coverage",
+        f"{cfg}:3 binds NEXT WrongNext, expected ExpectedNext for top coverage",
+    ]
+
+
+def test_cfg_behavior_surface_errors_accepts_single_behavior_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    spec_cfg = tmp_path / "SumeragiTemporal_fast.cfg"
+    init_next_cfg = tmp_path / "SumeragiSafety_fast.cfg"
+    spec_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    init_next_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_behavior_surface_errors(tmp_path) == []
+
+
+def test_cfg_behavior_surface_errors_rejects_missing_partial_and_mixed(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing_cfg = tmp_path / "SumeragiMissing_fast.cfg"
+    mixed_cfg = tmp_path / "SumeragiMixed_fast.cfg"
+    partial_cfg = tmp_path / "SumeragiPartial_fast.cfg"
+    repeated_cfg = tmp_path / "SumeragiRepeated_fast.cfg"
+    missing_cfg.write_text(
+        "INVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    mixed_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    partial_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    repeated_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "SPECIFICATION OtherSpec",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_behavior_surface_errors(tmp_path) == [
+        f"{missing_cfg} must define exactly one CFG behavior surface: "
+        "SPECIFICATION or both INIT and NEXT",
+        f"{mixed_cfg} mixes SPECIFICATION with INIT/NEXT behavior; each CFG "
+        "must define exactly one behavior surface",
+        f"{partial_cfg} must bind both INIT and NEXT for the INIT/NEXT "
+        "behavior surface",
+        f"{repeated_cfg}:2 repeats SPECIFICATION behavior binding OtherSpec "
+        "first declared at line 1; each CFG must use exactly one behavior "
+        "surface",
+    ]
+
+
+def test_cfg_shape_surface_errors_accepts_well_formed_cfgs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    init_next_cfg = tmp_path / "SumeragiSafety_fast.cfg"
+    spec_cfg = tmp_path / "SumeragiProgress_fast.cfg"
+    init_next_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CHECK_DEADLOCK FALSE",
+                "CONSTANTS",
+                '  Bug = "none"',
+                "INVARIANTS",
+                "  TypeInvariant",
+                "  SafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    spec_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "PROPERTY EventuallyCommits",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_shape_surface_errors(tmp_path) == []
+
+
+def test_cfg_shape_surface_errors_rejects_malformed_cfgs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    empty_cfg = tmp_path / "SumeragiEmpty_fast.cfg"
+    malformed_cfg = tmp_path / "SumeragiMalformed_fast.cfg"
+    duplicate_deadlock_cfg = tmp_path / "SumeragiDuplicateDeadlock_fast.cfg"
+    empty_cfg.write_text("", encoding="utf-8")
+    malformed_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CHECK_DEADLOCK=FALSE",
+                "INVARANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    duplicate_deadlock_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CHECK_DEADLOCK FALSE",
+                "CHECK_DEADLOCK TRUE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_shape_surface_errors(tmp_path) == [
+        f"formal coverage: {duplicate_deadlock_cfg}:4 repeats "
+        "CHECK_DEADLOCK directive first declared at line 3",
+        f"formal coverage: {empty_cfg} is empty",
+        f"formal coverage: {malformed_cfg}:3 malformed CFG directive "
+        "CHECK_DEADLOCK: CHECK_DEADLOCK=FALSE",
+        f"formal coverage: {malformed_cfg}:4 unknown CFG directive INVARANT",
+        f"formal coverage: {malformed_cfg} has no invariant or property checks",
+    ]
+
+
+def test_cfg_proof_surface_errors_accepts_typed_semantic_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    invariant_cfg = tmp_path / "SumeragiInvariant_fast.cfg"
+    property_cfg = tmp_path / "SumeragiProperty_fast.cfg"
+    invariant_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    property_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION Spec",
+                "INVARIANT TypeInvariant",
+                "PROPERTY EventuallyCommits",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_proof_surface_errors(tmp_path) == []
+
+
+def test_cfg_proof_surface_errors_rejects_untyped_or_type_only_configs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    downgraded_cfg = tmp_path / "SumeragiDowngraded_fast.cfg"
+    missing_type_cfg = tmp_path / "SumeragiUntyped_fast.cfg"
+    type_only_cfg = tmp_path / "SumeragiTypeOnly_fast.cfg"
+    downgraded_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "PROPERTY TypeInvariant",
+                "INVARIANT SafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_type_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT SafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    type_only_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_proof_surface_errors(tmp_path) == [
+        f"{downgraded_cfg} checks PROPERTY TypeInvariant, expected "
+        "INVARIANT for formal coverage",
+        f"{type_only_cfg} must check at least one non-TypeInvariant "
+        "invariant/property for formal coverage",
+        f"{missing_type_cfg} must check INVARIANT TypeInvariant for "
+        "formal coverage",
+    ]
+
+
+def test_cfg_fast_generic_surface_errors_accepts_direct_fast_envelopes(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    tlc_fast_cfg = tmp_path / "SumeragiFrontier_tlc_fast.cfg"
+    mutation_cfg = tmp_path / "SumeragiFrontier_bug_stale_fast.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT FrontierExactness",
+                "INVARIANT FrontierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_fast_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION Spec",
+                "INVARIANT TypeInvariant",
+                "PROPERTY TlcFrontierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mutation_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT NoBugInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_fast_generic_surface_errors(tmp_path) == []
+
+
+def test_cfg_fast_generic_surface_errors_rejects_generic_fast_surfaces(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    generic_cfg = tmp_path / "SumeragiGeneric_fast.cfg"
+    missing_envelope_cfg = tmp_path / "SumeragiMissingEnvelope_fast.cfg"
+    generic_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyFast",
+                "INVARIANTS Safety NoBugInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_envelope_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT FrontierExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_fast_generic_surface_errors(tmp_path) == [
+        f"formal coverage: formal coverage cfg {generic_cfg}:4 references "
+        "generic check SafetyFast; fast configs must use a model-specific "
+        "direct invariant",
+        f"formal coverage: formal coverage cfg {generic_cfg}:5 references "
+        "generic check Safety; fast configs must use a model-specific direct "
+        "invariant",
+        f"formal coverage: formal coverage cfg {generic_cfg}:5 references "
+        "generic check NoBugInvariant; fast configs must use a model-specific "
+        "direct invariant",
+        f"formal coverage: formal coverage cfg {generic_cfg} has no "
+        "model-specific *CorrectnessEnvelope invariant/property check",
+        f"formal coverage: formal coverage cfg {missing_envelope_cfg} has no "
+        "model-specific *CorrectnessEnvelope invariant/property check",
+    ]
+
+
+def test_cfg_proof_target_shape_surface_errors_accepts_paired_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiPairedShape.tla"
+    cfg = tmp_path / "SumeragiPairedShape_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiPairedShape ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "PairedExactness ==",
+                "  /\\ ModelPredicate",
+                "ModelPredicate == checked = ready",
+                "PairedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ PairedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT PairedExactness",
+                "INVARIANT PairedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_proof_target_shape_surface_errors(tmp_path) == []
+
+
+def test_cfg_proof_target_shape_surface_errors_rejects_invalid_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiInvalidShape.tla"
+    cfg = tmp_path / "SumeragiInvalidShape_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInvalidShape ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == checked = ready",
+                "BadExactness == ModelPredicate",
+                "BadCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ ModelPredicate",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT BadExactness",
+                "INVARIANT BadCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_proof_target_shape_surface_errors(tmp_path) == [
+        f"formal coverage: formal coverage cfg {cfg}:5 references "
+        f"correctness envelope BadCorrectnessEnvelope, but {tla}:8 has no "
+        "model-specific *Exactness conjunct",
+        f"formal coverage: formal coverage cfg {cfg}:4 references direct "
+        f"exactness check BadExactness at {tla}:6 aliases ModelPredicate; "
+        "inline concrete model predicates directly",
+        f"formal coverage: formal coverage cfg {cfg}:4 references direct "
+        "exactness check BadExactness, but no checked correctness envelope "
+        "in that CFG composes it",
+    ]
+
+
+def test_cfg_operator_reference_surface_errors_accepts_resolved_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    gate_tla = tmp_path / "SumeragiGate.tla"
+    gate_cfg = tmp_path / "SumeragiGate_fast.cfg"
+    top_tla = tmp_path / "Sumeragi.tla"
+    top_cfg = tmp_path / "Sumeragi_byzantine_direct_top_fast.cfg"
+    gate_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "VARIABLE checked",
+                "vars == <<checked>>",
+                "Init == checked = 0",
+                "Next == checked' = 1",
+                "Bound == checked \\in 0..1",
+                "TypeInvariant == TRUE",
+                "SafetyEnvelope == checked = 1",
+                "EventuallySafe == <> SafetyEnvelope",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CONSTRAINT Bound",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyEnvelope",
+                "PROPERTY EventuallySafe",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    top_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "VARIABLE checked",
+                "vars == <<checked>>",
+                "Init == checked = 0",
+                "ByzantineDirectCommitNext == checked' = 1",
+                "TypeInvariant == TRUE",
+                "TlcByzantineDirectCommitCorridor == checked = 0",
+                "ByzantineDirectTopCorrectnessEnvelope == checked = 1",
+                "ByzantineDirectTopCoversOrderedTopCorridors == checked \\in 0..1",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    top_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT ByzantineDirectCommitNext",
+                "INVARIANT TypeInvariant",
+                "INVARIANT TlcByzantineDirectCommitCorridor",
+                "INVARIANT ByzantineDirectTopCorrectnessEnvelope",
+                "INVARIANT ByzantineDirectTopCoversOrderedTopCorridors",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_operator_reference_surface_errors(tmp_path) == []
+
+
+def test_cfg_operator_reference_surface_errors_rejects_invalid_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    arity_tla = tmp_path / "SumeragiArity.tla"
+    arity_cfg = tmp_path / "SumeragiArity_fast.cfg"
+    missing_owner_cfg = tmp_path / "SumeragiMissing_fast.cfg"
+    trivial_tla = tmp_path / "SumeragiTrivial.tla"
+    trivial_cfg = tmp_path / "SumeragiTrivial_fast.cfg"
+    arity_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiArity ----",
+                "VARIABLE checked",
+                "vars == <<checked>>",
+                "Init == checked = 0",
+                "Next == checked' = 1",
+                "TypeInvariant == TRUE",
+                "SafetyEnvelope(x) == x = checked",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    arity_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_owner_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    trivial_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTrivial ----",
+                "VARIABLE checked",
+                "vars == <<checked>>",
+                "Init == checked = 0",
+                "Next == checked' = 1",
+                "TypeInvariant == TRUE",
+                "SafetyEnvelope == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    trivial_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_operator_reference_surface_errors(tmp_path) == [
+        f"formal coverage: {arity_cfg}:4 references INVARIANT operator "
+        f"SafetyEnvelope, but {arity_tla}:7 defines it with arity 1; CFG "
+        "references must target zero-arity operators",
+        f"{missing_owner_cfg} has no inferred owning TLA module; tried "
+        f"{tmp_path / 'SumeragiMissing_fast.tla'}, "
+        f"{tmp_path / 'SumeragiMissing.tla'}",
+        f"formal coverage: formal coverage cfg {trivial_cfg}:4 references "
+        f"INVARIANT check SafetyEnvelope, but {trivial_tla}:7 defines it as "
+        "literal TRUE",
+    ]
+
+
+def test_cfg_operator_reference_surface_errors_rejects_duplicate_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDuplicateTargets.tla"
+    cfg = tmp_path / "SumeragiDuplicateTargets_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDuplicateTargets ----",
+                "VARIABLE checked",
+                "vars == <<checked>>",
+                "Init == checked = 0",
+                "Next == checked' = 1",
+                "NextAgain == checked' = 2",
+                "Bound == checked \\in 0..2",
+                "TypeInvariant == TRUE",
+                "Safety == checked # 3",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "NEXT NextAgain",
+                "CONSTRAINT Bound",
+                "INVARIANT TypeInvariant",
+                "INVARIANT Safety",
+                "PROPERTY Safety",
+                "PROPERTY Bound",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_operator_reference_surface_errors(tmp_path) == [
+        f"formal coverage: {cfg}:3 repeats NEXT behavior directive first "
+        "declared at line 2",
+        f"formal coverage: {cfg}:7 references PROPERTY check Safety, but line "
+        "6 already references it as INVARIANT; CFG proof targets must not be "
+        "both INVARIANT and PROPERTY",
+        f"formal coverage: {cfg}:8 references PROPERTY check Bound, but line "
+        "4 already references it as CONSTRAINT operator; CFG behavior, "
+        "constraint, and proof targets must be role-disjoint",
+    ]
+
+
+def test_cfg_constant_binding_surface_errors_accepts_resolved_bindings(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    gate_tla = tmp_path / "SumeragiGate.tla"
+    gate_cfg = tmp_path / "SumeragiGate_fast.cfg"
+    top_tla = tmp_path / "Sumeragi.tla"
+    top_cfg = tmp_path / "Sumeragi_byzantine_direct_top_fast.cfg"
+    gate_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANT Bug, N",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    gate_cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "none"',
+                "CONSTANT N = 3",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    top_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Sumeragi ----",
+                "CONSTANTS",
+                "  Quorum,",
+                "  MaxFaulty",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    top_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  Quorum = 3",
+                "  MaxFaulty = 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_constant_binding_surface_errors(tmp_path) == []
+
+
+def test_cfg_constant_binding_surface_errors_rejects_invalid_bindings(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    duplicate_tla = tmp_path / "SumeragiDuplicate.tla"
+    duplicate_cfg = tmp_path / "SumeragiDuplicate_fast.cfg"
+    missing_owner_cfg = tmp_path / "SumeragiMissing_fast.cfg"
+    unbound_tla = tmp_path / "SumeragiUnbound.tla"
+    unbound_cfg = tmp_path / "SumeragiUnbound_fast.cfg"
+    undeclared_tla = tmp_path / "SumeragiUndeclared.tla"
+    undeclared_cfg = tmp_path / "SumeragiUndeclared_fast.cfg"
+    duplicate_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDuplicate ----",
+                "CONSTANT Bug",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    duplicate_cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "first"',
+                "CONSTANTS",
+                '  Bug = "second"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_owner_cfg.write_text('CONSTANT Bug = "none"\n', encoding="utf-8")
+    unbound_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiUnbound ----",
+                "CONSTANTS",
+                "  Bug,",
+                "  MissingBinding",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    unbound_cfg.write_text('CONSTANT Bug = "known"\n', encoding="utf-8")
+    undeclared_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiUndeclared ----",
+                "CONSTANT Bug",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    undeclared_cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "known"',
+                "CONSTANT Extra = 1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_constant_binding_surface_errors(tmp_path) == [
+        f"formal coverage: {duplicate_cfg}:3 repeats constant binding Bug "
+        "first declared at line 1",
+        f"{missing_owner_cfg} has no inferred owning TLA module; tried "
+        f"{tmp_path / 'SumeragiMissing_fast.tla'}, "
+        f"{tmp_path / 'SumeragiMissing.tla'}",
+        f"formal coverage: {unbound_cfg} does not bind constant "
+        f"MissingBinding declared by {unbound_tla}",
+        f"formal coverage: {undeclared_cfg}:2 binds constant Extra, but "
+        f"{undeclared_tla} does not declare it",
+    ]
+
+
+def test_cfg_module_ownership_surface_errors_accepts_inferred_owners(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    gate_tla = tmp_path / "SumeragiGate.tla"
+    gate_cfg = tmp_path / "SumeragiGate_fast.cfg"
+    top_tla = tmp_path / "Sumeragi.tla"
+    top_cfg = tmp_path / "Sumeragi_byzantine_direct_top_fast.cfg"
+    gate_tla.write_text("---- MODULE SumeragiGate ----\n====\n", encoding="utf-8")
+    gate_cfg.write_text("INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n", encoding="utf-8")
+    top_tla.write_text("---- MODULE Sumeragi ----\n====\n", encoding="utf-8")
+    top_cfg.write_text("INIT Init\nNEXT ByzantineNext\nINVARIANT TypeInvariant\n", encoding="utf-8")
+
+    assert module.cfg_module_ownership_surface_errors(tmp_path) == []
+
+
+def test_cfg_module_ownership_surface_errors_rejects_invalid_owners(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing_owner_cfg = tmp_path / "SumeragiMissing_fast.cfg"
+    nested_cfg = tmp_path / "Other_tlc_fast.cfg"
+    missing_owner_cfg.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    nested_cfg.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+
+    assert module.cfg_module_ownership_surface_errors(tmp_path) == [
+        f"{nested_cfg} has no inferred owning TLA module; tried "
+        f"{tmp_path / 'Other_tlc_fast.tla'}, {tmp_path / 'Other.tla'}, "
+        f"{tmp_path / 'Other_tlc.tla'}",
+        f"{missing_owner_cfg} has no inferred owning TLA module; tried "
+        f"{tmp_path / 'SumeragiMissing_fast.tla'}, "
+        f"{tmp_path / 'SumeragiMissing.tla'}",
+    ]
+
+
+def test_cfg_required_check_deadlock_contract_errors_accepts_expected_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_required_check_deadlock_contract_errors(
+            cfg,
+            "FALSE",
+            "progress coverage",
+        )
+        == []
+    )
+
+
+def test_cfg_required_check_deadlock_contract_errors_rejects_missing_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_check_deadlock_contract_errors(
+        cfg,
+        "FALSE",
+        "progress coverage",
+    ) == [f"{cfg} must set CHECK_DEADLOCK FALSE for progress coverage"]
+
+
+def test_cfg_required_check_deadlock_contract_errors_rejects_wrong_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK TRUE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_check_deadlock_contract_errors(
+        cfg,
+        "FALSE",
+        "progress coverage",
+    ) == [
+        f"{cfg}:2 sets CHECK_DEADLOCK TRUE, expected FALSE for progress coverage"
+    ]
+
+
+def test_specification_cfg_deadlock_errors_accepts_temporal_false_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    spec_cfg = tmp_path / "SumeragiTemporal_fast.cfg"
+    safety_cfg = tmp_path / "SumeragiSafety_fast.cfg"
+    spec_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    safety_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.specification_cfg_deadlock_errors(tmp_path) == []
+
+
+def test_specification_cfg_deadlock_errors_rejects_missing_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiTemporal_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.specification_cfg_deadlock_errors(tmp_path) == [
+        f"{cfg} must set CHECK_DEADLOCK FALSE for SPECIFICATION coverage"
+    ]
+
+
+def test_specification_cfg_deadlock_errors_rejects_wrong_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiTemporal_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK TRUE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.specification_cfg_deadlock_errors(tmp_path) == [
+        f"{cfg}:2 sets CHECK_DEADLOCK TRUE, expected FALSE for "
+        "SPECIFICATION coverage"
+    ]
+
+
+def test_cfg_required_constant_value_contract_errors_accepts_expected_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "none"',
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_required_constant_value_contract_errors(
+            cfg,
+            "Bug",
+            '"none"',
+            "progress coverage",
+        )
+        == []
+    )
+
+
+def test_cfg_required_constant_value_contract_errors_rejects_missing_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_constant_value_contract_errors(
+        cfg,
+        "Bug",
+        '"none"',
+        "progress coverage",
+    ) == [f'{cfg} must bind constant Bug = "none" for progress coverage']
+
+
+def test_cfg_required_constant_value_contract_errors_rejects_wrong_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "progress.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "finality_not_latched"',
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_constant_value_contract_errors(
+        cfg,
+        "Bug",
+        '"none"',
+        "progress coverage",
+    ) == [
+        f'{cfg}:1 binds constant Bug = "finality_not_latched", expected '
+        '"none" for progress coverage'
+    ]
+
+
+def test_cfg_required_bug_suffix_constant_errors_accepts_matching_suffix(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiModel_progress_bug_finality_not_latched.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "finality_not_latched"',
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.cfg_required_bug_suffix_constant_errors(
+            cfg,
+            "SumeragiModel_progress_bug_",
+            "progress mutation coverage",
+        )
+        == []
+    )
+
+
+def test_cfg_required_bug_suffix_constant_errors_rejects_wrong_suffix_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiModel_progress_bug_finality_not_latched.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "phase_not_committed"',
+                "SPECIFICATION ProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_bug_suffix_constant_errors(
+        cfg,
+        "SumeragiModel_progress_bug_",
+        "progress mutation coverage",
+    ) == [
+        f'{cfg}:1 binds constant Bug = "phase_not_committed", expected '
+        '"finality_not_latched" for progress mutation coverage'
+    ]
+
+
+def test_quoted_bug_suffix_constant_errors_accepts_quoted_suffix_and_numeric_bug(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    quoted_cfg = tmp_path / "SumeragiModel_bug_finality_not_latched.cfg"
+    numeric_cfg = tmp_path / "SumeragiLegacy_bug_named_fault.cfg"
+    quoted_cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "finality_not_latched"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    numeric_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANT Bug = 12",
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.quoted_bug_suffix_constant_errors(tmp_path) == []
+
+
+def test_quoted_bug_suffix_constant_errors_rejects_quoted_suffix_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiModel_bug_finality_not_latched.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "phase_not_committed"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.quoted_bug_suffix_constant_errors(tmp_path) == [
+        f'{cfg}:1 binds quoted Bug = "phase_not_committed", expected '
+        '"finality_not_latched" from mutation file suffix'
+    ]
+
+
+def test_quoted_bug_selector_reference_errors_accepts_reachable_bug_expressions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    root_tla = tmp_path / "SumeragiProjection.tla"
+    helper_tla = tmp_path / "SumeragiHelper.tla"
+    root_cfg = tmp_path / "SumeragiProjection_bug_named_fault.cfg"
+    wrapped_cfg = tmp_path / "SumeragiProjection_bug_wrapped_fault.cfg"
+    numeric_cfg = tmp_path / "SumeragiProjection_bug_numeric_fault.cfg"
+    root_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiProjection ----",
+                "Helper == INSTANCE SumeragiHelper",
+                "CONSTANT Bug",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    helper_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelper ----",
+                "CONSTANT Bug",
+                'UsesBug == Bug = "named_fault"',
+                'WrappedBug == Bug \\in {"other_fault",',
+                '  "wrapped_fault"}',
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    root_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+    wrapped_cfg.write_text(
+        'CONSTANT Bug = "wrapped_fault"\n',
+        encoding="utf-8",
+    )
+    numeric_cfg.write_text(
+        "CONSTANT Bug = 1\n",
+        encoding="utf-8",
+    )
+
+    assert module.quoted_bug_selector_reference_errors(tmp_path) == []
+
+
+def test_quoted_bug_selector_reference_errors_rejects_missing_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiMissing_progress_bug_named_fault.cfg"
+    cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.quoted_bug_selector_reference_errors(tmp_path) == [
+        f"{cfg} has quoted Bug selector but no matching TLA module; "
+        f"tried {tmp_path / 'SumeragiMissing_progress.tla'}, "
+        f"{tmp_path / 'SumeragiMissing.tla'}"
+    ]
+
+
+def test_quoted_bug_selector_reference_errors_rejects_unreferenced_literal(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_named_fault.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANT Bug",
+                '\\* "named_fault" appears only in a comment',
+                'Other == Bug = "other_fault"',
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.quoted_bug_selector_reference_errors(tmp_path) == [
+        f'{cfg}:1 binds quoted Bug selector "named_fault", but reachable '
+        f"TLA modules from {tla} do not use it in a Bug expression"
+    ]
+
+
+def test_quoted_bug_selector_reference_errors_rejects_incidental_literal(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_named_fault.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANT Bug",
+                'Incidental == "named_fault"',
+                'Other == Bug = "other_fault"',
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.quoted_bug_selector_reference_errors(tmp_path) == [
+        f'{cfg}:1 binds quoted Bug selector "named_fault", but reachable '
+        f"TLA modules from {tla} do not use it in a Bug expression"
+    ]
+
+
+def test_mutation_bug_selector_style_errors_accepts_exact_or_boolean_style(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    exact_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    boolean_cfg = tmp_path / "SumeragiBoolean_bug_named_fault.cfg"
+    exact_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+    boolean_cfg.write_text(
+        "CONSTANTS\n  BugNamedFault = TRUE\n  BugOtherFault = FALSE\n",
+        encoding="utf-8",
+    )
+
+    assert module.mutation_bug_selector_style_errors(tmp_path) == []
+
+
+def test_mutation_bug_selector_style_errors_rejects_mixed_selector_styles(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiMixed_bug_named_fault.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                '  Bug = "named_fault"',
+                "  BugNamedFault = TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.mutation_bug_selector_style_errors(tmp_path) == [
+        f"{cfg} mixes exact Bug selector Bug at line 2 with boolean "
+        "selectors BugNamedFault at line 3"
+    ]
+
+
+def test_mutation_bug_selector_style_errors_rejects_missing_selector_style(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiMissing_bug_named_fault.cfg"
+    cfg.write_text(
+        "CONSTANT Other = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.mutation_bug_selector_style_errors(tmp_path) == [
+        f"{cfg} must bind exact Bug or at least one boolean Bug... selector "
+        "for mutation coverage"
+    ]
+
+
+def test_clean_cfg_mutation_selector_errors_accepts_disabled_selectors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    string_cfg = tmp_path / "SumeragiString_fast.cfg"
+    numeric_cfg = tmp_path / "SumeragiNumeric_fast.cfg"
+    boolean_cfg = tmp_path / "SumeragiBoolean_fast.cfg"
+    mutation_cfg = tmp_path / "SumeragiMutation_bug_enabled.cfg"
+    string_cfg.write_text(
+        'CONSTANT Bug = "none"\n',
+        encoding="utf-8",
+    )
+    numeric_cfg.write_text(
+        "CONSTANT Bug = 0\n",
+        encoding="utf-8",
+    )
+    boolean_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugAcceptFuture = FALSE",
+                "  BugDropCommit = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mutation_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugAcceptFuture = TRUE",
+                "  BugDropCommit = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.clean_cfg_mutation_selector_errors(tmp_path) == []
+
+
+def test_clean_cfg_mutation_selector_errors_rejects_enabled_selectors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    boolean_cfg = tmp_path / "SumeragiBoolean_fast.cfg"
+    mixed_cfg = tmp_path / "SumeragiMixed_fast.cfg"
+    named_cfg = tmp_path / "SumeragiNamed_fast.cfg"
+    numeric_cfg = tmp_path / "SumeragiNumeric_fast.cfg"
+    boolean_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugAcceptFuture = TRUE",
+                "  BugDropCommit = Maybe",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    mixed_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                '  Bug = "none"',
+                "  BugAcceptFuture = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    named_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+    numeric_cfg.write_text(
+        "CONSTANT Bug = 1\n",
+        encoding="utf-8",
+    )
+
+    assert module.clean_cfg_mutation_selector_errors(tmp_path) == [
+        f"{boolean_cfg}:2 binds clean boolean mutation selector "
+        "BugAcceptFuture = TRUE, expected FALSE",
+        f"{boolean_cfg}:3 binds clean boolean mutation selector "
+        "BugDropCommit = Maybe, expected FALSE",
+        f"{mixed_cfg} mixes exact Bug selector Bug at line 2 with "
+        "boolean selectors BugAcceptFuture at line 3 in non-mutation coverage",
+        f"{named_cfg}:1 binds clean exact Bug selector "
+        '"named_fault", expected disabled selector "none" or 0',
+        f"{numeric_cfg}:1 binds clean exact Bug selector 1, expected "
+        'disabled selector "none" or 0',
+    ]
+
+
+def test_mutation_cfg_type_invariant_errors_accepts_required_invariant(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiGate_bug_named_fault.cfg"
+    non_bug_cfg = tmp_path / "SumeragiGate_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT Safety",
+                'CONSTANT Bug = "named_fault"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    non_bug_cfg.write_text(
+        "INVARIANT Safety\n",
+        encoding="utf-8",
+    )
+
+    assert module.mutation_cfg_type_invariant_errors(tmp_path) == []
+
+
+def test_mutation_cfg_type_invariant_errors_rejects_missing_or_wrong_kind(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing = tmp_path / "SumeragiGate_bug_missing.cfg"
+    property_cfg = tmp_path / "SumeragiGate_bug_property.cfg"
+    missing.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT Safety",
+                'CONSTANT Bug = "missing"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    property_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "PROPERTY TypeInvariant",
+                "INVARIANT Safety",
+                'CONSTANT Bug = "property"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.mutation_cfg_type_invariant_errors(tmp_path) == [
+        f"{missing} must check INVARIANT TypeInvariant for mutation coverage",
+        f"{property_cfg} checks PROPERTY TypeInvariant, expected INVARIANT",
+    ]
+
+
+def test_mutation_cfg_semantic_check_errors_accepts_targeted_check(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_named_fault.cfg"
+    non_bug_cfg = tmp_path / "SumeragiGate_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "EventuallyDetectsFault == counter = 1",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY EventuallyDetectsFault",
+                'CONSTANT Bug = "named_fault"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    non_bug_cfg.write_text(
+        "INVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+
+    assert module.mutation_cfg_semantic_check_errors(tmp_path) == []
+
+
+def test_mutation_cfg_semantic_check_errors_rejects_type_only_configs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    no_check = tmp_path / "SumeragiGate_bug_no_check.cfg"
+    type_only = tmp_path / "SumeragiGate_bug_type_only.cfg"
+    no_check.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "no_check"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    type_only.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                'CONSTANT Bug = "type_only"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    expected_suffix = (
+        "must check at least one non-TypeInvariant invariant/property "
+        "for mutation coverage"
+    )
+    assert module.mutation_cfg_semantic_check_errors(tmp_path) == [
+        f"{no_check} {expected_suffix}",
+        f"{type_only} {expected_suffix}",
+    ]
+
+
+def test_mutation_cfg_semantic_check_errors_rejects_weak_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    missing_target = tmp_path / "SumeragiGate_bug_missing_target.cfg"
+    parameterized = tmp_path / "SumeragiGate_bug_parameterized.cfg"
+    literal = tmp_path / "SumeragiGate_bug_literal.cfg"
+    type_alias = tmp_path / "SumeragiGate_bug_type_alias.cfg"
+    chained_literal = tmp_path / "SumeragiGate_bug_chained_literal.cfg"
+    missing_module = tmp_path / "SumeragiUnknown_bug_missing_module.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ParameterizedSafety(value) == value = counter",
+                "LiteralSafety == TRUE",
+                "TypeOnlySafety == TypeInvariant",
+                "LiteralHelper == TRUE",
+                "ChainedLiteralSafety == LiteralHelper",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_target.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n"
+        "INVARIANT MissingSafety\n",
+        encoding="utf-8",
+    )
+    parameterized.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n"
+        "INVARIANT ParameterizedSafety\n",
+        encoding="utf-8",
+    )
+    literal.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n"
+        "INVARIANT LiteralSafety\n",
+        encoding="utf-8",
+    )
+    type_alias.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n"
+        "INVARIANT TypeOnlySafety\n",
+        encoding="utf-8",
+    )
+    chained_literal.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n"
+        "PROPERTY ChainedLiteralSafety\n",
+        encoding="utf-8",
+    )
+    missing_module.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n"
+        "INVARIANT Safety\n",
+        encoding="utf-8",
+    )
+
+    assert module.mutation_cfg_semantic_check_errors(tmp_path) == [
+        f"{chained_literal}:4 references PROPERTY semantic check "
+        f"ChainedLiteralSafety, but ChainedLiteralSafety@{tla}:9 -> "
+        f"LiteralHelper@{tla}:8 resolves to literal TRUE",
+        f"{literal}:4 references INVARIANT semantic check LiteralSafety, "
+        f"but {tla}:6 defines it as literal TRUE",
+        f"{missing_target}:4 references INVARIANT semantic check "
+        f"MissingSafety, but {tla} does not define it",
+        f"{parameterized}:4 references INVARIANT semantic check "
+        f"ParameterizedSafety, but {tla}:5 defines it with arity 1; "
+        "mutation proof targets must be zero-arity operators",
+        f"{type_alias}:4 references INVARIANT semantic check TypeOnlySafety, "
+        f"but {tla}:7 aliases TypeInvariant directly",
+        f"{missing_module} has semantic proof targets but no matching TLA "
+        f"module; tried {tmp_path / 'SumeragiUnknown.tla'}",
+    ]
+
+
+def test_mutation_cfg_behavior_errors_accepts_expected_surfaces(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    normal = tmp_path / "SumeragiGate_bug_named_fault.cfg"
+    custom = tmp_path / "SumeragiFrontierRecovery_bug_zero_evidence_future_drop.cfg"
+    progress = tmp_path / "SumeragiGate_progress_bug_named_fault.cfg"
+    non_bug = tmp_path / "SumeragiGate_fast.cfg"
+    normal.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    custom.write_text(
+        "INIT ZeroEvidenceFutureDropBugInit\nNEXT Next\n"
+        "INVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    progress.write_text(
+        "SPECIFICATION SumeragiGateProgressSpec\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    non_bug.write_text(
+        "SPECIFICATION StaleSpec\n",
+        encoding="utf-8",
+    )
+
+    assert module.mutation_cfg_behavior_errors(tmp_path) == []
+
+
+def test_mutation_cfg_behavior_errors_rejects_stale_surfaces(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing_next = tmp_path / "SumeragiGate_bug_missing_next.cfg"
+    non_progress_spec = tmp_path / "SumeragiGate_bug_spec.cfg"
+    wrong_init = tmp_path / "SumeragiGate_bug_wrong_init.cfg"
+    wrong_next = tmp_path / "SumeragiGate_bug_wrong_next.cfg"
+    stale_progress = tmp_path / "SumeragiGate_progress_bug_stale_spec.cfg"
+    init_progress = tmp_path / "SumeragiGate_progress_bug_wrong.cfg"
+    missing_next.write_text(
+        "INIT Init\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    non_progress_spec.write_text(
+        "SPECIFICATION SumeragiGateProgressSpec\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    wrong_init.write_text(
+        "INIT StaleInit\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    wrong_next.write_text(
+        "INIT Init\nNEXT StaleNext\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    stale_progress.write_text(
+        "SPECIFICATION StaleSpec\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    init_progress.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+
+    assert module.mutation_cfg_behavior_errors(tmp_path) == [
+        f"{missing_next} must bind exactly one NEXT Next for mutation coverage",
+        f"{non_progress_spec}:1 binds SPECIFICATION SumeragiGateProgressSpec, "
+        "expected INIT and NEXT for mutation coverage",
+        f"{wrong_init}:1 binds INIT StaleInit, expected Init for mutation "
+        "coverage",
+        f"{wrong_next}:2 binds NEXT StaleNext, expected Next for mutation "
+        "coverage",
+        f"{stale_progress}:1 binds SPECIFICATION StaleSpec, expected a "
+        "*ProgressSpec operator for progress mutation coverage",
+        f"{init_progress} must bind a SPECIFICATION *ProgressSpec operator "
+        "for progress mutation coverage",
+    ]
+
+
+def test_mutation_cfg_custom_init_exception_errors_accepts_live_exception(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiFrontierRecovery.tla"
+    cfg = tmp_path / "SumeragiFrontierRecovery_bug_custom_seed.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFrontierRecovery ----",
+                "CustomSeedBugInit == TRUE",
+                "Next == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "INIT CustomSeedBugInit\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+
+    assert module.mutation_cfg_custom_init_exception_errors(
+        tmp_path,
+        {"SumeragiFrontierRecovery_bug_custom_seed.cfg": "CustomSeedBugInit"},
+    ) == []
+
+
+def test_mutation_cfg_custom_init_exception_errors_rejects_stale_entries(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    good_tla = tmp_path / "SumeragiFrontierRecovery.tla"
+    arity_tla = tmp_path / "SumeragiArity.tla"
+    progress_tla = tmp_path / "SumeragiProgress_progress.tla"
+    good_cfg = tmp_path / "SumeragiFrontierRecovery_bug_good.cfg"
+    redundant_cfg = tmp_path / "SumeragiFrontierRecovery_bug_redundant.cfg"
+    wrong_init_cfg = tmp_path / "SumeragiFrontierRecovery_bug_wrong_init.cfg"
+    wrong_next_cfg = tmp_path / "SumeragiFrontierRecovery_bug_wrong_next.cfg"
+    missing_definition_cfg = (
+        tmp_path / "SumeragiFrontierRecovery_bug_missing_definition.cfg"
+    )
+    missing_module_cfg = tmp_path / "SumeragiMissing_bug_missing_module.cfg"
+    progress_cfg = tmp_path / "SumeragiProgress_progress_bug_custom.cfg"
+    arity_cfg = tmp_path / "SumeragiArity_bug_parameterized.cfg"
+    good_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFrontierRecovery ----",
+                "CustomSeedBugInit == TRUE",
+                "OtherSeedBugInit == TRUE",
+                "Next == TRUE",
+                "WrongNext == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    arity_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiArity ----",
+                "ParameterizedSeed(value) == value",
+                "Next == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiProgress_progress ----",
+                "ProgressSeed == TRUE",
+                "Next == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    good_cfg.write_text(
+        "INIT CustomSeedBugInit\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    redundant_cfg.write_text(
+        "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    wrong_init_cfg.write_text(
+        "INIT OtherSeedBugInit\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    wrong_next_cfg.write_text(
+        "INIT CustomSeedBugInit\nNEXT WrongNext\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    missing_definition_cfg.write_text(
+        "INIT MissingSeedBugInit\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    missing_module_cfg.write_text(
+        "INIT MissingModuleSeed\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "INIT ProgressSeed\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    arity_cfg.write_text(
+        "INIT ParameterizedSeed\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+
+    assert module.mutation_cfg_custom_init_exception_errors(
+        tmp_path,
+        {
+            "SumeragiArity_bug_parameterized.cfg": "ParameterizedSeed",
+            "SumeragiFrontierRecovery_bug_good.cfg": "CustomSeedBugInit",
+            "SumeragiFrontierRecovery_bug_missing_definition.cfg": (
+                "MissingSeedBugInit"
+            ),
+            "SumeragiFrontierRecovery_bug_missing_file.cfg": "MissingFileSeed",
+            "SumeragiFrontierRecovery_bug_redundant.cfg": "Init",
+            "SumeragiFrontierRecovery_bug_wrong_init.cfg": "CustomSeedBugInit",
+            "SumeragiFrontierRecovery_bug_wrong_next.cfg": "CustomSeedBugInit",
+            "SumeragiMissing_bug_missing_module.cfg": "MissingModuleSeed",
+            "SumeragiProgress_progress_bug_custom.cfg": "ProgressSeed",
+            "SumeragiNotCfg": "BadSeed",
+        },
+    ) == [
+        f"{arity_cfg} custom INIT exception references ParameterizedSeed, but "
+        f"{arity_tla}:2 defines it with arity 1; custom INIT exceptions must "
+        "target zero-arity operators",
+        f"{missing_definition_cfg} custom INIT exception references "
+        f"MissingSeedBugInit, but {good_tla} does not define it",
+        f"{tmp_path / 'SumeragiFrontierRecovery_bug_missing_file.cfg'} is "
+        "missing for custom INIT exception",
+        f"{redundant_cfg} custom INIT exception is redundant with default Init",
+        f"{wrong_init_cfg}:1 custom INIT exception expects CustomSeedBugInit, "
+        "but CFG binds INIT OtherSeedBugInit",
+        f"{wrong_next_cfg}:2 custom INIT exception expects NEXT Next, but CFG "
+        "binds NEXT WrongNext",
+        f"{missing_module_cfg} has custom INIT exception but no matching TLA "
+        f"module; tried {tmp_path / 'SumeragiMissing.tla'}",
+        "SumeragiNotCfg is not a mutation CFG filename for custom INIT "
+        "exception",
+        f"{progress_cfg} is a progress mutation CFG; custom INIT exceptions "
+        "apply only to INIT/NEXT mutation coverage",
+    ]
+
+
+def test_mutation_bug_selector_duplicate_errors_accepts_unique_selectors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    exact_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    boolean_cfg = tmp_path / "SumeragiBoolean_bug_named_fault.cfg"
+    exact_cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "named_fault"',
+                "CONSTANT Other = TRUE",
+                "CONSTANT Other = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    boolean_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugNamedFault = TRUE",
+                "  BugOtherFault = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.mutation_bug_selector_duplicate_errors(tmp_path) == []
+
+
+def test_mutation_bug_selector_duplicate_errors_rejects_exact_duplicate(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "named_fault"',
+                'CONSTANT Bug = "other_fault"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.mutation_bug_selector_duplicate_errors(tmp_path) == [
+        f"{cfg}:2 repeats mutation Bug selector Bug; first declared at line 1"
+    ]
+
+
+def test_mutation_bug_selector_duplicate_errors_rejects_boolean_duplicate(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiBoolean_bug_named_fault.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugNamedFault = TRUE",
+                "  BugNamedFault = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.mutation_bug_selector_duplicate_errors(tmp_path) == [
+        f"{cfg}:3 repeats mutation Bug selector BugNamedFault; "
+        "first declared at line 2"
+    ]
+
+
+def test_exact_bug_selector_value_shape_errors_accepts_quoted_or_decimal(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    quoted_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    numeric_cfg = tmp_path / "SumeragiExact_bug_numeric_fault.cfg"
+    boolean_cfg = tmp_path / "SumeragiBoolean_bug_named_fault.cfg"
+    quoted_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+    numeric_cfg.write_text(
+        "CONSTANT Bug = 42\n",
+        encoding="utf-8",
+    )
+    boolean_cfg.write_text(
+        "CONSTANT BugNamedFault = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.exact_bug_selector_value_shape_errors(tmp_path) == []
+
+
+def test_exact_bug_selector_value_shape_errors_rejects_unquoted_non_decimal(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    bool_cfg = tmp_path / "SumeragiExact_bug_bool_fault.cfg"
+    name_cfg = tmp_path / "SumeragiExact_bug_name_fault.cfg"
+    bool_cfg.write_text(
+        "CONSTANT Bug = TRUE\n",
+        encoding="utf-8",
+    )
+    name_cfg.write_text(
+        "CONSTANT Bug = NamedFault\n",
+        encoding="utf-8",
+    )
+
+    assert module.exact_bug_selector_value_shape_errors(tmp_path) == [
+        f"{bool_cfg}:1 binds exact Bug selector value TRUE, expected a "
+        "quoted string or decimal legacy selector",
+        f"{name_cfg}:1 binds exact Bug selector value NamedFault, expected "
+        "a quoted string or decimal legacy selector",
+    ]
+
+
+def test_numeric_bug_selector_canonical_value_errors_accepts_canonical_decimal(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    numeric_cfg = tmp_path / "SumeragiExact_bug_numeric_fault.cfg"
+    quoted_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    numeric_cfg.write_text(
+        "CONSTANT Bug = 42\n",
+        encoding="utf-8",
+    )
+    quoted_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.numeric_bug_selector_canonical_value_errors(tmp_path) == []
+
+
+def test_numeric_bug_selector_canonical_value_errors_rejects_leading_zeroes(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiExact_bug_numeric_fault.cfg"
+    zero_cfg = tmp_path / "SumeragiExact_bug_zero_fault.cfg"
+    cfg.write_text(
+        "CONSTANT Bug = 007\n",
+        encoding="utf-8",
+    )
+    zero_cfg.write_text(
+        "CONSTANT Bug = 00\n",
+        encoding="utf-8",
+    )
+
+    assert module.numeric_bug_selector_canonical_value_errors(tmp_path) == [
+        f"{cfg}:1 binds numeric Bug selector 007, expected canonical "
+        "decimal 7",
+        f"{zero_cfg}:1 binds numeric Bug selector 00, expected canonical "
+        "decimal 0",
+    ]
+
+
+def test_numeric_bug_selector_positive_value_errors_accepts_positive_decimal(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    numeric_cfg = tmp_path / "SumeragiExact_bug_numeric_fault.cfg"
+    quoted_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    numeric_cfg.write_text(
+        "CONSTANT Bug = 1\n",
+        encoding="utf-8",
+    )
+    quoted_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.numeric_bug_selector_positive_value_errors(tmp_path) == []
+
+
+def test_numeric_bug_selector_positive_value_errors_rejects_zero(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiExact_bug_zero_fault.cfg"
+    cfg.write_text(
+        "CONSTANT Bug = 0\n",
+        encoding="utf-8",
+    )
+
+    assert module.numeric_bug_selector_positive_value_errors(tmp_path) == [
+        f"{cfg}:1 binds numeric Bug selector 0, expected a positive "
+        "mutation selector"
+    ]
+
+
+def test_numeric_bug_selector_reference_errors_accepts_reachable_bug_operands(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    root_tla = tmp_path / "SumeragiGate.tla"
+    helper_tla = tmp_path / "SumeragiHelper.tla"
+    direct_cfg = tmp_path / "SumeragiGate_bug_direct.cfg"
+    named_cfg = tmp_path / "SumeragiGate_bug_named.cfg"
+    set_cfg = tmp_path / "SumeragiGate_bug_set.cfg"
+    raw_set_cfg = tmp_path / "SumeragiGate_bug_raw_set.cfg"
+    quoted_cfg = tmp_path / "SumeragiGate_bug_quoted.cfg"
+    boolean_cfg = tmp_path / "SumeragiBoolean_bug_flag.cfg"
+    root_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "Helper == INSTANCE SumeragiHelper",
+                "CONSTANT Bug",
+                "NamedFault == 2",
+                "DirectUse == IF Bug = 1 THEN TRUE ELSE FALSE",
+                "NamedUse == Bug # NamedFault",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    helper_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelper ----",
+                "CONSTANT Bug",
+                "SetFault == 3",
+                "WrappedSetUse == Bug \\in {SetFault,",
+                "  4}",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for cfg, selector in (
+        (direct_cfg, "1"),
+        (named_cfg, "2"),
+        (set_cfg, "3"),
+        (raw_set_cfg, "4"),
+    ):
+        cfg.write_text(
+            f"CONSTANT Bug = {selector}\n",
+            encoding="utf-8",
+        )
+    quoted_cfg.write_text(
+        'CONSTANT Bug = "quoted"\n',
+        encoding="utf-8",
+    )
+    boolean_cfg.write_text(
+        "CONSTANT BugFlag = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.numeric_bug_selector_reference_errors(tmp_path) == []
+
+
+def test_numeric_bug_selector_reference_errors_rejects_missing_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiMissing_progress_bug_numeric.cfg"
+    cfg.write_text(
+        "CONSTANT Bug = 1\n",
+        encoding="utf-8",
+    )
+
+    assert module.numeric_bug_selector_reference_errors(tmp_path) == [
+        f"{cfg} has numeric Bug selector but no matching TLA module; "
+        f"tried {tmp_path / 'SumeragiMissing_progress.tla'}, "
+        f"{tmp_path / 'SumeragiMissing.tla'}"
+    ]
+
+
+def test_numeric_bug_selector_reference_errors_rejects_non_operand_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_named.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANT Bug",
+                "NamedFault == 1",
+                "DataFault == 2",
+                "\\* Bug = 1 appears only in a comment",
+                'StringOnly == "Bug = 1"',
+                "UseData == IF Bug = DataFault THEN NamedFault ELSE 0",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "CONSTANT Bug = 1\n",
+        encoding="utf-8",
+    )
+
+    assert module.numeric_bug_selector_reference_errors(tmp_path) == [
+        f"{cfg}:1 binds numeric Bug selector 1, but reachable TLA modules "
+        f"from {tla} do not use it as a Bug relation operand"
+    ]
+
+
+def test_boolean_bug_selector_one_hot_errors_accepts_one_hot_and_compound(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    one_hot_cfg = tmp_path / "SumeragiGate_bug_accept_future.cfg"
+    compound_cfg = tmp_path / "SumeragiForkSafety_bug_double_sign.cfg"
+    exact_bug_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    one_hot_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugAcceptFuture = TRUE",
+                "  BugAcceptStale = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    compound_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugDisableSingleVote = TRUE",
+                "  BugDisableLockedQcGate = TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    exact_bug_cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "named_fault"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_one_hot_errors(tmp_path) == []
+
+
+def test_boolean_bug_selector_one_hot_errors_rejects_multiple_true_selectors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiGate_bug_ambiguous.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugAcceptFuture = TRUE",
+                "  BugAcceptStale = TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_one_hot_errors(tmp_path) == [
+        f"{cfg} enables boolean mutation selectors "
+        "BugAcceptFuture at line 2, BugAcceptStale at line 3, "
+        "expected exactly one TRUE selector"
+    ]
+
+
+def test_boolean_bug_selector_one_hot_errors_rejects_non_boolean_selectors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiGate_bug_non_boolean.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugAcceptFuture = 1",
+                "  BugAcceptStale = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_one_hot_errors(tmp_path) == [
+        f"{cfg}:2 binds boolean mutation selector BugAcceptFuture = 1, "
+        "expected TRUE or FALSE",
+        f"{cfg} enables boolean mutation selectors none, expected exactly "
+        "one TRUE selector",
+    ]
+
+
+def test_boolean_bug_selector_name_errors_accepts_direct_token_and_alias_matches(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    direct_cfg = tmp_path / "SumeragiGate_bug_accept_stale_view.cfg"
+    token_cfg = tmp_path / "SumeragiGate_bug_overwrite_lower_highest.cfg"
+    alias_cfg = (
+        tmp_path
+        / "SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg"
+    )
+    exact_bug_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    compound_cfg = tmp_path / "SumeragiForkSafety_bug_double_sign.cfg"
+    direct_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugAcceptStaleView = TRUE",
+                "  BugAcceptFutureView = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    token_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugOverwriteHighestWithLower = TRUE",
+                "  BugSkipHighestRecord = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    alias_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugSkipHighestRecord = TRUE",
+                "  BugAcceptPendingReplay = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    exact_bug_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+    compound_cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugDisableSingleVote = TRUE",
+                "  BugDisableLockedQcGate = TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_name_errors(tmp_path) == []
+
+
+def test_boolean_bug_selector_name_errors_rejects_default_suffix_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiGate_bug_accept_stale_view.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugAcceptFutureView = TRUE",
+                "  BugAcceptStaleView = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_name_errors(tmp_path) == [
+        f"{cfg}:2 enables boolean mutation selector BugAcceptFutureView "
+        "(accept_future_view), expected it to match mutation file suffix "
+        "accept_stale_view"
+    ]
+
+
+def test_boolean_bug_selector_name_errors_rejects_alias_suffix_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugSkipLockRecord = TRUE",
+                "  BugSkipHighestRecord = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_name_errors(tmp_path) == [
+        f"{cfg}:2 enables boolean mutation selector BugSkipLockRecord, "
+        "expected BugSkipHighestRecord for mutation file suffix "
+        "missing_highest_record"
+    ]
+
+
+def test_boolean_bug_selector_exception_errors_accepts_live_exceptions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    alias_cfg = tmp_path / "SumeragiGate_bug_missing_record.cfg"
+    compound_cfg = tmp_path / "SumeragiGate_bug_compound.cfg"
+    alias_cfg.write_text("CONSTANTS\n  BugSkipRecord = TRUE\n", encoding="utf-8")
+    compound_cfg.write_text(
+        "CONSTANTS\n  BugOne = TRUE\n  BugTwo = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        module.boolean_bug_selector_exception_errors(
+            tmp_path,
+            alias_exceptions={
+                "SumeragiGate_bug_missing_record.cfg": "BugSkipRecord"
+            },
+            compound_exceptions={
+                "SumeragiGate_bug_compound.cfg": frozenset(
+                    {"BugOne", "BugTwo"}
+                )
+            },
+        )
+        == []
+    )
+
+
+def test_boolean_bug_selector_exception_errors_rejects_stale_entries(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    live_cfg = tmp_path / "SumeragiGate_bug_live.cfg"
+    live_cfg.write_text("CONSTANT Bug = 1\n", encoding="utf-8")
+
+    assert module.boolean_bug_selector_exception_errors(
+        tmp_path,
+        alias_exceptions={
+            "SumeragiGate_bug_live.cfg": "BugLive",
+            "SumeragiGate_fast.cfg": "BugNotMutation",
+            "SumeragiGate_bug_missing.cfg": "BugMissing",
+        },
+        compound_exceptions={
+            "SumeragiGate_bug_live.cfg": frozenset({"BugOne", "BugTwo"}),
+            "SumeragiGate_bug_compound_missing.cfg": frozenset(
+                {"BugOne", "BugTwo"}
+            ),
+        },
+    ) == [
+        "SumeragiGate_bug_live.cfg is declared as both a boolean selector "
+        "alias and compound mutation exception",
+        f"{tmp_path / 'SumeragiGate_bug_missing.cfg'} is missing for "
+        "boolean selector alias exception",
+        "SumeragiGate_fast.cfg is not a mutation CFG filename for boolean "
+        "selector alias",
+        f"{tmp_path / 'SumeragiGate_bug_compound_missing.cfg'} is missing "
+        "for compound boolean selector exception",
+    ]
+
+
+def test_boolean_bug_selector_exception_errors_rejects_weak_entries(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    redundant_alias = tmp_path / "SumeragiGate_bug_accept_future.cfg"
+    wrong_alias = tmp_path / "SumeragiGate_bug_missing_record.cfg"
+    weak_compound = tmp_path / "SumeragiGate_bug_single_compound.cfg"
+    bad_compound = tmp_path / "SumeragiGate_bug_bad_compound.cfg"
+    redundant_alias.write_text(
+        "CONSTANTS\n  BugAcceptFuture = TRUE\n",
+        encoding="utf-8",
+    )
+    wrong_alias.write_text(
+        "CONSTANTS\n  BugSkipRecord = FALSE\n  BugKeepRecord = TRUE\n",
+        encoding="utf-8",
+    )
+    weak_compound.write_text(
+        "CONSTANTS\n  BugSingle = TRUE\n",
+        encoding="utf-8",
+    )
+    bad_compound.write_text(
+        "CONSTANTS\n  BugOne = TRUE\n  BugTwo = FALSE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_exception_errors(
+        tmp_path,
+        alias_exceptions={
+            "SumeragiGate_bug_accept_future.cfg": "BugAcceptFuture",
+            "SumeragiGate_bug_missing_record.cfg": "BugSkipRecord",
+        },
+        compound_exceptions={
+            "SumeragiGate_bug_bad_compound.cfg": frozenset(
+                {"BugOne", "NotBugTwo"}
+            ),
+            "SumeragiGate_bug_single_compound.cfg": frozenset({"BugSingle"}),
+        },
+    ) == [
+        "SumeragiGate_bug_accept_future.cfg boolean selector alias "
+        "BugAcceptFuture matches suffix accept_future without an exception; "
+        "remove the alias entry",
+        f"{wrong_alias} alias exception expects BugSkipRecord, but CFG "
+        "enables BugKeepRecord at line 3",
+        "SumeragiGate_bug_bad_compound.cfg compound boolean selector "
+        "exception contains non-Bug selectors NotBugTwo",
+        f"{bad_compound} compound exception expects BugOne, NotBugTwo, but "
+        "CFG enables BugOne at line 2",
+        "SumeragiGate_bug_single_compound.cfg compound boolean selector "
+        "exception contains BugSingle, expected at least two selectors",
+    ]
+
+
+def test_boolean_bug_selector_uniqueness_errors_accepts_unique_or_cross_family(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    first = tmp_path / "SumeragiOne_bug_first.cfg"
+    second = tmp_path / "SumeragiOne_bug_second.cfg"
+    other_family = tmp_path / "SumeragiTwo_bug_first.cfg"
+    exact_bug_cfg = tmp_path / "SumeragiExact_bug_first.cfg"
+    first.write_text(
+        "CONSTANTS\n  BugFirst = TRUE\n  BugSecond = FALSE\n",
+        encoding="utf-8",
+    )
+    second.write_text(
+        "CONSTANTS\n  BugFirst = FALSE\n  BugSecond = TRUE\n",
+        encoding="utf-8",
+    )
+    other_family.write_text(
+        "CONSTANTS\n  BugFirst = TRUE\n",
+        encoding="utf-8",
+    )
+    exact_bug_cfg.write_text(
+        'CONSTANT Bug = "first"\n',
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_uniqueness_errors(tmp_path) == []
+
+
+def test_boolean_bug_selector_uniqueness_errors_rejects_family_collision(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    first = tmp_path / "SumeragiOne_bug_first.cfg"
+    second = tmp_path / "SumeragiOne_bug_second.cfg"
+    first.write_text(
+        "CONSTANTS\n  BugDuplicate = TRUE\n",
+        encoding="utf-8",
+    )
+    second.write_text(
+        "CONSTANTS\n  BugDuplicate = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_uniqueness_errors(tmp_path) == [
+        f"{second}:2 reuses boolean Bug selector BugDuplicate for "
+        f"SumeragiOne; first declared at {first}:2"
+    ]
+
+
+def test_boolean_bug_selector_declaration_errors_accepts_declared_and_tlc_modules(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    tlc_tla = tmp_path / "SumeragiTlcGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_accept_future.cfg"
+    tlc_cfg = tmp_path / "SumeragiTlcGate_tlc_bug_accept_future.cfg"
+    exact_bug_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANTS BugAcceptFuture, BugAcceptStale",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTlcGate ----",
+                "CONSTANT BugAcceptFuture",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "CONSTANTS\n  BugAcceptFuture = TRUE\n  BugAcceptStale = FALSE\n",
+        encoding="utf-8",
+    )
+    tlc_cfg.write_text(
+        "CONSTANT BugAcceptFuture = TRUE\n",
+        encoding="utf-8",
+    )
+    exact_bug_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_declaration_errors(tmp_path) == []
+
+
+def test_boolean_bug_selector_declaration_errors_rejects_missing_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiMissing_bug_accept_future.cfg"
+    cfg.write_text(
+        "CONSTANT BugAcceptFuture = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_declaration_errors(tmp_path) == [
+        f"{cfg} has boolean Bug selectors but no matching TLA module; "
+        f"tried {tmp_path / 'SumeragiMissing.tla'}"
+    ]
+
+
+def test_boolean_bug_selector_declaration_errors_rejects_undeclared_selector(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_accept_future.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANT BugAcceptStale",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "CONSTANT BugAcceptFuture = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_declaration_errors(tmp_path) == [
+        f"{cfg}:1 binds boolean Bug selector BugAcceptFuture, but {tla} "
+        "does not declare it"
+    ]
+
+
+def test_boolean_bug_selector_completeness_errors_accepts_complete_bindings(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    tlc_tla = tmp_path / "SumeragiTlcGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_accept_future.cfg"
+    tlc_cfg = tmp_path / "SumeragiTlcGate_tlc_bug_accept_future.cfg"
+    exact_bug_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANTS BugAcceptFuture, BugAcceptStale",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTlcGate ----",
+                "CONSTANTS BugAcceptFuture, BugAcceptStale",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "CONSTANTS\n  BugAcceptFuture = TRUE\n  BugAcceptStale = FALSE\n",
+        encoding="utf-8",
+    )
+    tlc_cfg.write_text(
+        "CONSTANTS\n  BugAcceptFuture = TRUE\n  BugAcceptStale = FALSE\n",
+        encoding="utf-8",
+    )
+    exact_bug_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_completeness_errors(tmp_path) == []
+
+
+def test_boolean_bug_selector_completeness_errors_rejects_missing_binding(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_accept_future.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANTS BugAcceptFuture, BugAcceptStale",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "CONSTANT BugAcceptFuture = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_completeness_errors(tmp_path) == [
+        f"{cfg} omits boolean Bug selectors declared by {tla}: BugAcceptStale"
+    ]
+
+
+def test_boolean_bug_selector_reference_errors_accepts_reachable_uses(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    root_tla = tmp_path / "SumeragiGate.tla"
+    helper_tla = tmp_path / "SumeragiHelper.tla"
+    cfg = tmp_path / "SumeragiGate_bug_accept_future.cfg"
+    exact_bug_cfg = tmp_path / "SumeragiExact_bug_named_fault.cfg"
+    root_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "Helper == INSTANCE SumeragiHelper",
+                "CONSTANTS BugAcceptFuture, BugAcceptStale",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    helper_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelper ----",
+                "CONSTANTS BugAcceptFuture, BugAcceptStale",
+                "UseSelectors ==",
+                "  /\\ BugAcceptFuture",
+                "  /\\ ~BugAcceptStale",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "CONSTANTS\n  BugAcceptFuture = TRUE\n  BugAcceptStale = FALSE\n",
+        encoding="utf-8",
+    )
+    exact_bug_cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_reference_errors(tmp_path) == []
+
+
+def test_boolean_bug_selector_reference_errors_rejects_missing_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiMissing_bug_accept_future.cfg"
+    cfg.write_text(
+        "CONSTANT BugAcceptFuture = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_reference_errors(tmp_path) == [
+        f"{cfg} has boolean Bug selectors but no matching TLA module; "
+        f"tried {tmp_path / 'SumeragiMissing.tla'}"
+    ]
+
+
+def test_boolean_bug_selector_reference_errors_rejects_unreferenced_selector(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_accept_future.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANTS BugAcceptFuture, BugAcceptStale",
+                "\\* BugAcceptStale appears only in a comment",
+                'StringOnly == "BugAcceptStale"',
+                "UseSelector == BugAcceptFuture",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "CONSTANTS\n  BugAcceptFuture = TRUE\n  BugAcceptStale = FALSE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_reference_errors(tmp_path) == [
+        f"{cfg}:3 binds boolean Bug selector BugAcceptStale, but reachable "
+        f"TLA modules from {tla} do not use it outside declarations"
+    ]
+
+
+def test_exact_bug_selector_declaration_errors_accepts_declared_and_fallback_modules(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    tlc_tla = tmp_path / "SumeragiTlcGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_named_fault.cfg"
+    progress_cfg = tmp_path / "SumeragiGate_progress_bug_named_fault.cfg"
+    tlc_cfg = tmp_path / "SumeragiTlcGate_tlc_bug_named_fault.cfg"
+    boolean_cfg = tmp_path / "SumeragiBoolean_bug_named_fault.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANT Bug",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTlcGate ----",
+                "CONSTANTS Bug, BugNamedFault",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for exact_cfg in (cfg, progress_cfg, tlc_cfg):
+        exact_cfg.write_text(
+            'CONSTANT Bug = "named_fault"\n',
+            encoding="utf-8",
+        )
+    boolean_cfg.write_text(
+        "CONSTANT BugNamedFault = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.exact_bug_selector_declaration_errors(tmp_path) == []
+
+
+def test_exact_bug_selector_declaration_errors_rejects_missing_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiMissing_progress_bug_named_fault.cfg"
+    cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.exact_bug_selector_declaration_errors(tmp_path) == [
+        f"{cfg} has exact Bug selector but no matching TLA module; "
+        f"tried {tmp_path / 'SumeragiMissing_progress.tla'}, "
+        f"{tmp_path / 'SumeragiMissing.tla'}"
+    ]
+
+
+def test_exact_bug_selector_declaration_errors_rejects_undeclared_bug(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiGate.tla"
+    cfg = tmp_path / "SumeragiGate_bug_named_fault.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiGate ----",
+                "CONSTANT Other",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        'CONSTANT Bug = "named_fault"\n',
+        encoding="utf-8",
+    )
+
+    assert module.exact_bug_selector_declaration_errors(tmp_path) == [
+        f"{cfg}:1 binds exact Bug selector, but {tla} does not declare Bug"
+    ]
+
+
+def test_numeric_bug_selector_uniqueness_errors_accepts_unique_or_cross_family(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    first = tmp_path / "SumeragiOne_bug_first.cfg"
+    second = tmp_path / "SumeragiOne_bug_second.cfg"
+    other_family = tmp_path / "SumeragiTwo_bug_first.cfg"
+    for cfg, selector in (
+        (first, "1"),
+        (second, "2"),
+        (other_family, "1"),
+    ):
+        cfg.write_text(
+            "\n".join(
+                [
+                    f"CONSTANT Bug = {selector}",
+                    "INIT Init",
+                    "NEXT Next",
+                    "INVARIANT TypeInvariant",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    assert module.numeric_bug_selector_uniqueness_errors(tmp_path) == []
+
+
+def test_numeric_bug_selector_uniqueness_errors_rejects_family_collision(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    first = tmp_path / "SumeragiOne_bug_first.cfg"
+    second = tmp_path / "SumeragiOne_bug_second.cfg"
+    for cfg in (first, second):
+        cfg.write_text(
+            "\n".join(
+                [
+                    "CONSTANT Bug = 1",
+                    "INIT Init",
+                    "NEXT Next",
+                    "INVARIANT TypeInvariant",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    assert module.numeric_bug_selector_uniqueness_errors(tmp_path) == [
+        f"{second}:1 reuses numeric Bug selector 1 for SumeragiOne; "
+        f"first declared at {first}:1"
+    ]
+
+
+def test_byzantine_top_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg_contracts = []
+    for cfg_path, required_checks, coverage_label in (
+        module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS
+    ):
+        tmp_cfg = tmp_path / cfg_path.name
+        required_behavior, _ = module.BYZANTINE_TOP_CFG_REQUIRED_BEHAVIOR_BY_NAME[
+            cfg_path.name
+        ]
+        write_cfg_with_behavior_constants_and_checks(
+            tmp_cfg,
+            tuple(f"{directive} {operator}" for directive, operator in required_behavior),
+            module.SUMERAGI_FAST_CONSTANT_VALUES,
+            required_checks,
+        )
+        cfg_contracts.append((tmp_cfg, required_checks, coverage_label))
+
+    assert module.byzantine_top_cfg_errors(tuple(cfg_contracts)) == []
+
+
+def test_byzantine_top_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    delivered_cfg = tmp_path / "Sumeragi_byzantine_delivered_first_top_fast.cfg"
+    direct_cfg = tmp_path / "Sumeragi_byzantine_direct_top_fast.cfg"
+    delivered_required = module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1]
+    direct_required = module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[2][1]
+    delivered_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT ByzantineDeliveredFirstCommitNext",
+                "CONSTANTS",
+                *(
+                    f"  {constant} = {value}"
+                    for constant, value in module.SUMERAGI_FAST_CONSTANT_VALUES
+                ),
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineDeliveredFirstTopCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    direct_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT ByzantineDirectCommitNext",
+                "CONSTANTS",
+                *(
+                    f"  {constant} = {value}"
+                    for constant, value in module.SUMERAGI_FAST_CONSTANT_VALUES
+                ),
+                "INVARIANT TypeInvariant",
+                "INVARIANT TlcByzantineDirectCommitCorridor",
+                "INVARIANT ByzantineDirectTopCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_top_cfg_errors(
+        (
+            (delivered_cfg, delivered_required, "delivered top coverage"),
+            (direct_cfg, direct_required, "direct top coverage"),
+        )
+    )
+
+    assert (
+        f"{delivered_cfg} must check INVARIANT TlcByzantineDirectCommitCorridor "
+        "for delivered top coverage"
+    ) in errors
+    assert (
+        f"{delivered_cfg} checks PROPERTY "
+        "ByzantineDeliveredFirstTopCorrectnessEnvelope, expected INVARIANT"
+    ) in errors
+    assert (
+        f"{direct_cfg} must check INVARIANT "
+        "ByzantineDirectTopCoversOrderedTopCorridors for direct top coverage"
+    ) in errors
+
+
+def test_byzantine_top_cfg_errors_rejects_wrong_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_byzantine_delivered_first_top_fast.cfg"
+    write_cfg_with_behavior_constants_and_checks(
+        cfg,
+        ("INIT Init", "NEXT WrongCommitNext"),
+        module.SUMERAGI_FAST_CONSTANT_VALUES,
+        module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1],
+    )
+
+    assert module.byzantine_top_cfg_errors(
+        (
+            (
+                cfg,
+                module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1],
+                "Byzantine delivered-first top coverage",
+            ),
+        )
+    ) == [
+        f"{cfg}:2 binds NEXT WrongCommitNext, expected "
+        "ByzantineDeliveredFirstCommitNext for Byzantine delivered-first top "
+        "coverage"
+    ]
+
+
+def test_byzantine_top_cfg_errors_rejects_wrong_constant_envelope(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_byzantine_delivered_first_top_fast.cfg"
+    constant_values = tuple(
+        (constant, "2") if constant == "CommitQuorum" else (constant, value)
+        for constant, value in module.SUMERAGI_FAST_CONSTANT_VALUES
+    )
+    write_cfg_with_behavior_constants_and_checks(
+        cfg,
+        ("INIT Init", "NEXT ByzantineDeliveredFirstCommitNext"),
+        constant_values,
+        module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1],
+    )
+
+    assert module.byzantine_top_cfg_errors(
+        (
+            (
+                cfg,
+                module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1],
+                "Byzantine delivered-first top coverage",
+            ),
+        )
+    ) == [
+        f"{cfg}:6 binds constant CommitQuorum = 2, expected 3 for Byzantine "
+        "delivered-first top coverage"
+    ]
+
+
+def test_direct_delivered_first_clean_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.DIRECT_DELIVERED_FIRST_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "DirectDeliveredFirstCorridorProgressSpec",
+        module.DIRECT_DELIVERED_FIRST_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_delivered_first_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == []
+
+
+def test_direct_delivered_first_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectDeliveredFirstCorridorExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectDeliveredFirstCorridorProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectDeliveredFirstProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_delivered_first_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == [
+        f"{fast_cfg} checks PROPERTY DirectDeliveredFirstCorridorExactness, "
+        "expected INVARIANT",
+        f"{fast_cfg} must check INVARIANT "
+        "DirectDeliveredFirstCorridorCorrectnessEnvelope for direct "
+        "delivered-first fast coverage",
+        f"{progress_cfg} checks PROPERTY "
+        "DirectDeliveredFirstProgressSafetyEnvelope, expected INVARIANT",
+        f"{progress_cfg} must check PROPERTY "
+        "EventualDirectDeliveredFirstFinalityStack for direct delivered-first "
+        "progress coverage",
+    ]
+
+
+def test_source_safety_mutation_cfg_errors_accepts_fast_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_bug_valid.cfg"
+    write_safety_mutation_cfg_with_checks(
+        cfg,
+        module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+
+    assert (
+        module.source_safety_mutation_cfg_errors(
+            cfg_contracts=(
+                (
+                    cfg.name,
+                    module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+                    "direct interleaving safety mutation coverage",
+                ),
+            ),
+            spec_dir=tmp_path,
+        )
+        == []
+    )
+
+
+def test_source_safety_mutation_cfg_errors_rejects_missing_or_downgraded_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "drifted"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineCommitInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.source_safety_mutation_cfg_errors(
+        cfg_contracts=(
+            (
+                cfg.name,
+                module.BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+                "Byzantine interleaving safety mutation coverage",
+            ),
+        ),
+        spec_dir=tmp_path,
+    ) == [
+        f"{cfg} checks PROPERTY ByzantineCommitInterleavingExactness, "
+        "expected INVARIANT",
+        f"{cfg} must check INVARIANT "
+        "ByzantineCommitInterleavingCorrectnessEnvelope for Byzantine "
+        "interleaving safety mutation coverage",
+    ]
+
+
+def test_source_safety_mutation_cfg_errors_rejects_wrong_bug_suffix(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_bug_valid.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT Next", 'CONSTANT Bug = "other_mutation"'),
+        module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.source_safety_mutation_cfg_errors(
+        cfg_contracts=(
+            (
+                cfg.name,
+                module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+                "direct interleaving safety mutation coverage",
+            ),
+        ),
+        spec_dir=tmp_path,
+    ) == [
+        f'{cfg}:3 binds constant Bug = "other_mutation", expected "valid" '
+        "for direct interleaving safety mutation coverage"
+    ]
+
+
+def test_source_safety_mutation_cfg_errors_rejects_wrong_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_bug_valid.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT StaleNext", 'CONSTANT Bug = "valid"'),
+        module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.source_safety_mutation_cfg_errors(
+        cfg_contracts=(
+            (
+                cfg.name,
+                module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+                "direct interleaving safety mutation coverage",
+            ),
+        ),
+        spec_dir=tmp_path,
+    ) == [
+        f"{cfg}:2 binds NEXT StaleNext, expected Next for direct interleaving "
+        "safety mutation coverage"
+    ]
+
+
+def test_direct_delivered_first_progress_mutation_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+        "DirectDeliveredFirstCorridorProgressSpec",
+        module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_delivered_first_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_direct_delivered_first_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / (
+        "SumeragiDirectDeliveredFirstCorridorGate_progress_bug_drifted.cfg"
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectDeliveredFirstCorridorProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectDeliveredFirstProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_delivered_first_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY DirectDeliveredFirstProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualDirectDeliveredFirstFinalityStack "
+        "for direct delivered-first progress mutation coverage",
+    ]
+
+
+def test_direct_vote_first_clean_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.DIRECT_VOTE_FIRST_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "DirectVoteFirstCorridorProgressSpec",
+        module.DIRECT_VOTE_FIRST_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_vote_first_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == []
+
+
+def test_direct_vote_first_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectVoteFirstCorridorExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectVoteFirstCorridorProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectVoteFirstProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_vote_first_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == [
+        f"{fast_cfg} checks PROPERTY DirectVoteFirstCorridorExactness, "
+        "expected INVARIANT",
+        f"{fast_cfg} must check INVARIANT "
+        "DirectVoteFirstCorridorCorrectnessEnvelope for direct vote-first "
+        "fast coverage",
+        f"{progress_cfg} checks PROPERTY DirectVoteFirstProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{progress_cfg} must check PROPERTY "
+        "EventualDirectVoteFirstFinalityStack for direct vote-first progress "
+        "coverage",
+    ]
+
+
+def test_direct_vote_first_progress_mutation_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+        "DirectVoteFirstCorridorProgressSpec",
+        module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_vote_first_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_direct_vote_first_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectVoteFirstCorridorGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectVoteFirstCorridorProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectVoteFirstProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_vote_first_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY DirectVoteFirstProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualDirectVoteFirstFinalityStack "
+        "for direct vote-first progress mutation coverage",
+    ]
+
+
+def test_direct_interleaving_clean_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.DIRECT_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "DirectCommitInterleavingProgressSpec",
+        module.DIRECT_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_interleaving_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == []
+
+
+def test_direct_interleaving_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectCommitInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectCommitInterleavingProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_interleaving_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == [
+        f"{fast_cfg} checks PROPERTY DirectCommitInterleavingExactness, "
+        "expected INVARIANT",
+        f"{fast_cfg} must check INVARIANT "
+        "DirectCommitInterleavingCorrectnessEnvelope for direct interleaving "
+        "fast coverage",
+        f"{progress_cfg} checks PROPERTY DirectCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{progress_cfg} must check PROPERTY EventualDirectCommitFinalityStack "
+        "for direct interleaving progress coverage",
+    ]
+
+
+def test_direct_interleaving_progress_mutation_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+        "DirectCommitInterleavingProgressSpec",
+        module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.direct_interleaving_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_direct_interleaving_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiDirectCommitInterleavingGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION DirectCommitInterleavingProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY DirectCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.direct_interleaving_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY DirectCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualDirectCommitFinalityStack "
+        "for direct interleaving progress mutation coverage",
+    ]
+
+
+def test_byzantine_interleaving_clean_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_progress.cfg"
+    write_clean_safety_cfg_with_checks(
+        fast_cfg,
+        module.BYZANTINE_INTERLEAVING_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_clean_progress_cfg_with_checks(
+        progress_cfg,
+        "ByzantineCommitInterleavingProgressSpec",
+        module.BYZANTINE_INTERLEAVING_PROGRESS_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.byzantine_interleaving_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == []
+
+
+def test_byzantine_interleaving_clean_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_fast.cfg"
+    progress_cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_progress.cfg"
+    fast_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineCommitInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    progress_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ByzantineCommitInterleavingProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "none"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.byzantine_interleaving_clean_cfg_errors(
+        fast_cfg,
+        progress_cfg,
+    ) == [
+        f"{fast_cfg} checks PROPERTY ByzantineCommitInterleavingExactness, "
+        "expected INVARIANT",
+        f"{fast_cfg} must check INVARIANT "
+        "ByzantineCommitInterleavingCorrectnessEnvelope for Byzantine "
+        "interleaving fast coverage",
+        f"{progress_cfg} checks PROPERTY ByzantineCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{progress_cfg} must check PROPERTY EventualByzantineCommitFinalityStack "
+        "for Byzantine interleaving progress coverage",
+    ]
+
+
+def test_byzantine_interleaving_progress_mutation_cfg_errors_accepts_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+        "ByzantineCommitInterleavingProgressSpec",
+        module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.byzantine_interleaving_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_byzantine_interleaving_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitInterleavingGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ByzantineCommitInterleavingProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ByzantineCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.byzantine_interleaving_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY ByzantineCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualByzantineCommitFinalityStack "
+        "for Byzantine interleaving progress mutation coverage",
+    ]
+
+
+def test_projection_mutation_bridge_cfg_errors_accepts_full_bridge(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_valid.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "valid"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedByzantineDirectTopExactness",
+                "INVARIANT ProjectedByzantineDirectTopCorrectnessEnvelope",
+                "INVARIANT ProjectionBridgeCoversOrderedTopCorridors",
+                "INVARIANT ProjectionBridgeMatchesInterleavingCore",
+                "INVARIANT ProjectionBridgeMatchesInterleavingExactness",
+                (
+                    "INVARIANT "
+                    "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope"
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == []
+
+
+def test_projection_mutation_bridge_cfg_errors_rejects_missing_or_downgraded_bridge(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "drifted"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedByzantineDirectTopExactness",
+                "INVARIANT ProjectedByzantineDirectTopCorrectnessEnvelope",
+                "INVARIANT ProjectionBridgeMatchesInterleavingCore",
+                "PROPERTY ProjectionBridgeMatchesInterleavingExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == [
+        f"{cfg} must check INVARIANT ProjectionBridgeCoversOrderedTopCorridors "
+        "for projection bridge mutation coverage",
+        f"{cfg} checks PROPERTY ProjectionBridgeMatchesInterleavingExactness, "
+        "expected INVARIANT",
+        f"{cfg} must check INVARIANT "
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope "
+        "for projection bridge mutation coverage",
+    ]
+
+
+def test_projection_mutation_bridge_cfg_errors_rejects_wrong_bug_suffix(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_valid.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "other_mutation"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedByzantineDirectTopExactness",
+                "INVARIANT ProjectedByzantineDirectTopCorrectnessEnvelope",
+                "INVARIANT ProjectionBridgeCoversOrderedTopCorridors",
+                "INVARIANT ProjectionBridgeMatchesInterleavingCore",
+                "INVARIANT ProjectionBridgeMatchesInterleavingExactness",
+                (
+                    "INVARIANT "
+                    "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope"
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == [
+        f'{cfg}:1 binds constant Bug = "other_mutation", expected "valid" '
+        "for projection bridge mutation coverage"
+    ]
+
+
+def test_projection_mutation_bridge_cfg_errors_rejects_wrong_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_valid.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT StaleNext", 'CONSTANT Bug = "valid"'),
+        module.PROJECTION_MUTATION_BRIDGE_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == [
+        f"{cfg}:2 binds NEXT StaleNext, expected Next "
+        "for projection bridge mutation coverage"
+    ]
+
+
+def test_projection_mutation_bridge_cfg_errors_rejects_missing_type_and_direct_top(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_bug_untyped.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "untyped"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT ProjectionBridgeMatchesInterleavingCore",
+                "INVARIANT ProjectionBridgeMatchesInterleavingExactness",
+                (
+                    "INVARIANT "
+                    "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope"
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_mutation_bridge_cfg_errors([cfg]) == [
+        f"{cfg} must check INVARIANT TypeInvariant "
+        "for projection bridge mutation coverage",
+        f"{cfg} must check INVARIANT ProjectedByzantineDirectTopExactness "
+        "for projection bridge mutation coverage",
+        f"{cfg} must check INVARIANT "
+        "ProjectedByzantineDirectTopCorrectnessEnvelope "
+        "for projection bridge mutation coverage",
+        f"{cfg} must check INVARIANT ProjectionBridgeCoversOrderedTopCorridors "
+        "for projection bridge mutation coverage",
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_accepts_safety_and_progress(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_valid.cfg"
+    write_progress_mutation_cfg_with_checks(
+        cfg,
+        module.PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+        "ProjectedCommitProgressSpec",
+        module.PROJECTION_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == []
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_missing_or_downgraded_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "drifted"',
+                "INVARIANT TypeInvariant",
+                "PROPERTY ProjectedCommitProgressSafetyEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} checks PROPERTY ProjectedCommitProgressSafetyEnvelope, "
+        "expected INVARIANT",
+        f"{cfg} must check PROPERTY EventualProjectedCommitFinalityStack "
+        "for projection progress mutation coverage",
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_wrong_bug_suffix(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_drifted.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "other_mutation"',
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedCommitProgressSafetyEnvelope",
+                "PROPERTY EventualProjectedCommitFinalityStack",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f'{cfg}:3 binds constant Bug = "other_mutation", expected "drifted" '
+        "for projection progress mutation coverage"
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_missing_deadlock_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / (
+        "SumeragiByzantineCommitProjectionGate_progress_bug_deadlock.cfg"
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                'CONSTANT Bug = "deadlock"',
+                "INVARIANT TypeInvariant",
+                "INVARIANT ProjectedCommitProgressSafetyEnvelope",
+                "PROPERTY EventualProjectedCommitFinalityStack",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} must set CHECK_DEADLOCK FALSE "
+        "for projection progress mutation coverage"
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_missing_type_invariant(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_untyped.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION ProjectedCommitProgressSpec",
+                "CHECK_DEADLOCK FALSE",
+                'CONSTANT Bug = "untyped"',
+                "INVARIANT ProjectedCommitProgressSafetyEnvelope",
+                "PROPERTY EventualProjectedCommitFinalityStack",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg} must check INVARIANT TypeInvariant "
+        "for projection progress mutation coverage",
+    ]
+
+
+def test_projection_progress_mutation_cfg_errors_rejects_wrong_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiByzantineCommitProjectionGate_progress_bug_wrong.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        (
+            "SPECIFICATION OldProjectedCommitProgressSpec",
+            'CONSTANT Bug = "wrong"',
+        ),
+        module.PROJECTION_PROGRESS_MUTATION_REQUIRED_CHECKS,
+    )
+
+    assert module.projection_progress_mutation_cfg_errors([cfg]) == [
+        f"{cfg}:1 binds SPECIFICATION OldProjectedCommitProgressSpec, expected "
+        "ProjectedCommitProgressSpec for projection progress mutation coverage"
+    ]
+
+
+def make_byzantine_mutation_cfgs(
+    tmp_path: Path,
+    stem_prefix: str,
+    suffixes: tuple[str, ...],
+) -> list[Path]:
+    paths: list[Path] = []
+    for suffix in suffixes:
+        cfg = tmp_path / f"{stem_prefix}{suffix}.cfg"
+        cfg.write_text(
+            "INIT Init\nNEXT Next\nINVARIANT TypeInvariant\n",
+            encoding="utf-8",
+        )
+        paths.append(cfg)
+    return paths
+
+
+def test_direct_mutation_family_alignment_errors_accepts_aligned_families(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert (
+        module.direct_mutation_family_alignment_errors(
+            delivered_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX,
+                ("a", "b"),
+            ),
+            delivered_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+                ("a", "b"),
+            ),
+            vote_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX,
+                ("a", "b", "safety_only"),
+            ),
+            vote_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+                ("a", "b"),
+            ),
+            interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX,
+                ("a", "b", "safety_only"),
+            ),
+            interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+                ("a", "b"),
+            ),
+            vote_progress_safety_only_mutations=frozenset({"safety_only"}),
+            interleaving_progress_safety_only_mutations=frozenset({"safety_only"}),
+        )
+        == []
+    )
+
+
+def test_direct_mutation_family_alignment_errors_rejects_unapproved_progress_omission(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert module.direct_mutation_family_alignment_errors(
+        delivered_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        delivered_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_progress_safety_only_mutations=frozenset(),
+        interleaving_progress_safety_only_mutations=frozenset(),
+    ) == [
+        "direct delivered-first progress mutation CFGs are missing direct "
+        "delivered-first safety minus safety-only mutations mutation suffixes:\n"
+        "  - b"
+    ]
+
+
+def test_direct_mutation_family_alignment_errors_rejects_stale_allowlist_and_extra_progress(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert module.direct_mutation_family_alignment_errors(
+        delivered_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        delivered_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        vote_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a", "b", "c"),
+        ),
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_progress_safety_only_mutations=frozenset({"missing"}),
+        interleaving_progress_safety_only_mutations=frozenset(),
+    ) == [
+        "direct vote-first progress safety-only mutation allowlist has stale "
+        "suffixes absent from the safety family:\n  - missing",
+        "direct vote-first progress mutation CFGs have suffixes absent from "
+        "direct vote-first safety minus safety-only mutations:\n  - c",
+    ]
+
+
+def test_byzantine_mutation_family_alignment_errors_accepts_aligned_families(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    safety_suffixes = ("a", "b", "safety_only")
+    progress_suffixes = ("a", "b")
+
+    assert (
+        module.byzantine_mutation_family_alignment_errors(
+            interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX,
+                safety_suffixes,
+            ),
+            interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+                progress_suffixes,
+            ),
+            projection_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.PROJECTION_MUTATION_STEM_PREFIX,
+                safety_suffixes,
+            ),
+            projection_progress_cfg_paths=make_byzantine_mutation_cfgs(
+                tmp_path,
+                module.PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+                progress_suffixes,
+            ),
+            progress_safety_only_mutations=frozenset({"safety_only"}),
+        )
+        == []
+    )
+
+
+def test_byzantine_mutation_family_alignment_errors_rejects_projection_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_mutation_family_alignment_errors(
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        projection_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_MUTATION_STEM_PREFIX,
+            ("a", "c"),
+        ),
+        projection_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a", "c"),
+        ),
+        progress_safety_only_mutations=frozenset({"b"}),
+    ) == [
+        "projection safety mutation CFGs are missing source Byzantine "
+        "interleaving safety mutation suffixes:\n  - b",
+        "projection safety mutation CFGs have suffixes absent from source "
+        "Byzantine interleaving safety:\n  - c",
+        "projection progress mutation CFGs have suffixes absent from source "
+        "Byzantine interleaving progress:\n  - c",
+    ]
+
+
+def test_byzantine_mutation_family_alignment_errors_rejects_unapproved_progress_omission(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_mutation_family_alignment_errors(
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        projection_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_MUTATION_STEM_PREFIX,
+            ("a", "b"),
+        ),
+        projection_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        progress_safety_only_mutations=frozenset(),
+    ) == [
+        "source Byzantine interleaving progress mutation CFGs are missing "
+        "source Byzantine interleaving safety minus safety-only mutations "
+        "mutation suffixes:\n  - b",
+        "projection progress mutation CFGs are missing projection safety "
+        "minus safety-only mutations mutation suffixes:\n  - b",
+    ]
+
+
+def byzantine_top_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+    overrides: dict[str, list[str]] | None = None,
+) -> str:
+    lines: list[str] = []
+    overrides = overrides or {}
+    for operator, conjuncts in module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS.items():
+        override = overrides.get(operator)
+        if override is not None:
+            lines.extend(override)
+            continue
+        lines.append(f"{operator} ==")
+        antecedent = module.SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS.get(
+            operator
+        )
+        if antecedent is None:
+            prefix = "  "
+        else:
+            lines.append(f"  {antecedent} =>")
+            prefix = "    "
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"{prefix}/\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_byzantine_top_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(byzantine_top_contract_text(module), encoding="utf-8")
+
+    assert module.byzantine_top_conjunct_contract_errors(tla) == []
+
+
+def test_byzantine_top_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    missing = "RbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    tla.write_text(
+        byzantine_top_contract_text(
+            module,
+            omit=("ByzantineDirectTopExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_top_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ByzantineDirectTopExactness, but is missing required direct "
+        f"conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_byzantine_top_conjunct_contract_errors_rejects_dropped_implication(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    conjuncts = module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS[
+        "ByzantineDirectTopCoversOrderedTopCorridors"
+    ]
+    tla.write_text(
+        byzantine_top_contract_text(
+            module,
+            overrides={
+                "ByzantineDirectTopCoversOrderedTopCorridors": [
+                    "ByzantineDirectTopCoversOrderedTopCorridors ==",
+                    *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                ]
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_top_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ByzantineDirectTopCoversOrderedTopCorridors, but it must keep "
+        "a top-level implication guarded by ByzantineDirectTopExactness"
+    ) in errors[0]
+
+
+def copied_contracts(
+    contracts: dict[str, tuple[str, ...]],
+) -> dict[str, tuple[str, ...]]:
+    return {operator: tuple(conjuncts) for operator, conjuncts in contracts.items()}
+
+
+def test_byzantine_top_corridor_contract_alignment_errors_accepts_family(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_top_corridor_contract_alignment_errors() == []
+
+
+def test_byzantine_top_corridor_contract_alignment_errors_rejects_delivered_wait_conjunct(
+) -> None:
+    module = load_coverage_module()
+    top_contracts = copied_contracts(module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS)
+    extra = "RbcDeliveredWithoutFinalityHasNoCommitCertificate"
+    top_contracts["ByzantineDeliveredFirstTopExactness"] = (
+        *top_contracts["ByzantineDeliveredFirstTopExactness"],
+        extra,
+    )
+
+    errors = module.byzantine_top_corridor_contract_alignment_errors(
+        top_contracts=top_contracts,
+    )
+
+    assert errors == [
+        "ByzantineDeliveredFirstTopExactness must keep the Byzantine top "
+        f"corridor contract; unexpected conjunct(s) {extra}"
+    ]
+
+
+def test_byzantine_top_corridor_contract_alignment_errors_rejects_direct_missing_wait(
+) -> None:
+    module = load_coverage_module()
+    top_contracts = copied_contracts(module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS)
+    missing = "RbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    top_contracts["ByzantineDirectTopExactness"] = tuple(
+        conjunct
+        for conjunct in top_contracts["ByzantineDirectTopExactness"]
+        if conjunct != missing
+    )
+
+    errors = module.byzantine_top_corridor_contract_alignment_errors(
+        top_contracts=top_contracts,
+    )
+
+    assert errors == [
+        "ByzantineDirectTopExactness must keep the Byzantine top corridor "
+        f"contract; missing conjunct(s) {missing}"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_accepts_mirror(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_top_projection_contract_alignment_errors() == []
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_missing_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    projection_contracts["ProjectedByzantineDirectTopExactness"] = tuple(
+        conjunct
+        for conjunct in projection_contracts["ProjectedByzantineDirectTopExactness"]
+        if conjunct != missing
+    )
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectedByzantineDirectTopExactness must mirror "
+        "ByzantineDirectTopExactness projected conjunct contract; missing "
+        f"projected conjunct(s) {missing}"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_extra_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "ProjectedUnexpectedTopObligation"
+    projection_contracts["ProjectedByzantineDeliveredFirstTopExactness"] = (
+        *projection_contracts["ProjectedByzantineDeliveredFirstTopExactness"],
+        extra,
+    )
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectedByzantineDeliveredFirstTopExactness must mirror "
+        "ByzantineDeliveredFirstTopExactness projected conjunct contract; "
+        f"unexpected projected conjunct(s) {extra}"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_implication_drift(
+) -> None:
+    module = load_coverage_module()
+    projection_implications = dict(module.SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS)
+    projection_implications["ProjectionBridgeCoversOrderedTopCorridors"] = (
+        "ProjectedByzantineDeliveredFirstTopExactness"
+    )
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        projection_implication_contracts=projection_implications,
+    )
+
+    assert errors == [
+        "ProjectionBridgeCoversOrderedTopCorridors implication antecedent must "
+        "mirror ByzantineDirectTopCoversOrderedTopCorridors; expected "
+        "ProjectedByzantineDirectTopExactness, found "
+        "ProjectedByzantineDeliveredFirstTopExactness"
+    ]
+
+
+def test_projection_bridge_interleaving_contract_alignment_errors_accepts_composite(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.projection_bridge_interleaving_contract_alignment_errors() == []
+
+
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_missing_top_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    projection_contracts["ProjectionBridgeMatchesInterleavingExactness"] = tuple(
+        conjunct
+        for conjunct in projection_contracts[
+            "ProjectionBridgeMatchesInterleavingExactness"
+        ]
+        if conjunct != missing
+    )
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingExactness must compose "
+        "ProjectedByzantineDirectTopExactness and "
+        f"ProjectionBridgeMatchesInterleavingCore; missing conjunct(s) {missing}"
+    ]
+
+
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_missing_core_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "BufferedVotesWaitForDelivery"
+    projection_contracts["ProjectionBridgeMatchesInterleavingExactness"] = tuple(
+        conjunct
+        for conjunct in projection_contracts[
+            "ProjectionBridgeMatchesInterleavingExactness"
+        ]
+        if conjunct != missing
+    )
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingExactness must compose "
+        "ProjectedByzantineDirectTopExactness and "
+        f"ProjectionBridgeMatchesInterleavingCore; missing conjunct(s) {missing}"
+    ]
+
+
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_extra_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "ProjectedUnexpectedBridgeObligation"
+    projection_contracts["ProjectionBridgeMatchesInterleavingExactness"] = (
+        *projection_contracts["ProjectionBridgeMatchesInterleavingExactness"],
+        extra,
+    )
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingExactness must compose "
+        "ProjectedByzantineDirectTopExactness and "
+        "ProjectionBridgeMatchesInterleavingCore; unexpected conjunct(s) "
+        f"{extra}"
+    ]
+
+
+def test_projection_bridge_core_source_alignment_errors_accepts_source_exactness(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.projection_bridge_core_source_alignment_errors() == []
+
+
+def test_projection_bridge_core_source_alignment_errors_rejects_missing_source_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "ProposedRoundInitializesRbc"
+    projection_contracts["ProjectionBridgeMatchesInterleavingCore"] = tuple(
+        conjunct
+        for conjunct in projection_contracts["ProjectionBridgeMatchesInterleavingCore"]
+        if conjunct != missing
+    )
+
+    errors = module.projection_bridge_core_source_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingCore must mirror "
+        f"ByzantineCommitInterleavingExactness; missing conjunct(s) {missing}"
+    ]
+
+
+def test_projection_bridge_core_source_alignment_errors_rejects_extra_conjunct(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "UnexpectedProjectionBridgeCore"
+    projection_contracts["ProjectionBridgeMatchesInterleavingCore"] = (
+        *projection_contracts["ProjectionBridgeMatchesInterleavingCore"],
+        extra,
+    )
+
+    errors = module.projection_bridge_core_source_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectionBridgeMatchesInterleavingCore must mirror "
+        f"ByzantineCommitInterleavingExactness; unexpected conjunct(s) {extra}"
+    ]
+
+
+def replace_source_progress_alignment_contract(
+    module,
+    envelope: str,
+    replacement: dict[str, tuple[str, ...]],
+) -> tuple[tuple[str, dict[str, tuple[str, ...]], str, tuple[str, ...]], ...]:
+    return tuple(
+        (
+            family,
+            replacement if envelope_operator == envelope else conjunct_contracts,
+            envelope_operator,
+            expected_components,
+        )
+        for (
+            family,
+            conjunct_contracts,
+            envelope_operator,
+            expected_components,
+        ) in module.SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS
+    )
+
+
+def test_source_progress_safety_contract_alignment_errors_accepts_envelopes(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.source_progress_safety_contract_alignment_errors() == []
+
+
+def test_source_progress_safety_contract_alignment_errors_rejects_missing_exactness(
+) -> None:
+    module = load_coverage_module()
+    envelope = "DirectCommitProgressSafetyEnvelope"
+    direct_contracts = copied_contracts(
+        module.SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "DirectCommitInterleavingExactness"
+    direct_contracts[envelope] = tuple(
+        conjunct for conjunct in direct_contracts[envelope] if conjunct != missing
+    )
+
+    errors = module.source_progress_safety_contract_alignment_errors(
+        alignment_contracts=replace_source_progress_alignment_contract(
+            module,
+            envelope,
+            direct_contracts,
+        ),
+    )
+
+    assert errors == [
+        "DirectCommitProgressSafetyEnvelope must compose TypeInvariant and "
+        "DirectCommitInterleavingExactness for direct interleaving progress "
+        f"safety; missing conjunct(s) {missing}"
+    ]
+
+
+def test_source_progress_safety_contract_alignment_errors_rejects_extra_conjunct(
+) -> None:
+    module = load_coverage_module()
+    envelope = "ByzantineCommitProgressSafetyEnvelope"
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "UnexpectedByzantineProgressSafety"
+    byzantine_contracts[envelope] = (*byzantine_contracts[envelope], extra)
+
+    errors = module.source_progress_safety_contract_alignment_errors(
+        alignment_contracts=replace_source_progress_alignment_contract(
+            module,
+            envelope,
+            byzantine_contracts,
+        ),
+    )
+
+    assert errors == [
+        "ByzantineCommitProgressSafetyEnvelope must compose TypeInvariant and "
+        "ByzantineCommitInterleavingExactness for Byzantine interleaving "
+        f"progress safety; unexpected conjunct(s) {extra}"
+    ]
+
+
+def test_projected_commit_progress_contract_alignment_errors_accepts_bridge_components(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.projected_commit_progress_contract_alignment_errors() == []
+
+
+def test_projected_commit_progress_contract_alignment_errors_rejects_missing_component(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "ProjectionBridgeCoversOrderedTopCorridors"
+    projection_contracts["ProjectedCommitProgressSafetyEnvelope"] = tuple(
+        conjunct
+        for conjunct in projection_contracts["ProjectedCommitProgressSafetyEnvelope"]
+        if conjunct != missing
+    )
+
+    errors = module.projected_commit_progress_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectedCommitProgressSafetyEnvelope must compose "
+        "ProjectionBridgeCoversOrderedTopCorridors and "
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope; "
+        f"missing conjunct(s) {missing}"
+    ]
+
+
+def test_projected_commit_progress_contract_alignment_errors_rejects_extra_component(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "ProjectedUnexpectedProgressBridge"
+    projection_contracts["ProjectedCommitProgressSafetyEnvelope"] = (
+        *projection_contracts["ProjectedCommitProgressSafetyEnvelope"],
+        extra,
+    )
+
+    errors = module.projected_commit_progress_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "ProjectedCommitProgressSafetyEnvelope must compose "
+        "ProjectionBridgeCoversOrderedTopCorridors and "
+        "ProjectionBridgeMatchesInterleavingExactnessCorrectnessEnvelope; "
+        f"unexpected conjunct(s) {extra}"
+    ]
+
+
+def projected_commit_progress_spec_contract_text(
+    module,
+    *,
+    fairness_actions: tuple[str, ...] | None = None,
+    spec_lines: list[str] | None = None,
+) -> str:
+    fairness_actions = (
+        fairness_actions
+        if fairness_actions is not None
+        else module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    )
+    spec_lines = spec_lines or [
+        "ProjectedCommitProgressSpec ==",
+        "  /\\ Init",
+        "  /\\ [][Next]_vars",
+        "  /\\ ProjectedCommitProgressFairness",
+    ]
+    return "\n".join(
+        [
+            "ProjectedCommitProgressFairness ==",
+            *(f"  /\\ WF_vars({action})" for action in fairness_actions),
+            "",
+            *spec_lines,
+        ]
+    )
+
+
+def test_projected_commit_progress_spec_contract_errors_accepts_named_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(module),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == []
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_raw_spec_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            spec_lines=[
+                "ProjectedCommitProgressSpec ==",
+                "  /\\ Init",
+                "  /\\ [][Next]_vars",
+                "  /\\ WF_vars(HonestPropose)",
+                "  /\\ WF_vars(PrepareVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projected_commit_progress_spec_contract_errors(tla)
+
+    assert errors == [
+        f"{tla}:11 defines ProjectedCommitProgressSpec, but is missing "
+        "required direct conjunct(s) ProjectedCommitProgressFairness",
+        f"{tla}:11 defines ProjectedCommitProgressSpec, but must compose "
+        "ProjectedCommitProgressFairness instead of raw WF_vars fairness "
+        "clauses: HonestPropose, PrepareVote"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_missing_next_closure(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            spec_lines=[
+                "ProjectedCommitProgressSpec ==",
+                "  /\\ Init",
+                "  /\\ ProjectedCommitProgressFairness",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projected_commit_progress_spec_contract_errors(tla)
+
+    assert errors == [
+        f"{tla}:11 defines ProjectedCommitProgressSpec, but must keep direct "
+        "[][Next]_vars transition closure"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_fairness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    fairness_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != "RbcDeliver"
+    ) + ("TimeoutTick", "RbcReady")
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            fairness_actions=fairness_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projected_commit_progress_spec_contract_errors(tla)
+
+    assert errors == [
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but repeats "
+        "WF_vars action(s) RbcReady; each projected commit progress fairness "
+        "action must be counted once",
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but is missing "
+        "WF_vars action(s) RbcDeliver",
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but contains "
+        "unexpected WF_vars action(s) TimeoutTick; keep projected commit "
+        "progress fairness on the documented action contract",
+    ]
+
+
+def commit_progress_spec_contract_text(
+    *,
+    spec_operator: str,
+    fairness_operator: str,
+    next_closure: str,
+    fairness_actions: tuple[str, ...],
+    spec_lines: list[str] | None = None,
+) -> str:
+    spec_lines = spec_lines or [
+        f"{spec_operator} ==",
+        "  /\\ Init",
+        f"  /\\ {next_closure}",
+        f"  /\\ {fairness_operator}",
+    ]
+    return "\n".join(
+        [
+            f"{fairness_operator} ==",
+            *(f"  /\\ WF_vars({action})" for action in fairness_actions),
+            "",
+            *spec_lines,
+        ]
+    )
+
+
+def test_source_commit_progress_spec_contract_errors_accepts_named_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    contracts = []
+    for (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) in module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS:
+        tla = tmp_path / module_path.name
+        tla.write_text(
+            commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+            ),
+            encoding="utf-8",
+        )
+        contracts.append(
+            (
+                tla,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                fairness_actions,
+                root_kind,
+            )
+        )
+
+    assert module.source_commit_progress_spec_contract_errors(tuple(contracts)) == []
+
+
+def test_source_commit_progress_spec_contract_errors_rejects_raw_spec_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[2]
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+            spec_lines=[
+                f"{spec_operator} ==",
+                "  /\\ Init",
+                f"  /\\ {next_closure}",
+                "  /\\ WF_vars(HonestPropose)",
+                "  /\\ WF_vars(PrepareVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.source_commit_progress_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:10 defines {spec_operator}, but is missing required direct "
+        f"conjunct(s) {fairness_operator}",
+        f"{tla}:10 defines {spec_operator}, but must compose "
+        f"{fairness_operator} instead of raw WF_vars fairness clauses: "
+        "HonestPropose, PrepareVote",
+    ]
+
+
+def test_source_commit_progress_spec_contract_errors_rejects_missing_next_closure(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+            spec_lines=[
+                f"{spec_operator} ==",
+                "  /\\ Init",
+                f"  /\\ {fairness_operator}",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.source_commit_progress_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:5 defines {spec_operator}, but must keep direct {next_closure} "
+        "transition closure"
+    ]
+
+
+def test_source_commit_progress_spec_contract_errors_rejects_fairness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[3]
+    drifted_actions = tuple(
+        action for action in fairness_actions if action != "RbcDeliver"
+    ) + ("TimeoutTick", "RbcReady")
+    tla = tmp_path / "SumeragiByzantineCommitInterleavingGate.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=drifted_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.source_commit_progress_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:2 defines {fairness_operator}, but repeats WF_vars action(s) "
+        f"RbcReady; each {root_kind} fairness action must be counted once",
+        f"{tla}:2 defines {fairness_operator}, but is missing WF_vars "
+        "action(s) RbcDeliver",
+        f"{tla}:2 defines {fairness_operator}, but contains unexpected "
+        f"WF_vars action(s) TimeoutTick; keep {root_kind} fairness on the "
+        "documented action contract",
+    ]
+
+
+def test_top_level_commit_spec_contract_errors_accepts_named_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    contracts = []
+    for (
+        module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) in module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS:
+        tla = tmp_path / module_path.name
+        existing = tla.read_text(encoding="utf-8") if tla.exists() else ""
+        tla.write_text(
+            existing
+            + "\n"
+            + commit_progress_spec_contract_text(
+                spec_operator=spec_operator,
+                fairness_operator=fairness_operator,
+                next_closure=next_closure,
+                fairness_actions=fairness_actions,
+            ),
+            encoding="utf-8",
+        )
+        contracts.append(
+            (
+                tla,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                fairness_actions,
+                root_kind,
+            )
+        )
+
+    assert module.top_level_commit_spec_contract_errors(tuple(contracts)) == []
+
+
+def test_top_level_commit_spec_contract_errors_rejects_raw_spec_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+            spec_lines=[
+                f"{spec_operator} ==",
+                "  /\\ Init",
+                f"  /\\ {next_closure}",
+                "  /\\ WF_vars(HonestPropose)",
+                "  /\\ WF_vars(HonestCommitVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.top_level_commit_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:12 defines {spec_operator}, but is missing required direct "
+        f"conjunct(s) {fairness_operator}",
+        f"{tla}:12 defines {spec_operator}, but must compose "
+        f"{fairness_operator} instead of raw WF_vars fairness clauses: "
+        "HonestPropose, HonestCommitVote",
+    ]
+
+
+def test_top_level_commit_spec_contract_errors_rejects_fairness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[1]
+    drifted_actions = tuple(
+        action for action in fairness_actions if action != "RbcDeliverGood"
+    ) + ("TimeoutTick", "RbcReadyGood")
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=drifted_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.top_level_commit_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:2 defines {fairness_operator}, but repeats WF_vars action(s) "
+        f"RbcReadyGood; each {root_kind} fairness action must be counted once",
+        f"{tla}:2 defines {fairness_operator}, but is missing WF_vars "
+        "action(s) RbcDeliverGood",
+        f"{tla}:2 defines {fairness_operator}, but contains unexpected "
+        f"WF_vars action(s) TimeoutTick; keep {root_kind} fairness on the "
+        "documented action contract",
+    ]
+
+
+def direct_delivered_first_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+) -> str:
+    lines: list[str] = []
+    for (
+        operator,
+        conjuncts,
+    ) in module.SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS.items():
+        lines.append(f"{operator} ==")
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"  /\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_direct_delivered_first_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    tla.write_text(direct_delivered_first_contract_text(module), encoding="utf-8")
+
+    assert module.direct_delivered_first_gate_conjunct_contract_errors(tla) == []
+
+
+def test_direct_delivered_first_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    missing = "DirectDeliveredFirstCorridorExactness"
+    tla.write_text(
+        direct_delivered_first_contract_text(
+            module,
+            omit=("DirectDeliveredFirstProgressSafetyEnvelope", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_delivered_first_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectDeliveredFirstProgressSafetyEnvelope, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_direct_delivered_first_gate_conjunct_contract_errors_rejects_exactness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    missing = "RbcEvidenceMatchesSpec"
+    tla.write_text(
+        direct_delivered_first_contract_text(
+            module,
+            omit=("DirectDeliveredFirstCorridorExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_delivered_first_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectDeliveredFirstCorridorExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def direct_vote_first_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+) -> str:
+    lines: list[str] = []
+    for (
+        operator,
+        conjuncts,
+    ) in module.SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS.items():
+        lines.append(f"{operator} ==")
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"  /\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_direct_vote_first_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectVoteFirstCorridorGate.tla"
+    tla.write_text(direct_vote_first_contract_text(module), encoding="utf-8")
+
+    assert module.direct_vote_first_gate_conjunct_contract_errors(tla) == []
+
+
+def test_direct_vote_first_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectVoteFirstCorridorGate.tla"
+    missing = "DirectVoteFirstCorridorExactness"
+    tla.write_text(
+        direct_vote_first_contract_text(
+            module,
+            omit=("DirectVoteFirstProgressSafetyEnvelope", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_vote_first_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectVoteFirstProgressSafetyEnvelope, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_direct_vote_first_gate_conjunct_contract_errors_rejects_exactness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectVoteFirstCorridorGate.tla"
+    missing = "BufferedCommitWaitHasNoCertificate"
+    tla.write_text(
+        direct_vote_first_contract_text(
+            module,
+            omit=("DirectVoteFirstCorridorExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_vote_first_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectVoteFirstCorridorExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def direct_interleaving_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+) -> str:
+    lines: list[str] = []
+    for (
+        operator,
+        conjuncts,
+    ) in module.SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS.items():
+        lines.append(f"{operator} ==")
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"  /\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_direct_interleaving_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    tla.write_text(direct_interleaving_contract_text(module), encoding="utf-8")
+
+    assert module.direct_interleaving_gate_conjunct_contract_errors(tla) == []
+
+
+def test_direct_interleaving_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    missing = "DirectCommitInterleavingExactness"
+    tla.write_text(
+        direct_interleaving_contract_text(
+            module,
+            omit=("DirectCommitProgressSafetyEnvelope", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_interleaving_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectCommitProgressSafetyEnvelope, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_direct_interleaving_gate_conjunct_contract_errors_rejects_exactness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    missing = "BufferedVotesWaitForDelivery"
+    tla.write_text(
+        direct_interleaving_contract_text(
+            module,
+            omit=("DirectCommitInterleavingExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.direct_interleaving_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines DirectCommitInterleavingExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def byzantine_interleaving_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+) -> str:
+    lines: list[str] = []
+    for (
+        operator,
+        conjuncts,
+    ) in module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS.items():
+        lines.append(f"{operator} ==")
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"  /\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_byzantine_interleaving_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitInterleavingGate.tla"
+    tla.write_text(byzantine_interleaving_contract_text(module), encoding="utf-8")
+
+    assert module.byzantine_interleaving_gate_conjunct_contract_errors(tla) == []
+
+
+def test_byzantine_interleaving_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitInterleavingGate.tla"
+    missing = "ByzantineCommitInterleavingExactness"
+    tla.write_text(
+        byzantine_interleaving_contract_text(
+            module,
+            omit=("ByzantineCommitProgressSafetyEnvelope", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_interleaving_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ByzantineCommitProgressSafetyEnvelope, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_byzantine_interleaving_gate_conjunct_contract_errors_rejects_exactness_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitInterleavingGate.tla"
+    missing = "ProposedRoundInitializesRbc"
+    tla.write_text(
+        byzantine_interleaving_contract_text(
+            module,
+            omit=("ByzantineCommitInterleavingExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.byzantine_interleaving_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ByzantineCommitInterleavingExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_byzantine_interleaving_exactness_alignment_errors_accepts_direct_core(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.byzantine_interleaving_exactness_alignment_errors() == []
+
+
+def test_byzantine_interleaving_exactness_alignment_errors_rejects_missing_core(
+) -> None:
+    module = load_coverage_module()
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    missing = "BufferedVotesWaitForDelivery"
+    byzantine_contracts["ByzantineCommitInterleavingExactness"] = tuple(
+        conjunct
+        for conjunct in byzantine_contracts["ByzantineCommitInterleavingExactness"]
+        if conjunct != missing
+    )
+
+    errors = module.byzantine_interleaving_exactness_alignment_errors(
+        byzantine_contracts=byzantine_contracts,
+    )
+
+    assert errors == [
+        "ByzantineCommitInterleavingExactness must extend "
+        "DirectCommitInterleavingExactness with Byzantine-only exactness "
+        f"conjuncts; missing conjunct(s) {missing}"
+    ]
+
+
+def test_byzantine_interleaving_exactness_alignment_errors_rejects_extra_core(
+) -> None:
+    module = load_coverage_module()
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    extra = "UnexpectedByzantineInterleavingCore"
+    byzantine_contracts["ByzantineCommitInterleavingExactness"] = (
+        *byzantine_contracts["ByzantineCommitInterleavingExactness"],
+        extra,
+    )
+
+    errors = module.byzantine_interleaving_exactness_alignment_errors(
+        byzantine_contracts=byzantine_contracts,
+    )
+
+    assert errors == [
+        "ByzantineCommitInterleavingExactness must extend "
+        "DirectCommitInterleavingExactness with Byzantine-only exactness "
+        f"conjuncts; unexpected conjunct(s) {extra}"
+    ]
+
+
+def projection_gate_contract_text(
+    module,
+    *,
+    omit: tuple[str, str] | None = None,
+    overrides: dict[str, list[str]] | None = None,
+) -> str:
+    lines: list[str] = []
+    overrides = overrides or {}
+    for operator, conjuncts in module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS.items():
+        override = overrides.get(operator)
+        if override is not None:
+            lines.extend(override)
+            continue
+        lines.append(f"{operator} ==")
+        antecedent = module.SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS.get(
+            operator
+        )
+        if antecedent is None:
+            prefix = "  "
+        else:
+            lines.append(f"  {antecedent} =>")
+            prefix = "    "
+        for conjunct in conjuncts:
+            if omit == (operator, conjunct):
+                continue
+            lines.append(f"{prefix}/\\ {conjunct}")
+    return "\n".join(lines)
+
+
+def test_projection_gate_conjunct_contract_errors_accepts_exact_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(projection_gate_contract_text(module), encoding="utf-8")
+
+    assert module.projection_gate_conjunct_contract_errors(tla) == []
+
+
+def test_projection_gate_conjunct_contract_errors_rejects_missing_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    missing = "DeliveredWithBufferedVotesCommits"
+    tla.write_text(
+        projection_gate_contract_text(
+            module,
+            omit=("ProjectionBridgeMatchesInterleavingExactness", missing),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projection_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ProjectionBridgeMatchesInterleavingExactness, but is missing "
+        f"required direct conjunct(s) {missing}"
+    ) in errors[0]
+
+
+def test_projection_gate_conjunct_contract_errors_rejects_dropped_implication(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    conjuncts = module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS[
+        "ProjectionBridgeMatchesInterleavingCore"
+    ]
+    tla.write_text(
+        projection_gate_contract_text(
+            module,
+            overrides={
+                "ProjectionBridgeMatchesInterleavingCore": [
+                    "ProjectionBridgeMatchesInterleavingCore ==",
+                    *(f"  /\\ {conjunct}" for conjunct in conjuncts),
+                ]
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.projection_gate_conjunct_contract_errors(tla)
+
+    assert len(errors) == 1
+    assert (
+        "defines ProjectionBridgeMatchesInterleavingCore, but it must keep a "
+        "top-level implication guarded by ProjectedByzantineDirectTopExactness"
+    ) in errors[0]
 
 
 def test_mutation_cfg_name_errors_accepts_matching_cfg_fragments() -> None:
@@ -2425,6 +11471,83 @@ def test_tlc_runner_constraint_errors_rejects_parameterized_constraint(
     ]
 
 
+def test_tlc_runner_constraint_contract_errors_accepts_documented_families() -> None:
+    module = load_coverage_module()
+
+    cases = [
+        module.RunnerCase(
+            "bounded-fast",
+            '\n    tlc_constraint="TlcSingletonOrEmpty"\n',
+            10,
+        ),
+        module.RunnerCase(
+            "bounded-bug-*",
+            '\n    tlc_constraint="TlcSingletonOrEmpty"\n',
+            20,
+        ),
+        module.RunnerCase("plain-fast", "", 30),
+    ]
+
+    assert (
+        module.tlc_runner_constraint_contract_errors(
+            cases,
+            constrained_prefixes=("bounded",),
+        )
+        == []
+    )
+
+
+def test_tlc_runner_constraint_contract_errors_rejects_drift() -> None:
+    module = load_coverage_module()
+
+    cases = [
+        module.RunnerCase("bounded-fast", "", 10),
+        module.RunnerCase(
+            "bounded-bug-*",
+            '\n    tlc_constraint="OtherConstraint"\n',
+            20,
+        ),
+        module.RunnerCase(
+            "plain-fast",
+            '\n    tlc_constraint="TlcSingletonOrEmpty"\n',
+            30,
+        ),
+    ]
+
+    assert module.tlc_runner_constraint_contract_errors(
+        cases,
+        constrained_prefixes=("bounded",),
+    ) == [
+        "TLC runner case 'bounded-fast' must assign "
+        'tlc_constraint="TlcSingletonOrEmpty" for documented '
+        "singleton-or-empty state-space splitting",
+        "TLC runner case 'bounded-bug-*' assigns "
+        'tlc_constraint="OtherConstraint", expected "TlcSingletonOrEmpty" '
+        "for documented singleton-or-empty state-space splitting",
+        "TLC runner case 'plain-fast' assigns undocumented "
+        'tlc_constraint="TlcSingletonOrEmpty"; only documented '
+        "singleton-or-empty families may narrow TLC state space",
+    ]
+
+
+def test_tlc_runner_constraint_contract_errors_rejects_missing_case() -> None:
+    module = load_coverage_module()
+
+    assert module.tlc_runner_constraint_contract_errors(
+        [
+            module.RunnerCase(
+                "bounded-fast",
+                '\n    tlc_constraint="TlcSingletonOrEmpty"\n',
+                10,
+            )
+        ],
+        constrained_prefixes=("bounded",),
+    ) == [
+        "TLC runner is missing documented singleton-or-empty constrained "
+        "case 'bounded-bug-*'"
+    ]
+
+
 def test_apalache_length_errors_require_non_negative_integer() -> None:
     module = load_coverage_module()
 
@@ -2899,6 +12022,508 @@ def test_cfg_check_operator_names_returns_only_invariants_and_properties(
     )
 
 
+def test_top_level_cfg_behavior_errors_accepts_root_behavior_contracts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "Sumeragi_fast.cfg"
+    deep_cfg = tmp_path / "Sumeragi_deep.cfg"
+    tlc_cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    required_check = (("TypeInvariant", "INVARIANT"),)
+    write_cfg_with_behavior_and_checks(
+        fast_cfg,
+        ("INIT Init", "NEXT Next"),
+        required_check,
+    )
+    write_cfg_with_behavior_and_checks(
+        deep_cfg,
+        ("INIT Init", "NEXT Next"),
+        required_check,
+    )
+    write_cfg_with_behavior_and_checks(
+        tlc_cfg,
+        ("SPECIFICATION Spec",),
+        required_check,
+    )
+
+    assert module.top_level_cfg_behavior_errors(
+        (
+            (
+                fast_cfg,
+                (("INIT", "Init"), ("NEXT", "Next")),
+                "top-level fast coverage",
+            ),
+            (
+                deep_cfg,
+                (("INIT", "Init"), ("NEXT", "Next")),
+                "top-level deep coverage",
+            ),
+            (
+                tlc_cfg,
+                (("SPECIFICATION", "Spec"),),
+                "top-level TLC fast coverage",
+            ),
+        )
+    ) == []
+
+
+def test_top_level_cfg_behavior_errors_rejects_wrong_init_next_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_deep.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT StaleNext"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.top_level_cfg_behavior_errors(
+        (
+            (
+                cfg,
+                (("INIT", "Init"), ("NEXT", "Next")),
+                "top-level deep coverage",
+            ),
+        )
+    ) == [
+        f"{cfg}:2 binds NEXT StaleNext, expected Next for top-level deep coverage"
+    ]
+
+
+def test_top_level_cfg_behavior_errors_rejects_wrong_spec_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT Next"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.top_level_cfg_behavior_errors(
+        (
+            (
+                cfg,
+                (("SPECIFICATION", "Spec"),),
+                "top-level TLC fast coverage",
+            ),
+        )
+    ) == [
+        f"{cfg} must bind SPECIFICATION Spec for top-level TLC fast coverage",
+        f"{cfg}:1 binds unexpected INIT Init; expected SPECIFICATION Spec "
+        "for top-level TLC fast coverage",
+        f"{cfg}:2 binds unexpected NEXT Next; expected SPECIFICATION Spec "
+        "for top-level TLC fast coverage",
+    ]
+
+
+def test_top_level_cfg_deadlock_errors_accepts_tlc_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("SPECIFICATION Spec",),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.top_level_cfg_deadlock_errors(
+        ((cfg, "FALSE", "top-level TLC fast coverage"),)
+    ) == []
+
+
+def test_top_level_cfg_deadlock_errors_rejects_wrong_tlc_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION Spec",
+                "CHECK_DEADLOCK TRUE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.top_level_cfg_deadlock_errors(
+        ((cfg, "FALSE", "top-level TLC fast coverage"),)
+    ) == [
+        f"{cfg}:2 sets CHECK_DEADLOCK TRUE, expected FALSE for top-level TLC "
+        "fast coverage"
+    ]
+
+
+def test_top_level_cfg_deadlock_absence_errors_accepts_non_temporal_roots(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "Sumeragi_fast.cfg"
+    byzantine_cfg = tmp_path / "Sumeragi_byzantine_direct_top_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        fast_cfg,
+        ("INIT Init", "NEXT Next"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+    write_cfg_with_behavior_and_checks(
+        byzantine_cfg,
+        ("INIT Init", "NEXT ByzantineDirectCommitNext"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.top_level_cfg_deadlock_absence_errors(
+        (
+            (fast_cfg, "top-level fast coverage"),
+            (byzantine_cfg, "Byzantine direct top coverage"),
+        )
+    ) == []
+
+
+def test_top_level_cfg_deadlock_absence_errors_rejects_policy(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_deep.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.top_level_cfg_deadlock_absence_errors(
+        ((cfg, "top-level deep coverage"),)
+    ) == [
+        f"{cfg}:3 sets CHECK_DEADLOCK FALSE, but top-level deep coverage "
+        "must not bind CHECK_DEADLOCK"
+    ]
+
+
+def test_top_level_cfg_constraint_errors_accepts_unconstrained_roots(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    deep_cfg = tmp_path / "Sumeragi_deep.cfg"
+    byzantine_cfg = tmp_path / "Sumeragi_byzantine_direct_top_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        deep_cfg,
+        ("INIT Init", "NEXT Next"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+    write_cfg_with_behavior_and_checks(
+        byzantine_cfg,
+        ("INIT Init", "NEXT ByzantineDirectCommitNext"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.top_level_cfg_constraint_errors(
+        (
+            (deep_cfg, "top-level deep coverage"),
+            (byzantine_cfg, "Byzantine direct top coverage"),
+        )
+    ) == []
+
+
+def test_top_level_cfg_constraint_errors_rejects_static_bounds(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION Spec",
+                "CONSTRAINT TlcStateBound",
+                "CHECK_DEADLOCK FALSE",
+                "INVARIANT TypeInvariant",
+                "PROPERTY EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.top_level_cfg_constraint_errors(
+        ((cfg, "top-level TLC fast coverage"),)
+    ) == [
+        f"{cfg}:2 binds CONSTRAINT TlcStateBound, but top-level TLC fast "
+        "coverage must remain unconstrained"
+    ]
+
+
+def write_cfg_with_constant_values(
+    path: Path,
+    constant_values: tuple[tuple[str, str], ...],
+) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "CONSTANTS",
+                *(f"  {constant} = {value}" for constant, value in constant_values),
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_top_level_cfg_constant_errors_accepts_root_envelopes(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "Sumeragi_fast.cfg"
+    deep_cfg = tmp_path / "Sumeragi_deep.cfg"
+    tlc_cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    write_cfg_with_constant_values(fast_cfg, module.SUMERAGI_FAST_CONSTANT_VALUES)
+    write_cfg_with_constant_values(deep_cfg, module.SUMERAGI_DEEP_CONSTANT_VALUES)
+    write_cfg_with_constant_values(tlc_cfg, module.SUMERAGI_FAST_CONSTANT_VALUES)
+
+    assert module.top_level_cfg_constant_errors(
+        (
+            (
+                fast_cfg,
+                module.SUMERAGI_FAST_CONSTANT_VALUES,
+                "top-level fast coverage",
+            ),
+            (
+                deep_cfg,
+                module.SUMERAGI_DEEP_CONSTANT_VALUES,
+                "top-level deep coverage",
+            ),
+            (
+                tlc_cfg,
+                module.SUMERAGI_FAST_CONSTANT_VALUES,
+                "top-level TLC fast coverage",
+            ),
+        )
+    ) == []
+
+
+def test_top_level_cfg_constant_errors_rejects_wrong_quorum_value(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    write_cfg_with_constant_values(cfg, (("CommitQuorum", "2"),))
+
+    assert module.top_level_cfg_constant_errors(
+        (
+            (
+                cfg,
+                (("CommitQuorum", "3"),),
+                "top-level fast coverage",
+            ),
+        )
+    ) == [
+        f"{cfg}:4 binds constant CommitQuorum = 2, expected 3 "
+        "for top-level fast coverage"
+    ]
+
+
+def test_top_level_cfg_constant_set_errors_accepts_exact_envelopes(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "Sumeragi_fast.cfg"
+    byzantine_cfg = tmp_path / "Sumeragi_byzantine_direct_top_fast.cfg"
+    write_cfg_with_constant_values(fast_cfg, module.SUMERAGI_FAST_CONSTANT_VALUES)
+    write_cfg_with_constant_values(byzantine_cfg, module.SUMERAGI_FAST_CONSTANT_VALUES)
+
+    assert module.top_level_cfg_constant_set_errors(
+        (
+            (
+                fast_cfg,
+                module.SUMERAGI_FAST_CONSTANT_VALUES,
+                "top-level fast coverage",
+            ),
+            (
+                byzantine_cfg,
+                module.SUMERAGI_FAST_CONSTANT_VALUES,
+                "Byzantine direct top coverage",
+            ),
+        )
+    ) == []
+
+
+def test_top_level_cfg_constant_set_errors_rejects_extra_constants(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    write_cfg_with_constant_values(
+        cfg,
+        module.SUMERAGI_FAST_CONSTANT_VALUES + (("ExtraBound", "1"),),
+    )
+
+    expected_constants = ", ".join(
+        sorted(constant for constant, _ in module.SUMERAGI_FAST_CONSTANT_VALUES)
+    )
+    assert module.top_level_cfg_constant_set_errors(
+        (
+            (
+                cfg,
+                module.SUMERAGI_FAST_CONSTANT_VALUES,
+                "top-level TLC fast coverage",
+            ),
+        )
+    ) == [
+        f"{cfg}:13 binds unexpected constant ExtraBound; expected only "
+        f"{expected_constants} for top-level TLC fast coverage"
+    ]
+
+
+def test_top_level_fast_cfg_check_errors_accepts_fast_sentinel_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT Next"),
+        module.SUMERAGI_FAST_CFG_REQUIRED_CHECKS,
+    )
+
+    assert module.top_level_fast_cfg_check_errors(cfg) == []
+
+
+def test_top_level_fast_cfg_check_errors_rejects_missing_or_downgraded_root(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreFastCorrectnessEnvelope",
+                "INVARIANT SumeragiConsensusCoreAlwaysMatchesExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.top_level_fast_cfg_check_errors(cfg) == [
+        f"{cfg} checks PROPERTY SumeragiConsensusCoreFastCorrectnessEnvelope, "
+        "expected INVARIANT",
+    ]
+
+
+def test_top_level_fast_cfg_check_errors_rejects_replaced_fast_root(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SumeragiConsensusCoreAlwaysMatchesExactness",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.top_level_fast_cfg_check_errors(cfg) == [
+        f"{cfg} must check INVARIANT "
+        "SumeragiConsensusCoreFastCorrectnessEnvelope for top-level fast "
+        "sentinel coverage",
+    ]
+
+
+def test_top_level_cfg_check_set_errors_accepts_exact_sentinel_sets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_cfg = tmp_path / "Sumeragi_fast.cfg"
+    byzantine_cfg = tmp_path / "Sumeragi_byzantine_direct_top_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        fast_cfg,
+        ("INIT Init", "NEXT Next"),
+        module.SUMERAGI_FAST_CFG_REQUIRED_CHECKS,
+    )
+    write_cfg_with_behavior_and_checks(
+        byzantine_cfg,
+        ("INIT Init", "NEXT ByzantineDirectCommitNext"),
+        (
+            ("TypeInvariant", "INVARIANT"),
+            ("TlcByzantineDirectCommitCorridor", "INVARIANT"),
+            ("ByzantineDirectTopCorrectnessEnvelope", "INVARIANT"),
+            ("ByzantineDirectTopCoversOrderedTopCorridors", "INVARIANT"),
+        ),
+    )
+
+    assert module.top_level_cfg_check_set_errors(
+        (
+            (
+                fast_cfg,
+                module.SUMERAGI_FAST_CFG_REQUIRED_CHECKS,
+                "top-level fast sentinel coverage",
+            ),
+            (
+                byzantine_cfg,
+                (
+                    ("TypeInvariant", "INVARIANT"),
+                    ("TlcByzantineDirectCommitCorridor", "INVARIANT"),
+                    ("ByzantineDirectTopCorrectnessEnvelope", "INVARIANT"),
+                    ("ByzantineDirectTopCoversOrderedTopCorridors", "INVARIANT"),
+                ),
+                "Byzantine direct top coverage",
+            ),
+        )
+    ) == []
+
+
+def test_top_level_cfg_check_set_errors_rejects_extra_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT SumeragiConsensusCoreFastCorrectnessEnvelope",
+                "PROPERTY ExtraProof",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    expected_checks = ", ".join(
+        f"{kind} {operator}"
+        for operator, kind in module.SUMERAGI_FAST_CFG_REQUIRED_CHECKS
+    )
+    assert module.top_level_cfg_check_set_errors(
+        (
+            (
+                cfg,
+                module.SUMERAGI_FAST_CFG_REQUIRED_CHECKS,
+                "top-level fast sentinel coverage",
+            ),
+        )
+    ) == [
+        f"{cfg} checks unexpected PROPERTY ExtraProof; expected only "
+        f"{expected_checks} for top-level fast sentinel coverage"
+    ]
+
+
 def test_top_level_cfg_check_parity_errors_accepts_matching_checks(
     tmp_path: Path,
 ) -> None:
@@ -3238,6 +12863,62 @@ def test_consensus_core_root_conjunct_contract_errors_accepts_exact_contract(
     assert module.consensus_core_root_conjunct_contract_errors(tla) == []
 
 
+def test_consensus_core_root_conjunct_contract_errors_rejects_non_named_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "Root ==",
+                "  /\\ Named",
+                "  /\\ TRUE",
+                "Named == checked = ready",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.consensus_core_root_conjunct_contract_errors(
+        tla,
+        contracts={"Root": ("Named",)},
+    ) == [
+        f"{tla}:2 defines Root, but contains direct non-named conjunct TRUE; "
+        "keep consensus-core aggregate proof roots on the documented conjunct "
+        "contract"
+    ]
+
+
+def test_consensus_core_root_conjunct_contract_errors_allows_documented_wrapper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "Root ==",
+                "  /\\ Named",
+                "  /\\ Guard => Consequent",
+                "Named == checked = ready",
+                "Guard == ready",
+                "Consequent == checked",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.consensus_core_root_conjunct_contract_errors(
+            tla,
+            contracts={"Root": ("Named",)},
+            allow_non_named_conjunct_operators=frozenset({"Root"}),
+        )
+        == []
+    )
+
+
 def test_consensus_core_root_cfg_check_contract_errors_accepts_expected_roles(
     tmp_path: Path,
 ) -> None:
@@ -3375,6 +13056,7 @@ def sumeragi_temporal_shape_contract_lines(
     action_wrapper_bodies: dict[str, str] | None = None,
 ) -> list[str]:
     wrappers = {
+        "SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope": "[] SumeragiConsensusCoreStateMatchesEnvelope",
         "TimeoutTickGateNeverBypassesStalledProgress": "[] TimeoutTickGateMatchesStalledProgress",
         "ViewQuorumEvidenceNeverDiverges": "[] ViewEvidenceMatchesActiveView",
         "ViewEvidenceWitnessNeverTargetsZeroOrNewView": "[] ViewEvidenceWitnessRequiresNonzeroActiveView",
@@ -3587,6 +13269,9 @@ def sumeragi_temporal_shape_contract_lines(
         "---- MODULE Sumeragi ----",
         f"CommitNeverRevoked == {commit_never_revoked_body}",
         f"CommittedPhaseNeverLeaves == {committed_phase_never_leaves_body}",
+        "SumeragiConsensusCoreStateMatchesEnvelope == TRUE",
+        "SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope == "
+        f"{wrappers['SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope']}",
         "CommittedPhaseMatchesFinality == TRUE",
         "CommitCertificateMatchesFinality == TRUE",
         "LiveCommitGateMatchesFinality == TRUE",
@@ -3648,6 +13333,55 @@ def test_sumeragi_temporal_shape_contract_errors_accepts_protected_temporal_shap
     )
 
     assert module.sumeragi_temporal_shape_contract_errors(tla) == []
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_state_safety_wrapper_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cases = (
+        ("missing_always", "SumeragiConsensusCoreStateMatchesEnvelope"),
+        ("wrong_predicate", "[] SumeragiConsensusCoreStateSafetyEnvelope"),
+        (
+            "extra_conjunct",
+            "[] (SumeragiConsensusCoreStateMatchesEnvelope /\\ TypeInvariant)",
+        ),
+    )
+    for case_name, body in cases:
+        case_dir = tmp_path / case_name
+        case_dir.mkdir()
+        tla = case_dir / "Sumeragi.tla"
+        operator = "SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope"
+        predicate = "SumeragiConsensusCoreStateMatchesEnvelope"
+        lines = sumeragi_temporal_shape_contract_lines(
+            wrapper_bodies={operator: body},
+        )
+        tla.write_text("\n".join(lines), encoding="utf-8")
+        line = lines.index(f"{operator} == {body}") + 1
+
+        assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+            f"{tla}:{line} defines {operator}, but it does not keep the "
+            f"direct [] {predicate} wrapper shape"
+        ]
+
+
+def test_sumeragi_temporal_shape_contract_errors_rejects_state_safety_predicate_arity_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    lines = sumeragi_temporal_shape_contract_lines()
+    predicate_line = "SumeragiConsensusCoreStateMatchesEnvelope == TRUE"
+    line_index = lines.index(predicate_line)
+    lines[line_index] = "SumeragiConsensusCoreStateMatchesEnvelope(state) == TRUE"
+    tla.write_text("\n".join(lines), encoding="utf-8")
+
+    assert module.sumeragi_temporal_shape_contract_errors(tla) == [
+        f"{tla}:{line_index + 1} defines matching predicate "
+        "SumeragiConsensusCoreStateMatchesEnvelope for temporal theorem "
+        "SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope with arity 1; "
+        "temporal shape contracts require zero-arity predicates"
+    ]
 
 
 def test_sumeragi_temporal_shape_contract_errors_rejects_commit_never_revoked_drift(
@@ -9743,14 +19477,12 @@ def test_tla_module_dependency_references_rejects_late_declarations(
     )
 
     assert module.tla_module_dependency_references(tla) == (
-        [(2, "EXTENDS", "Naturals")],
+        [(2, "EXTENDS", "Naturals"), (5, "INSTANCE", "LateNamed")],
         [
-            f"{tla}:4 TLA dependency declarations must appear before "
-            "declarations and definitions: EXTENDS LateHelpers",
-            f"{tla}:5 TLA dependency declarations must appear before "
-            "declarations and definitions: Alias == INSTANCE LateNamed",
+            f"{tla}:4 EXTENDS declarations must appear before declarations "
+            "and definitions: EXTENDS LateHelpers",
             f"{tla}:7 TLA dependency declarations must appear before "
-            "declarations and definitions: INSTANCE LateBare",
+            "operator definitions: INSTANCE LateBare",
         ],
     )
 
@@ -9938,6 +19670,96 @@ def test_tla_module_validation_errors_check_reachable_dependency_modules(
         "expected LocalHelpers",
         f"frontier-deep: {helper}:4 uses top-level AXIOM directive; "
         "Sumeragi formal modules must be assumption-free",
+    ]
+
+
+def test_tla_module_surface_errors_accepts_valid_local_modules(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    root = tmp_path / "Root.tla"
+    helper = tmp_path / "Helper.tla"
+    root.write_text(
+        "\n".join(
+            [
+                "---- MODULE Root ----",
+                "EXTENDS Helper",
+                "CONSTANT MaxView",
+                "VARIABLE state",
+                "vars == <<state>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    helper.write_text(
+        "\n".join(
+            [
+                "---- MODULE Helper ----",
+                "VARIABLE helper_state",
+                "vars == <<helper_state>>",
+                "HelperPredicate == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_module_surface_errors(tmp_path) == []
+
+
+def test_tla_module_surface_errors_rejects_invalid_and_orphan_modules(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    root = tmp_path / "Root.tla"
+    helper = tmp_path / "Helper.tla"
+    orphan = tmp_path / "Orphan.tla"
+    root.write_text(
+        "\n".join(
+            [
+                "---- MODULE Root ----",
+                "EXTENDS Helper",
+                "VARIABLE state",
+                "vars == <<state>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    helper.write_text(
+        "\n".join(
+            [
+                "---- MODULE DriftedHelper ----",
+                "VARIABLE helper_state",
+                "vars == <<helper_state>>",
+                "AXIOM FALSE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    orphan.write_text(
+        "\n".join(
+            [
+                "---- MODULE Orphan ----",
+                "CONSTANT Flag",
+                "CONSTANT Flag",
+                "VARIABLE state",
+                "vars == <<state>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tla_module_surface_errors(tmp_path) == [
+        f"formal coverage: {helper} declares MODULE DriftedHelper, "
+        "expected Helper",
+        f"formal coverage: {helper}:4 uses top-level AXIOM directive; "
+        "Sumeragi formal modules must be assumption-free",
+        f"formal coverage: {orphan}:3 repeats TLA constant declaration Flag "
+        "first declared at line 2",
     ]
 
 
@@ -26029,6 +35851,7 @@ def test_pr_tlc_cross_check_errors_rejects_missing_non_allowlisted_mode() -> Non
         {"fast", "deep", "fork-npos"},
         {"fast"},
         {"fast"},
+        apalache_only_modes={"deep"},
     )
 
     assert len(errors) == 2
@@ -26052,6 +35875,7 @@ def test_pr_tlc_cross_check_errors_accepts_documented_apalache_only_deep() -> No
             {"fast", "deep", "fork-npos"},
             {"fast", "fork-npos"},
             {"fast", "fork-npos"},
+            apalache_only_modes={"deep"},
         )
         == []
     )
@@ -26064,6 +35888,7 @@ def test_pr_tlc_cross_check_errors_rejects_stale_or_routed_allowlist() -> None:
         {"fast"},
         {"fast", "deep"},
         {"fast", "deep"},
+        apalache_only_modes={"deep"},
     )
 
     assert errors == [
@@ -26074,6 +35899,54 @@ def test_pr_tlc_cross_check_errors_rejects_stale_or_routed_allowlist() -> None:
         "Sumeragi Apalache-only PR modes unexpectedly have README TLC commands:\n"
         "  - deep",
     ]
+
+
+def test_ci_tlc_inventory_errors_rejects_undocumented_or_unsupported_modes() -> None:
+    module = load_coverage_module()
+    tlc_cases = {
+        "frontier-fast": module.RunnerCase(label="frontier-fast", body="", line=1),
+        "frontier-small": module.RunnerCase(label="frontier-small", body="", line=2),
+    }
+
+    assert module.ci_tlc_inventory_errors(
+        {"frontier-fast", "frontier-small", "missing-fast"},
+        {"frontier-fast"},
+        tlc_cases,
+    ) == [
+        "missing-fast is invoked by CI/workflow but unsupported by the TLC runner",
+        "frontier-small is invoked by CI/workflow but missing from README TLC commands",
+        "missing-fast is invoked by CI/workflow but missing from README TLC commands",
+    ]
+
+
+def test_ci_tlc_inventory_errors_rejects_duplicate_modes() -> None:
+    module = load_coverage_module()
+    tlc_cases = {
+        "frontier-fast": module.RunnerCase(label="frontier-fast", body="", line=1),
+        "frontier-small": module.RunnerCase(label="frontier-small", body="", line=2),
+    }
+
+    assert module.ci_tlc_inventory_errors(
+        ["frontier-fast", "frontier-fast", "frontier-small"],
+        {"frontier-fast", "frontier-small"},
+        tlc_cases,
+    ) == ["frontier-fast is invoked by CI/workflow more than once"]
+
+
+def test_ci_tlc_inventory_errors_accepts_documented_runner_modes() -> None:
+    module = load_coverage_module()
+    tlc_cases = {
+        "frontier-*": module.RunnerCase(label="frontier-*", body="", line=1),
+    }
+
+    assert (
+        module.ci_tlc_inventory_errors(
+            {"frontier-fast", "frontier-small"},
+            {"frontier-fast", "frontier-small"},
+            tlc_cases,
+        )
+        == []
+    )
 
 
 def test_runner_case_labels_parse_duplicates_for_guarding(tmp_path: Path) -> None:

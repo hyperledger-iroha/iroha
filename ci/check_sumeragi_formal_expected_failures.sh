@@ -4,6 +4,10 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root_dir"
 
+python3 scripts/formal/check_sumeragi_formal_coverage.py
+
+target/apalache/toolchains/v0.52.2/bin/apalache-mc --version
+
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-recovery-owner-cleanup
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-vote-queue
@@ -6346,6 +6350,81 @@ bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-bug-wait-before-none
 bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-bug-wait-before-uses-gap
 bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-bug-wait-future-underflows
 bash scripts/formal/sumeragi_apalache.sh worker-tick-gap-bug-wait-zero-gap-some
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-commit-without-committed-phase
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-skip-deliver-state
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-drop-second-chunk
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-commit-final-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-delivered-first-corridor-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-phase-committed-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-skip-deliver-state
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-deliver-without-chunks
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-deliver-without-ready-quorum
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-buffered-commit-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-buffered-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-commit-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-commit-evidence-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-vote-first-corridor-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-propose-skips-rbc
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-drop-second-chunk
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-skip-deliver-state
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-evidence-before-delivery
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-phase-not-committed
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh direct-commit-interleaving-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-propose-skips-rbc
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-honest-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-byzantine-stake-over-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-byzantine-vote-over-budget
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-drop-second-chunk
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-skip-deliver-state
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-before-delivery
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-without-honest-support
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-evidence-before-delivery
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-phase-not-committed
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-interleaving-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-byzantine-stake-over-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-byzantine-vote-over-budget
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-before-delivery
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-evidence-before-delivery
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-evidence-stake-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-evidence-votes-missing
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-commit-without-honest-support
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-digest-not-seeded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-drop-second-chunk
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-finality-not-latched
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-header-not-seeded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-honest-stake-not-recorded
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-phase-not-committed
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-prepare-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-propose-skips-rbc
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-ready-quorum-under-counted
+bash scripts/formal/sumeragi_apalache.sh byzantine-commit-projection-bug-skip-deliver-state
 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-bug-return-parent-at-height-zero
 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-bug-return-parent-at-height-one
 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-bug-skip-kura-parent

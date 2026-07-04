@@ -170,9 +170,13 @@ use iroha_primitives::{
         derive_gateway_hosts_with_profile,
     },
 };
+#[cfg(test)]
+use iroha_sccp::tests::{
+    sample_source_chain_proof_envelope_with_material_and_deployment, sample_ton_validator_set_hash,
+};
 use iroha_sccp::{
-    NexusSccpMessageProofV1, SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON,
-    SccpSourceAdapterEngineDeploymentV1, SccpSourceConsensusProofV1, SccpSourceVerifierMaterialV1,
+    NexusSccpMessageProofV1, SccpSourceAdapterEngineDeploymentV1, SccpSourceConsensusProofV1,
+    SccpSourceVerifierMaterialV1,
     build_sccp_source_adapter_verification_proof_with_material_and_deployment,
     build_sccp_source_verifier_evidence_with_material_and_deployment, canonical_sccp_payload_bytes,
     decode_sccp_source_chain_proof_envelope, decode_sccp_source_consensus_proof,
@@ -187,16 +191,14 @@ use iroha_sccp::{
     sccp_source_chain_proof_source_event_binds_to_bundle_with_material,
     sccp_source_verifier_evidence_hash, sccp_ton_full_light_client_gate_hash_from_deployment_v1,
     taira_bsc_xor_transfer_source_event_digest_with_material,
-    tests::{
-        sample_source_chain_proof_envelope_with_material_and_deployment,
-        sample_ton_validator_set_hash,
-    },
     verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment,
     verify_message_bundle_structure_with_source_verifier_material_and_deployment,
     verify_sccp_payload_structure,
     verify_sccp_source_chain_proof_binding_with_material_and_deployment,
     verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment,
 };
+#[cfg(test)]
+use iroha_sccp::{SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON};
 use kaigi_zk::{
     KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit, compute_commitment,
     compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, empty_roster_root_hash,
@@ -709,9 +711,9 @@ fn normalize_sccp_source_material_empty_defaults(value: &mut json::Value) {
         }
 
         if key.ends_with("_hash") || key.ends_with("_network_id") {
-            *raw = ZERO_HEX32.to_owned();
+            ZERO_HEX32.clone_into(raw);
         } else if key.ends_with("_address") {
-            *raw = "0x".to_owned();
+            "0x".clone_into(raw);
         }
     }
 }
@@ -748,12 +750,11 @@ fn hex_0x_lower(bytes: &[u8]) -> String {
 }
 
 fn hex_0x_lower_opt(bytes: Option<[u8; 32]>) -> String {
-    bytes
-        .map(|value| hex_0x_lower(&value))
-        .unwrap_or_else(|| "none".to_owned())
+    bytes.map_or_else(|| "none".to_owned(), |value| hex_0x_lower(&value))
 }
 
 /// Return the deterministic TON fixture validator-set hash used by SCCP source proof fixtures.
+#[cfg(test)]
 #[napi(js_name = "sccpTonFixtureValidatorSetHash")]
 pub fn sccp_ton_fixture_validator_set_hash() -> String {
     hex_0x_lower(&sample_ton_validator_set_hash())
@@ -1046,6 +1047,7 @@ pub fn sccp_rebuild_message_bundle_source_proof_with_deployment(
 }
 
 /// Build a TON-source SCCP message bundle with deployment-bound source proof material.
+#[cfg(test)]
 #[napi(js_name = "sccpBuildTonMessageBundleSourceProofWithDeployment")]
 #[allow(clippy::needless_pass_by_value)]
 pub fn sccp_build_ton_message_bundle_source_proof_with_deployment(
@@ -1868,6 +1870,10 @@ pub fn crypto_verify(
         PublicKey::from_bytes(algorithm, public_key.as_ref()).map_err(norito_to_napi)?;
     let signature = match algorithm {
         Algorithm::Ed25519 => match iroha_crypto::ed25519_parse_signature(signature.as_ref()) {
+            Ok(signature) => signature,
+            Err(_) => return Ok(false),
+        },
+        Algorithm::MlDsa => match iroha_crypto::mldsa65_parse_signature(signature.as_ref()) {
             Ok(signature) => signature,
             Err(_) => return Ok(false),
         },
@@ -19212,6 +19218,127 @@ mod tests {
             .expect("crypto verify should return false for malformed material");
 
             assert!(!verified, "{label} Ed25519 signature R must not verify");
+        }
+    }
+
+    #[test]
+    fn crypto_verify_rejects_malformed_mldsa_signature_lengths() {
+        let seed = vec![0x44; 32];
+        let message = b"js-host-crypto-mldsa-sign";
+        let keypair =
+            KeyPair::try_from_seed(seed, Algorithm::MlDsa).expect("checked ML-DSA keypair");
+        let (_, public_key) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("checked ML-DSA public-key payload");
+        let (_alg, private_key) = keypair.private_key().to_bytes();
+        let public_key = public_key.to_vec();
+        let signature = crypto_sign(
+            "mldsa".to_owned(),
+            Uint8Array::from(private_key),
+            Uint8Array::from(message.to_vec()),
+        )
+        .expect("crypto sign");
+        assert!(
+            crypto_verify(
+                "mldsa".to_owned(),
+                Uint8Array::from(public_key.clone()),
+                Uint8Array::from(message.to_vec()),
+                Uint8Array::from(signature.as_ref().to_vec()),
+            )
+            .expect("crypto verify"),
+            "valid ML-DSA signature must verify"
+        );
+        let mut short = signature.as_ref().to_vec();
+        short.pop();
+        let mut overlong = signature.as_ref().to_vec();
+        overlong.push(0x42);
+
+        for (label, malformed) in [
+            ("short", short),
+            ("overlong", overlong),
+            ("all-zero", vec![0_u8; signature.as_ref().len()]),
+        ] {
+            let verified = crypto_verify(
+                "mldsa".to_owned(),
+                Uint8Array::from(public_key.clone()),
+                Uint8Array::from(message.to_vec()),
+                Uint8Array::from(malformed),
+            )
+            .expect("crypto verify should return false for malformed material");
+
+            assert!(!verified, "{label} ML-DSA signature must not verify");
+        }
+    }
+
+    #[test]
+    fn crypto_verify_rejects_malformed_ed25519_public_key_material() {
+        const SMALL_ORDER_PUBLIC_KEY: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_PUBLIC_KEY: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        let seed = vec![0x33; 32];
+        let message = b"js-host-crypto-public-key-admission";
+        let keypair =
+            KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("checked seed keypair");
+        let signature = Signature::try_new(keypair.private_key(), message)
+            .expect("checked Ed25519 JS host fixture signature");
+
+        for (label, public_key, expected) in [
+            ("all-zero", [0_u8; 32], "all zero"),
+            ("small-order", SMALL_ORDER_PUBLIC_KEY, "small-order"),
+            ("noncanonical", NONCANONICAL_PUBLIC_KEY, "canonical"),
+        ] {
+            let err = crypto_verify(
+                "ed25519".to_owned(),
+                Uint8Array::from(public_key.to_vec()),
+                Uint8Array::from(message.to_vec()),
+                Uint8Array::from(signature.payload().to_vec()),
+            )
+            .expect_err("malformed Ed25519 public key must fail admission");
+            let message = err.to_string();
+
+            assert!(
+                message.contains(expected),
+                "{label} public key produced unexpected error: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn crypto_public_key_multihash_rejects_malformed_ed25519_public_key_material() {
+        const SMALL_ORDER_PUBLIC_KEY: [u8; 32] = [
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0,
+        ];
+        const NONCANONICAL_PUBLIC_KEY: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        for (label, public_key, expected) in [
+            ("all-zero", [0_u8; 32], "all zero"),
+            ("small-order", SMALL_ORDER_PUBLIC_KEY, "small-order"),
+            ("noncanonical", NONCANONICAL_PUBLIC_KEY, "canonical"),
+        ] {
+            let err = crypto_public_key_multihash(
+                "ed25519".to_owned(),
+                Uint8Array::from(public_key.to_vec()),
+            )
+            .expect_err("malformed Ed25519 public key must fail multihash admission");
+            let message = err.to_string();
+
+            assert!(
+                message.contains(expected),
+                "{label} public key produced unexpected multihash error: {message}"
+            );
         }
     }
 

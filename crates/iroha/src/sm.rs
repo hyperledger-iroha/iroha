@@ -316,4 +316,48 @@ mod tests {
             .verify(message, &checked)
             .expect("checked signature verifies");
     }
+
+    #[test]
+    fn sdk_sm2_keypair_constructors_reject_all_zero_secret_material() {
+        let err = Sm2KeyPair::from_seed([0_u8; 32])
+            .expect_err("all-zero SM2 seed must not derive a key pair");
+        assert!(err.to_string().contains("all zero"));
+
+        let err = Sm2KeyPair::from_private_key([0_u8; 32])
+            .expect_err("all-zero SM2 private scalar must not parse");
+        assert!(err.to_string().contains("all zero"));
+    }
+
+    #[test]
+    fn sdk_sm2_verify_rejects_zero_signature_scalars_before_backend() {
+        let keypair =
+            Sm2KeyPair::from_seed(b"sdk-sm2-zero-signature-scalar").expect("seeded SM2 key pair");
+        let message = b"sdk sm2 zero signature scalar";
+
+        for (label, signature) in [
+            ("all-zero", [0_u8; Sm2Signature::LENGTH]),
+            ("zero-r", {
+                let mut signature = [0_u8; Sm2Signature::LENGTH];
+                signature[Sm2Signature::LENGTH - 1] = 1;
+                signature
+            }),
+            ("zero-s", {
+                let mut signature = [0_u8; Sm2Signature::LENGTH];
+                signature[0] = 1;
+                signature
+            }),
+        ] {
+            let err = keypair
+                .verify(message, &signature)
+                .expect_err("zero SM2 signature scalar must fail during parse");
+            assert!(
+                matches!(err, Sm2VerifyError::Parse(_)),
+                "{label} signature produced unexpected error: {err:?}"
+            );
+            assert!(
+                err.to_string().contains("zero"),
+                "{label} signature error must describe zero scalar material: {err}"
+            );
+        }
+    }
 }

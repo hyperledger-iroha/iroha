@@ -1000,6 +1000,22 @@ mod tests {
     }
 
     #[test]
+    fn signature_norito_try_deserialize_rejects_empty_payload() {
+        let signature = Signature::from_bytes(&[]);
+        let framed = norito::core::to_bytes(&signature).expect("frame empty signature");
+        let archived =
+            norito::from_bytes::<Signature>(&framed).expect("archive empty signature fixture");
+
+        let err = <Signature as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            .expect_err("empty Norito signature must fail closed");
+
+        assert!(
+            err.to_string().contains("empty"),
+            "unexpected empty Norito signature error: {err}"
+        );
+    }
+
+    #[test]
     fn signature_norito_try_deserialize_rejects_all_zero_payload() {
         let signature = Signature::from_bytes(&[0u8; 64]);
         let framed = norito::core::to_bytes(&signature).expect("frame all-zero signature");
@@ -1012,6 +1028,22 @@ mod tests {
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero Norito signature error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_decode_from_slice_rejects_empty_payload() {
+        use norito::codec::Encode as _;
+
+        let signature = Signature::from_bytes(&[]);
+        let bytes = signature.encode();
+
+        let err = <Signature as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect_err("empty bare signature must fail closed");
+
+        assert!(
+            err.to_string().contains("empty"),
+            "unexpected empty bare signature error: {err}"
         );
     }
 
@@ -1075,6 +1107,18 @@ mod tests {
     }
 
     #[test]
+    fn signature_json_rejects_empty_payload() {
+        let input = norito::json!("");
+        let err = norito::json::from_value::<Signature>(input)
+            .expect_err("JSON signature decoding must reject empty payloads");
+
+        assert!(
+            err.to_string().contains("empty"),
+            "unexpected empty JSON signature error: {err}"
+        );
+    }
+
+    #[test]
     fn signature_json_rejects_all_zero_payload() {
         let input = norito::json!("00".repeat(64));
         let err = norito::json::from_value::<Signature>(input)
@@ -1093,6 +1137,41 @@ mod tests {
         assert!(
             err.to_string().contains("empty"),
             "unexpected empty signature error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_try_from_hex_rejects_all_zero_payload() {
+        let err = Signature::try_from_hex("00".repeat(64))
+            .expect_err("all-zero hex signature must fail closed");
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero signature error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_of_json_rejects_empty_payload() {
+        let input = norito::json!("");
+        let err = norito::json::from_value::<SignatureOf<()>>(input)
+            .expect_err("typed JSON signature decoding must reject empty payloads");
+
+        assert!(
+            err.to_string().contains("empty"),
+            "unexpected empty typed JSON signature error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_of_json_rejects_all_zero_payload() {
+        let input = norito::json!("00".repeat(64));
+        let err = norito::json::from_value::<SignatureOf<()>>(input)
+            .expect_err("typed JSON signature decoding must reject all-zero payloads");
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero typed JSON signature error: {err}"
         );
     }
 
@@ -1156,6 +1235,72 @@ mod tests {
 
         assert_eq!(decoded, typed);
         norito::core::reset_decode_state();
+    }
+
+    #[test]
+    fn signature_of_try_deserialize_rejects_empty_payload() {
+        let typed = SignatureOf::<()>::from_signature(Signature::from_bytes(&[]));
+        let framed = norito::core::to_bytes(&typed).expect("frame empty typed signature");
+        let archived =
+            norito::from_bytes::<SignatureOf<()>>(&framed).expect("archived typed signature");
+
+        let err = <SignatureOf<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            .expect_err("empty typed signature must fail closed");
+
+        assert!(
+            err.to_string().contains("empty"),
+            "unexpected empty typed signature error: {err}"
+        );
+        norito::core::reset_decode_state();
+    }
+
+    #[test]
+    fn signature_of_try_deserialize_rejects_all_zero_payload() {
+        let typed = SignatureOf::<()>::from_signature(Signature::from_bytes(&[0u8; 64]));
+        let framed = norito::core::to_bytes(&typed).expect("frame all-zero typed signature");
+        let archived =
+            norito::from_bytes::<SignatureOf<()>>(&framed).expect("archived typed signature");
+
+        let err = <SignatureOf<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            .expect_err("all-zero typed signature must fail closed");
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero typed signature error: {err}"
+        );
+        norito::core::reset_decode_state();
+    }
+
+    #[test]
+    fn signature_of_decode_from_slice_rejects_empty_payload() {
+        use norito::codec::Encode as _;
+
+        let typed = SignatureOf::<()>::from_signature(Signature::from_bytes(&[]));
+        let bytes = typed.encode();
+
+        let err = <SignatureOf<()> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect_err("empty bare typed signature must fail closed");
+
+        assert!(
+            err.to_string().contains("empty"),
+            "unexpected empty bare typed signature error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_of_decode_from_slice_rejects_all_zero_payload() {
+        use norito::codec::Encode as _;
+
+        let typed = SignatureOf::<()>::from_signature(Signature::from_bytes(&[0u8; 64]));
+        let bytes = typed.encode();
+
+        let err = <SignatureOf<()> as norito::core::DecodeFromSlice>::decode_from_slice(&bytes)
+            .expect_err("all-zero bare typed signature must fail closed");
+
+        assert!(
+            err.to_string().contains("all zero"),
+            "unexpected all-zero bare typed signature error: {err}"
+        );
     }
 
     #[test]
