@@ -127,13 +127,20 @@ def _program_account_data(module, programdata_raw):
     return module.UPGRADEABLE_LOADER_PROGRAM_TAG.to_bytes(4, "little") + programdata_raw
 
 
-def _programdata_account_data(module, *, slot, program_bytes, authority=None):
+def _programdata_account_data(
+    module,
+    *,
+    slot,
+    program_bytes,
+    authority=None,
+    stale_authority=None,
+):
     data = bytearray()
     data.extend(module.UPGRADEABLE_LOADER_PROGRAMDATA_TAG.to_bytes(4, "little"))
     data.extend(slot.to_bytes(8, "little"))
     if authority is None:
         data.append(0)
-        data.extend(bytes(32))
+        data.extend(stale_authority or bytes(32))
     else:
         data.append(1)
         data.extend(authority)
@@ -698,7 +705,12 @@ def test_live_solana_evidence_collects_immutable_program_hash_and_toml():
     ).decode("ascii")
     assert live["verifier_code_hash"] == "0x" + code_hash.hex()
 
-    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    args = _live_args(
+        module,
+        code_hash=code_hash,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
     summary = module._summary(args, live)
     assert summary["expected_verifier_code_hash_matches"] is True
     assert summary["rpc_commitment_finalized"] is True
@@ -805,6 +817,41 @@ def test_live_solana_evidence_collects_immutable_program_hash_and_toml():
     assert rendered.count("# sccp_solana_programdata_metadata_base64") == 1
     assert rendered.count("# sccp_solana_programdata_executable_blake2b256") == 1
     assert rendered.count("# sccp_solana_programdata_executable_base64") == 1
+
+
+def test_live_solana_evidence_accepts_immutable_programdata_with_retained_authority_bytes():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = bytes.fromhex("7f454c460102030405")
+    stale_authority = bytes.fromhex("c4f2feefb3ccdacce6859d6302876c2ea14084081193d57133ba6b6cef08d5aa")
+    programdata_data = _programdata_account_data(
+        module,
+        slot=4321,
+        program_bytes=program_bytes,
+        stale_authority=stale_authority,
+    )
+    programdata_metadata = programdata_data[: module.PROGRAMDATA_METADATA_LEN]
+
+    live = module.collect_live_evidence(
+        "https://solana.example.invalid",
+        verifier_program_id=program_id,
+        opener=_fake_solana_rpc(
+            module,
+            program_id=program_id,
+            programdata_address=programdata_address,
+            programdata_data=programdata_data,
+        ),
+        timeout=3.0,
+    )
+
+    assert live["program_immutable"] is True
+    assert live["programdata_metadata_base64"] == base64.b64encode(
+        programdata_metadata
+    ).decode("ascii")
+    assert live["programdata_metadata_blake2b256"] == (
+        "0x" + hashlib.blake2b(programdata_metadata, digest_size=32).hexdigest()
+    )
     assert "[[zk.sccp_destination_rollouts]]" in rendered
     assert "[[zk.sccp_route_allowlists]]" in rendered
     assert f'verifier_identity = "{program_id}"' in rendered
@@ -821,7 +868,12 @@ def test_live_solana_direct_api_rejects_forged_live_metadata():
     programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
     program_bytes = b"\x7fELFsol"
     code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
-    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    args = _live_args(
+        module,
+        code_hash=code_hash,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
 
     for field, forged_value, expected_message in (
         ("program_owner", "11111111111111111111111111111111", "program owner"),
@@ -942,6 +994,68 @@ def test_live_solana_evidence_rejects_non_string_imported_metadata_without_strin
             assert exc.__suppress_context__ is True
         else:
             raise AssertionError(f"non-string Solana live {field} metadata was accepted")
+
+
+def test_live_solana_offline_args_reject_non_string_copied_summary_metadata_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = b"\x7fELFsol"
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    args = _live_args(
+        module,
+        code_hash=code_hash,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    original_json_summary = module.evidence._json_summary
+
+    for path, expected_error in (
+        (
+            ("destination_binding_hash",),
+            "destination binding hash must be an exact non-empty string",
+        ),
+        (
+            ("route_allowlist_hash",),
+            "route allowlist hash must be an exact non-empty string",
+        ),
+        (
+            ("route_canary", "evidence_hash"),
+            "route canary evidence hash must be an exact non-empty string",
+        ),
+    ):
+
+        def malformed_json_summary(*summary_args, _path=path, **summary_kwargs):
+            summary = original_json_summary(*summary_args, **summary_kwargs)
+            target = summary
+            for key in _path[:-1]:
+                target = target[key]
+            target[_path[-1]] = HostileImportedScalar()
+            return summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module.evidence, "_json_summary", malformed_json_summary)
+            try:
+                module._summary(args, live)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_error
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "Solana offline args accepted hostile copied summary "
+                    f"{'.'.join(path)}"
+                )
 
 
 def test_live_solana_evidence_rejects_hostile_commitment_before_rpc():

@@ -2242,6 +2242,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "scripts/sccp_bsc_groth16_material.test.mjs",
         "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
         "scripts/sccp_tron_taira_xor_deploy.test.mjs",
+        "scripts/sccp_solana_taira_xor_deploy.test.mjs",
         "scripts/sccp_taira_xor_contract.test.mjs",
         "--check contracts/evm/sccp/test/sccp_message_bridge_smoke.js",
         "bash scripts/sccp_evm_contract_smoke.sh",
@@ -2257,6 +2258,7 @@ CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS = (
     "proof-self-test rejects witness calculators that accept adversarial assignments",
     "finalize-attestations refuses production blockers after signed request matching",
     "BSC route-config requires explicit post-deploy evidence for production-ready manifests",
+    "Solana route-manifest accepts only literal production_ready true",
     "route manifest draft binds deployment evidence, verifier material, and TAIRA burn-record contract",
     "TAIRA XOR SCCP burn-record contract compiles as IVM ZK proved artifact",
 )
@@ -6168,6 +6170,8 @@ def _phase_success_fragment_required_command_fragments(
     if phase == "contract-smoke":
         if fragment == "sccp_message_bridge_smoke: ok":
             return ("bash scripts/sccp_evm_contract_smoke.sh",)
+        if fragment == "Solana route-manifest accepts only literal production_ready true":
+            return ("scripts/sccp_solana_taira_xor_deploy.test.mjs",)
         if fragment in CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS:
             return ("scripts/sccp_taira_xor_contract.test.mjs",)
     if phase == "dotnet-sdk":

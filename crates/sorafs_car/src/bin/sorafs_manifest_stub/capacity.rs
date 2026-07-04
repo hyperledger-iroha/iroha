@@ -75,6 +75,7 @@ Options:
   --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/declare`) to <file>.
   --authority=<account_id>     Account identifier used when building the request JSON.
   --private-key=<key>          Exposed private key (multihash hex) for the request JSON.
+  --private-key-file=<file>    Read the private key from <file> instead of exposing it in argv.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
@@ -93,6 +94,7 @@ Options:
   --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/telemetry`) to <file>.
   --authority=<account_id>     Account identifier used when building the request JSON.
   --private-key=<key>          Exposed private key (multihash hex) for the request JSON.
+  --private-key-file=<file>    Read the private key from <file> instead of exposing it in argv.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
@@ -140,6 +142,7 @@ Options:
   --request-out=<file>         Write Torii request JSON (`/v1/sorafs/capacity/dispute`) to <file>.
   --authority=<account_id>     Account identifier used when building the request JSON.
   --private-key=<key>          Exposed private key (multihash hex) for the request JSON.
+  --private-key-file=<file>    Read the private key from <file> instead of exposing it in argv.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
   --help                       Show this message.
 
@@ -175,6 +178,7 @@ where
             "--request-out" => opts.request_out = Some(PathBuf::from(value)),
             "--authority" => opts.authority = Some(value.to_string()),
             "--private-key" => opts.private_key = Some(value.to_string()),
+            "--private-key-file" => opts.private_key_file = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
@@ -218,16 +222,13 @@ where
         if authority.is_empty() {
             return Err("--authority must not be empty".to_string());
         }
-        let private_key = opts
-            .private_key
-            .as_deref()
-            .ok_or_else(|| "--private-key is required when using --request-out".to_string())?;
-        if private_key.is_empty() {
-            return Err("--private-key must not be empty".to_string());
-        }
+        let private_key = resolve_private_key(
+            opts.private_key.as_deref(),
+            opts.private_key_file.as_deref(),
+        )?;
 
         let request_value =
-            build_declaration_request_value(&artefacts, &declaration_b64, authority, private_key)?;
+            build_declaration_request_value(&artefacts, &declaration_b64, authority, &private_key)?;
         write_json_file(path, &request_value)?;
     }
 
@@ -263,6 +264,7 @@ where
             "--request-out" => opts.request_out = Some(PathBuf::from(value)),
             "--authority" => opts.authority = Some(value.to_string()),
             "--private-key" => opts.private_key = Some(value.to_string()),
+            "--private-key-file" => opts.private_key_file = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
@@ -306,15 +308,12 @@ where
         if authority.is_empty() {
             return Err("--authority must not be empty".to_string());
         }
-        let private_key = opts
-            .private_key
-            .as_deref()
-            .ok_or_else(|| "--private-key is required when using --request-out".to_string())?;
-        if private_key.is_empty() {
-            return Err("--private-key must not be empty".to_string());
-        }
+        let private_key = resolve_private_key(
+            opts.private_key.as_deref(),
+            opts.private_key_file.as_deref(),
+        )?;
         let request_value =
-            build_telemetry_request_value(&telemetry_artefacts, authority, private_key)?;
+            build_telemetry_request_value(&telemetry_artefacts, authority, &private_key)?;
         write_json_file(path, &request_value)?;
     }
 
@@ -420,6 +419,7 @@ where
             "--request-out" => opts.request_out = Some(PathBuf::from(value)),
             "--authority" => opts.authority = Some(value.to_string()),
             "--private-key" => opts.private_key = Some(value.to_string()),
+            "--private-key-file" => opts.private_key_file = Some(PathBuf::from(value)),
             _ => return Err(format!("unknown capacity option `{key}`")),
         }
     }
@@ -463,15 +463,12 @@ where
         if authority.is_empty() {
             return Err("--authority must not be empty".to_string());
         }
-        let private_key = opts
-            .private_key
-            .as_deref()
-            .ok_or_else(|| "--private-key is required when using --request-out".to_string())?;
-        if private_key.is_empty() {
-            return Err("--private-key must not be empty".to_string());
-        }
+        let private_key = resolve_private_key(
+            opts.private_key.as_deref(),
+            opts.private_key_file.as_deref(),
+        )?;
         let request_value =
-            build_dispute_request_value(&dispute, &dispute_b64, authority, private_key)?;
+            build_dispute_request_value(&dispute, &dispute_b64, authority, &private_key)?;
         write_json_file(path, &request_value)?;
     }
 
@@ -537,6 +534,7 @@ struct DeclarationOptions {
     request_out: Option<PathBuf>,
     authority: Option<String>,
     private_key: Option<String>,
+    private_key_file: Option<PathBuf>,
     quiet: bool,
 }
 
@@ -557,6 +555,7 @@ struct TelemetryOptions {
     request_out: Option<PathBuf>,
     authority: Option<String>,
     private_key: Option<String>,
+    private_key_file: Option<PathBuf>,
     quiet: bool,
 }
 
@@ -591,6 +590,7 @@ struct DisputeOptions {
     request_out: Option<PathBuf>,
     authority: Option<String>,
     private_key: Option<String>,
+    private_key_file: Option<PathBuf>,
     quiet: bool,
 }
 
@@ -1794,6 +1794,43 @@ fn parse_fixed_hex<const N: usize>(value: &str, context: &str) -> Result<[u8; N]
     let mut out = [0u8; N];
     out.copy_from_slice(&bytes);
     Ok(out)
+}
+
+fn resolve_private_key(
+    private_key: Option<&str>,
+    private_key_file: Option<&Path>,
+) -> Result<String, String> {
+    if private_key.is_some() && private_key_file.is_some() {
+        return Err("--private-key and --private-key-file are mutually exclusive".to_string());
+    }
+
+    if let Some(value) = private_key {
+        if value.is_empty() {
+            return Err("--private-key must not be empty".to_string());
+        }
+        return Ok(value.to_string());
+    }
+
+    let Some(path) = private_key_file else {
+        return Err(
+            "--private-key or --private-key-file is required when using --request-out".to_string(),
+        );
+    };
+
+    let value = fs::read_to_string(path).map_err(|err| {
+        format!(
+            "failed to read private key file `{}`: {err}",
+            path.display()
+        )
+    })?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!(
+            "private key file `{}` must not be empty",
+            path.display()
+        ));
+    }
+    Ok(trimmed.to_string())
 }
 
 fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {

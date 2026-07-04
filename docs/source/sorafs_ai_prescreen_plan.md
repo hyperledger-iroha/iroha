@@ -94,8 +94,9 @@ Juror notification transport artifacts also bind `probe_count` and
 require reviewed `ai-prescreen-notification-delivery-*` labels without
 non-production markers and at least one accepted notification delivery before
 promotion can report ready. Each probe's dedup key must also be unique, bound
-to its reviewed delivery ID, and accompanied by a shipped `commit` or `reveal`
-action plus non-empty case, round, and juror identifiers. Notification probe
+to its reviewed delivery ID, and accompanied by a shipped `submit_commit` or
+`submit_reveal` action plus non-empty case, round, and juror identifiers.
+Notification probe
 byte counts must also be well-formed: notification bodies require positive byte
 counts, webhook response byte counts must be non-negative, and malformed
 byte-count evidence blocks the artifact before promotion can report ready.

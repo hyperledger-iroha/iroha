@@ -159,7 +159,7 @@ def notification_transport(*, accepted_count: int | None = None) -> dict:
                 "sorafs-moderation-juror:"
                 "ai-prescreen-notification-delivery-01"
             ),
-            "action": "commit",
+            "action": "submit_commit",
             "case_id": "case-1",
             "round_id": "round-1",
             "juror_id": "juror-1@moderation",
@@ -1420,7 +1420,31 @@ def test_notification_probe_identity_fields_are_required(tmp_path: Path) -> None
     artifact = payload["required"]["notification_transport"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "probes[0].dedup_key must be a string" in artifact["errors"]
-    assert "probes[0].action must be `commit` or `reveal`" in artifact["errors"]
+    assert (
+        "probes[0].action must be `submit_commit` or `submit_reveal`"
+        in artifact["errors"]
+    )
+
+
+@pytest.mark.parametrize("legacy_action", ("commit", "reveal"))
+def test_notification_probe_rejects_legacy_short_action_labels(
+    tmp_path: Path, legacy_action: str
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = notification_transport()
+    payload["probes"][0]["action"] = legacy_action
+    write_json(tmp_path / "notification-transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["notification_transport"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "probes[0].action must be `submit_commit` or `submit_reveal`"
+        in artifact["errors"]
+    )
     assert (
         "probes[0].case_id must be a non-empty canonical string"
         in artifact["errors"]

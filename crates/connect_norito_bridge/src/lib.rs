@@ -34139,6 +34139,42 @@ mod tests {
     }
 
     #[test]
+    fn sm2_verify_ffi_rejects_zero_scalar_signature_material() {
+        let distid = "connect-sm2-zero-scalar-signature";
+        let distid_c = CString::new(distid).expect("distid c string");
+        let private = Sm2PrivateKey::from_seed(distid, b"connect-sm2-zero-scalar-seed")
+            .expect("derive SM2 key");
+        let public_bytes = private.public_key().to_sec1_bytes(false);
+        let message = b"connect-sm2-zero-scalar-signature";
+
+        let mut zero_r = [0u8; Sm2Signature::LENGTH];
+        zero_r[Sm2Signature::LENGTH - 1] = 1;
+        let mut zero_s = [0u8; Sm2Signature::LENGTH];
+        zero_s[31] = 1;
+
+        for (label, signature) in [
+            ("all-zero", [0u8; Sm2Signature::LENGTH]),
+            ("zero-r", zero_r),
+            ("zero-s", zero_s),
+        ] {
+            let rc = unsafe {
+                connect_norito_sm2_verify(
+                    distid_c.as_ptr(),
+                    distid_c.as_bytes().len() as c_ulong,
+                    public_bytes.as_ptr(),
+                    public_bytes.len() as c_ulong,
+                    message.as_ptr(),
+                    message.len() as c_ulong,
+                    signature.as_ptr(),
+                    signature.len() as c_ulong,
+                )
+            };
+
+            assert_eq!(rc, ERR_SM2_PARSE, "{label} signature must fail parsing");
+        }
+    }
+
+    #[test]
     fn secp256k1_helpers_expose_sign_and_verify() {
         let private =
             hex::decode("e4f21b38e005d4f895a29e84948d7cc83eac79041aeb644ee4fab8d9da42f713")

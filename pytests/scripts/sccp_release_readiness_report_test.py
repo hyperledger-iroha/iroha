@@ -7302,6 +7302,13 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
         "sourceStateProof must be a TON source-state stark-fri-v1 proof"
         in javascript_impl_markers
     )
+    assert "export const buildTonSccpProofRequest = (input) => {" in (
+        javascript_impl_markers
+    )
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in javascript_impl_markers
+    )
     assert (
         "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
         "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
@@ -7318,6 +7325,13 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
         "sourceStateProof must be a TON source-state stark-fri-v1 proof"
         in javascript_dist_markers
     )
+    assert "export const buildTonSccpProofRequest = (input) => {" in (
+        javascript_dist_markers
+    )
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in javascript_dist_markers
+    )
     assert (
         "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
         "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
@@ -7332,6 +7346,10 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     assert "oversizedTonCallbackProver" in javascript_test_markers
     assert 'proofFamily: "debug-proof-family"' in javascript_test_markers
     assert "TON source-state stark-fri-v1 proof" in javascript_test_markers
+    assert (
+        "/requires non-zero source adapter deployment binding/"
+        in javascript_test_markers
+    )
     javascript_package_dist_markers = inventory_by_path[
         "javascript/iroha_js/test/package_dist.test.js"
     ]
@@ -7416,6 +7434,12 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
         "sourceProofBytes required for non-SORA source bundle"
         in python_impl_markers
     )
+    assert "def build_ton_sccp_proof_request" in python_impl_markers
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in python_impl_markers
+    )
+    assert "sourceAdapterDeploymentBinding must be non-zero" in python_impl_markers
     python_test_markers = inventory_by_path[
         "python/iroha_torii_client/tests/sccp_test.py"
     ]
@@ -7440,6 +7464,10 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     assert "package_root_ton_debug_proof_family" in python_test_markers
     assert (
         "oversized_package_root_ton_source_state_proof"
+        in python_test_markers
+    )
+    assert (
+        'match="requires non-zero source adapter deployment binding"'
         in python_test_markers
     )
     assert (
@@ -7471,6 +7499,11 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     )
     assert "proof.proofFamily == STARK_FRI_PROOF_FAMILY_V1" in kotlin_ton_impl_markers
     assert "proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES" in kotlin_ton_impl_markers
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in kotlin_ton_impl_markers
+    )
+    assert "sourceAdapterDeploymentBinding must be non-zero" in kotlin_ton_impl_markers
     kotlin_ton_test_markers = inventory_by_path[
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
     ]
@@ -7480,6 +7513,10 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     )
     assert "oversizedCallbackProver" in kotlin_ton_test_markers
     assert 'proofFamily = "debug-proof-family"' in kotlin_ton_test_markers
+    assert "zeroDeploymentError" in kotlin_ton_test_markers
+    assert (
+        "requires non-zero source adapter deployment binding" in kotlin_ton_test_markers
+    )
     java_ton_impl_markers = inventory_by_path[
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java"
     ]
@@ -7495,6 +7532,11 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
         "normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES"
         in java_ton_impl_markers
     )
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in java_ton_impl_markers
+    )
+    assert "sourceAdapterDeploymentBinding must be non-zero" in java_ton_impl_markers
     java_ton_test_markers = inventory_by_path[
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
     ]
@@ -7504,6 +7546,10 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     assert (
         "TON source-state verification proof family must be stark-fri-v1"
         in java_ton_test_markers
+    )
+    assert "zero TON deployment binding must be rejected" in java_ton_test_markers
+    assert (
+        "requires non-zero source adapter deployment binding" in java_ton_test_markers
     )
     kotlin_evm_test_markers = inventory_by_path[
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt"
@@ -7604,6 +7650,14 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     )
     assert "proofBytes.count <= sccpSourceStateMaxProofBytes" in swift_ton_impl_markers
     assert "proof.proofFamily == tonStarkFriProofFamilyV1" in swift_ton_impl_markers
+    assert "public func buildTonSccpProofRequest" in swift_ton_impl_markers
+    assert (
+        "guard deploymentBinding.sourceAdapterDeploymentHash != sccpZeroHashV1 else"
+        in swift_ton_impl_markers
+    )
+    assert (
+        "request.sourceAdapterDeploymentBinding.sourceDomain" in swift_ton_impl_markers
+    )
     swift_ton_test_markers = inventory_by_path[
         "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift"
     ]
@@ -7613,6 +7667,11 @@ def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventor
     assert 'proofFamily: "debug-proof-family"' in swift_ton_test_markers
     assert "tamperedBscBase64ProofResult" in swift_ton_test_markers
     assert "tamperedEthereumBase64ProofResult" in swift_ton_test_markers
+    assert "sourceAdapterDeploymentHash: sccpZeroHashV1" in swift_ton_test_markers
+    assert (
+        "sourceAdapterDeploymentReceiptHash: sccpZeroHashV1" in swift_ton_test_markers
+    )
+    assert ".sourceAdapterDeploymentBindingMismatch" in swift_ton_test_markers
     assert (
         "buildBscMainnetSccpDestinationSubmission(EvmSccpSubmissionInput("
         in swift_ton_test_markers
@@ -12703,6 +12762,7 @@ def test_release_readiness_phase_command_matchers_reject_extra_suffix_arguments(
             "contract-smoke",
             "+ node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs "
             "scripts/sccp_tron_taira_xor_deploy.test.mjs "
+            "scripts/sccp_solana_taira_xor_deploy.test.mjs "
             "scripts/sccp_taira_xor_contract.test.mjs scripts/unscoped_extra.test.mjs",
             "scripts/sccp_taira_xor_contract.test.mjs",
         ),
@@ -13835,6 +13895,10 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "route-canary MessageProofAccepted networkId does not match networkId()",
             "route-canary transaction calldata must call",
             "submitSccpMessageProof(bytes,bytes32[6],bytes32)",
+            'label="route-canary event message id"',
+            'label="route-canary event commitment root"',
+            'label="route-canary call data SHA-256"',
+            'label="route-canary finality block hash"',
             "route-canary proofBytes must be a 384-byte Groth16 tuple",
             "route-canary proofBytes must not be all zero",
             "route-canary proof version must be 1",
@@ -13849,6 +13913,17 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "JSON-RPC {method} failed with HTTP {exc.code}",
             "JSON-RPC {method} request failed",
             "JSON-RPC {method} returned error response",
+            "def _summary_exact_u32(",
+            "def _summary_exact_positive_u64(",
+            'label="route-canary receipt block number"',
+            'label="route-canary log index"',
+            'label="route-canary target domain"',
+            'label="route-canary proof source domain"',
+            'label="route canary transaction hash"',
+            'label="route canary transaction block number"',
+            'label="route canary receipt block number"',
+            'label="route canary proof version"',
+            'label="route canary proof source domain"',
         ),
         ROOT / "pytests" / "scripts" / "sccp_evm_live_evidence_test.py": (
             "test_live_evm_evidence_rejects_verifier_code_hash_drift",
@@ -13856,6 +13931,22 @@ def test_release_readiness_guards_evm_live_destination_production_surface() -> N
             "test_live_evm_evidence_rejects_bridge_destination_binding_drift",
             "test_live_evm_full_toml_revalidates_imported_summary_metadata",
             "test_evm_live_cli_parsers_reject_non_string_values_without_stringification",
+            "test_evm_route_canary_call_summary_rejects_non_string_event_fields_without_stringifying",
+            "test_evm_route_canary_evidence_hash_rejects_non_string_call_fields_without_stringifying",
+            "test_evm_route_canary_evidence_hash_rejects_non_integer_summary_fields_without_coercion",
+            "route-canary event message id must be an exact hex string",
+            "route-canary call data SHA-256 must be an exact hex string",
+            "route-canary receipt block number must be an exact positive u64 integer",
+            "route-canary log index must be an exact u32 integer",
+            "test_live_evm_full_toml_rejects_non_string_route_canary_transaction_metadata_without_stringifying",
+            "test_live_evm_full_toml_rejects_non_integer_route_canary_transaction_metadata_without_coercion",
+            "test_live_evm_collect_rejects_non_string_route_canary_transaction_summary_without_stringifying",
+            "test_live_evm_collect_rejects_non_integer_route_canary_transaction_summary_without_coercion",
+            "route canary transaction hash must be an exact hex string",
+            "route canary transaction block number must be an exact positive u64 integer",
+            "route canary proof version must be an exact u32 integer",
+            "HostileImportedInteger",
+            "secret-token imported EVM live integer",
             "HostileEvmLiveParserValue",
             "secret-token-evm-live-parser-value",
             "test_live_evm_route_canary_rejects_unverified_transaction_metadata",

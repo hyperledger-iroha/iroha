@@ -590,6 +590,7 @@ def test_sccp_production_corridor_dry_run_prints_selected_phase_commands() -> No
     assert "==> SCCP production corridor: contract-smoke" in completed.stdout
     assert "scripts/sccp_bsc_taira_xor_deploy.test.mjs" in completed.stdout
     assert "scripts/sccp_tron_taira_xor_deploy.test.mjs" in completed.stdout
+    assert "scripts/sccp_solana_taira_xor_deploy.test.mjs" in completed.stdout
     assert "scripts/sccp_taira_xor_contract.test.mjs" in completed.stdout
     assert "+ node --check contracts/evm/sccp/test/sccp_message_bridge_smoke.js" in (
         completed.stdout

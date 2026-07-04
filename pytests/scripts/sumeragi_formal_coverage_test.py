@@ -1334,6 +1334,152 @@ def test_formal_workflow_run_inventory_errors_rejects_order_or_extra_runs(
     ]
 
 
+def test_formal_workflow_job_inventory_errors_accepts_dedicated_nightly_job(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_inventory_errors(
+        ((workflow, "nightly formal workflow", ("frontier-nightly",)),)
+    ) == []
+
+
+def test_formal_workflow_job_inventory_errors_rejects_extra_nightly_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  publish-formal-summary:",
+                "    steps:",
+                "      - run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_inventory_errors(
+        ((workflow, "nightly formal workflow", ("frontier-nightly",)),)
+    ) == [
+        f"nightly formal workflow {workflow} must keep exact workflow job "
+        "inventory:\n"
+        "  - frontier-nightly; found:\n"
+        "  - 3: frontier-nightly\n"
+        "  - 6: publish-formal-summary",
+    ]
+
+
+def test_formal_workflow_checked_job_occurrence_errors_accepts_single_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  lint:",
+                "    steps: []",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  docs:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_checked_job_occurrence_errors(
+        (
+            (pr_workflow, "PR formal workflow", ("sumeragi_formal",)),
+            (nightly_workflow, "nightly formal workflow", ("frontier-nightly",)),
+        )
+    ) == []
+
+
+def test_formal_workflow_checked_job_occurrence_errors_rejects_missing_or_duplicate_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  lint:",
+                "    steps: []",
+                "  sumeragi_formal:",
+                "    steps: []",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "jobs:",
+                "  publish-summary:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_checked_job_occurrence_errors(
+        (
+            (pr_workflow, "PR formal workflow", ("sumeragi_formal",)),
+            (nightly_workflow, "nightly formal workflow", ("frontier-nightly",)),
+        )
+    ) == [
+        f"PR formal workflow {pr_workflow} must declare checked job "
+        "sumeragi_formal exactly once; found:\n"
+        "  - 5: sumeragi_formal\n"
+        "  - 7: sumeragi_formal",
+        f"nightly formal workflow {nightly_workflow} must declare checked job "
+        "frontier-nightly exactly once; found: no declarations",
+    ]
+
+
 def test_formal_workflow_name_errors_accepts_checked_names(tmp_path: Path) -> None:
     module = load_coverage_module()
     pr_workflow = tmp_path / "pr.yml"
@@ -1495,6 +1641,117 @@ def test_formal_workflow_header_key_errors_rejects_extra_or_duplicate_keys(
         "  - 5: concurrency\n"
         "  - 8: env\n"
         "  - 10: env",
+    ]
+
+
+def test_formal_workflow_top_level_key_errors_accepts_reviewed_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: false",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_top_level_key_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                ("name", "on", "concurrency", "env", "jobs"),
+            ),
+            (
+                nightly_workflow,
+                "nightly formal workflow",
+                ("name", "on", "concurrency", "jobs"),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_top_level_key_errors_rejects_post_jobs_controls(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+                "permissions:",
+                "  contents: read",
+                "jobs:",
+                "  publish-summary:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_top_level_key_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                ("name", "on", "concurrency", "env", "jobs"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow {workflow} must keep exact full top-level keys:\n"
+        "  - name\n"
+        "  - on\n"
+        "  - concurrency\n"
+        "  - env\n"
+        "  - jobs; found:\n"
+        "  - 1: name\n"
+        "  - 2: on\n"
+        "  - 4: concurrency\n"
+        "  - 7: env\n"
+        "  - 9: jobs\n"
+        "  - 12: permissions\n"
+        "  - 14: jobs",
     ]
 
 
@@ -2543,6 +2800,286 @@ def test_formal_workflow_action_inventory_errors_rejects_order_or_extra_actions(
     ]
 
 
+def test_formal_workflow_step_name_inventory_errors_accepts_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "formal.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "      - name: Install pinned Apalache",
+                "        run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - name: Apalache version",
+                "        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - name: Sumeragi formal model checks (fast + deep)",
+                "        run: bash ci/check_sumeragi_formal.sh",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "      - name: Install pinned Apalache",
+                "        run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - name: Apalache version",
+                "        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - name: Sumeragi formal CI baseline",
+                "        run: bash ci/check_sumeragi_formal.sh",
+                "      - name: Sumeragi frontier nightly formal check",
+                "        run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+                "      - name: Formal docs metadata report",
+                "        run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json",
+                "      - name: Upload formal docs metadata report",
+                "        uses: actions/upload-artifact@v4",
+                "        with:",
+                "          name: formal-docs-i18n-metadata-nightly",
+                "          path: target/docs-i18n/formal-metadata.json",
+                "          if-no-files-found: ignore",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_step_name_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    module.FORMAL_WORKFLOW_UNNAMED_STEP,
+                    module.FORMAL_WORKFLOW_UNNAMED_STEP,
+                    "Install pinned Apalache",
+                    "Apalache version",
+                    "Sumeragi formal model checks (fast + deep)",
+                ),
+            ),
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                (
+                    module.FORMAL_WORKFLOW_UNNAMED_STEP,
+                    module.FORMAL_WORKFLOW_UNNAMED_STEP,
+                    "Install pinned Apalache",
+                    "Apalache version",
+                    "Sumeragi formal CI baseline",
+                    "Sumeragi frontier nightly formal check",
+                    "Formal docs metadata report",
+                    "Upload formal docs metadata report",
+                ),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_step_name_inventory_errors_rejects_label_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - name: Checkout proof inputs",
+                "        uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "      - name: Install pinned Apalache",
+                "        run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - name: Apalache version",
+                "        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - name: Sumeragi formal checks",
+                "        run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_step_name_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    module.FORMAL_WORKFLOW_UNNAMED_STEP,
+                    module.FORMAL_WORKFLOW_UNNAMED_STEP,
+                    "Install pinned Apalache",
+                    "Apalache version",
+                    "Sumeragi formal model checks (fast + deep)",
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job {workflow} must use exact step-name inventory:\n"
+        "  - <unnamed step>\n"
+        "  - <unnamed step>\n"
+        "  - Install pinned Apalache\n"
+        "  - Apalache version\n"
+        "  - Sumeragi formal model checks (fast + deep); found:\n"
+        "  - 6: Checkout proof inputs\n"
+        "  - 8: <unnamed step>\n"
+        "  - 9: Install pinned Apalache\n"
+        "  - 11: Apalache version\n"
+        "  - 13: Sumeragi formal checks",
+    ]
+
+
+def test_formal_workflow_step_key_inventory_errors_accepts_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "formal.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "        with:",
+                "          distribution: temurin",
+                "          java-version: '17'",
+                "      - name: Install pinned Apalache",
+                "        run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - name: Apalache version",
+                "        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - name: Sumeragi formal model checks (fast + deep)",
+                "        run: bash ci/check_sumeragi_formal.sh",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "        with:",
+                "          distribution: temurin",
+                "          java-version: '17'",
+                "      - name: Install pinned Apalache",
+                "        run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - name: Apalache version",
+                "        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - name: Sumeragi formal CI baseline",
+                "        run: bash ci/check_sumeragi_formal.sh",
+                "      - name: Sumeragi frontier nightly formal check",
+                "        run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+                "      - name: Formal docs metadata report",
+                "        run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json",
+                "      - name: Upload formal docs metadata report",
+                "        if: always()",
+                "        uses: actions/upload-artifact@v4",
+                "        with:",
+                "          name: formal-docs-i18n-metadata-nightly",
+                "          path: target/docs-i18n/formal-metadata.json",
+                "          if-no-files-found: ignore",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_step_key_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    ("uses",),
+                    ("uses", "with"),
+                    ("name", "run"),
+                    ("name", "run"),
+                    ("name", "run"),
+                ),
+            ),
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                (
+                    ("uses",),
+                    ("uses", "with"),
+                    ("name", "run"),
+                    ("name", "run"),
+                    ("name", "run"),
+                    ("name", "run"),
+                    ("name", "run"),
+                    ("name", "if", "uses", "with"),
+                ),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_step_key_inventory_errors_rejects_step_metadata_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - id: checkout",
+                "        uses: actions/checkout@v4",
+                "      - uses: actions/setup-java@v4",
+                "        with:",
+                "          distribution: temurin",
+                "          java-version: '17'",
+                "      - name: Install pinned Apalache",
+                "        id: install-apalache",
+                "        run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - name: Apalache version",
+                "        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+                "      - name: Sumeragi formal model checks (fast + deep)",
+                "        run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_step_key_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    ("uses",),
+                    ("uses", "with"),
+                    ("name", "run"),
+                    ("name", "run"),
+                    ("name", "run"),
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job {workflow} must use exact step-key inventory:\n"
+        "  - uses\n"
+        "  - uses -> with\n"
+        "  - name -> run\n"
+        "  - name -> run\n"
+        "  - name -> run; found:\n"
+        "  - 5: id -> uses\n"
+        "  - 7: uses -> with\n"
+        "  - 11: name -> id -> run\n"
+        "  - 14: name -> run\n"
+        "  - 16: name -> run",
+    ]
+
+
 def test_formal_workflow_action_input_errors_accepts_pinned_inputs(
     tmp_path: Path,
 ) -> None:
@@ -2743,6 +3280,98 @@ def test_formal_workflow_setup_action_control_errors_rejects_setup_controls(
         "at line 7 must not set timeout-minutes: timeout-minutes: 1",
         f"formal workflow {workflow}:9 setup action 'actions/setup-java@v4' "
         "at line 7 must not set env: env:",
+    ]
+
+
+def test_formal_workflow_job_key_inventory_errors_accepts_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "formal.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: formal",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    runs-on: ubuntu-latest",
+                "    timeout-minutes: 45",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "  frontier-nightly:",
+                "    runs-on: ubuntu-latest",
+                "    timeout-minutes: 90",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_key_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                ("runs-on", "timeout-minutes", "steps"),
+            ),
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                ("runs-on", "timeout-minutes", "steps"),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_job_key_inventory_errors_rejects_job_key_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    name: Nightly proof evidence",
+                "    timeout-minutes: 90",
+                "    runs-on: ubuntu-latest",
+                "    outputs:",
+                "      proof-log: ${{ steps.proof.outputs.log }}",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_key_inventory_errors(
+        (
+            (
+                workflow,
+                ("frontier-nightly",),
+                "nightly formal workflow job",
+                ("runs-on", "timeout-minutes", "steps"),
+            ),
+        )
+    ) == [
+        f"nightly formal workflow job {workflow} checked job frontier-nightly "
+        "must keep exact job key inventory:\n"
+        "  - runs-on\n"
+        "  - timeout-minutes\n"
+        "  - steps; found:\n"
+        "  - 4: name\n"
+        "  - 5: timeout-minutes\n"
+        "  - 6: runs-on\n"
+        "  - 7: outputs\n"
+        "  - 9: steps\n"
+        "  - 11: steps",
     ]
 
 

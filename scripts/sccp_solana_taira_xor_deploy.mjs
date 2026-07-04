@@ -10,8 +10,7 @@ const DEFAULT_SOLANA_RPC_URL =
   "https://api.testnet.solana.com";
 const DEFAULT_TAIRA_TORII_URL =
   process.env.SCCP_TAIRA_TORII_URL || "https://taira.sora.org";
-const SOLANA_TESTNET_CHAIN_ID_HEX =
-  "0x736f6c616e612d746573746e6574";
+const SOLANA_TESTNET_CHAIN_ID_HEX = "0x736f6c616e612d746573746e6574";
 const ROUTE_ID = "taira_sol_xor";
 const ASSET_KEY = "xor";
 const SOL_DOMAIN = 3;
@@ -23,7 +22,7 @@ Commands:
   doctor
     Check Solana CLI, Solana testnet RPC, and TAIRA governance endpoint readiness.
 
-  deploy --program-so PATH --program-id-keypair PATH --keypair PATH --broadcast true --confirm-testnet solana-testnet
+  deploy --program-so PATH --program-id-keypair PATH --keypair PATH --broadcast true --confirm-testnet solana-testnet [--final true]
     Deploy a compiled Solana SCCP program to Solana testnet through the Solana CLI.
 
   evidence --program-id ADDRESS --output PATH
@@ -113,11 +112,13 @@ const rpc = async (url, method, params = []) => {
   return payload.result;
 };
 
-const sha256Hex = (value) =>
-  createHash("sha256").update(value).digest("hex");
+const sha256Hex = (value) => createHash("sha256").update(value).digest("hex");
 
 const normalizeHex32 = (value, label) => {
-  const body = String(value ?? "").trim().replace(/^0x/u, "").toLowerCase();
+  const body = String(value ?? "")
+    .trim()
+    .replace(/^0x/u, "")
+    .toLowerCase();
   if (!/^[0-9a-f]{64}$/u.test(body)) {
     throw new Error(`${label} must be a 32-byte lowercase hex value`);
   }
@@ -130,25 +131,49 @@ const normalizeRequiredString = (value, label) => {
   return text;
 };
 
+const requireProductionReadyTrue = (value) => {
+  const hasSnake = Object.hasOwn(value, "production_ready");
+  const hasCamel = Object.hasOwn(value, "productionReady");
+  if (hasSnake && hasCamel) {
+    throw new Error("production_ready must not use multiple aliases");
+  }
+  if (!hasSnake && !hasCamel) {
+    throw new Error("production_ready must be the boolean true");
+  }
+  const ready = hasSnake ? value.production_ready : value.productionReady;
+  if (ready !== true) {
+    throw new Error("production_ready must be the boolean true");
+  }
+  return true;
+};
+
 const normalizeBrowserProver = (value, label) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
   }
   return {
-    module_url: normalizeRequiredString(value.module_url ?? value.moduleUrl, `${label}.module_url`),
+    module_url: normalizeRequiredString(
+      value.module_url ?? value.moduleUrl,
+      `${label}.module_url`,
+    ),
     module_specifier:
-      value.module_specifier ?? value.moduleSpecifier
+      (value.module_specifier ?? value.moduleSpecifier)
         ? normalizeRequiredString(
             value.module_specifier ?? value.moduleSpecifier,
             `${label}.module_specifier`,
           )
         : null,
-    module_hash: normalizeHex32(value.module_hash ?? value.moduleHash, `${label}.module_hash`),
+    module_hash: normalizeHex32(
+      value.module_hash ?? value.moduleHash,
+      `${label}.module_hash`,
+    ),
     manifest_hash: normalizeHex32(
       value.manifest_hash ?? value.manifestHash,
       `${label}.manifest_hash`,
     ),
-    expected_exports: Array.isArray(value.expected_exports ?? value.expectedExports)
+    expected_exports: Array.isArray(
+      value.expected_exports ?? value.expectedExports,
+    )
       ? (value.expected_exports ?? value.expectedExports).map((entry, index) =>
           normalizeRequiredString(entry, `${label}.expected_exports[${index}]`),
         )
@@ -166,6 +191,18 @@ const normalizeBrowserProver = (value, label) => {
 
 const normalizeManifest = (template, evidence) => {
   const manifest = { ...template };
+  for (const field of [
+    "tron_network",
+    "tronNetwork",
+    "tron_verifier_address",
+    "tronVerifierAddress",
+    "sccp_tron_source_bridge_address",
+    "sccpTronSourceBridgeAddress",
+  ]) {
+    if (manifest[field] !== undefined) {
+      throw new Error(`Solana route-manifest template must not use ${field}`);
+    }
+  }
   manifest.version = Number(manifest.version ?? 1);
   manifest.route_id = normalizeRequiredString(
     manifest.route_id ?? manifest.routeId ?? ROUTE_ID,
@@ -175,9 +212,9 @@ const normalizeManifest = (template, evidence) => {
     manifest.asset_key ?? manifest.assetKey ?? ASSET_KEY,
     "asset_key",
   );
-  manifest.tron_network = normalizeRequiredString(
-    manifest.tron_network ?? manifest.tronNetwork ?? "testnet",
-    "tron_network",
+  manifest.solana_network = normalizeRequiredString(
+    manifest.solana_network ?? manifest.solanaNetwork ?? "testnet",
+    "solana_network",
   );
   manifest.chain = normalizeRequiredString(
     manifest.chain ?? "solana-testnet",
@@ -188,7 +225,9 @@ const normalizeManifest = (template, evidence) => {
     "chain_id_hex",
   );
   manifest.counterparty_account_codec = Number(
-    manifest.counterparty_account_codec ?? manifest.counterpartyAccountCodec ?? 6,
+    manifest.counterparty_account_codec ??
+      manifest.counterpartyAccountCodec ??
+      3,
   );
   manifest.counterparty_account_codec_key = normalizeRequiredString(
     manifest.counterparty_account_codec_key ??
@@ -203,26 +242,51 @@ const normalizeManifest = (template, evidence) => {
     manifest.verifier_target ?? manifest.verifierTarget ?? "SolanaProgram",
     "verifier_target",
   );
-  manifest.production_ready = Boolean(
-    manifest.production_ready ?? manifest.productionReady,
-  );
+  manifest.production_ready = requireProductionReadyTrue(template);
   manifest.network_id_hex = normalizeRequiredString(
-    manifest.network_id_hex ?? manifest.networkIdHex ?? SOLANA_TESTNET_CHAIN_ID_HEX,
+    manifest.network_id_hex ??
+      manifest.networkIdHex ??
+      SOLANA_TESTNET_CHAIN_ID_HEX,
     "network_id_hex",
   );
 
-  const programId = evidence.programId ?? evidence.program_id ?? evidence.program;
+  const programId =
+    evidence.programId ?? evidence.program_id ?? evidence.program;
   if (programId && !manifest.taira_xor_bridge_address) {
     manifest.taira_xor_bridge_address = programId;
   }
+  manifest.taira_xor_bridge_address =
+    manifest.taira_xor_bridge_address ??
+    manifest.taira_xor_solana_program_id ??
+    manifest.solana_program_id ??
+    manifest.tairaXorSolanaProgramId ??
+    manifest.solanaProgramId;
+  manifest.taira_xor_token_address =
+    manifest.taira_xor_token_address ??
+    manifest.solana_token_mint ??
+    manifest.tairaXorTokenAddress ??
+    manifest.solanaTokenMint;
+  manifest.sccp_solana_source_bridge_address =
+    manifest.sccp_solana_source_bridge_address ??
+    manifest.solana_source_bridge_address ??
+    manifest.sccpSolanaSourceBridgeAddress ??
+    manifest.solanaSourceBridgeAddress;
+  manifest.solana_verifier_program_id =
+    manifest.solana_verifier_program_id ??
+    manifest.solanaVerifierProgramId ??
+    manifest.sccp_solana_destination_verifier_program_id ??
+    manifest.sccpSolanaDestinationVerifierProgramId;
 
   for (const [field, label] of [
     ["taira_xor_token_address", "Solana XOR token mint"],
     ["taira_xor_bridge_address", "Solana bridge program"],
-    ["sccp_tron_source_bridge_address", "Solana source bridge program"],
-    ["tron_verifier_address", "Solana verifier program"],
+    ["sccp_solana_source_bridge_address", "Solana source bridge program"],
+    ["solana_verifier_program_id", "Solana verifier program"],
     ["destination_binding_key", "destination binding key"],
-    ["taira_burn_record_settlement_asset_definition_id", "TAIRA settlement asset definition id"],
+    [
+      "taira_burn_record_settlement_asset_definition_id",
+      "TAIRA settlement asset definition id",
+    ],
     ["taira_burn_record_contract_artifact_b64", "TAIRA burn-record artifact"],
     ["taira_burn_record_vk_backend", "TAIRA burn-record VK backend"],
     ["taira_burn_record_vk_name", "TAIRA burn-record VK name"],
@@ -255,7 +319,9 @@ const normalizeManifest = (template, evidence) => {
     "source_browser_prover",
   );
   manifest.source_verifier_material =
-    manifest.source_verifier_material ?? manifest.sourceVerifierMaterial ?? null;
+    manifest.source_verifier_material ??
+    manifest.sourceVerifierMaterial ??
+    null;
   manifest.source_adapter_engine_deployment = {
     ...(manifest.source_adapter_engine_deployment ??
       manifest.sourceAdapterEngineDeployment ??
@@ -265,7 +331,9 @@ const normalizeManifest = (template, evidence) => {
     solana_programdata_slot:
       evidence.programDataSlot ?? evidence.programdataSlot ?? null,
     solana_program_account_sha256:
-      evidence.programAccountDataSha256 ?? evidence.program_account_data_sha256 ?? null,
+      evidence.programAccountDataSha256 ??
+      evidence.program_account_data_sha256 ??
+      null,
   };
   manifest.source_adapter_engine =
     manifest.source_adapter_engine ?? manifest.sourceAdapterEngine ?? null;
@@ -277,9 +345,12 @@ const normalizeManifest = (template, evidence) => {
     manifest.chain !== "solana-testnet" ||
     manifest.chain_id_hex !== SOLANA_TESTNET_CHAIN_ID_HEX ||
     manifest.verifier_target !== "SolanaProgram" ||
-    manifest.counterparty_account_codec_key !== "solana_base58"
+    manifest.counterparty_account_codec_key !== "solana_base58" ||
+    manifest.counterparty_account_codec !== 3
   ) {
-    throw new Error("manifest is not the canonical taira_sol_xor Solana testnet route");
+    throw new Error(
+      "manifest is not the canonical taira_sol_xor Solana testnet route",
+    );
   }
   if (!manifest.production_ready) {
     throw new Error("route-manifest refuses to publish production_ready=false");
@@ -292,15 +363,29 @@ const doctor = async (args) => {
   const toriiUrl = args["torii-url"] || DEFAULT_TAIRA_TORII_URL;
   const checks = [];
   checks.push({ name: "solana-cli", ok: commandExists("solana") });
-  checks.push({ name: "anchor-cli", ok: commandExists("anchor"), optional: true });
+  checks.push({
+    name: "anchor-cli",
+    ok: commandExists("anchor"),
+    optional: true,
+  });
   try {
     const health = await rpc(solanaRpcUrl, "getHealth");
-    checks.push({ name: "solana-testnet-rpc", ok: health === "ok", evidence: health });
+    checks.push({
+      name: "solana-testnet-rpc",
+      ok: health === "ok",
+      evidence: health,
+    });
   } catch (error) {
-    checks.push({ name: "solana-testnet-rpc", ok: false, error: error.message });
+    checks.push({
+      name: "solana-testnet-rpc",
+      ok: false,
+      error: error.message,
+    });
   }
   try {
-    const response = await fetch(`${toriiUrl.replace(/\/+$/u, "")}/openapi.json`);
+    const response = await fetch(
+      `${toriiUrl.replace(/\/+$/u, "")}/openapi.json`,
+    );
     const openapi = response.ok ? await response.json() : null;
     checks.push({
       name: "taira-governance-sccp-route-endpoint",
@@ -314,16 +399,25 @@ const doctor = async (args) => {
       error: error.message,
     });
   }
-  console.log(JSON.stringify({ ok: checks.every((check) => check.ok || check.optional), checks }, null, 2));
+  console.log(
+    JSON.stringify(
+      { ok: checks.every((check) => check.ok || check.optional), checks },
+      null,
+      2,
+    ),
+  );
 };
 
 const deploy = (args) => {
-  if (args.broadcast !== "true" || args["confirm-testnet"] !== "solana-testnet") {
+  if (
+    args.broadcast !== "true" ||
+    args["confirm-testnet"] !== "solana-testnet"
+  ) {
     throw new Error(
       "deploy requires --broadcast true --confirm-testnet solana-testnet",
     );
   }
-  const output = run("solana", [
+  const deployArgs = [
     "program",
     "deploy",
     "--url",
@@ -332,8 +426,12 @@ const deploy = (args) => {
     requireOption(args, "keypair"),
     "--program-id",
     requireOption(args, "program-id-keypair"),
-    requireOption(args, "program-so"),
-  ]);
+  ];
+  if (args.final === "true") {
+    deployArgs.push("--final");
+  }
+  deployArgs.push(requireOption(args, "program-so"));
+  const output = run("solana", deployArgs);
   console.log(output);
 };
 
@@ -344,6 +442,7 @@ const evidence = (args) => {
     "show",
     "--url",
     args["solana-rpc-url"] || DEFAULT_SOLANA_RPC_URL,
+    ...(args.keypair ? ["--keypair", args.keypair] : []),
     "--output",
     "json",
     programId,
@@ -353,8 +452,15 @@ const evidence = (args) => {
     schema: "sccp-solana-taira-xor-program-evidence/v1",
     programId,
     programDataAddress:
-      parsed.programDataAddress ?? parsed["ProgramData Address"] ?? null,
-    programDataSlot: parsed.lastDeploySlot ?? parsed["Last Deployed In Slot"] ?? null,
+      parsed.programDataAddress ??
+      parsed.programdataAddress ??
+      parsed["ProgramData Address"] ??
+      null,
+    programDataSlot:
+      parsed.lastDeploySlot ??
+      parsed.lastDeployedSlot ??
+      parsed["Last Deployed In Slot"] ??
+      null,
     authority: parsed.authority ?? parsed["Authority"] ?? null,
     raw: parsed,
     evidenceSha256: sha256Hex(output),
@@ -376,13 +482,18 @@ const proposeRouteManifest = async (args) => {
     `${toriiUrl.replace(/\/+$/u, "")}/v1/gov/proposals/sccp-route-manifest`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
       body: JSON.stringify({ manifest, mode: args.mode || "Plain" }),
     },
   );
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`TAIRA governance proposal failed HTTP ${response.status}: ${text}`);
+    throw new Error(
+      `TAIRA governance proposal failed HTTP ${response.status}: ${text}`,
+    );
   }
   const payload = text ? JSON.parse(text) : null;
   if (args.output) {

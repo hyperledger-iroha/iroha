@@ -437,7 +437,7 @@ def build_notification_probes(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "sorafs-moderation-juror:"
                 f"{notification_delivery_id(index)}"
             ),
-            "action": "commit" if index % 2 else "reveal",
+            "action": "submit_commit" if index % 2 else "submit_reveal",
             "case_id": args.case_id,
             "round_id": args.round_id,
             "juror_id": f"juror-{index}@moderation",
