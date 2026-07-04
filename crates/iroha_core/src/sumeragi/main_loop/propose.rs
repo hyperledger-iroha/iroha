@@ -1564,6 +1564,36 @@ impl Actor {
             ) {
                 Ok(domains) => {
                     if !domains.is_empty() {
+                        let lane_block_subjects =
+                            match super::lane_scheduler::plan_lane_block_subjects(
+                                &domains, height, view,
+                            ) {
+                                Ok(subjects) => subjects,
+                                Err(error) => {
+                                    warn!(
+                                        height,
+                                        view,
+                                        ?error,
+                                        "failed to plan lane-local block subjects for proposal batch; retaining global proposal compatibility path"
+                                    );
+                                    Vec::new()
+                                }
+                            };
+                        let lane_payload_ownerships =
+                            match super::lane_scheduler::plan_lane_payload_ownership(
+                                &lane_block_subjects,
+                            ) {
+                                Ok(ownerships) => ownerships,
+                                Err(error) => {
+                                    warn!(
+                                        height,
+                                        view,
+                                        ?error,
+                                        "failed to plan lane-local DA/RBC payload ownership for proposal batch; retaining global proposal compatibility path"
+                                    );
+                                    Vec::new()
+                                }
+                            };
                         trace!(
                             height,
                             view,
@@ -1583,6 +1613,20 @@ impl Actor {
                             accepted_lane_candidate_indices = ?domains
                                 .iter()
                                 .map(|domain| domain.accepted_candidate_indices.clone())
+                                .collect::<Vec<_>>(),
+                            lane_block_subjects = lane_block_subjects.len(),
+                            lane_block_subject_hashes = ?lane_block_subjects
+                                .iter()
+                                .map(|subject| hex::encode(subject.subject_hash.as_ref()))
+                                .collect::<Vec<_>>(),
+                            lane_payload_ownerships = lane_payload_ownerships.len(),
+                            lane_payload_ownership_hashes = ?lane_payload_ownerships
+                                .iter()
+                                .map(|ownership| hex::encode(ownership.payload_ownership_hash.as_ref()))
+                                .collect::<Vec<_>>(),
+                            lane_rbc_instance_hashes = ?lane_payload_ownerships
+                                .iter()
+                                .map(|ownership| hex::encode(ownership.rbc_instance_hash.as_ref()))
                                 .collect::<Vec<_>>(),
                             validator_count = domains
                                 .iter()

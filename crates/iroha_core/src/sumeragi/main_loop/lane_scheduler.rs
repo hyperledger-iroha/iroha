@@ -1,12 +1,14 @@
 //! Deterministic per-lane proposal scheduling helpers.
 
-use std::collections::{BTreeMap, VecDeque, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry};
 
 use iroha_config::parameters::actual::Nexus;
+use iroha_crypto::Hash;
 use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayQuorumContext},
     peer::PeerId,
 };
+use norito::codec::Encode;
 
 use crate::queue::RoutingDecision;
 
@@ -170,6 +172,152 @@ pub(super) struct LaneConsensusDomain {
     pub(super) quorum: LaneRelayQuorumContext,
     /// Domain-separated mode tag used for lane-local vote signatures.
     pub(super) qc_mode_tag: String,
+}
+
+/// Deterministic subject for lane-local block votes and DA ownership.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LaneBlockSubject {
+    /// Lane whose work is bound by this subject.
+    pub(super) lane_id: LaneId,
+    /// Dataspace bound to the lane work.
+    pub(super) dataspace_id: DataSpaceId,
+    /// Lane-local block height assigned by the caller.
+    pub(super) lane_block_height: u64,
+    /// Lane-local view assigned by the caller.
+    pub(super) lane_block_view: u64,
+    /// Fetched-batch candidate indices committed by this subject.
+    pub(super) accepted_candidate_indices: Vec<usize>,
+    /// Domain-separated QC mode tag used for lane-local votes.
+    pub(super) qc_mode_tag: String,
+    /// Stable Norito-backed digest of the subject preimage.
+    pub(super) subject_hash: Hash,
+}
+
+/// Deterministic DA/RBC ownership identity for one lane-local block subject.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LanePayloadOwnership {
+    /// Lane whose payload ownership is bound by this identity.
+    pub(super) lane_id: LaneId,
+    /// Dataspace bound to the lane payload.
+    pub(super) dataspace_id: DataSpaceId,
+    /// Lane-local block height for the payload.
+    pub(super) lane_block_height: u64,
+    /// Lane-local view for the payload.
+    pub(super) lane_block_view: u64,
+    /// Subject digest validated before deriving ownership identity.
+    pub(super) subject_hash: Hash,
+    /// Fetched-batch candidate indices owned by this lane payload.
+    pub(super) accepted_candidate_indices: Vec<usize>,
+    /// Stable digest naming lane-local payload ownership.
+    pub(super) payload_ownership_hash: Hash,
+    /// Stable digest naming the lane-local RBC instance for this payload.
+    pub(super) rbc_instance_hash: Hash,
+}
+
+/// Error returned when lane-local block subjects cannot be derived safely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LaneBlockSubjectError {
+    /// Consensus domain has a blank mode tag.
+    BlankQcModeTag {
+        /// Lane being planned.
+        lane_id: LaneId,
+    },
+    /// Consensus domain has no accepted work to bind.
+    EmptyCandidateSet {
+        /// Lane being planned.
+        lane_id: LaneId,
+    },
+    /// Consensus domain count disagrees with its candidate index list.
+    CandidateCountMismatch {
+        /// Lane being planned.
+        lane_id: LaneId,
+        /// Accepted-candidate count advertised by the domain.
+        accepted_candidates: usize,
+        /// Number of candidate indices carried by the domain.
+        candidate_indices: usize,
+    },
+    /// Consensus domain repeats a fetched-batch candidate index.
+    DuplicateCandidateIndex {
+        /// Lane being planned.
+        lane_id: LaneId,
+        /// Duplicated fetched-batch index.
+        index: usize,
+    },
+    /// More than one domain was provided for the same lane.
+    DuplicateLaneDomain {
+        /// Duplicated lane identifier.
+        lane_id: LaneId,
+    },
+    /// Candidate index does not fit the architecture-neutral digest preimage.
+    CandidateIndexOverflow {
+        /// Lane being planned.
+        lane_id: LaneId,
+        /// Candidate index that could not be represented as `u64`.
+        index: usize,
+    },
+    /// Canonical subject preimage encoding failed.
+    Encode,
+}
+
+/// Error returned when lane-local DA/RBC ownership identities cannot be planned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LanePayloadOwnershipError {
+    /// Block subject has a blank QC mode tag.
+    BlankQcModeTag {
+        /// Lane being planned.
+        lane_id: LaneId,
+    },
+    /// Block subject has no accepted work to bind.
+    EmptyCandidateSet {
+        /// Lane being planned.
+        lane_id: LaneId,
+    },
+    /// Block subject repeats a fetched-batch candidate index.
+    DuplicateCandidateIndex {
+        /// Lane being planned.
+        lane_id: LaneId,
+        /// Duplicated fetched-batch index.
+        index: usize,
+    },
+    /// Candidate index does not fit the architecture-neutral digest preimage.
+    CandidateIndexOverflow {
+        /// Lane being planned.
+        lane_id: LaneId,
+        /// Candidate index that could not be represented as `u64`.
+        index: usize,
+    },
+    /// Block subject digest does not match its canonical preimage.
+    SubjectHashMismatch {
+        /// Lane being planned.
+        lane_id: LaneId,
+        /// Digest recomputed from the canonical preimage.
+        expected: Hash,
+        /// Digest carried by the subject.
+        actual: Hash,
+    },
+    /// More than one subject was provided for the same lane-local slot.
+    DuplicateLaneSlot {
+        /// Duplicated lane identifier.
+        lane_id: LaneId,
+        /// Duplicated dataspace identifier.
+        dataspace_id: DataSpaceId,
+        /// Duplicated lane-local block height.
+        lane_block_height: u64,
+        /// Duplicated lane-local block view.
+        lane_block_view: u64,
+    },
+    /// Two subjects produced the same payload ownership digest.
+    DuplicatePayloadOwnershipHash {
+        /// Duplicated payload ownership digest.
+        payload_ownership_hash: Hash,
+    },
+    /// Two subjects produced the same RBC instance digest.
+    DuplicateRbcInstanceHash {
+        /// Duplicated RBC instance digest.
+        rbc_instance_hash: Hash,
+    },
+    /// Canonical ownership preimage encoding failed.
+    Encode,
 }
 
 /// Error returned when a lane-local consensus domain cannot be derived safely.
@@ -386,6 +534,42 @@ struct LaneAcceptedWork {
     candidate_indices: Vec<usize>,
 }
 
+#[derive(Clone, Debug, Encode)]
+struct LaneBlockSubjectPreimage {
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    candidate_indices: Vec<u64>,
+    qc_mode_tag: String,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LanePayloadOwnershipPreimage {
+    purpose: String,
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    subject_hash: Hash,
+    candidate_indices: Vec<u64>,
+    qc_mode_tag: String,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct LaneRbcInstancePreimage {
+    purpose: String,
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    lane_block_view: u64,
+    subject_hash: Hash,
+    payload_ownership_hash: Hash,
+}
+
 /// Derive lane-local vote/QC domains for accepted work in a scheduled batch.
 ///
 /// The returned domains are sorted by lane id, include only accepted candidates,
@@ -477,11 +661,231 @@ pub(super) fn plan_lane_consensus_domains_with_shared_committee(
     plan_lane_consensus_domains(routing_decisions, schedule, &committees, base_mode_tag)
 }
 
+/// Derive deterministic lane block subjects from lane-local consensus domains.
+///
+/// Subjects are sorted by lane id/dataspace id and bind the lane coordinates,
+/// caller-supplied lane height/view, exact fetched-batch candidate order, and
+/// lane QC mode tag into a stable Norito-backed digest. The current global
+/// proposal path can call this with global height/view as a compatibility
+/// anchor; a full per-lane scheduler can later supply independent lane-local
+/// heights without changing the subject validation rules.
+pub(super) fn plan_lane_block_subjects(
+    domains: &[LaneConsensusDomain],
+    lane_block_height: u64,
+    lane_block_view: u64,
+) -> Result<Vec<LaneBlockSubject>, LaneBlockSubjectError> {
+    let mut seen_lanes = BTreeSet::new();
+    let mut subjects = Vec::with_capacity(domains.len());
+    for domain in domains {
+        if domain.qc_mode_tag.trim().is_empty() {
+            return Err(LaneBlockSubjectError::BlankQcModeTag {
+                lane_id: domain.lane_id,
+            });
+        }
+        if domain.accepted_candidate_indices.is_empty() {
+            return Err(LaneBlockSubjectError::EmptyCandidateSet {
+                lane_id: domain.lane_id,
+            });
+        }
+        if domain.accepted_candidates != domain.accepted_candidate_indices.len() {
+            return Err(LaneBlockSubjectError::CandidateCountMismatch {
+                lane_id: domain.lane_id,
+                accepted_candidates: domain.accepted_candidates,
+                candidate_indices: domain.accepted_candidate_indices.len(),
+            });
+        }
+        if !seen_lanes.insert(domain.lane_id) {
+            return Err(LaneBlockSubjectError::DuplicateLaneDomain {
+                lane_id: domain.lane_id,
+            });
+        }
+
+        let mut seen_indices = BTreeSet::new();
+        let mut candidate_indices = Vec::with_capacity(domain.accepted_candidate_indices.len());
+        for index in domain.accepted_candidate_indices.iter().copied() {
+            if !seen_indices.insert(index) {
+                return Err(LaneBlockSubjectError::DuplicateCandidateIndex {
+                    lane_id: domain.lane_id,
+                    index,
+                });
+            }
+            candidate_indices.push(u64::try_from(index).map_err(|_| {
+                LaneBlockSubjectError::CandidateIndexOverflow {
+                    lane_id: domain.lane_id,
+                    index,
+                }
+            })?);
+        }
+
+        let preimage = LaneBlockSubjectPreimage {
+            version: 1,
+            lane_id: domain.lane_id,
+            dataspace_id: domain.dataspace_id,
+            lane_block_height,
+            lane_block_view,
+            candidate_indices,
+            qc_mode_tag: domain.qc_mode_tag.clone(),
+        };
+        let subject_hash =
+            Hash::new(norito::to_bytes(&preimage).map_err(|_| LaneBlockSubjectError::Encode)?);
+        subjects.push(LaneBlockSubject {
+            lane_id: domain.lane_id,
+            dataspace_id: domain.dataspace_id,
+            lane_block_height,
+            lane_block_view,
+            accepted_candidate_indices: domain.accepted_candidate_indices.clone(),
+            qc_mode_tag: domain.qc_mode_tag.clone(),
+            subject_hash,
+        });
+    }
+    subjects.sort_by_key(|subject| (subject.lane_id, subject.dataspace_id));
+    Ok(subjects)
+}
+
+/// Derive deterministic DA/RBC ownership identities from lane block subjects.
+///
+/// The planner validates each subject against its canonical subject digest
+/// before deriving payload ownership and RBC instance digests. The current
+/// proposal path uses this as preflight metadata while it still broadcasts a
+/// global block payload; future lane-local DA/RBC sessions can use these
+/// digests as stable, hardware-independent instance names.
+pub(super) fn plan_lane_payload_ownership(
+    subjects: &[LaneBlockSubject],
+) -> Result<Vec<LanePayloadOwnership>, LanePayloadOwnershipError> {
+    let mut seen_slots = BTreeSet::new();
+    let mut seen_payload_ownership_hashes = BTreeSet::new();
+    let mut seen_rbc_instance_hashes = BTreeSet::new();
+    let mut ownerships = Vec::with_capacity(subjects.len());
+
+    for subject in subjects {
+        if subject.qc_mode_tag.trim().is_empty() {
+            return Err(LanePayloadOwnershipError::BlankQcModeTag {
+                lane_id: subject.lane_id,
+            });
+        }
+        if subject.accepted_candidate_indices.is_empty() {
+            return Err(LanePayloadOwnershipError::EmptyCandidateSet {
+                lane_id: subject.lane_id,
+            });
+        }
+
+        let mut seen_indices = BTreeSet::new();
+        let mut candidate_indices = Vec::with_capacity(subject.accepted_candidate_indices.len());
+        for index in subject.accepted_candidate_indices.iter().copied() {
+            if !seen_indices.insert(index) {
+                return Err(LanePayloadOwnershipError::DuplicateCandidateIndex {
+                    lane_id: subject.lane_id,
+                    index,
+                });
+            }
+            candidate_indices.push(u64::try_from(index).map_err(|_| {
+                LanePayloadOwnershipError::CandidateIndexOverflow {
+                    lane_id: subject.lane_id,
+                    index,
+                }
+            })?);
+        }
+
+        let expected_subject_hash = Hash::new(
+            norito::to_bytes(&LaneBlockSubjectPreimage {
+                version: 1,
+                lane_id: subject.lane_id,
+                dataspace_id: subject.dataspace_id,
+                lane_block_height: subject.lane_block_height,
+                lane_block_view: subject.lane_block_view,
+                candidate_indices: candidate_indices.clone(),
+                qc_mode_tag: subject.qc_mode_tag.clone(),
+            })
+            .map_err(|_| LanePayloadOwnershipError::Encode)?,
+        );
+        if expected_subject_hash != subject.subject_hash {
+            return Err(LanePayloadOwnershipError::SubjectHashMismatch {
+                lane_id: subject.lane_id,
+                expected: expected_subject_hash,
+                actual: subject.subject_hash,
+            });
+        }
+
+        let slot = (
+            subject.lane_id,
+            subject.dataspace_id,
+            subject.lane_block_height,
+            subject.lane_block_view,
+        );
+        if !seen_slots.insert(slot) {
+            return Err(LanePayloadOwnershipError::DuplicateLaneSlot {
+                lane_id: subject.lane_id,
+                dataspace_id: subject.dataspace_id,
+                lane_block_height: subject.lane_block_height,
+                lane_block_view: subject.lane_block_view,
+            });
+        }
+
+        let payload_ownership_hash = Hash::new(
+            norito::to_bytes(&LanePayloadOwnershipPreimage {
+                purpose: "nexus:lane-payload-ownership:v1".to_string(),
+                version: 1,
+                lane_id: subject.lane_id,
+                dataspace_id: subject.dataspace_id,
+                lane_block_height: subject.lane_block_height,
+                lane_block_view: subject.lane_block_view,
+                subject_hash: subject.subject_hash,
+                candidate_indices,
+                qc_mode_tag: subject.qc_mode_tag.clone(),
+            })
+            .map_err(|_| LanePayloadOwnershipError::Encode)?,
+        );
+        if !seen_payload_ownership_hashes.insert(payload_ownership_hash) {
+            return Err(LanePayloadOwnershipError::DuplicatePayloadOwnershipHash {
+                payload_ownership_hash,
+            });
+        }
+
+        let rbc_instance_hash = Hash::new(
+            norito::to_bytes(&LaneRbcInstancePreimage {
+                purpose: "nexus:lane-rbc-instance:v1".to_string(),
+                version: 1,
+                lane_id: subject.lane_id,
+                dataspace_id: subject.dataspace_id,
+                lane_block_height: subject.lane_block_height,
+                lane_block_view: subject.lane_block_view,
+                subject_hash: subject.subject_hash,
+                payload_ownership_hash,
+            })
+            .map_err(|_| LanePayloadOwnershipError::Encode)?,
+        );
+        if !seen_rbc_instance_hashes.insert(rbc_instance_hash) {
+            return Err(LanePayloadOwnershipError::DuplicateRbcInstanceHash { rbc_instance_hash });
+        }
+
+        ownerships.push(LanePayloadOwnership {
+            lane_id: subject.lane_id,
+            dataspace_id: subject.dataspace_id,
+            lane_block_height: subject.lane_block_height,
+            lane_block_view: subject.lane_block_view,
+            subject_hash: subject.subject_hash,
+            accepted_candidate_indices: subject.accepted_candidate_indices.clone(),
+            payload_ownership_hash,
+            rbc_instance_hash,
+        });
+    }
+
+    ownerships.sort_by_key(|ownership| {
+        (
+            ownership.lane_id,
+            ownership.dataspace_id,
+            ownership.lane_block_height,
+            ownership.lane_block_view,
+        )
+    });
+    Ok(ownerships)
+}
+
 fn accepted_work_by_lane(
     routing_decisions: &[RoutingDecision],
     schedule: &ProposalBatchSchedule,
 ) -> Result<BTreeMap<LaneId, LaneAcceptedWork>, LaneConsensusDomainError> {
-    let mut accepted_work = BTreeMap::new();
+    let mut accepted_work: BTreeMap<LaneId, LaneAcceptedWork> = BTreeMap::new();
     for action in &schedule.actions {
         let ProposalBatchAction::Accept { index, .. } = *action else {
             continue;
@@ -1318,6 +1722,340 @@ mod tests {
         assert_eq!(domains[0].accepted_candidate_indices, vec![2, 0]);
         assert_eq!(domains[1].lane_id, LaneId::new(2));
         assert_eq!(domains[1].accepted_candidate_indices, vec![1, 3]);
+    }
+
+    #[test]
+    fn lane_block_subjects_bind_coordinates_mode_tag_and_candidate_order() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22), (1, 11), (2, 22)]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[2, 1, 0, 3]),
+            &[
+                committee(1, 11, validators.clone(), None),
+                committee(2, 22, validators, None),
+            ],
+            "permissioned",
+        )
+        .expect("lane consensus domains");
+
+        let subjects = plan_lane_block_subjects(&domains, 42, 7).expect("lane block subjects");
+
+        assert_eq!(subjects.len(), 2);
+        assert_eq!(subjects[0].lane_id, LaneId::new(1));
+        assert_eq!(subjects[0].dataspace_id, DataSpaceId::new(11));
+        assert_eq!(subjects[0].lane_block_height, 42);
+        assert_eq!(subjects[0].lane_block_view, 7);
+        assert_eq!(subjects[0].accepted_candidate_indices, vec![2, 0]);
+        assert_eq!(
+            subjects[0].qc_mode_tag,
+            LaneRelayEnvelope::lane_qc_mode_tag_for(
+                LaneId::new(1),
+                DataSpaceId::new(11),
+                "permissioned"
+            )
+        );
+
+        let view_drift =
+            plan_lane_block_subjects(&domains, 42, 8).expect("lane block subjects with view drift");
+        assert_ne!(subjects[0].subject_hash, view_drift[0].subject_hash);
+
+        let mut reordered_work = domains.clone();
+        reordered_work[0].accepted_candidate_indices.reverse();
+        let reordered_subjects =
+            plan_lane_block_subjects(&reordered_work, 42, 7).expect("reordered subjects");
+        assert_ne!(subjects[0].subject_hash, reordered_subjects[0].subject_hash);
+
+        let mut mode_drift = domains.clone();
+        mode_drift[0].qc_mode_tag.push_str("::tampered");
+        let mode_drift_subjects =
+            plan_lane_block_subjects(&mode_drift, 42, 7).expect("mode drift subjects");
+        assert_ne!(
+            subjects[0].subject_hash,
+            mode_drift_subjects[0].subject_hash
+        );
+    }
+
+    #[test]
+    fn lane_block_subjects_are_sorted_independent_of_domain_input_order() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22)]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0, 1]),
+            &[
+                committee(1, 11, validators.clone(), None),
+                committee(2, 22, validators, None),
+            ],
+            "permissioned",
+        )
+        .expect("lane consensus domains");
+        let mut reversed_domains = domains.clone();
+        reversed_domains.reverse();
+
+        let subjects = plan_lane_block_subjects(&domains, 3, 4).expect("lane block subjects");
+        let reversed_subjects =
+            plan_lane_block_subjects(&reversed_domains, 3, 4).expect("reversed subjects");
+
+        assert_eq!(
+            subjects
+                .iter()
+                .map(|subject| subject.lane_id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::new(1), LaneId::new(2)]
+        );
+        assert_eq!(
+            subjects
+                .iter()
+                .map(|subject| subject.subject_hash)
+                .collect::<Vec<_>>(),
+            reversed_subjects
+                .iter()
+                .map(|subject| subject.subject_hash)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_binds_subject_hash_coordinates_and_candidate_order() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22), (1, 11), (2, 22)]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[2, 1, 0, 3]),
+            &[
+                committee(1, 11, validators.clone(), None),
+                committee(2, 22, validators, None),
+            ],
+            "permissioned",
+        )
+        .expect("lane consensus domains");
+        let subjects = plan_lane_block_subjects(&domains, 42, 7).expect("lane block subjects");
+
+        let ownerships = plan_lane_payload_ownership(&subjects).expect("lane payload ownership");
+
+        assert_eq!(ownerships.len(), 2);
+        assert_eq!(ownerships[0].lane_id, LaneId::new(1));
+        assert_eq!(ownerships[0].dataspace_id, DataSpaceId::new(11));
+        assert_eq!(ownerships[0].lane_block_height, 42);
+        assert_eq!(ownerships[0].lane_block_view, 7);
+        assert_eq!(ownerships[0].subject_hash, subjects[0].subject_hash);
+        assert_eq!(ownerships[0].accepted_candidate_indices, vec![2, 0]);
+        assert_ne!(
+            ownerships[0].payload_ownership_hash,
+            ownerships[0].rbc_instance_hash
+        );
+
+        let view_drift_subjects =
+            plan_lane_block_subjects(&domains, 42, 8).expect("lane block subjects with view drift");
+        let view_drift_ownerships =
+            plan_lane_payload_ownership(&view_drift_subjects).expect("view drift ownership");
+        assert_ne!(
+            ownerships[0].payload_ownership_hash,
+            view_drift_ownerships[0].payload_ownership_hash
+        );
+        assert_ne!(
+            ownerships[0].rbc_instance_hash,
+            view_drift_ownerships[0].rbc_instance_hash
+        );
+
+        let mut reordered_work = domains.clone();
+        reordered_work[0].accepted_candidate_indices.reverse();
+        let reordered_subjects =
+            plan_lane_block_subjects(&reordered_work, 42, 7).expect("reordered subjects");
+        let reordered_ownerships =
+            plan_lane_payload_ownership(&reordered_subjects).expect("reordered ownership");
+        assert_ne!(
+            ownerships[0].payload_ownership_hash,
+            reordered_ownerships[0].payload_ownership_hash
+        );
+        assert_ne!(
+            ownerships[0].rbc_instance_hash,
+            reordered_ownerships[0].rbc_instance_hash
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_is_sorted_independent_of_subject_input_order() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22)]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0, 1]),
+            &[
+                committee(1, 11, validators.clone(), None),
+                committee(2, 22, validators, None),
+            ],
+            "permissioned",
+        )
+        .expect("lane consensus domains");
+        let subjects = plan_lane_block_subjects(&domains, 3, 4).expect("lane block subjects");
+        let mut reversed_subjects = subjects.clone();
+        reversed_subjects.reverse();
+
+        let ownerships = plan_lane_payload_ownership(&subjects).expect("lane payload ownership");
+        let reversed_ownerships =
+            plan_lane_payload_ownership(&reversed_subjects).expect("reversed ownership");
+
+        assert_eq!(
+            ownerships
+                .iter()
+                .map(|ownership| ownership.lane_id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::new(1), LaneId::new(2)]
+        );
+        assert_eq!(
+            ownerships
+                .iter()
+                .map(|ownership| {
+                    (
+                        ownership.payload_ownership_hash,
+                        ownership.rbc_instance_hash,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            reversed_ownerships
+                .iter()
+                .map(|ownership| {
+                    (
+                        ownership.payload_ownership_hash,
+                        ownership.rbc_instance_hash,
+                    )
+                })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn lane_payload_ownership_rejects_malformed_subjects() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(
+                1,
+                11,
+                vec![test_peer(1), test_peer(2), test_peer(3)],
+                None,
+            )],
+            "permissioned",
+        )
+        .expect("lane consensus domains");
+        let subjects = plan_lane_block_subjects(&domains, 9, 2).expect("lane block subjects");
+        let mut malformed = subjects[0].clone();
+
+        malformed.qc_mode_tag = " ".to_string();
+        assert_eq!(
+            plan_lane_payload_ownership(&[malformed.clone()]),
+            Err(LanePayloadOwnershipError::BlankQcModeTag {
+                lane_id: LaneId::new(1),
+            })
+        );
+
+        malformed = subjects[0].clone();
+        malformed.accepted_candidate_indices.clear();
+        assert_eq!(
+            plan_lane_payload_ownership(&[malformed.clone()]),
+            Err(LanePayloadOwnershipError::EmptyCandidateSet {
+                lane_id: LaneId::new(1),
+            })
+        );
+
+        malformed = subjects[0].clone();
+        malformed.accepted_candidate_indices.push(0);
+        assert_eq!(
+            plan_lane_payload_ownership(&[malformed.clone()]),
+            Err(LanePayloadOwnershipError::DuplicateCandidateIndex {
+                lane_id: LaneId::new(1),
+                index: 0,
+            })
+        );
+
+        malformed = subjects[0].clone();
+        malformed.subject_hash = Hash::new(b"tampered lane block subject");
+        assert_eq!(
+            plan_lane_payload_ownership(&[malformed.clone()]),
+            Err(LanePayloadOwnershipError::SubjectHashMismatch {
+                lane_id: LaneId::new(1),
+                expected: subjects[0].subject_hash,
+                actual: malformed.subject_hash,
+            })
+        );
+
+        assert_eq!(
+            plan_lane_payload_ownership(&[subjects[0].clone(), subjects[0].clone()]),
+            Err(LanePayloadOwnershipError::DuplicateLaneSlot {
+                lane_id: LaneId::new(1),
+                dataspace_id: DataSpaceId::new(11),
+                lane_block_height: 9,
+                lane_block_view: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn lane_block_subjects_reject_malformed_domains() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(
+                1,
+                11,
+                vec![test_peer(1), test_peer(2), test_peer(3)],
+                None,
+            )],
+            "permissioned",
+        )
+        .expect("lane consensus domains");
+        let mut malformed = domains[0].clone();
+
+        malformed.qc_mode_tag = " ".to_string();
+        assert_eq!(
+            plan_lane_block_subjects(&[malformed.clone()], 1, 0),
+            Err(LaneBlockSubjectError::BlankQcModeTag {
+                lane_id: LaneId::new(1),
+            })
+        );
+
+        malformed = domains[0].clone();
+        malformed.accepted_candidate_indices.clear();
+        malformed.accepted_candidates = 0;
+        assert_eq!(
+            plan_lane_block_subjects(&[malformed.clone()], 1, 0),
+            Err(LaneBlockSubjectError::EmptyCandidateSet {
+                lane_id: LaneId::new(1),
+            })
+        );
+
+        malformed = domains[0].clone();
+        malformed.accepted_candidates = 2;
+        assert_eq!(
+            plan_lane_block_subjects(&[malformed.clone()], 1, 0),
+            Err(LaneBlockSubjectError::CandidateCountMismatch {
+                lane_id: LaneId::new(1),
+                accepted_candidates: 2,
+                candidate_indices: 1,
+            })
+        );
+
+        malformed = domains[0].clone();
+        malformed.accepted_candidate_indices.push(0);
+        malformed.accepted_candidates = malformed.accepted_candidate_indices.len();
+        assert_eq!(
+            plan_lane_block_subjects(&[malformed.clone()], 1, 0),
+            Err(LaneBlockSubjectError::DuplicateCandidateIndex {
+                lane_id: LaneId::new(1),
+                index: 0,
+            })
+        );
+
+        assert_eq!(
+            plan_lane_block_subjects(&[domains[0].clone(), domains[0].clone()], 1, 0),
+            Err(LaneBlockSubjectError::DuplicateLaneDomain {
+                lane_id: LaneId::new(1),
+            })
+        );
     }
 
     #[test]
