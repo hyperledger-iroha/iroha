@@ -191,6 +191,17 @@ def write_all(fd: int, chunk: bytes) -> None:
             raise OSError("failed to write SoraFS adoption artifact")
         view = view[written:]
 
+def sync_output_parent(path: pathlib.Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def validate_adoption_path(path: pathlib.Path, label: str) -> None:
     if path.is_symlink():
         raise SystemExit(f"[sorafs-adoption] {label} must not be a symlink: {path}")
@@ -241,9 +252,11 @@ def write_adoption_text(path: pathlib.Path, body: str, label: str) -> None:
     fd = os.open(path, write_open_flags(), 0o666)
     try:
         write_all(fd, body.encode("utf-8"))
+        os.fsync(fd)
     finally:
         if fd >= 0:
             os.close(fd)
+    sync_output_parent(path)
 
 metadata = read_json(fixture_dir / "metadata.json")
 options = read_json(fixture_dir / "options.json")
@@ -470,6 +483,17 @@ def write_all(fd: int, chunk: bytes) -> None:
             raise OSError("failed to write SoraFS adoption artifact")
         view = view[written:]
 
+def sync_output_parent(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def validate_adoption_path(path: Path, label: str) -> None:
     if path.is_symlink():
         raise SystemExit(f"[sorafs-adoption] {label} must not be a symlink: {path}")
@@ -498,9 +522,11 @@ def write_adoption_json(path: Path, payload: dict, label: str) -> None:
     fd = os.open(path, write_open_flags(), 0o666)
     try:
         write_all(fd, rendered)
+        os.fsync(fd)
     finally:
         if fd >= 0:
             os.close(fd)
+    sync_output_parent(path)
 
 def parse_float(name: str, default=None):
     raw = os.environ.get(name)

@@ -38,6 +38,17 @@ def write_open_flags() -> int:
         | getattr(os, "O_NOFOLLOW", 0)
     )
 
+def sync_output_parent(path: pathlib.Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def validate_sdk_path(path: pathlib.Path, label: str) -> None:
     if path.is_symlink():
         sys.exit(f"[sorafs-sdk] {label} must not be a symlink: {path}")
@@ -49,7 +60,11 @@ def validate_sdk_path(path: pathlib.Path, label: str) -> None:
 
 validate_sdk_path(path, "results TSV")
 fd = os.open(path, write_open_flags(), 0o666)
-os.close(fd)
+try:
+    os.fsync(fd)
+finally:
+    os.close(fd)
+sync_output_parent(path)
 PY
 
 echo "[sorafs-sdk] writing parity artefacts to ${RUN_DIR}"
@@ -97,6 +112,17 @@ def write_all(fd: int, chunk: bytes) -> None:
             raise OSError("failed to write SoraFS SDK artifact")
         view = view[written:]
 
+def sync_output_parent(path: pathlib.Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def require_source(path: pathlib.Path, label: str) -> pathlib.Path | None:
     if not path.exists():
         print(f"[sorafs-sdk] warning: fixture file missing ({path})", file=sys.stderr)
@@ -125,10 +151,12 @@ try:
         if not chunk:
             break
         write_all(write_fd, chunk)
+    os.fsync(write_fd)
 finally:
     os.close(read_fd)
     if write_fd >= 0:
         os.close(write_fd)
+sync_output_parent(target)
 PY
 }
 
@@ -231,6 +259,17 @@ def write_all(fd: int, chunk: bytes) -> None:
             raise OSError("failed to write SoraFS SDK artifact")
         view = view[written:]
 
+def sync_output_parent(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def write_text_artifact(path: Path, body: str, label: str) -> None:
     validate_sdk_path(path, label)
     ensure_sdk_directory(path.parent, f"{label} parent directory")
@@ -238,9 +277,11 @@ def write_text_artifact(path: Path, body: str, label: str) -> None:
     fd = os.open(path, write_open_flags(), 0o666)
     try:
         write_all(fd, body.encode("utf-8"))
+        os.fsync(fd)
     finally:
         if fd >= 0:
             os.close(fd)
+    sync_output_parent(path)
 
 def load_results(path: Path) -> list[dict]:
     results: list[dict] = []
@@ -411,14 +452,27 @@ def write_all(fd: int, chunk: bytes) -> None:
             raise OSError("failed to write SoraFS SDK artifact")
         view = view[written:]
 
+def sync_output_parent(path: pathlib.Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 validate_sdk_path(path, "results TSV")
 if path.exists() and not stat.S_ISREG(path.lstat().st_mode):
     raise SystemExit(f"[sorafs-sdk] results TSV must be a regular file: {path}")
 fd = os.open(path, append_open_flags(), 0o666)
 try:
     write_all(fd, ("\t".join(fields) + "\n").encode("utf-8"))
+    os.fsync(fd)
 finally:
     os.close(fd)
+sync_output_parent(path)
 PY
   return "${exit_code}"
 }

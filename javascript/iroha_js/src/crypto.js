@@ -3383,6 +3383,9 @@ function kagemushaNormalizeAppendRequest(request) {
     "outputProofCircuitId",
     "output_proof_circuit_id",
   ]);
+  if (typeof outputProofCircuitId !== "string" || outputProofCircuitId.length === 0) {
+    throw kagemushaFieldCodecError("outputProofCircuitId");
+  }
   const normalizedOutput = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
     outputProofCircuitId,
   );

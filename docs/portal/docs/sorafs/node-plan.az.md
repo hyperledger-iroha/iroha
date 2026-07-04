@@ -47,12 +47,13 @@ SF-3, Iroha/Torii prosesini SoraFS yaddaş provayderinə çevirən ilk işlək `
 
 ### C. Gateway Son Nöqtələri
 
-| Son nöqtə | Davranış | Tapşırıqlar |
+| Endpoint | Behaviour | Tasks |
 |----------|-----------|-------|
-| `POST /sorafs/pin` | `PinProposalV1` qəbul edin, manifestləri təsdiqləyin, qəbulu növbəyə qoyun, manifest CID ilə cavab verin. | Yığma profilini təsdiqləyin, kvotaları tətbiq edin, yığın mağazası vasitəsilə məlumat yayımlayın. |
-| `GET /sorafs/chunks/{cid}` + diapazon sorğusu | `Content-Chunker` başlıqları ilə yığın baytlara xidmət edin; diapazon qabiliyyəti spesifikasiyasına hörmət edin. | Planlayıcı + axın büdcələrindən istifadə edin (SF-2d diapazonu qabiliyyətinə bağlayın). |
-| `POST /sorafs/por/sample` | Manifest və geriyə sübut paketi üçün PoR nümunəsini işə salın. | Dükan nümunəsini təkrar istifadə edin, Norito JSON yükləri ilə cavab verin. |
-| `GET /sorafs/telemetry` | Xülasə: tutum, PoR müvəffəqiyyəti, əldə etmə xətası sayları. | Panellər/operatorlar üçün məlumat təmin edin. |
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 `sorafs_node::por` vasitəsilə iş vaxtı santexnika mövzuları PoR qarşılıqlı əlaqəsini təmin edir: izləyici hər bir `PorChallengeV1`, `PorProofV1` və `AuditVerdictV1`-ni qeyd edir, beləliklə `CapacityMeter` qiymətləndirmə göstəricilərini əks etdirmir. Torii məntiqi.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ Qeydlər / hadisələr:
 ## Mərhələ Çıxış Meyarları
 
 - `cargo run -p sorafs_node --example pin_fetch` yerli qurğulara qarşı işləyir.  
-- Torii `--features sorafs-storage` ilə qurur və inteqrasiya testlərindən keçir.  
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - Sənədləşdirmə ([node storage guide](node-storage.md)) konfiqurasiya defoltları + CLI nümunələri ilə yeniləndi; operator runbook mövcuddur.  
 - Səhnələşdirmə panellərində görünən telemetriya; tutumun doyması və PoR uğursuzluqları üçün konfiqurasiya edilmiş xəbərdarlıqlar.
 
@@ -116,4 +117,4 @@ Qeydlər / hadisələr:
 
 - Konfiqurasiya defoltları, CLI istifadəsi və problemlərin aradan qaldırılması addımları ilə [node storage arayışını](node-storage.md) yeniləyin.  
 - SF-3 inkişaf etdikcə [node əməliyyatları runbook](node-operations.md) tətbiqi ilə uyğunlaşdırılsın.  
-- Tərtibatçı portalında `/sorafs/*` son nöqtələri üçün API arayışlarını dərc edin və Torii işləyiciləri yerləşdikdən sonra onları OpenAPI manifestinə köçürün.
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

@@ -848,6 +848,91 @@ mod tests {
         SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None)
     }
 
+    fn test_certified_fetch_messages(height: u64, view: u64) -> (Vec<BlockMessage>, BlockMessage) {
+        let block = test_signed_block(height, view);
+        let block_hash = block.hash();
+        let validator_set = vec![checked_peer()];
+        let signers_bitmap = vec![1];
+        let bls_aggregate_signature = vec![0xA5];
+        let parent_state_root = Hash::prehashed([0x11; Hash::LENGTH]);
+        let post_state_root = Hash::prehashed([0x12; Hash::LENGTH]);
+        let chain_order_hash = iroha_data_model::consensus::default_chain_order_hash();
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root,
+            post_state_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash,
+            rechain_seq: 0,
+            mode_tag: String::new(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            aggregate: QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let validator_checkpoint =
+            iroha_data_model::consensus::ValidatorSetCheckpoint::new_with_chain_order(
+                height,
+                view,
+                block_hash,
+                chain_order_hash,
+                0,
+                parent_state_root,
+                post_state_root,
+                validator_set,
+                signers_bitmap,
+                bls_aggregate_signature,
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            );
+
+        let payloads = vec![
+            BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Response(
+                message::CertifiedBlockFetchResponse {
+                    height,
+                    view,
+                    block: block.clone(),
+                    commit_qc: qc.clone(),
+                    validator_checkpoint: validator_checkpoint.clone(),
+                    stake_snapshot: None,
+                },
+            )),
+            BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Proof(
+                message::CertifiedBlockFetchProof {
+                    height,
+                    view,
+                    block_hash,
+                    commit_qc: qc,
+                    validator_checkpoint,
+                    stake_snapshot: None,
+                },
+            )),
+            BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Body(
+                message::CertifiedBlockFetchBody {
+                    height,
+                    view,
+                    block,
+                },
+            )),
+        ];
+        let request = BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Request(
+            message::CertifiedBlockFetchRequest {
+                requester: checked_peer(),
+                height,
+                view,
+                block_hash,
+            },
+        ));
+        (payloads, request)
+    }
+
     #[test]
     fn inbound_block_message_tracks_queue_latency() {
         let msg = BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
@@ -3626,6 +3711,252 @@ mod tests {
             received,
             InboundBlockMessage {
                 message: BlockMessage::BlockBodyResponse(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            block_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_routes_certified_fetch_payloads_via_payload_ingress_queue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let block = test_signed_block(3, 0);
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let validator_set = vec![checked_peer()];
+        let signers_bitmap = vec![1];
+        let bls_aggregate_signature = vec![0xA5];
+        let parent_state_root = Hash::prehashed([0x11; Hash::LENGTH]);
+        let post_state_root = Hash::prehashed([0x12; Hash::LENGTH]);
+        let chain_order_hash = iroha_data_model::consensus::default_chain_order_hash();
+        let qc = Qc {
+            phase: Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root,
+            post_state_root,
+            height,
+            view,
+            epoch: 0,
+            chain_order_hash,
+            rechain_seq: 0,
+            mode_tag: String::new(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            aggregate: QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: bls_aggregate_signature.clone(),
+            },
+        };
+        let validator_checkpoint =
+            iroha_data_model::consensus::ValidatorSetCheckpoint::new_with_chain_order(
+                height,
+                view,
+                block_hash,
+                chain_order_hash,
+                0,
+                parent_state_root,
+                post_state_root,
+                validator_set,
+                signers_bitmap,
+                bls_aggregate_signature,
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            );
+
+        let messages = [
+            BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Response(
+                message::CertifiedBlockFetchResponse {
+                    height,
+                    view,
+                    block: block.clone(),
+                    commit_qc: qc.clone(),
+                    validator_checkpoint: validator_checkpoint.clone(),
+                    stake_snapshot: None,
+                },
+            )),
+            BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Proof(
+                message::CertifiedBlockFetchProof {
+                    height,
+                    view,
+                    block_hash,
+                    commit_qc: qc,
+                    validator_checkpoint,
+                    stake_snapshot: None,
+                },
+            )),
+            BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Body(
+                message::CertifiedBlockFetchBody {
+                    height,
+                    view,
+                    block,
+                },
+            )),
+        ];
+
+        for message in messages {
+            assert!(handle.incoming_block_message(message));
+            let received = block_payload_rx
+                .try_recv()
+                .expect("certified fetch payload should be enqueued to payload ingress");
+            let (queue_kind, _latency_ms) = received
+                .queue_latency_ms()
+                .expect("CertifiedBlockFetch payload should record enqueue metadata");
+            assert_eq!(queue_kind, status::WorkerQueueKind::BlockPayload);
+            assert!(matches!(
+                received,
+                InboundBlockMessage {
+                    message: BlockMessage::CertifiedBlockFetch(
+                        message::CertifiedBlockFetch::Response(_)
+                            | message::CertifiedBlockFetch::Proof(_)
+                            | message::CertifiedBlockFetch::Body(_)
+                    ),
+                    ..
+                }
+            ));
+        }
+
+        let requester = checked_peer();
+        assert!(
+            handle.incoming_block_message(BlockMessage::CertifiedBlockFetch(
+                message::CertifiedBlockFetch::Request(message::CertifiedBlockFetchRequest {
+                    requester,
+                    height,
+                    view,
+                    block_hash,
+                }),
+            ))
+        );
+        let received = block_rx
+            .try_recv()
+            .expect("certified fetch request should stay on block ingress");
+        let (queue_kind, _latency_ms) = received
+            .queue_latency_ms()
+            .expect("CertifiedBlockFetch request should record enqueue metadata");
+        assert_eq!(queue_kind, status::WorkerQueueKind::Blocks);
+        assert!(matches!(
+            received,
+            InboundBlockMessage {
+                message: BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Request(
+                    _
+                )),
+                ..
+            }
+        ));
+        assert!(matches!(
+            block_payload_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            rbc_chunk_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(vote_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn incoming_block_message_dedups_certified_fetch_bursts_before_enqueue() {
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx,
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+        let (payloads, request) = test_certified_fetch_messages(4, 0);
+
+        for payload in payloads {
+            assert!(handle.incoming_block_message(payload.clone()));
+            assert!(
+                !handle.incoming_block_message(payload),
+                "duplicate certified fetch payload should be suppressed before enqueue"
+            );
+        }
+        assert!(handle.incoming_block_message(request.clone()));
+        assert!(
+            !handle.incoming_block_message(request),
+            "duplicate certified fetch request should be suppressed before enqueue"
+        );
+
+        let received_payloads: Vec<_> = block_payload_rx.try_iter().collect();
+        assert_eq!(received_payloads.len(), 3);
+        assert!(received_payloads.iter().all(|msg| {
+            matches!(
+                msg,
+                InboundBlockMessage {
+                    message: BlockMessage::CertifiedBlockFetch(
+                        message::CertifiedBlockFetch::Response(_)
+                            | message::CertifiedBlockFetch::Proof(_)
+                            | message::CertifiedBlockFetch::Body(_)
+                    ),
+                    ..
+                }
+            )
+        }));
+        let received_request = block_rx
+            .try_recv()
+            .expect("first certified fetch request should be enqueued");
+        assert!(matches!(
+            received_request,
+            InboundBlockMessage {
+                message: BlockMessage::CertifiedBlockFetch(message::CertifiedBlockFetch::Request(
+                    _
+                )),
                 ..
             }
         ));
@@ -6643,6 +6974,57 @@ mod tests {
         }
     }
 
+    struct UrgentRepairTickActor {
+        events: Vec<&'static str>,
+        deadline: Instant,
+        message_sleep: Duration,
+        tick_calls: usize,
+    }
+
+    impl WorkerActor for UrgentRepairTickActor {
+        fn on_block_message(&mut self, msg: InboundBlockMessage) -> Result<()> {
+            std::thread::sleep(self.message_sleep);
+            match msg.message {
+                BlockMessage::BlockCreated(_)
+                | BlockMessage::BlockBodyResponse(_)
+                | BlockMessage::RbcInit(_)
+                | BlockMessage::RbcChunk(_)
+                | BlockMessage::RbcChunkCompact(_)
+                | BlockMessage::RbcReady(_)
+                | BlockMessage::RbcDeliver(_)
+                | BlockMessage::Proposal(_) => self.events.push("payload"),
+                _ => self.events.push("other"),
+            }
+            Ok(())
+        }
+
+        fn on_consensus_control(&mut self, _msg: ControlFlow) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_lane_relay(&mut self, _message: LaneRelayMessage) -> Result<()> {
+            Ok(())
+        }
+
+        fn on_background_request(&mut self, _request: BackgroundRequest) -> Result<()> {
+            Ok(())
+        }
+
+        fn prioritize_frontier_body_repair(&self) -> bool {
+            true
+        }
+
+        fn next_tick_deadline(&self, _now: Instant) -> Option<Instant> {
+            Some(self.deadline)
+        }
+
+        fn tick(&mut self) -> bool {
+            self.tick_calls = self.tick_calls.saturating_add(1);
+            self.events.push("tick");
+            true
+        }
+    }
+
     #[derive(Default)]
     struct IngressKindRecordingActor {
         events: Vec<&'static str>,
@@ -8405,6 +8787,104 @@ mod tests {
         assert_eq!(actor.events, vec!["rbc", "other"]);
         assert_eq!(stats.rbc_chunks_handled, 1);
         assert_eq!(stats.votes_handled, 1);
+        assert!(stats.progress);
+        assert!(!stats.budget_exceeded);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn run_worker_iteration_drains_urgent_repair_burst_before_due_tick() {
+        let _guard = status::worker_queue_test_guard();
+        status::reset_worker_loop_snapshot_for_tests();
+
+        let (_vote_tx, vote_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_rbc_chunk_tx, rbc_chunk_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_block_tx, block_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_consensus_tx, consensus_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_lane_tx, lane_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+        let (_background_tx, background_rx) = mpsc::sync_channel(TEST_CHANNEL_CAP);
+
+        let parent_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"parent"));
+        for idx in 0_u64..3 {
+            let proposal = Proposal {
+                header: ConsensusBlockHeader {
+                    parent_hash,
+                    tx_root: Hash::new(b"tx"),
+                    state_root: Hash::new(b"state"),
+                    proposer: 0,
+                    height: idx.saturating_add(1),
+                    view: 0,
+                    epoch: 0,
+                    highest_qc: QcHeaderRef {
+                        height: 0,
+                        view: 0,
+                        epoch: 0,
+                        subject_block_hash: parent_hash,
+                        phase: Phase::Prepare,
+                    },
+                },
+                payload_hash: Hash::new(b"payload"),
+            };
+            block_payload_tx
+                .send(inbound(BlockMessage::Proposal(proposal)))
+                .expect("send proposal");
+            status::record_worker_queue_enqueue(status::WorkerQueueKind::BlockPayload);
+        }
+
+        let config = WorkerLoopConfig {
+            time_budget: Duration::from_secs(1),
+            drain_budget_cap: Duration::from_secs(1),
+            vote_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_budget: Duration::from_secs(1),
+            block_payload_rx_drain_max_messages: 16,
+            vote_rx_drain_max_messages: 16,
+            vote_burst_cap_with_payload_backlog: VOTE_BURST_CAP_WITH_PAYLOAD_BACKLOG,
+            block_rx_drain_budget: Duration::from_secs(1),
+            block_rx_drain_max_messages: 16,
+            rbc_chunk_rx_drain_budget: Duration::from_secs(1),
+            rbc_chunk_rx_drain_max_messages: 16,
+            consensus_rx_drain_max_messages: 16,
+            lane_relay_rx_drain_max_messages: 16,
+            background_rx_drain_max_messages: 16,
+            tick_min_gap: Duration::from_millis(1),
+            tick_busy_gap: Duration::from_millis(1),
+            tick_max_gap: Duration::from_secs(1),
+            block_rx_starve_max: Duration::from_secs(1),
+            non_vote_starve_max: Duration::from_secs(1),
+        };
+        let now = Instant::now();
+        let past = now
+            .checked_sub(Duration::from_secs(2))
+            .unwrap_or_else(Instant::now);
+        let mut loop_state = WorkerLoopState {
+            last_tick: past,
+            last_served: [past; PRIORITY_TIER_COUNT],
+            mailbox: WorkerMailboxState::new(),
+        };
+        let mut actor = UrgentRepairTickActor {
+            events: Vec::new(),
+            deadline: Instant::now() + Duration::from_millis(50),
+            message_sleep: Duration::from_millis(60),
+            tick_calls: 0,
+        };
+
+        let stats = run_worker_iteration(
+            &mut actor,
+            &config,
+            &mut loop_state,
+            &vote_rx,
+            &block_payload_rx,
+            &rbc_chunk_rx,
+            &block_rx,
+            &consensus_rx,
+            &lane_rx,
+            &background_rx,
+        );
+
+        assert_eq!(actor.events, vec!["payload", "payload", "payload", "tick"]);
+        assert_eq!(stats.block_payloads_handled, 3);
+        assert_eq!(actor.tick_calls, 1);
         assert!(stats.progress);
         assert!(!stats.budget_exceeded);
     }
@@ -12077,6 +12557,29 @@ enum BlockPayloadDedupKey {
         priority: message::FetchPendingBlockPriority,
         commit_qc_only: bool,
     },
+    CertifiedBlockFetchRequest {
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        requester_hash: CryptoHash,
+    },
+    CertifiedBlockFetchResponse {
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        evidence_hash: CryptoHash,
+    },
+    CertifiedBlockFetchProof {
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        evidence_hash: CryptoHash,
+    },
+    CertifiedBlockFetchBody {
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+    },
     RbcChunk {
         height: u64,
         view: u64,
@@ -12091,7 +12594,7 @@ const VOTE_DEDUP_CACHE_CAP: usize = 8192;
 const VOTE_DEDUP_CACHE_TTL: Duration = Duration::from_secs(60);
 const BLOCK_PAYLOAD_DEDUP_CACHE_CAP: usize = 8192;
 const BLOCK_PAYLOAD_DEDUP_CACHE_TTL: Duration = Duration::from_secs(120);
-const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 10;
+const BLOCK_PAYLOAD_DEDUP_KIND_COUNT: usize = 11;
 const BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND: usize =
     if BLOCK_PAYLOAD_DEDUP_CACHE_CAP / BLOCK_PAYLOAD_DEDUP_KIND_COUNT == 0 {
         1
@@ -12141,6 +12644,63 @@ fn block_body_response_evidence_hash(response: &message::BlockBodyResponse) -> C
         }
     }
     CryptoHash::new(&buf)
+}
+
+fn certified_block_fetch_evidence_hash(
+    commit_qc: &iroha_data_model::consensus::Qc,
+    validator_checkpoint: &iroha_data_model::consensus::ValidatorSetCheckpoint,
+    stake_snapshot: Option<&stake_snapshot::CommitStakeSnapshot>,
+) -> CryptoHash {
+    let commit_qc_hash = CryptoHash::new(&commit_qc.encode());
+    let validator_checkpoint_hash = CryptoHash::new(&validator_checkpoint.encode());
+    let stake_snapshot_hash = stake_snapshot.map(|snapshot| CryptoHash::new(&snapshot.encode()));
+    let mut buf = Vec::new();
+    buf.extend_from_slice(commit_qc_hash.as_ref());
+    buf.extend_from_slice(validator_checkpoint_hash.as_ref());
+    push_optional_hash(&mut buf, stake_snapshot_hash);
+    CryptoHash::new(&buf)
+}
+
+fn certified_block_fetch_dedup_key(fetch: &message::CertifiedBlockFetch) -> BlockPayloadDedupKey {
+    match fetch {
+        message::CertifiedBlockFetch::Request(request) => {
+            BlockPayloadDedupKey::CertifiedBlockFetchRequest {
+                height: request.height,
+                view: request.view,
+                block_hash: request.block_hash,
+                requester_hash: CryptoHash::new(request.requester.encode()),
+            }
+        }
+        message::CertifiedBlockFetch::Response(response) => {
+            BlockPayloadDedupKey::CertifiedBlockFetchResponse {
+                height: response.height,
+                view: response.view,
+                block_hash: response.block.hash(),
+                evidence_hash: certified_block_fetch_evidence_hash(
+                    &response.commit_qc,
+                    &response.validator_checkpoint,
+                    response.stake_snapshot.as_ref(),
+                ),
+            }
+        }
+        message::CertifiedBlockFetch::Proof(proof) => {
+            BlockPayloadDedupKey::CertifiedBlockFetchProof {
+                height: proof.height,
+                view: proof.view,
+                block_hash: proof.block_hash,
+                evidence_hash: certified_block_fetch_evidence_hash(
+                    &proof.commit_qc,
+                    &proof.validator_checkpoint,
+                    proof.stake_snapshot.as_ref(),
+                ),
+            }
+        }
+        message::CertifiedBlockFetch::Body(body) => BlockPayloadDedupKey::CertifiedBlockFetchBody {
+            height: body.height,
+            view: body.view,
+            block_hash: body.block.hash(),
+        },
+    }
 }
 
 fn push_optional_hash(buf: &mut Vec<u8>, hash: Option<CryptoHash>) {
@@ -12317,6 +12877,7 @@ struct BlockPayloadDedupCache {
     rbc_deliver: DedupCache<BlockPayloadDedupKey>,
     block_sync_update: DedupCache<BlockPayloadDedupKey>,
     fetch_pending_block: DedupCache<BlockPayloadDedupKey>,
+    certified_block_fetch: DedupCache<BlockPayloadDedupKey>,
     rbc_chunk: DedupCache<BlockPayloadDedupKey>,
 }
 
@@ -12332,6 +12893,7 @@ impl BlockPayloadDedupCache {
             rbc_deliver: DedupCache::new(cap_per_kind, ttl),
             block_sync_update: DedupCache::new(cap_per_kind, ttl),
             fetch_pending_block: DedupCache::new(cap_per_kind, ttl),
+            certified_block_fetch: DedupCache::new(cap_per_kind, ttl),
             rbc_chunk: DedupCache::new(cap_per_kind, ttl),
         }
     }
@@ -12351,6 +12913,12 @@ impl BlockPayloadDedupCache {
             BlockPayloadDedupKey::FetchPendingBlock { .. } => {
                 self.fetch_pending_block.insert(key, now)
             }
+            BlockPayloadDedupKey::CertifiedBlockFetchRequest { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchResponse { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchProof { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchBody { .. } => {
+                self.certified_block_fetch.insert(key, now)
+            }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.insert(key, now),
         }
     }
@@ -12366,6 +12934,12 @@ impl BlockPayloadDedupCache {
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.remove(key),
             BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.remove(key),
             BlockPayloadDedupKey::FetchPendingBlock { .. } => self.fetch_pending_block.remove(key),
+            BlockPayloadDedupKey::CertifiedBlockFetchRequest { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchResponse { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchProof { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchBody { .. } => {
+                self.certified_block_fetch.remove(key)
+            }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.remove(key),
         }
     }
@@ -12386,6 +12960,12 @@ impl BlockPayloadDedupCache {
             BlockPayloadDedupKey::FetchPendingBlock { .. } => {
                 self.fetch_pending_block.contains(key)
             }
+            BlockPayloadDedupKey::CertifiedBlockFetchRequest { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchResponse { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchProof { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchBody { .. } => {
+                self.certified_block_fetch.contains(key)
+            }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.contains(key),
         }
     }
@@ -12401,6 +12981,7 @@ impl BlockPayloadDedupCache {
         self.rbc_deliver.clear();
         self.block_sync_update.clear();
         self.fetch_pending_block.clear();
+        self.certified_block_fetch.clear();
         self.rbc_chunk.clear();
     }
 
@@ -12415,6 +12996,7 @@ impl BlockPayloadDedupCache {
             + self.rbc_deliver.len()
             + self.block_sync_update.len()
             + self.fetch_pending_block.len()
+            + self.certified_block_fetch.len()
             + self.rbc_chunk.len()
     }
 
@@ -12430,6 +13012,12 @@ impl BlockPayloadDedupCache {
             BlockPayloadDedupKey::RbcDeliver { .. } => self.rbc_deliver.len(),
             BlockPayloadDedupKey::BlockSyncUpdate { .. } => self.block_sync_update.len(),
             BlockPayloadDedupKey::FetchPendingBlock { .. } => self.fetch_pending_block.len(),
+            BlockPayloadDedupKey::CertifiedBlockFetchRequest { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchResponse { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchProof { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchBody { .. } => {
+                self.certified_block_fetch.len()
+            }
             BlockPayloadDedupKey::RbcChunk { .. } => self.rbc_chunk.len(),
         }
     }
@@ -12821,6 +13409,12 @@ impl SumeragiHandle {
             }
             BlockPayloadDedupKey::FetchPendingBlock { .. } => {
                 status::DedupEvictionKind::FetchPendingBlock
+            }
+            BlockPayloadDedupKey::CertifiedBlockFetchRequest { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchResponse { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchProof { .. }
+            | BlockPayloadDedupKey::CertifiedBlockFetchBody { .. } => {
+                status::DedupEvictionKind::BlockBodyResponse
             }
             BlockPayloadDedupKey::RbcChunk { .. } => status::DedupEvictionKind::RbcChunk,
         };
@@ -13611,13 +14205,60 @@ impl SumeragiHandle {
                 }
                 accepted
             }
-            BlockMessage::CertifiedBlockFetch(fetch) => enqueue_with_mode(
-                &self.block,
-                InboundBlockMessage::new(BlockMessage::CertifiedBlockFetch(fetch), sender),
-                "CertifiedBlockFetch",
-                status::WorkerQueueKind::Blocks,
-                mode,
-            ),
+            BlockMessage::CertifiedBlockFetch(fetch) => {
+                let dedup_key = certified_block_fetch_dedup_key(&fetch);
+                let duplicate = !self.dedup_block_payload(dedup_key);
+                if duplicate {
+                    let (height, view, block_hash) = match &fetch {
+                        message::CertifiedBlockFetch::Request(request) => {
+                            (request.height, request.view, request.block_hash)
+                        }
+                        message::CertifiedBlockFetch::Response(response) => {
+                            (response.height, response.view, response.block.hash())
+                        }
+                        message::CertifiedBlockFetch::Proof(proof) => {
+                            (proof.height, proof.view, proof.block_hash)
+                        }
+                        message::CertifiedBlockFetch::Body(body) => {
+                            (body.height, body.view, body.block.hash())
+                        }
+                    };
+                    iroha_logger::debug!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        "dropping duplicate CertifiedBlockFetch from network"
+                    );
+                    return false;
+                }
+                let is_payload = matches!(
+                    fetch,
+                    message::CertifiedBlockFetch::Response(_)
+                        | message::CertifiedBlockFetch::Proof(_)
+                        | message::CertifiedBlockFetch::Body(_)
+                );
+                let queue = if is_payload {
+                    status::WorkerQueueKind::BlockPayload
+                } else {
+                    status::WorkerQueueKind::Blocks
+                };
+                let tx = if is_payload {
+                    &self.block_payload
+                } else {
+                    &self.block
+                };
+                let accepted = enqueue_with_mode(
+                    tx,
+                    InboundBlockMessage::new(BlockMessage::CertifiedBlockFetch(fetch), sender),
+                    "CertifiedBlockFetch",
+                    queue,
+                    mode,
+                );
+                if !accepted {
+                    self.release_block_payload_dedup(&dedup_key);
+                }
+                accepted
+            }
             other => enqueue_with_mode(
                 &self.block,
                 InboundBlockMessage::new(other, sender),
@@ -15166,6 +15807,7 @@ const BLOCK_RX_BACKLOG_DRAIN_CAP_MEDIUM: usize = 16;
 const BLOCK_RX_BACKLOG_DRAIN_CAP_LARGE: usize = 48;
 const BLOCK_RX_BACKLOG_DRAIN_CAP_HUGE: usize = 128;
 const BLOCK_BACKLOG_PAYLOAD_RBC_MIN_CAP: usize = 8;
+const URGENT_REPAIR_TICK_OVERTIME_BURST_CAP: usize = 8;
 // Keep the RBC session ingress chain together under parallel ingress so
 // INIT/chunk/READY/DELIVER repair work is not delayed behind a fresh vote/control burst.
 const RBC_PARALLEL_BATCH_LIMIT: usize = 4;
@@ -15572,21 +16214,34 @@ fn drain_mailbox<A: WorkerActor>(
             break;
         }
         let now = Instant::now();
+        let payload_turn = oldest_pending_non_vote_payload(now, mailbox, budgets, last_served);
+        let frontier_body_repair_turn =
+            oldest_pending_frontier_body_repair(now, mailbox, budgets, last_served);
+        let force_frontier_body_repair_turn =
+            actor.prioritize_frontier_body_repair() && frontier_body_repair_turn.is_some();
+        let urgent_repair_burst_used = stats
+            .block_payloads_handled
+            .saturating_add(stats.rbc_chunks_handled)
+            .saturating_add(stats.blocks_handled);
+        let extend_for_urgent_repair = matches!(phase, DrainPhase::PreTick)
+            && force_frontier_body_repair_turn
+            && urgent_repair_burst_used < URGENT_REPAIR_TICK_OVERTIME_BURST_CAP;
         if let Some(deadline) = tick_deadline {
-            if now >= deadline && (phase_progress || !matches!(phase, DrainPhase::PreTick)) {
+            if now >= deadline
+                && (phase_progress || !matches!(phase, DrainPhase::PreTick))
+                && !extend_for_urgent_repair
+            {
                 break;
             }
         }
         if now >= drain_budget_deadline {
-            let payload_pending =
-                oldest_pending_non_vote_payload(now, mailbox, budgets, last_served).is_some();
             let grant_overtime_turn = !overtime_non_vote_turn
                 && matches!(phase, DrainPhase::PreTick)
                 && drain_budget_is_time_limited
                 && stats.votes_handled > 0
                 && stats.block_payloads_handled == 0
                 && stats.rbc_chunks_handled == 0
-                && payload_pending;
+                && payload_turn.is_some();
             if grant_overtime_turn {
                 overtime_non_vote_turn = true;
             } else if !phase_progress && matches!(phase, DrainPhase::PreTick) {
@@ -15596,13 +16251,8 @@ fn drain_mailbox<A: WorkerActor>(
                 break;
             }
         }
-        let payload_turn = oldest_pending_non_vote_payload(now, mailbox, budgets, last_served);
-        let frontier_body_repair_turn =
-            oldest_pending_frontier_body_repair(now, mailbox, budgets, last_served);
         let votes_pending =
             budgets.remaining(PriorityTier::Votes) > 0 && mailbox.has_pending(PriorityTier::Votes);
-        let force_frontier_body_repair_turn =
-            actor.prioritize_frontier_body_repair() && frontier_body_repair_turn.is_some();
         let force_payload_turn = overtime_non_vote_turn
             && stats.rbc_chunks_handled == 0
             && stats.block_payloads_handled == 0

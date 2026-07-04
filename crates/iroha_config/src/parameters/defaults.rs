@@ -1208,6 +1208,16 @@ pub mod sorafs {
             pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
         }
 
+        /// Evidence-viewer audit-report scheduler defaults.
+        pub mod evidence_viewer_audits {
+            /// Enable config-backed SFM-4b3 evidence-viewer audit-report scheduling.
+            pub const ENABLED: bool = false;
+            /// Default evidence-viewer audit-report cycle width (seconds).
+            pub const CYCLE_SECONDS: u64 = 24 * 60 * 60;
+            /// Default delay after a cycle closes before publication (seconds).
+            pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
+        }
+
         /// Reserve lifecycle scheduler defaults.
         pub mod reserve_lifecycle {
             /// Enable config-backed SFM-6 reserve lifecycle advancement.

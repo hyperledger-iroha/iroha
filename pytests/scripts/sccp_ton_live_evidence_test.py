@@ -1346,6 +1346,64 @@ def test_live_ton_evidence_rejects_non_string_imported_metadata_without_stringif
             raise AssertionError(f"non-string TON live {field} metadata was accepted")
 
 
+def test_live_ton_offline_args_reject_non_string_copied_summary_metadata_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    fake = fake_ton_opener(module)
+    live = module.collect_live_evidence(
+        "https://toncenter.example",
+        verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+        opener=fake.opener,
+        timeout=3.0,
+    )
+    args = live_args(
+        module,
+        code_hash=fake.code_hash,
+        account_state_hash=fake.account_state_hash,
+    )
+    original_json_summary = module.evidence._json_summary
+
+    for path, expected_error in (
+        (
+            ("destination_binding_hash",),
+            "destination binding hash must be an exact non-empty string",
+        ),
+        (
+            ("route_allowlist_hash",),
+            "route allowlist hash must be an exact non-empty string",
+        ),
+        (
+            ("route_canary", "evidence_hash"),
+            "route canary evidence hash must be an exact non-empty string",
+        ),
+    ):
+
+        def malformed_json_summary(*summary_args, _path=path, **summary_kwargs):
+            summary = original_json_summary(*summary_args, **summary_kwargs)
+            target = summary
+            for key in _path[:-1]:
+                target = target[key]
+            target[_path[-1]] = HostileImportedScalar()
+            return summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module.evidence, "_json_summary", malformed_json_summary)
+            try:
+                module._summary(args, live)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_error
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(
+                    "TON offline args accepted hostile copied summary "
+                    f"{'.'.join(path)}"
+                )
+
+
 def test_live_ton_summary_rejects_hostile_expected_pins_without_hooks():
     module = load_live_module()
     fake = fake_ton_opener(module)

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_chaos_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: df845444d67f36e55734bd1d1d095fb4bad84badbdd0d5bfa7498ccdc9ef2068
+source_hash: ba82527b65acd7e2149b2a2d8721be000fd93eed9e13a830b1126de1836a5b1f
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
@@ -110,3 +110,9 @@ shell glue.
   - Postmortem requires verifying that automation improvements (e.g., adding synthetic probes) are tracked as action items.
 
 These additions complete the communication, governance, and TLS/ECH integration work for the chaos drill plan.
+
+metadata cannot be hidden behind a later probe failure. It also rejects
+symlinked or non-directory artifact roots, symlinked output-parent components,
+and symlinked/non-regular probe log, JSON report, or PagerDuty payload targets
+before launch, keeping drill evidence from being written through ambiguous
+filesystem aliases.

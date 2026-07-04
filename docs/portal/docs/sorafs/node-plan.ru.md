@@ -49,12 +49,13 @@ SF-3 поставляет первый исполняемый crate `sorafs-node
 
 ### C. Эндпоинты gateway
 
-| Эндпоинт | Поведение | Задачи |
-|---------|-----------|--------|
-| `POST /sorafs/pin` | Принимает `PinProposalV1`, валидирует манифесты, ставит ingestion в очередь, отвечает CID манифеста. | Валидировать профиль chunker, применять квоты, стримить данные через chunk store. |
-| `GET /sorafs/chunks/{cid}` + range query | Отдает байты чанка с заголовками `Content-Chunker`; соблюдает спецификацию range capability. | Использовать scheduler + бюджеты стрима (связать с SF-2d range capability). |
-| `POST /sorafs/por/sample` | Запускает PoR sampling для манифеста и возвращает proof bundle. | Переиспользовать sampling chunk store, отвечать Norito JSON payloads. |
-| `GET /sorafs/telemetry` | Сводки: емкость, успех PoR, счетчики ошибок fetch. | Предоставлять данные для дашбордов/операторов. |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 Рантайм-проводка направляет PoR взаимодействия через `sorafs_node::por`: трекер фиксирует каждый `PorChallengeV1`, `PorProofV1` и `AuditVerdictV1`, чтобы метрики `CapacityMeter` отражали вердикты governance без отдельной логики Torii.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -107,7 +108,7 @@ SF-3 поставляет первый исполняемый crate `sorafs-node
 ## Критерии завершения вехи
 
 - `cargo run -p sorafs_node --example pin_fetch` работает на локальных fixtures.
-- Torii собирается с `--features sorafs-storage` и проходит интеграционные тесты.
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - Документация ([гайд по хранилищу узла](node-storage.md)) обновлена с default конфигурацией + примерами CLI; runbook для операторов доступен.
 - Телеметрия видна в staging dashboard; алерты настроены на насыщение емкости и PoR ошибки.
 
@@ -115,4 +116,4 @@ SF-3 поставляет первый исполняемый crate `sorafs-node
 
 - Обновить [справочник по хранилищу узла](node-storage.md) с дефолтами конфигурации, использованием CLI и шагами troubleshooting.
 - Держать [runbook операций узла](node-operations.md) в соответствии с реализацией по мере эволюции SF-3.
-- Опубликовать ссылки на API `/sorafs/*` в портале разработчиков и связать с OpenAPI manifest, когда Torii handlers появятся.
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

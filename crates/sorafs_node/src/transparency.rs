@@ -5,6 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::moderation::ModerationEvidenceViewerAuditReport;
 use crate::reserve::{
     ReserveAppealRecord, ReserveAppealStatus, ReserveLifecycleEvent, ReserveLifecyclePolicyRecord,
     ReserveMovementCustodyStatus, ReserveMovementKind, ReserveMovementRecord,
@@ -175,6 +176,12 @@ pub enum TransparencySourceEntryAdapterError {
     /// Reserve lifecycle policy source data is malformed.
     #[error("invalid reserve lifecycle policy source: {message}")]
     InvalidReserveLifecyclePolicy {
+        /// Validation detail.
+        message: String,
+    },
+    /// Evidence-viewer audit report source data is malformed.
+    #[error("invalid evidence viewer audit report source: {message}")]
+    InvalidEvidenceViewerAuditReport {
         /// Validation detail.
         message: String,
     },
@@ -437,6 +444,137 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         payload_digest,
         summary_digest: source_summary_digest("appeal_finance_settlement_receipt", &metadata),
         policy_digest: Some(policy_digest),
+        evidence_uris: Vec::new(),
+        metadata,
+    };
+    validate_adapter_source_entry(entry)
+}
+
+/// Derive a transparency source entry from a payload-free evidence-viewer audit report.
+///
+/// # Errors
+///
+/// Returns [`TransparencySourceEntryAdapterError`] when report validation,
+/// canonical encoding, or source-entry derivation fails.
+pub fn moderation_evidence_viewer_audit_report_source_entry(
+    report: &ModerationEvidenceViewerAuditReport,
+) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
+    report.validate().map_err(|err| {
+        TransparencySourceEntryAdapterError::InvalidEvidenceViewerAuditReport { message: err }
+    })?;
+    let payload_digest = canonical_payload_digest("evidence_viewer_audit_report", report)?;
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        "access_event_count".to_string(),
+        report.access_event_count.to_string(),
+    );
+    for kind_count in &report.access_kind_counts {
+        metadata.insert(
+            format!("access_kind_{}_count", kind_count.kind),
+            kind_count.count.to_string(),
+        );
+    }
+    metadata.insert(
+        "access_event_digest_set_digest_hex".to_string(),
+        hex::encode(report.access_event_digest_set_digest),
+    );
+    metadata.insert(
+        "attestation_digest_set_digest_hex".to_string(),
+        hex::encode(report.attestation_digest_set_digest),
+    );
+    metadata.insert(
+        "attested_session_count".to_string(),
+        report.attested_session_count.to_string(),
+    );
+    metadata.insert(
+        "evidence_digest_set_digest_hex".to_string(),
+        hex::encode(report.evidence_digest_set_digest),
+    );
+    if let Some(first_event_at_unix_ms) = report.first_event_at_unix_ms {
+        metadata.insert(
+            "first_event_at_unix_ms".to_string(),
+            first_event_at_unix_ms.to_string(),
+        );
+    }
+    metadata.insert(
+        "generated_at_unix".to_string(),
+        report.generated_at_unix.to_string(),
+    );
+    if let Some(last_event_at_unix_ms) = report.last_event_at_unix_ms {
+        metadata.insert(
+            "last_event_at_unix_ms".to_string(),
+            last_event_at_unix_ms.to_string(),
+        );
+    }
+    metadata.insert(
+        "legal_hold_bound_session_count".to_string(),
+        report.legal_hold_bound_session_count.to_string(),
+    );
+    metadata.insert(
+        "logged_session_count".to_string(),
+        report.logged_session_count.to_string(),
+    );
+    metadata.insert("payloads_included".to_string(), "false".to_string());
+    metadata.insert(
+        "report_digest_hex".to_string(),
+        hex::encode(report.report_digest),
+    );
+    metadata.insert("report_scope".to_string(), report.report_scope.clone());
+    metadata.insert(
+        "request_digest_set_digest_hex".to_string(),
+        hex::encode(report.request_digest_set_digest),
+    );
+    metadata.insert("response_bodies_included".to_string(), "false".to_string());
+    metadata.insert(
+        "session_count".to_string(),
+        report.session_count.to_string(),
+    );
+    metadata.insert(
+        "session_manifest_digest_set_digest_hex".to_string(),
+        hex::encode(report.session_manifest_digest_set_digest),
+    );
+    metadata.insert("session_tokens_included".to_string(), "false".to_string());
+    metadata.insert("signed_urls_included".to_string(), "false".to_string());
+    metadata.insert(
+        "unique_viewer_role_count".to_string(),
+        report.unique_viewer_role_count.to_string(),
+    );
+    metadata.insert("viewer_accounts_included".to_string(), "false".to_string());
+    metadata.insert(
+        "watermark_metadata_digest_set_digest_hex".to_string(),
+        hex::encode(report.watermark_metadata_digest_set_digest),
+    );
+    metadata.insert(
+        "watermarked_session_count".to_string(),
+        report.watermarked_session_count.to_string(),
+    );
+    metadata.insert(
+        "window_end_unix".to_string(),
+        report.window_end_unix.to_string(),
+    );
+    metadata.insert(
+        "window_start_unix".to_string(),
+        report.window_start_unix.to_string(),
+    );
+    let metadata = metadata_vec(metadata);
+    let subject = format!(
+        "evidence-viewer-audit:{}:{}-{}",
+        report.report_scope, report.window_start_unix, report.window_end_unix
+    );
+    let occurred_at_unix = report.window_end_unix.saturating_sub(1);
+    let entry = TransparencyLedgerSourceEntry {
+        event_id: format!("evidence-viewer-audit:{}", hex::encode(report.report_id)),
+        occurred_at_unix,
+        kind: ModerationLedgerEntryKindV1::EvidenceAccess,
+        subject: subject.clone(),
+        subject_digest: source_subject_digest(
+            "evidence_viewer_audit_report",
+            &subject,
+            &payload_digest,
+        ),
+        payload_digest,
+        summary_digest: source_summary_digest("evidence_viewer_audit_report", &metadata),
+        policy_digest: report.policy_digest,
         evidence_uris: Vec::new(),
         metadata,
     };
@@ -2289,6 +2427,7 @@ mod tests {
             juror_id: None,
             committed_count: 3,
             revealed_count: 3,
+            challenge_count: 0,
             tally: Some(SoraFsModerationBallotGovernanceTallyV1 {
                 case_id: "case-42".to_string(),
                 round_id: "round-1".to_string(),
@@ -2304,6 +2443,7 @@ mod tests {
                 contested: false,
                 tallied_at_unix_ms: 1_800_000_030_000,
             }),
+            challenge: None,
         }
     }
 

@@ -412,15 +412,29 @@ def test_runner_preflight_sanitizes_malformed_non_path_targets(
 def test_plan_rendered_path_safety_rejects_unsafe_components() -> None:
     assert plan_rendered_path_is_safe(Path("artifacts/sorafs/digest-summary.json"))
     assert plan_rendered_path_is_safe(Path("artifacts/sorafs/gateway_load_digest.json"))
+    assert plan_rendered_path_is_safe(
+        Path("artifacts/sorafs/test_sensitive_response_body_f0/summary.json")
+    )
 
     for path in (
         Path("artifacts") / "private_key_output" / "summary.json",
         Path("artifacts") / "bearer_token_summary.json",
+        Path("artifacts") / "response_body" / "summary.json",
+        Path("artifacts") / "%70rivate_key_output" / "summary.json",
+        Path("artifacts") / "%2570rivate_key_output" / "summary.json",
+        Path("artifacts") / "private&#95;key_output" / "summary.json",
+        Path("artifacts") / "private%26%2395%3Bkey_output" / "summary.json",
         Path("artifacts") / "nested" / ".." / "summary.json",
+        Path("artifacts") / "%2e%2e" / "summary.json",
+        Path("artifacts") / "bad%2Fsummary.json",
+        Path("artifacts") / "bad&#47;summary.json",
         Path("."),
         Path("artifacts") / "bad\\summary.json",
         Path("artifacts") / "bad\nsummary.json",
         Path("C:/sorafs/summary.json"),
+        Path("artifacts") / "C%3A" / "summary.json",
+        Path("artifacts") / "C&#58;" / "summary.json",
+        Path("https://torii.example/summary.json"),
     ):
         assert not plan_rendered_path_is_safe(path)
 
@@ -558,8 +572,48 @@ def test_runner_url_arg_safety_rejects_secret_bearing_urls() -> None:
         "https://torii.example/path?bearer_token=secret",
         "https://torii.example/path#secret",
         "https://private-key.example",
+        "https://api-token.example",
+        "https://auth-token.example",
+        "https://id-token.example",
+        "https://jwt.example",
+        "https://oauth-token.example",
+        "https://refresh-token.example",
+        "https://session-token.example",
+        "https://set-cookie.example",
+        "https://x-api-token.example",
+        "https://password.example",
+        "https://%70rivate-key.example",
+        "https://private&#45;key.example",
+        "https://private%26%2345%3Bkey.example",
+        "https://%2e%2e.example",
+        "https://C%3A.example",
+        "https://C&#58;.example",
+        "https://http%3A.example",
+        "https://http&#58;.example",
         "https://torii.example/private_key/hook",
+        "https://torii.example/api%2Dtoken/hook",
+        "https://torii.example/api&#45;token/hook",
+        "https://torii.example/auth%255Ftoken/hook",
+        "https://torii.example/id-token/hook",
+        "https://torii.example/jwt/hook",
+        "https://torii.example/oauth-token/hook",
+        "https://torii.example/refresh%2Dtoken/hook",
+        "https://torii.example/session-token/hook",
+        "https://torii.example/set-cookie/hook",
+        "https://torii.example/x-api-token/hook",
+        "https://torii.example/password/hook",
         "https://torii.example/bearer%5Ftoken/hook",
+        "https://torii.example/bearer%255Ftoken/hook",
+        "https://torii.example/bearer&#95;token/hook",
+        "https://torii.example/bearer%26%2395%3Btoken/hook",
+        "https://torii.example/%2e%2e/admin",
+        "https://torii.example/%252e%252e/admin",
+        "https://torii.example/bad%2Fpath",
+        "https://torii.example/bad&#47;path",
+        "https://torii.example/C%3A/summary",
+        "https://torii.example/C&#58;/summary",
+        "https://torii.example/http%3A/summary",
+        "https://torii.example/http&#58;/summary",
         "https://torii.example/bad\npath",
         "ftp://torii.example",
         "torii.example",
@@ -613,10 +667,48 @@ def test_runner_passthrough_arg_safety_rejects_secret_like_arguments() -> None:
 
     for value in (
         "--private-key",
+        "--%70rivate-key",
+        "--private&#45;key",
+        "--api-token",
+        "--auth-token=runtime-secret",
+        "--auth&#45;token=runtime-secret",
         "--bearer-token=runtime-secret",
+        "--id-token",
+        "--jwt",
+        "--oauth-token=runtime-secret",
+        "--refresh-token=runtime-secret",
+        "--session-token=runtime-secret",
+        "--set-cookie",
+        "--x-api-token",
+        "--config=%2Fruntime%2Fprivate_key%2Fclient.toml",
+        "--config=%2Fruntime%2Fapi-token%2Fclient.toml",
+        "--config=%2Fruntime%2Frefresh-token%2Fclient.toml",
+        "--config=%2Fruntime%2Fprivate%26%2395%3Bkey%2Fclient.toml",
         "authorization=Bearer token",
+        "api_token=runtime-secret",
+        "auth-token=runtime-secret",
+        "id_token=runtime-secret",
+        "jwt=runtime-secret",
+        "oauth_token=runtime-secret",
+        "refresh%5Ftoken",
+        "session%5Ftoken",
+        "set-cookie=runtime-secret",
+        "private%5Fkey",
+        "private&#95;key",
+        "private%26%2395%3Bkey",
         "/runtime/private_key/client.toml",
+        "/runtime/api-token/client.toml",
+        "/runtime/id-token/client.toml",
+        "/runtime/oauth_token/client.toml",
+        "/runtime/refresh-token/client.toml",
+        "/runtime/session_token/client.toml",
+        "/runtime/set_cookie/client.toml",
+        "/runtime/password/client.toml",
+        "/runtime/%70rivate_key/client.toml",
+        "/runtime/private&#95;key/client.toml",
         "https://user:private_key@torii.example",
+        "https%3A%2F%2Fuser%3Aprivate_key%40torii.example",
+        "https%3A%2F%2Fuser%3Aprivate%26%2395%3Bkey%40torii.example",
         "bad\narg",
     ):
         assert not runner_passthrough_arg_is_plan_safe(value)
@@ -1819,9 +1911,26 @@ def test_validate_command_plan_step_shapes_sanitizes_malformed_artifact_labels()
     ]
 
 
+def test_validate_command_plan_step_shapes_rejects_secret_non_path_artifact_without_leaking() -> None:
+    errors = validate_command_plan_step_shapes(
+        [
+            argparse.Namespace(
+                label="bad_artifact",
+                artifact="private&#95;key-summary.json",
+                command=["true"],
+            )
+        ]
+    )
+
+    assert errors == [PLAN_RENDERED_PATH_ERROR]
+    rendered = "\n".join(errors)
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
+
+
 def test_planned_artifact_same_as_reserved_output_fails(tmp_path: Path) -> None:
     out_dir = tmp_path / "evidence"
-    artifact = tmp_path / "nested" / ".." / "evidence"
+    artifact = out_dir
 
     errors = validate_command_plan_artifacts(
         [Step("gate", artifact, ["true"])],
@@ -1832,6 +1941,36 @@ def test_planned_artifact_same_as_reserved_output_fails(tmp_path: Path) -> None:
         f"gate artifact `{artifact}` must not be the same path as "
         f"reserved output `{out_dir}`"
     ]
+
+
+def test_validate_command_plan_artifacts_rejects_unsafe_artifact_without_leaking(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "private&#95;key-artifact.json"
+
+    errors = validate_command_plan_artifacts([Step("gate", artifact, ["true"])])
+
+    assert errors == [PLAN_RENDERED_PATH_ERROR]
+    rendered = "\n".join(errors)
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
+
+
+def test_validate_command_plan_artifacts_rejects_unsafe_reserved_output_without_leaking(
+    tmp_path: Path,
+) -> None:
+    reserved = tmp_path / "private%26%2395%3Bkey-output"
+
+    errors = validate_command_plan_artifacts(
+        [Step("gate", tmp_path / "artifact.json", ["true"])],
+        reserved_output_paths=(reserved,),
+    )
+
+    assert errors == [PLAN_RENDERED_PATH_ERROR]
+    rendered = "\n".join(errors)
+    assert "private%26%2395%3Bkey" not in rendered
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
 
 
 def test_validate_command_plan_artifacts_rejects_malformed_reserved_outputs(
@@ -1861,7 +2000,7 @@ def test_validate_command_plan_artifacts_rejects_duplicate_reserved_outputs(
     tmp_path: Path,
 ) -> None:
     out_dir = tmp_path / "out"
-    alias = tmp_path / "nested" / ".." / "out"
+    alias = out_dir
 
     errors = validate_command_plan_artifacts(
         [Step("gate", tmp_path / "artifact.json", ["true"])],
@@ -3116,12 +3255,12 @@ def test_run_command_plan_sanitizes_output_creation_failure(
     capsys,
     monkeypatch,
 ) -> None:
-    out_dir = tmp_path / "bad\nout"
+    out_dir = tmp_path / "out"
     original_mkdir = Path.mkdir
 
     def mkdir(path: Path, *args, **kwargs):
         if path == out_dir:
-            raise OSError(f"mkdir denied for {path}")
+            raise OSError(f"mkdir denied for {path}\nsecret")
         return original_mkdir(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "mkdir", mkdir)
@@ -3132,7 +3271,7 @@ def test_run_command_plan_sanitizes_output_creation_failure(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert (
-        "ERROR: failed to create --out-dir `<non-canonical-path>`: "
+        f"ERROR: failed to create --out-dir `{out_dir}`: "
         "<non-canonical-error>\n"
     ) == captured.err
 
@@ -3269,6 +3408,23 @@ def test_run_command_plan_rejects_preexisting_artifact_before_create(
     assert not launched.exists()
     captured = capsys.readouterr()
     assert f"gate artifact `{artifact}` must not already exist" in captured.err
+
+
+def test_run_command_plan_rejects_unsafe_artifact_before_create_without_leaking(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    out_dir = tmp_path / "out"
+    artifact = tmp_path / "private&#95;key-artifact.json"
+
+    exit_code = run_command_plan([Step("gate", artifact, ["true"])], out_dir)
+
+    assert exit_code == 1
+    assert not out_dir.exists()
+    captured = capsys.readouterr()
+    assert PLAN_RENDERED_PATH_ERROR in captured.err
+    assert "private&#95;key" not in captured.err
+    assert "private_key" not in captured.err
 
 
 def test_run_command_plan_rejects_output_dir_symlink_before_launch(

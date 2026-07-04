@@ -21,6 +21,7 @@ pub struct StorageConfig {
     stream_token_signing_key_path: Option<PathBuf>,
     orderbook: OrderbookAdmissionPolicy,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
+    evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
     reserve_lifecycle_schedule: Option<ReserveLifecycleScheduleConfig>,
     governance_dir: Option<PathBuf>,
     governance_dag_publisher_peer_id: Option<String>,
@@ -107,6 +108,12 @@ impl StorageConfig {
         self.privacy_aggregate_schedule
     }
 
+    /// Optional config-backed evidence-viewer audit-report due-cycle scheduler.
+    #[must_use]
+    pub fn evidence_viewer_audit_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
+        self.evidence_viewer_audit_schedule
+    }
+
     /// Optional config-backed reserve lifecycle advancement scheduler.
     #[must_use]
     pub fn reserve_lifecycle_schedule(&self) -> Option<ReserveLifecycleScheduleConfig> {
@@ -177,6 +184,7 @@ impl StorageConfig {
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
             orderbook: OrderbookAdmissionPolicy::from(storage.orderbook),
             privacy_aggregate_schedule: storage.privacy_aggregates.into_schedule_config(),
+            evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
             reserve_lifecycle_schedule: storage.reserve_lifecycle.into_schedule_config(),
             governance_dir: storage.governance_dag_dir.clone(),
             governance_dag_publisher_peer_id: storage.governance_dag_publisher_peer_id.clone(),
@@ -282,6 +290,16 @@ impl StorageConfigBuilder {
         schedule: Option<PrivacyAggregateScheduleConfig>,
     ) -> Self {
         self.inner.privacy_aggregate_schedule = schedule;
+        self
+    }
+
+    /// Override the optional config-backed evidence-viewer audit-report scheduler.
+    #[must_use]
+    pub fn evidence_viewer_audit_schedule(
+        mut self,
+        schedule: Option<PrivacyAggregateScheduleConfig>,
+    ) -> Self {
+        self.inner.evidence_viewer_audit_schedule = schedule;
         self
     }
 
@@ -434,6 +452,18 @@ trait PrivacyAggregateScheduleConfigExt {
 }
 
 impl PrivacyAggregateScheduleConfigExt for actual::SorafsPrivacyAggregateSchedule {
+    fn into_schedule_config(self) -> Option<PrivacyAggregateScheduleConfig> {
+        if !self.enabled {
+            return None;
+        }
+        Some(PrivacyAggregateScheduleConfig {
+            cycle_seconds: self.cycle_seconds.max(1),
+            publish_delay_seconds: self.publish_delay_seconds,
+        })
+    }
+}
+
+impl PrivacyAggregateScheduleConfigExt for actual::SorafsEvidenceViewerAuditSchedule {
     fn into_schedule_config(self) -> Option<PrivacyAggregateScheduleConfig> {
         if !self.enabled {
             return None;
@@ -938,6 +968,11 @@ mod tests {
             cycle_seconds: 12,
             publish_delay_seconds: 3,
         };
+        actual.evidence_viewer_audits = actual::SorafsEvidenceViewerAuditSchedule {
+            enabled: true,
+            cycle_seconds: 24,
+            publish_delay_seconds: 6,
+        };
         actual.reserve_lifecycle = actual::SorafsReserveLifecycleSchedule {
             enabled: true,
             interval_seconds: 30,
@@ -977,6 +1012,13 @@ mod tests {
             })
         );
         assert_eq!(
+            cfg.evidence_viewer_audit_schedule(),
+            Some(PrivacyAggregateScheduleConfig {
+                cycle_seconds: 24,
+                publish_delay_seconds: 6,
+            })
+        );
+        assert_eq!(
             cfg.reserve_lifecycle_schedule(),
             Some(ReserveLifecycleScheduleConfig::new(30, 7))
         );
@@ -1001,6 +1043,19 @@ mod tests {
 
         let cfg = StorageConfig::from(&actual);
         assert_eq!(cfg.privacy_aggregate_schedule(), None);
+    }
+
+    #[test]
+    fn evidence_viewer_audit_schedule_is_none_when_disabled() {
+        let mut actual = actual::SorafsStorage::default();
+        actual.evidence_viewer_audits = actual::SorafsEvidenceViewerAuditSchedule {
+            enabled: false,
+            cycle_seconds: 0,
+            publish_delay_seconds: 5,
+        };
+
+        let cfg = StorageConfig::from(&actual);
+        assert_eq!(cfg.evidence_viewer_audit_schedule(), None);
     }
 
     #[test]

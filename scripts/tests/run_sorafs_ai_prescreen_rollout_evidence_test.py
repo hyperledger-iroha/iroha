@@ -161,6 +161,24 @@ def test_dry_run_prints_complete_collection_plan(tmp_path: Path, capsys) -> None
             "required_payload_fields"
         ]
     )
+    assert (
+        "manifest_path"
+        in plan["evidence_contract"]["notification_transport"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "bundle_metadata_bytes"
+        in plan["evidence_contract"]["commit_reveal_executor"][
+            "required_payload_fields"
+        ]
+    )
+    assert (
+        "bundle_metadata_blake3"
+        in plan["evidence_contract"]["commit_reveal_executor"][
+            "required_payload_fields"
+        ]
+    )
     assert "config_source" in plan["evidence_contract"]["governance_dag"]["required_payload_fields"]
 
 
@@ -457,6 +475,30 @@ def test_service_url_rejects_secret_bearing_url_without_leaking(
     assert "private_key" not in captured.err
     assert "token=secret" not in captured.err
     assert captured.out == ""
+
+
+def test_service_url_rejects_encoded_host_tokens_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    unsafe_urls = (
+        "https://C%3A.notifications.example/hook",
+        "https://http%3A.notifications.example/hook",
+    )
+
+    for index, unsafe_url in enumerate(unsafe_urls):
+        case_dir = tmp_path / f"url-case-{index}"
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        args[args.index("--notification-webhook-url") + 1] = unsafe_url
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert "SoraFS runner URL arguments must not contain" in captured.err
+        assert unsafe_url not in captured.err
+        assert "C%3A" not in captured.err
+        assert "http%3A" not in captured.err
+        assert captured.out == ""
 
 
 def test_iroha_arg_rejects_secret_bearing_value_without_leaking(

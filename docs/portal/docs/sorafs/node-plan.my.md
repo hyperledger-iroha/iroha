@@ -47,12 +47,13 @@ SF-3 သည် Iroha/Torii လုပ်ငန်းစဉ်ကို SoraFS သ
 
 ### C. Gateway Endpoints
 
-| အဆုံးမှတ် | အနေအထိုင် | အလုပ်များ |
-|----------|-----------|------|
-| `POST /sorafs/pin` | `PinProposalV1` ကိုလက်ခံပါ၊ မန်နီးဖက်စ်များကိုအတည်ပြုပါ၊ တန်းစီခြင်းကိုထည့်သွင်းပါ၊ manifest CID ဖြင့်တုံ့ပြန်ပါ။ | အတုံးအခဲပရိုဖိုင်ကို အတည်ပြုပါ၊ ခွဲတမ်းကို တွန်းအားပေးပါ၊ အတုံးလိုက်စတိုးမှတစ်ဆင့် ဒေတာစီးကြောင်း။ |
-| `GET /sorafs/chunks/{cid}` + အပိုင်းအခြား မေးမြန်းမှု | `Content-Chunker` ခေါင်းစီးများဖြင့် အတွဲလိုက် ဘိုက်များကို ထမ်းဆောင်ပါ။ အကွာအဝေး စွမ်းဆောင်ရည် spec ကို လေးစားပါ။ | အချိန်ဇယားဆွဲသူ + ​​ထုတ်လွှင့်မှုဘတ်ဂျက်များကို သုံးပါ (SF-2d အကွာအဝေးစွမ်းရည်နှင့် ချိတ်ဆက်ပါ)။ |
-| `POST /sorafs/por/sample` | ထင်ရှားသော သက်သေအတွဲအတွက် PoR နမူနာကို လုပ်ဆောင်ပြီး ပြန်ပေးသည့် အထောက်အထားအတွဲ။ | စတိုးဆိုင်နမူနာကို ပြန်သုံးပါ၊ Norito JSON ပေးချေမှုများဖြင့် တုံ့ပြန်ပါ။ |
-| `GET /sorafs/telemetry` | အနှစ်ချုပ်များ- စွမ်းဆောင်ရည်၊ PoR အောင်မြင်မှု၊ ရယူမှု အမှားအယွင်း အရေအတွက်။ | ဒက်ရှ်ဘုတ်များ/အော်ပရေတာများအတွက် ဒေတာပေးပါ။ |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 Runtime ပိုက်လိုင်းများ PoR အပြန်အလှန်တုံ့ပြန်မှုများ `sorafs_node::por`- ခြေရာခံကိရိယာသည် `PorChallengeV1`၊ `PorProofV1` နှင့် `AuditVerdictV1` ဖြစ်သောကြောင့် `CapacityMeter` စီရင်ချက်သည် 8000100 အုပ်ချုပ်မှုမရှိဘဲ 1800000059X မက်ထရစ်များကို ထင်ဟပ်စေပါသည်။ ယုတ္တိဗေဒ။ 【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ Runtime ပိုက်လိုင်းများ PoR အပြန်အလ�
 ## Milestone Exit သတ်မှတ်ချက်
 
 - `cargo run -p sorafs_node --example pin_fetch` သည် ပြည်တွင်းပွဲများကို ဆန့်ကျင်သည်။  
-- Torii သည် `--features sorafs-storage` ဖြင့် တည်ဆောက်ပြီး ပေါင်းစပ်စစ်ဆေးမှုများကို အောင်မြင်သည်။  
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - စာရွက်စာတမ်းများ ([node သိုလှောင်မှုလမ်းညွှန်](node-storage.md)) ဖွဲ့စည်းမှုပုံသေပုံသေများ + CLI နမူနာများဖြင့် အပ်ဒိတ်လုပ်ထားသည်။ အော်ပရေတာ runbook ရနိုင်သည်။  
 - စံပြဒိုင်ခွက်များတွင် Telemetry ကိုမြင်နိုင်သည်; စွမ်းဆောင်ရည်ပြည့်ဝမှုနှင့် PoR ချို့ယွင်းမှုများအတွက် ပြင်ဆင်သတ်မှတ်ထားသော သတိပေးချက်များ။
 
@@ -116,4 +117,4 @@ Runtime ပိုက်လိုင်းများ PoR အပြန်အလ�
 
 - [node storage reference](node-storage.md) ကို ဖွဲ့စည်းမှုပုံသေများ၊ CLI အသုံးပြုမှုနှင့် ပြဿနာဖြေရှင်းခြင်းအဆင့်များဖြင့် အပ်ဒိတ်လုပ်ပါ။  
 - [node operations runbook](node-operations.md) ကို SF-3 တိုးတက်ပြောင်းလဲလာသည်နှင့်အမျှ အကောင်အထည်ဖော်မှုနှင့်အညီ ထားရှိပါ။  
-- developer portal အတွင်းရှိ `/sorafs/*` အတွက် အဆုံးမှတ်များအတွက် API ကိုးကားချက်များကို ထုတ်ဝေပြီး OpenAPI တွင် တစ်ကြိမ် Torii ကိုင်တွယ်သူများ ရောက်သည်နှင့် ပေါ်လာသည်။
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

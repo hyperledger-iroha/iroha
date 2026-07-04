@@ -58,6 +58,116 @@ abs_path() {
   fi
 }
 
+abs_output_path() {
+  local input="$1"
+  if [[ "$input" = /* ]]; then
+    printf '%s\n' "$input"
+  else
+    printf '%s/%s\n' "$(pwd -P)" "$input"
+  fi
+}
+
+reject_symlinked_output_parent() {
+  local label="$1"
+  local target="$2"
+  local parent
+  parent="$(dirname "$target")"
+  local current="/"
+  local rest="${parent#/}"
+  local component
+  IFS='/' read -r -a components <<< "$rest"
+  for component in "${components[@]}"; do
+    [[ -z "$component" || "$component" == "." ]] && continue
+    if [[ "$component" == ".." ]]; then
+      echo "error: ${label} parent must not contain parent-directory segments" >&2
+      exit 1
+    fi
+    if [[ "$current" == "/" ]]; then
+      current="/${component}"
+    else
+      current="${current}/${component}"
+    fi
+    if [[ -L "$current" ]]; then
+      echo "error: ${label} parent must not be a symlink: ${current}" >&2
+      exit 1
+    fi
+    if [[ -e "$current" && ! -d "$current" ]]; then
+      echo "error: ${label} parent component must be a directory: ${current}" >&2
+      exit 1
+    fi
+    if [[ ! -e "$current" ]]; then
+      break
+    fi
+  done
+}
+
+require_option_value() {
+  local option="$1"
+  local value="${2-}"
+  if [[ -z "$value" || "$value" == --* ]]; then
+    echo "error: ${option} requires a value" >&2
+    exit 1
+  fi
+}
+
+validate_output_file_path() {
+  local label="$1"
+  local target="$2"
+  if [[ -z "$target" ]]; then
+    echo "error: ${label} path must not be empty" >&2
+    exit 1
+  fi
+  if [[ -L "$target" ]]; then
+    echo "error: ${label} must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  if [[ -e "$target" && ! -f "$target" ]]; then
+    echo "error: ${label} must be a regular file path: ${target}" >&2
+    exit 1
+  fi
+  reject_symlinked_output_parent "$label" "$target"
+}
+
+prepare_output_file_path() {
+  local label="$1"
+  local target="$2"
+  validate_output_file_path "$label" "$target"
+  mkdir -p "$(dirname "$target")"
+  validate_output_file_path "$label" "$target"
+}
+
+validate_existing_file_path() {
+  local label="$1"
+  local target="$2"
+  if [[ -z "$target" ]]; then
+    echo "error: ${label} path must not be empty" >&2
+    exit 1
+  fi
+  if [[ -L "$target" ]]; then
+    echo "error: ${label} must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  reject_symlinked_output_parent "$label" "$target"
+  if [[ ! -e "$target" ]]; then
+    echo "error: ${label} not found at $target" >&2
+    exit 1
+  fi
+  if [[ ! -f "$target" ]]; then
+    echo "error: ${label} must be a regular file: $target" >&2
+    exit 1
+  fi
+}
+
+validate_existing_executable_file_path() {
+  local label="$1"
+  local target="$2"
+  validate_existing_file_path "$label" "$target"
+  if [[ ! -x "$target" ]]; then
+    echo "error: ${label} not executable at $target" >&2
+    exit 1
+  fi
+}
+
 workspace="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cli_path=""
 manifest_path=""
@@ -78,66 +188,82 @@ config_path=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --workspace)
+      require_option_value "$1" "${2-}"
       workspace="$(abs_path "$2")"
       shift 2
       ;;
     --cli)
+      require_option_value "$1" "${2-}"
       cli_path="$(abs_path "$2")"
       shift 2
       ;;
     --config)
+      require_option_value "$1" "${2-}"
       config_path="$(abs_path "$2")"
       shift 2
       ;;
     --manifest)
+      require_option_value "$1" "${2-}"
       manifest_path="$(abs_path "$2")"
       shift 2
       ;;
     --chunk-plan)
+      require_option_value "$1" "${2-}"
       chunk_plan_path="$(abs_path "$2")"
       shift 2
       ;;
     --chunk-summary)
+      require_option_value "$1" "${2-}"
       chunk_summary_path="$(abs_path "$2")"
       shift 2
       ;;
     --chunk-digest-sha3)
+      require_option_value "$1" "${2-}"
       chunk_digest_hex="$2"
       shift 2
       ;;
     --bundle-out)
+      require_option_value "$1" "${2-}"
       bundle_out="$(abs_path "$2")"
       shift 2
       ;;
     --signature-out)
+      require_option_value "$1" "${2-}"
       signature_out="$(abs_path "$2")"
       shift 2
       ;;
     --expect-token-hash)
+      require_option_value "$1" "${2-}"
       expect_token_hash="$2"
       shift 2
       ;;
     --identity-token)
+      require_option_value "$1" "${2-}"
       identity_token_inline="$2"
       shift 2
       ;;
     --identity-token-env)
+      require_option_value "$1" "${2-}"
       identity_token_env="$2"
       shift 2
       ;;
     --identity-token-file)
+      require_option_value "$1" "${2-}"
       identity_token_file="$(abs_path "$2")"
       shift 2
       ;;
     --identity-token-provider)
+      require_option_value "$1" "${2-}"
       identity_token_provider="$2"
       shift 2
       ;;
     --identity-token-audience)
+      require_option_value "$1" "${2-}"
       identity_token_audience="$2"
       shift 2
       ;;
     --issued-at)
+      require_option_value "$1" "${2-}"
       issued_at_override="$2"
       shift 2
       ;;
@@ -153,11 +279,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$manifest_path" ]]; then
-  manifest_path=""
+if [[ -n "$manifest_path" ]]; then
+  manifest_path="$(abs_path "$manifest_path")"
 fi
-
-manifest_path="$(abs_path "$manifest_path")"
 cli_manifest=""
 cli_chunk_plan=""
 cli_chunk_summary=""
@@ -203,26 +327,21 @@ fi
 
 # Provide fixture defaults if still unset
 if [[ -z "$manifest_path" ]]; then
-  manifest_path="$(abs_path "fixtures/sorafs_manifest/ci_sample/manifest.to")"
+  manifest_path="${workspace}/fixtures/sorafs_manifest/ci_sample/manifest.to"
 fi
-[[ -z "$chunk_plan_path" ]] && chunk_plan_path="$(abs_path "fixtures/sorafs_manifest/ci_sample/chunk_plan.json")"
-[[ -z "$chunk_summary_path" ]] && chunk_summary_path="$(abs_path "fixtures/sorafs_manifest/ci_sample/car_summary.json")"
+[[ -z "$chunk_plan_path" ]] && chunk_plan_path="${workspace}/fixtures/sorafs_manifest/ci_sample/chunk_plan.json"
+[[ -z "$chunk_summary_path" ]] && chunk_summary_path="${workspace}/fixtures/sorafs_manifest/ci_sample/car_summary.json"
 [[ -z "$chunk_digest_hex" ]] && chunk_digest_hex="0236c64b664bfff906f32106789baa61e7d4d9fdb4514e173b77a77d2883946e"
 [[ -z "$expect_token_hash" ]] && expect_token_hash="7b56598bca4584a5f5631ce4e510b8c55bd9379799f231db2a3476774f45722b"
 
-if [[ ! -f "$manifest_path" ]]; then
-  echo "error: manifest not found at $manifest_path" >&2
-  exit 1
+validate_existing_file_path "manifest input" "$manifest_path"
+
+if [[ -n "$chunk_plan_path" ]]; then
+  validate_existing_file_path "chunk plan input" "$chunk_plan_path"
 fi
 
-if [[ -n "$chunk_plan_path" && ! -f "$chunk_plan_path" ]]; then
-  echo "error: chunk plan not found at $chunk_plan_path" >&2
-  exit 1
-fi
-
-if [[ -n "$chunk_summary_path" && ! -f "$chunk_summary_path" ]]; then
-  echo "error: chunk summary not found at $chunk_summary_path" >&2
-  exit 1
+if [[ -n "$chunk_summary_path" ]]; then
+  validate_existing_file_path "chunk summary input" "$chunk_summary_path"
 fi
 
 identity_flag_count=0
@@ -242,22 +361,33 @@ if [[ -n "$identity_token_provider" && -z "$identity_token_audience" ]]; then
   echo "error: --identity-token-provider now requires --identity-token-audience" >&2
   exit 1
 fi
+if [[ -n "$identity_token_file" ]]; then
+  validate_existing_file_path "identity token file" "$identity_token_file"
+fi
 
 output_root="${workspace}/artifacts/sorafs_cli_release"
 if [[ -n "$bundle_out" ]]; then
+  bundle_out="$(abs_output_path "$bundle_out")"
   output_root="$(dirname "$bundle_out")"
 else
   bundle_out="${output_root}/manifest.bundle.json"
 fi
 if [[ -n "$signature_out" ]]; then
+  signature_out="$(abs_output_path "$signature_out")"
   output_root="$(dirname "$signature_out")"
 else
   signature_out="${output_root}/manifest.sig"
 fi
-mkdir -p "$output_root"
+bundle_out="$(abs_output_path "$bundle_out")"
+signature_out="$(abs_output_path "$signature_out")"
+output_root="$(abs_output_path "$output_root")"
 
 sign_summary_path="${output_root}/manifest.sign.summary.json"
 verify_summary_path="${output_root}/manifest.verify.summary.json"
+prepare_output_file_path "release bundle output" "$bundle_out"
+prepare_output_file_path "release signature output" "$signature_out"
+prepare_output_file_path "sign summary" "$sign_summary_path"
+prepare_output_file_path "verify summary" "$verify_summary_path"
 
 if [[ -z "$cli_path" ]]; then
   cli_path="${workspace}/target/release/sorafs_cli"
@@ -268,10 +398,7 @@ if [[ -z "$cli_path" ]]; then
 else
   cli_path="$(abs_path "$cli_path")"
 fi
-if [[ ! -x "$cli_path" ]]; then
-  echo "error: sorafs_cli binary not executable at $cli_path" >&2
-  exit 1
-fi
+validate_existing_executable_file_path "sorafs_cli binary" "$cli_path"
 
 sign_cmd=("$cli_path" "manifest" "sign" "--manifest=$manifest_path" "--bundle-out=$bundle_out" "--signature-out=$signature_out")
 if [[ -n "$chunk_plan_path" ]]; then sign_cmd+=("--chunk-plan=$chunk_plan_path"); fi

@@ -39,7 +39,10 @@ def base(schema: str) -> dict:
 
 
 def auditor_roster(*, auditor_count: int = 3) -> dict:
-    auditors = [{"name": f"auditor-{index:02d}"} for index in range(auditor_count)]
+    auditors = [
+        {"name": f"repair-auditor-{index:02d}"}
+        for index in range(auditor_count)
+    ]
     payload = base("sorafs.repair.auditor_roster_canary.v1")
     payload.update(
         {
@@ -58,16 +61,23 @@ def auditor_roster(*, auditor_count: int = 3) -> dict:
 
 
 def failure_capture() -> dict:
+    failure_sources = ["por", "potr"]
+    failure_events = [
+        {"name": "repair-failure-event-por-00", "source": "por"},
+        {"name": "repair-failure-event-potr-00", "source": "potr"},
+    ]
     payload = base("sorafs.repair.failure_capture_canary.v1")
     payload.update(
         {
-            "failure_sources": ["por", "potr"],
+            "failure_sources": failure_sources,
+            "failure_source_count": len(failure_sources),
             "por_history_replayed": True,
             "potr_receipt_replayed": True,
             "coordinator_event_verified": True,
             "merkle_or_receipt_inclusion_verified": True,
             "object_storage_retention_bound": True,
-            "failure_event_count": 2,
+            "failure_event_count": len(failure_events),
+            "failure_events": failure_events,
             "evidence_bundle_digest_hex": DIGEST,
             "raw_evidence_included": False,
         }
@@ -80,6 +90,7 @@ def route(name: str, *, authz: bool = True, latency_ms: int = 200) -> dict:
         "name": name,
         "passed": True,
         "status_code": 200,
+        "body_blake3_hex": DIGEST,
         "latency_ms": latency_ms,
         "authz_enforced": authz,
         "signature_verified": True,
@@ -133,6 +144,7 @@ def worker_lifecycle(*, repair_latency_seconds: int = 900, missing_status: bool 
             "passed_route_count": len(routes),
             "roster_digest_hex": DIGEST,
             "evidence_bundle_digest_hex": DIGEST,
+            "status_count": len(statuses),
             "statuses_observed": statuses,
             "worker_permission_enforced": True,
             "lease_heartbeat_enforced": True,
@@ -183,6 +195,7 @@ def governance_handoff(*, handoff_digest: str = DIGEST) -> dict:
             "reserve_rent_handoff_verified": True,
             "transparency_publication_verified": True,
             "reputation_handoff_verified": True,
+            "handoff_target_count": 5,
             "handoff_targets": [
                 "governance_dag",
                 "repair_slash_proposal",
@@ -214,6 +227,7 @@ def observability(*, critical: bool = False) -> dict:
                 "torii_sorafs_repair_lease_expired_total",
                 "torii_sorafs_slash_proposals_total",
             ],
+            "metric_count": len(MODULE.REQUIRED_METRICS),
             "response_bodies_included": False,
         }
     )
@@ -266,6 +280,79 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["failure_capture"]["valid"] is True
     assert payload["valid_handoff_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [DIGEST]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    observability_artifact = payload["required"]["observability"]["artifacts"][0]
+    assert observability_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert observability_artifact["fingerprint"]["metrics"] == list(
+        MODULE.REQUIRED_METRICS
+    )
+
+
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        (
+            "auditor-roster.json",
+            "auditor_roster",
+            auditor_roster,
+            ("raw_roster_included",),
+        ),
+        (
+            "failure-capture.json",
+            "failure_capture",
+            failure_capture,
+            ("raw_evidence_included",),
+        ),
+        (
+            "auditor-api.json",
+            "auditor_api",
+            auditor_api,
+            ("response_bodies_included",),
+        ),
+        (
+            "worker-lifecycle.json",
+            "worker_lifecycle",
+            worker_lifecycle,
+            ("raw_repair_payloads_included",),
+        ),
+        (
+            "event-streams.json",
+            "event_streams",
+            event_streams,
+            ("response_bodies_included",),
+        ),
+        (
+            "governance-handoff.json",
+            "governance_handoff",
+            governance_handoff,
+            ("raw_ledger_included",),
+        ),
+        (
+            "observability.json",
+            "observability",
+            observability,
+            ("critical_alerts_firing", "response_bodies_included"),
+        ),
+    )
+
+    for artifact_file, kind, make_payload, fields in cases:
+        for field in fields:
+            case_dir = tmp_path / kind / field
+            case_dir.mkdir(parents=True)
+            write_complete_evidence(case_dir)
+            payload = make_payload()
+            payload.pop(field)
+            write_json(case_dir / artifact_file, payload)
+            summary = case_dir / "summary.json"
+
+            assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            artifact = result["required"][kind]["artifacts"][0]
+            assert artifact["valid"] is False
+            assert f"{field} must be false" in artifact["errors"]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -354,6 +441,174 @@ def test_auditor_roster_auditors_must_not_duplicate(tmp_path: Path) -> None:
     assert "auditor_count must match unique auditors count" in artifact["errors"]
 
 
+def test_auditor_roster_auditor_labels_must_use_production_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = auditor_roster()
+    payload["auditors"][0]["name"] = "auditor-00"
+    write_json(tmp_path / "auditor-roster.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["auditor_roster"]["artifacts"][0]
+    assert MODULE.AUDITOR_LABEL_ERROR in artifact["errors"]
+
+
+def test_auditor_roster_auditor_labels_reject_placeholder_marker(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = auditor_roster()
+    payload["auditors"][0]["name"] = "repair-auditor-placeholder"
+    write_json(tmp_path / "auditor-roster.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["auditor_roster"]["artifacts"][0]
+    assert (
+        "auditors[0].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_failure_sources_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_sources"].append(payload["failure_sources"][0])
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert "failure_sources must not contain duplicate values" in artifact["errors"]
+
+
+def test_failure_source_count_must_match_unique_sources(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_source_count"] += 1
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert "failure_source_count must match unique failure_sources count" in artifact[
+        "errors"
+    ]
+
+
+def test_failure_sources_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_sources"].append("pdp")
+    payload["failure_source_count"] = len(payload["failure_sources"])
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert "failure_sources must not include unknown values" in artifact["errors"]
+
+
+def test_failure_event_count_must_match_unique_events(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_event_count"] += 1
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert "failure_event_count must match unique failure_events count" in artifact[
+        "errors"
+    ]
+
+
+def test_failure_events_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_events"].append(dict(payload["failure_events"][0]))
+    payload["failure_event_count"] = len(payload["failure_events"])
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert "failure_events must not contain duplicate values" in artifact["errors"]
+    assert "failure_event_count must match unique failure_events count" in artifact[
+        "errors"
+    ]
+
+
+def test_failure_events_must_cover_required_sources(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_events"] = [payload["failure_events"][0]]
+    payload["failure_event_count"] = len(payload["failure_events"])
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert "failure_events must include source `potr`" in artifact["errors"]
+
+
+def test_failure_events_must_use_reviewed_sources(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_events"][0]["source"] = "unknown"
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert "failure_events source must be one of failure_sources" in artifact["errors"]
+
+
+def test_failure_events_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_events"][0]["name"] = "por-failure-00"
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert (
+        "failure_events[].name must match canonical lowercase "
+        "`repair-failure-event-name`"
+    ) in artifact["errors"]
+
+
+def test_failure_events_reject_placeholder_marker(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_events"][0]["name"] = "repair-failure-event-placeholder"
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert (
+        "failure_events[0].name must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
+
+
 def test_auditor_api_without_authz_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "auditor-api.json", auditor_api(authz=False))
@@ -420,6 +675,84 @@ def test_routes_must_not_duplicate_for_route_artifacts(tmp_path: Path) -> None:
         assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_routes_must_not_include_unknown_values_for_route_artifacts(
+    tmp_path: Path,
+) -> None:
+    route_artifacts = (
+        ("auditor_api", "auditor-api.json", auditor_api),
+        ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+        ("event_streams", "event-streams.json", event_streams),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        payload["routes"].append(route("repair_debug_route"))
+        payload["route_count"] = len(payload["routes"])
+        payload["passed_route_count"] = len(payload["routes"])
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_route_body_hash_is_required_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("auditor_api", "auditor-api.json", auditor_api),
+        ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+        ("event_streams", "event-streams.json", event_streams),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload["routes"][0]["body_blake3_hex"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert (
+            "routes[0].body_blake3_hex must be a non-empty string"
+            in artifact["errors"]
+        )
+
+
+def test_route_latency_is_required_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("auditor_api", "auditor-api.json", auditor_api),
+        ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+        ("event_streams", "event-streams.json", event_streams),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload["routes"][0]["latency_ms"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert (
+            "routes[0].latency_ms must be a non-negative integer"
+            in artifact["errors"]
+        )
+
+
 def test_worker_lifecycle_roster_digest_must_match_roster(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = worker_lifecycle()
@@ -437,6 +770,63 @@ def test_worker_lifecycle_roster_digest_must_match_roster(tmp_path: Path) -> Non
     assert artifact["errors"] == [
         "worker_lifecycle roster_digest_hex must reference a valid auditor_roster roster_digest_hex"
     ]
+
+
+def test_worker_statuses_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = worker_lifecycle()
+    payload["statuses_observed"].append(payload["statuses_observed"][0])
+    write_json(tmp_path / "worker-lifecycle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["worker_lifecycle"]["artifacts"][0]
+    assert "statuses_observed must not contain duplicate values" in artifact["errors"]
+
+
+def test_worker_statuses_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = worker_lifecycle()
+    payload["statuses_observed"].append("blocked")
+    payload["status_count"] = len(payload["statuses_observed"])
+    write_json(tmp_path / "worker-lifecycle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["worker_lifecycle"]["artifacts"][0]
+    assert "statuses_observed must not include unknown values" in artifact["errors"]
+
+
+def test_worker_status_count_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = worker_lifecycle()
+    del payload["status_count"]
+    write_json(tmp_path / "worker-lifecycle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["worker_lifecycle"]["artifacts"][0]
+    assert "status_count must be a positive integer" in artifact["errors"]
+    assert "status_count must be at least 4" in artifact["errors"]
+
+
+def test_worker_status_count_must_match_inventory(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = worker_lifecycle()
+    payload["status_count"] += 1
+    write_json(tmp_path / "worker-lifecycle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["worker_lifecycle"]["artifacts"][0]
+    assert (
+        "status_count must match unique statuses_observed count"
+        in artifact["errors"]
+    )
 
 
 def test_governance_handoff_failure_digest_must_match_capture(tmp_path: Path) -> None:
@@ -457,6 +847,67 @@ def test_governance_handoff_failure_digest_must_match_capture(tmp_path: Path) ->
         "governance_handoff evidence_bundle_digest_hex must reference a valid "
         "failure_capture evidence_bundle_digest_hex"
     ]
+
+
+def test_governance_handoff_targets_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_handoff()
+    payload["handoff_targets"].append(payload["handoff_targets"][0])
+    write_json(tmp_path / "governance-handoff.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_handoff"]["artifacts"][0]
+    assert "handoff_targets must not contain duplicate values" in artifact["errors"]
+
+
+def test_governance_handoff_targets_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_handoff()
+    payload["handoff_targets"].append("manual_review_board")
+    payload["handoff_target_count"] = len(payload["handoff_targets"])
+    write_json(tmp_path / "governance-handoff.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_handoff"]["artifacts"][0]
+    assert "handoff_targets must not include unknown values" in artifact["errors"]
+
+
+def test_governance_handoff_target_count_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_handoff()
+    del payload["handoff_target_count"]
+    write_json(tmp_path / "governance-handoff.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_handoff"]["artifacts"][0]
+    assert "handoff_target_count must be a positive integer" in artifact["errors"]
+    assert "handoff_target_count must be at least 5" in artifact["errors"]
+
+
+def test_governance_handoff_target_count_must_match_inventory(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_handoff()
+    payload["handoff_target_count"] += 1
+    write_json(tmp_path / "governance-handoff.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_handoff"]["artifacts"][0]
+    assert (
+        "handoff_target_count must match unique handoff_targets count"
+        in artifact["errors"]
+    )
 
 
 def test_governance_approval_handoff_digest_must_match_handoff(tmp_path: Path) -> None:
@@ -590,11 +1041,63 @@ def test_event_lag_above_threshold_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_rollout_timing_evidence_must_be_integer_units(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    worker = worker_lifecycle()
+    worker["repair_latency_seconds"] = 900.5
+    worker["routes"][0]["latency_ms"] = 12.5
+    write_json(tmp_path / "worker-lifecycle.json", worker)
+    streams = event_streams()
+    streams["event_lag_seconds"] = 30.5
+    write_json(tmp_path / "event-streams.json", streams)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    worker_errors = payload["required"]["worker_lifecycle"]["artifacts"][0][
+        "errors"
+    ]
+    stream_errors = payload["required"]["event_streams"]["artifacts"][0]["errors"]
+    assert "repair_latency_seconds must be a non-negative integer" in worker_errors
+    assert "routes[0].latency_ms must be a non-negative integer" in worker_errors
+    assert "event_lag_seconds must be a non-negative integer" in stream_errors
+
+
 def test_observability_critical_alert_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "observability.json", observability(critical=True))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_observability_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_observability_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append("torii_sorafs_repair_debug_metric")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not include unknown values" in artifact["errors"]
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:

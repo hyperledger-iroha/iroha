@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPT_ROOT / "build_sorafs_potr_canary.py"
@@ -65,11 +67,12 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         for index in range(CHECKER.DEFAULT_MIN_PROVIDERS):
             args.extend(["--provider", f"provider-{index:02d}"])
         for index in range(CHECKER.DEFAULT_MIN_RECEIPTS):
-            args.extend(["--receipt", f"receipt-{index:02d}"])
+            args.extend(["--receipt", f"potr-receipt-{index:02d}"])
     elif kind == "receipt_validation":
         args.extend(["--validation-bundle-digest-hex", VALIDATION_DIGEST])
         args.extend(["--pq-key-roster-digest-hex", PQ_KEY_ROSTER_DIGEST])
     elif kind == "proof_stream":
+        args.extend(["--route-body-blake3-hex", DIGEST])
         for route in MODULE.REQUIRED_ROUTES:
             args.extend(["--route", route])
     elif kind == "reputation_integration":
@@ -107,6 +110,21 @@ def checker_options() -> object:
     )
 
 
+def assert_rejected_without_artifact(
+    args: list[str],
+    *,
+    kind: str,
+    tmp_path: Path,
+    capsys,
+    expected_error: str,
+) -> None:
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, kind).exists()
+
+
 def test_builds_payload_free_proof_stream_canary(tmp_path: Path) -> None:
     assert MODULE.main(args_for("proof_stream", tmp_path)) == 0
 
@@ -116,6 +134,7 @@ def test_builds_payload_free_proof_stream_canary(tmp_path: Path) -> None:
     assert payload["route_count"] == len(MODULE.REQUIRED_ROUTES)
     assert payload["passed_route_count"] == len(MODULE.REQUIRED_ROUTES)
     assert payload["response_bodies_included"] is False
+    assert all(route["body_blake3_hex"] == DIGEST for route in payload["routes"])
     assert all(route["norito_verified"] is True for route in payload["routes"])
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "proof_stream"
@@ -161,6 +180,7 @@ def test_response_file_can_build_multi_provider_probe_canary(tmp_path: Path) -> 
     payload = json.loads(
         canary_path(tmp_path, "multi_provider_probe").read_text("utf-8")
     )
+    assert payload["tier_count"] == len(MODULE.REQUIRED_TIERS)
     assert payload["tiers_observed"] == list(MODULE.REQUIRED_TIERS)
     assert payload["provider_count"] == CHECKER.DEFAULT_MIN_PROVIDERS
     assert payload["providers"] == [
@@ -169,7 +189,7 @@ def test_response_file_can_build_multi_provider_probe_canary(tmp_path: Path) -> 
     ]
     assert payload["receipt_count"] == CHECKER.DEFAULT_MIN_RECEIPTS
     assert payload["receipts"] == [
-        {"name": f"receipt-{index:02d}"}
+        {"name": f"potr-receipt-{index:02d}"}
         for index in range(CHECKER.DEFAULT_MIN_RECEIPTS)
     ]
     assert payload["raw_receipts_included"] is False
@@ -191,19 +211,133 @@ def test_probe_provider_inventory_must_match_provider_count(
     assert not canary_path(tmp_path, "multi_provider_probe").exists()
 
 
+def test_probe_tiers_must_not_duplicate_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_provider_probe", tmp_path)
+    args.extend(["--tier", MODULE.REQUIRED_TIERS[0]])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="multi_provider_probe",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--tier must not contain duplicates",
+    )
+
+
+def test_probe_tiers_must_not_include_unknown_values_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_provider_probe", tmp_path)
+    args.extend(["--tier", "unreviewed-tier"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="multi_provider_probe",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--tier contains an unknown value",
+    )
+
+
+def test_probe_provider_inventory_must_not_duplicate_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_provider_probe", tmp_path)
+    first_provider_index = args.index("--provider")
+    args[first_provider_index + 1] = "provider-01"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider must not contain duplicates" in captured.err
+    assert "--provider unique values must match --provider-count" in captured.err
+    assert not canary_path(tmp_path, "multi_provider_probe").exists()
+
+
+def test_probe_provider_inventory_must_use_reviewed_labels_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_provider_probe", tmp_path)
+    first_provider_index = args.index("--provider")
+    args[first_provider_index + 1] = "provider_00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--provider must match canonical lowercase `provider-*`" in captured.err
+    assert not canary_path(tmp_path, "multi_provider_probe").exists()
+
+
+def test_probe_provider_inventory_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_provider_probe", tmp_path)
+    first_provider_index = args.index("--provider")
+    args[first_provider_index + 1] = "provider-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--provider must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "multi_provider_probe").exists()
+
+
 def test_probe_receipt_inventory_must_not_duplicate(
     tmp_path: Path,
     capsys,
 ) -> None:
     args = args_for("multi_provider_probe", tmp_path)
     first_receipt_index = args.index("--receipt")
-    args[first_receipt_index + 1] = "receipt-01"
+    args[first_receipt_index + 1] = "potr-receipt-01"
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
     assert "--receipt must not contain duplicates" in captured.err
     assert "--receipt unique values must match --receipt-count" in captured.err
+    assert not canary_path(tmp_path, "multi_provider_probe").exists()
+
+
+def test_probe_receipt_inventory_must_use_reviewed_labels_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_provider_probe", tmp_path)
+    first_receipt_index = args.index("--receipt")
+    args[first_receipt_index + 1] = "receipt-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--receipt must match canonical lowercase `potr-receipt-*`" in captured.err
+    assert not canary_path(tmp_path, "multi_provider_probe").exists()
+
+
+def test_probe_receipt_inventory_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("multi_provider_probe", tmp_path)
+    first_receipt_index = args.index("--receipt")
+    args[first_receipt_index + 1] = "potr-receipt-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--receipt must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
     assert not canary_path(tmp_path, "multi_provider_probe").exists()
 
 
@@ -220,6 +354,139 @@ def test_missing_proof_stream_route_coverage_fails_closed(
     captured = capsys.readouterr()
     assert "--route must include every required value" in captured.err
     assert not canary_path(tmp_path, "proof_stream").exists()
+
+
+def test_proof_stream_routes_must_not_duplicate_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("proof_stream", tmp_path)
+    args.extend(["--route", MODULE.REQUIRED_ROUTES[0]])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="proof_stream",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--route must not contain duplicates",
+    )
+
+
+def test_proof_stream_routes_must_not_include_unknown_values_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("proof_stream", tmp_path)
+    args.extend(["--route", "unreviewed-proof-stream-route"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="proof_stream",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--route contains an unknown value",
+    )
+
+
+def test_proof_stream_requires_route_body_digest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("proof_stream", tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "proof_stream").exists()
+
+
+def test_observability_metrics_must_not_duplicate_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("observability", tmp_path)
+    args.extend(["--metric", MODULE.REQUIRED_METRICS[0]])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="observability",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--metric must not contain duplicates",
+    )
+
+
+def test_observability_metrics_must_not_include_unknown_values_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("observability", tmp_path)
+    args.extend(["--metric", "unreviewed-potr-metric"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="observability",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--metric contains an unknown value",
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "option", "duplicate_value", "unknown_value"),
+    (
+        (
+            "multi_provider_probe",
+            "--tier",
+            MODULE.REQUIRED_TIERS[0],
+            "unreviewed-tier",
+        ),
+        (
+            "proof_stream",
+            "--route",
+            MODULE.REQUIRED_ROUTES[0],
+            "unreviewed-proof-stream-route",
+        ),
+        (
+            "observability",
+            "--metric",
+            MODULE.REQUIRED_METRICS[0],
+            "unreviewed-potr-metric",
+        ),
+    ),
+)
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    kind: str,
+    option: str,
+    duplicate_value: str,
+    unknown_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    duplicate_args = args_for(kind, tmp_path)
+    duplicate_args.extend([option, duplicate_value])
+    assert_rejected_without_artifact(
+        duplicate_args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain duplicates",
+    )
+
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    unknown_args = args_for(kind, unknown_dir)
+    unknown_args.extend([option, unknown_value])
+    assert_rejected_without_artifact(
+        unknown_args,
+        kind=kind,
+        tmp_path=unknown_dir,
+        capsys=capsys,
+        expected_error=f"{option} contains an unknown value",
+    )
 
 
 def test_probe_latency_thresholds_fail_before_write(
@@ -250,3 +517,17 @@ def test_output_symlink_is_refused(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert "must not be a symlink" in captured.err
     assert not target.exists()
+
+
+def test_output_directory_is_rejected(tmp_path: Path, capsys) -> None:
+    output_dir = tmp_path / "multi-provider-output"
+    output_dir.mkdir()
+    args = args_for("multi_provider_probe", tmp_path)
+    args[args.index("--out") + 1] = str(output_dir)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--out" in captured.err
+    assert "must not be a directory" in captured.err
+    assert output_dir.is_dir()

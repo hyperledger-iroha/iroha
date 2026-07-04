@@ -47,12 +47,13 @@ SF-3 གིས་ I18NI000000028X cret འདི་ I18NT000000009X/I18NT0000000
 
 ### C. འཛུལ་སྒོ་མཇུག་བསྡུ།
 
-| མཐའ་མཇུག་ | སྤྱོད་ལམ་ | ལས་ཀ་ |
-|--------------------------|-----------|
-| I18NI0000049X | `PinProposalV1` ལུ་ངོས་ལེན་འབད་ གསལ་སྟོན་འབད་ནི། བང་རིམ་བཙུགས་ནི། | ཆ་ཤས་གསལ་སྡུད་དང་ ཟུར་ཐོ་ཚུ་ རྒྱུན་ལམ་གནས་སྡུད་ ཅངཀ་ཚོང་ཁང་བརྒྱུད་དེ་ བདེན་དཔྱད་འབད། |
-| `GET /sorafs/chunks/{cid}` + ཁྱབ་ཚད་འདྲི་དཔྱད་ | `Content-Chunker` མགོ་ཡིག་ཚུ་དང་གཅིག་ཁར་ ཅངཀ་བཱའིཊི་ཚུ་ ཞབས་ཏོག་སྤྲོད་དགོ། བརྩི་མཐོང་ཁྱབ་ཚད་ཀྱི་ཚད་གཞི། | དུས་ཚོད་བཀོད་མི་ + རྒྱུན་ལམ་འཆར་དངུལ་ཚུ་ལག་ལེན་འཐབ། |
-| I18NI0000003X | གསལ་སྟོན་དང་ ལོག་འོང་བའི་བདེན་དཔང་བཱན་ཌལ་གྱི་དོན་ལུ་ པོ་ཨར་དཔེ་ཚད་འདི་ གཡོག་བཀོལ། | བསྐྱར་དུ་སྤྱོད་པའི་ཆང་ཚོའི་ཚོང་ཁང་དཔེ་ཚད་ Norito JSON payloads དང་མཉམ་དུ་ལན་འདེབས་འབད། |
-| `GET /sorafs/telemetry` | བཅུད་བསྡུས་: ལྕོགས་གྲུབ་, པོ་ཨར་ མཐར་འཁྱོལ་ འཛོལ་བའི་གྱངས་ཁ་ཚུ། | ཌེཤ་བོརཌི་/བཀོལ་སྤྱོད་འབད་མི་ཚུ་གི་དོན་ལུ་ གནད་སྡུད་བྱིན། |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 རན་ཊའིམ་ཆུ་གཡུར་གྱི་ཐགསཔ་ཚུ་ Norito བརྒྱུད་དེ་ བརྡ་རྟགས་འདི་གིས་ I18NI000000066X, I18NI000000057X, དང་ `AuditVerdictV1` རེ་ལུ་ཐོ་བཀོད་འབདཝ་ཨིན། I18NT0000015X ཚད་མ།【crates/sorafs_node/src/schenuler.rs#L147】
 
@@ -108,7 +109,7 @@ SF-3 གིས་ I18NI000000028X cret འདི་ I18NT000000009X/I18NT0000000
 ## མའིལ་སི་ཊོན་ཕྱིར་ཐོན་ཚད་གཞི།
 
 - `cargo run -p sorafs_node --example pin_fetch` ས་གནས་ཀྱི་སྒྲིག་ཆས་ལུ་རྒྱབ་འགལ་འབདཝ་ཨིན།  
-- I18NT0000000020X གིས་ `--features sorafs-storage` དང་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ བརྒྱུད་དེ་བཟོཝ་ཨིན།  
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - ཡིག་ཆ་ ([ནོཌི་གསོག་འཇོག་ལམ་སྟོན་](I18NU0000025X) རིམ་སྒྲིག་སྔོན་སྒྲིག་ཚུ་དང་གཅིག་ཁར་དུས་མཐུན་བཟོ་ཡོདཔ་ + CLI དཔེ་ཚུ་; བཀོལ་སྤྱོད་པའི་རན་དེབ་ཡོད།  
 - སྟེགས་རིས་བཀོད་སྒྲོམ་ཚུ་ནང་ ཊེ་ལི་མི་ཊི་རི།; ཤུགས་ཚད་ཚད་གཞི་དང་ པོ་ཨར་ འཐུས་ཤོར་ཚུ་གི་དོན་ལུ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ ཉེན་བརྡ་ཚུ།
 
@@ -116,4 +117,4 @@ SF-3 གིས་ I18NI000000028X cret འདི་ I18NT000000009X/I18NT0000000
 
 - རིམ་སྒྲིག་སྔོན་སྒྲིག་དང་ སི་ཨེལ་ཨའི་ལག་ལེན་ དེ་ལས་ དཀའ་ངལ་སེལ་ཐབས་རིམ་པ་ཚུ་དང་གཅིག་ཁར་ [མཐུད་མཚམས་གསོག་འཇོག་གཞི་བསྟུན་](I18NU0000026X) དུས་མཐུན་བཟོ་དགོ།  
 - [མཛུབ་གནོན་བཀོལ་བཀོད](node-operations.md) ཨེསི་ཨེཕ་-༣ གོང་འཕེལ་འགྱོ་བའི་བསྒང་ལས་ ལག་ལེན་འཐབ་ཐངས་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་བཞག་དགོ།  
-- གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་ནང་ `/sorafs/*` མཐའ་མཇུག་གི་དོན་ལུ་ API གཞི་བསྟུན་ཚུ་ དཔར་བསྐྲུན་འབད་ཞིནམ་ལས་ I18NT000000001X ནང་ལུ་ གློག་ཐག་འདི་ གསལ་སྟོན་འབད།
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

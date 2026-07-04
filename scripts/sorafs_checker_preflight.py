@@ -13,6 +13,14 @@ from typing import Any
 from sorafs_evidence_paths import record_reserved_output_evidence_conflicts
 from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
 from sorafs_path_identity import resolve_path_identity
+from sorafs_runner_preflight import plan_rendered_path_is_safe
+
+
+CHECKER_RENDERED_PATH_ERROR = (
+    "SoraFS checker-rendered paths must not contain secret-looking, "
+    "control-character, parent, current, drive-prefix, or platform-specific "
+    "components"
+)
 
 
 def _require_error_list(errors: Any) -> list[str]:
@@ -89,6 +97,22 @@ def checker_summary_write_open_flags() -> int:
     return flags
 
 
+def checker_output_parent_sync_open_flags() -> int:
+    """Return descriptor flags for syncing checker output parent directories."""
+
+    flags = os.O_RDONLY
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if directory:
+        flags |= directory
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    cloexec = getattr(os, "O_CLOEXEC", 0)
+    if cloexec:
+        flags |= cloexec
+    return flags
+
+
 def write_all_checker_summary_bytes(fd: int, payload: bytes) -> None:
     """Write every checker summary byte, including after short writes."""
 
@@ -98,6 +122,32 @@ def write_all_checker_summary_bytes(fd: int, payload: bytes) -> None:
         if written <= 0:
             raise OSError("failed to write checker summary")
         view = view[written:]
+
+
+def fsync_checker_output_parent(path: Path, *, label: str) -> list[str]:
+    """Persist the directory entry for a checker output artifact."""
+
+    output_label = _require_label(label)
+    if not isinstance(path, Path):
+        return [f"{output_label} `{path_diagnostic_label(path)}` must be a path"]
+    parent = path.parent
+    fd = -1
+    try:
+        fd = os.open(parent, checker_output_parent_sync_open_flags())
+        os.fsync(fd)
+    except (OSError, RuntimeError) as error:
+        parent_label = path_diagnostic_label(parent)
+        return [
+            "failed to fsync {} parent `{}`: {}".format(
+                output_label,
+                parent_label,
+                error_diagnostic_label(error, path_label=parent_label),
+            )
+        ]
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    return []
 
 
 def _checker_artifact_error_message(message: Any, *, label: str) -> str:
@@ -126,6 +176,31 @@ def _checker_path_sequence(
         errors.append(f"{label} paths must be a sequence")
         return None
     return paths
+
+
+def _checker_evidence_rendered_paths(paths: Sequence[Any]) -> tuple[Path, ...]:
+    """Return evidence paths that may be rendered by checker diagnostics."""
+
+    rendered_paths: list[Path] = []
+    for path in paths:
+        if isinstance(path, Path):
+            rendered_paths.append(path)
+            continue
+        if isinstance(path, str) and path.strip() and path == path.strip():
+            _kind, separator, spec_path = path.partition("=")
+            rendered_paths.append(Path(spec_path.strip() if separator else path))
+    return tuple(rendered_paths)
+
+
+def validate_checker_rendered_paths(paths: Iterable[Any], errors: list[str]) -> None:
+    """Reject unsafe checker-rendered paths before diagnostics can print them."""
+
+    error_list = _require_error_list(errors)
+    if any(
+        isinstance(path, Path) and not plan_rendered_path_is_safe(path)
+        for path in paths
+    ):
+        error_list.append(CHECKER_RENDERED_PATH_ERROR)
 
 
 def resolve_checker_preflight_path(
@@ -280,6 +355,9 @@ def validate_checker_summary_output(summary_out: Path, errors: list[str]) -> boo
             f"--summary-out `{path_diagnostic_label(summary_out)}` must be a path"
         )
         return False
+    validate_checker_rendered_paths((summary_out,), error_list)
+    if error_list:
+        return False
     summary_out_is_symlink = inspect_checker_preflight_path_is_symlink(
         summary_out,
         error_list,
@@ -400,6 +478,15 @@ def validate_checker_evidence_inputs(args: argparse.Namespace) -> list[str]:
         return errors
     assert evidence_dir_items is not None
     assert evidence_file_items is not None
+    validate_checker_rendered_paths(
+        (
+            *_checker_evidence_rendered_paths(evidence_dir_items),
+            *_checker_evidence_rendered_paths(evidence_file_items),
+        ),
+        errors,
+    )
+    if errors:
+        return errors
     for evidence_dir in evidence_dir_items:
         if not isinstance(evidence_dir, Path):
             errors.append(
@@ -508,6 +595,7 @@ def write_checker_summary(summary_out: Path | None, summary_text: str) -> list[s
     try:
         fd = os.open(summary_out, checker_summary_write_open_flags(), 0o666)
         write_all_checker_summary_bytes(fd, summary_text.encode("utf-8"))
+        os.fsync(fd)
     except (OSError, RuntimeError) as error:
         summary_label = path_diagnostic_label(summary_out)
         return [
@@ -519,6 +607,11 @@ def write_checker_summary(summary_out: Path | None, summary_text: str) -> list[s
     finally:
         if fd >= 0:
             os.close(fd)
+    parent_sync_errors = fsync_checker_output_parent(
+        summary_out, label="--summary-out"
+    )
+    if parent_sync_errors:
+        return parent_sync_errors
     return []
 
 

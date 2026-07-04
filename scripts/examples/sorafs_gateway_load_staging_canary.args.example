@@ -19,9 +19,9 @@ cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 --policy-digest-hex
 dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 --gateway-version
-iroha-gateway 1.0.0
+"iroha-gateway 1.0.0"
 --hardware-profile
-staging-c6i-2xlarge
+gateway-load-hardware-c6i-2xlarge
 --cache-state
 cold-cache
 --duration-seconds
@@ -31,13 +31,13 @@ cold-cache
 --provider-count
 4
 --provider
-provider-a
+gateway-load-provider-a
 --provider
-provider-b
+gateway-load-provider-b
 --provider
-provider-c
+gateway-load-provider-c
 --provider
-provider-d
+gateway-load-provider-d
 --success-rate-bps
 9950
 --error-rate-bps

@@ -228,14 +228,15 @@ use iroha_data_model::{
         SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
         SumeragiMissingBlockFetchStatus, SumeragiNposRepairCoverageStatus,
         SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
-        SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
-        SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
-        SumeragiRbcStoreStatus, SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook,
-        SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
-        SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
-        SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
+        SumeragiPendingRbcStatus, SumeragiProposalGateStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
+        SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRoundGapStatus,
+        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiV1StatusWire,
+        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
+        SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
+        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
+        SumeragiWorkerQueueTotals,
     },
     domain::DomainId,
     events::{
@@ -58895,6 +58896,75 @@ fn sumeragi_v1_status_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Val
     ])
 }
 
+fn proposal_gate_status(
+    gate: sumeragi::status::ProposalGateSnapshot,
+) -> SumeragiProposalGateStatus {
+    SumeragiProposalGateStatus {
+        height: gate.height,
+        view: gate.view,
+        queue_len: gate.queue_len,
+        pending_blocks_total: gate.pending_blocks_total,
+        pending_blocks_blocking: gate.pending_blocks_blocking,
+        active_pending_for_tip: gate.active_pending_for_tip,
+        queue_saturated: gate.queue_saturated,
+        active_pending: gate.active_pending,
+        rbc_backlog: gate.rbc_backlog,
+        relay_backpressure: gate.relay_backpressure,
+        consensus_queue_backpressure: gate.consensus_queue_backpressure,
+        should_defer: gate.should_defer,
+        only_pacing_backpressure: gate.only_pacing_backpressure,
+        commit_inflight_active: gate.commit_inflight_active,
+        cached_proposal_present: gate.cached_proposal_present,
+        cached_proposal_hint_present: gate.cached_proposal_hint_present,
+        round_liveness_present: gate.round_liveness_present,
+        frontier_owner_present: gate.frontier_owner_present,
+        missing_qc_liveness_active: gate.missing_qc_liveness_active,
+        last_pacemaker_attempt_age_ms: gate.last_pacemaker_attempt_age_ms,
+        last_successful_proposal_age_ms: gate.last_successful_proposal_age_ms,
+    }
+}
+
+fn proposal_gate_json(gate: sumeragi::status::ProposalGateSnapshot) -> norito::json::Value {
+    json_object(vec![
+        json_entry("height", gate.height),
+        json_entry("view", gate.view),
+        json_entry("queue_len", gate.queue_len),
+        json_entry("pending_blocks_total", gate.pending_blocks_total),
+        json_entry("pending_blocks_blocking", gate.pending_blocks_blocking),
+        json_entry("active_pending_for_tip", gate.active_pending_for_tip),
+        json_entry("queue_saturated", gate.queue_saturated),
+        json_entry("active_pending", gate.active_pending),
+        json_entry("rbc_backlog", gate.rbc_backlog),
+        json_entry("relay_backpressure", gate.relay_backpressure),
+        json_entry(
+            "consensus_queue_backpressure",
+            gate.consensus_queue_backpressure,
+        ),
+        json_entry("should_defer", gate.should_defer),
+        json_entry("only_pacing_backpressure", gate.only_pacing_backpressure),
+        json_entry("commit_inflight_active", gate.commit_inflight_active),
+        json_entry("cached_proposal_present", gate.cached_proposal_present),
+        json_entry(
+            "cached_proposal_hint_present",
+            gate.cached_proposal_hint_present,
+        ),
+        json_entry("round_liveness_present", gate.round_liveness_present),
+        json_entry("frontier_owner_present", gate.frontier_owner_present),
+        json_entry(
+            "missing_qc_liveness_active",
+            gate.missing_qc_liveness_active,
+        ),
+        json_entry(
+            "last_pacemaker_attempt_age_ms",
+            gate.last_pacemaker_attempt_age_ms,
+        ),
+        json_entry(
+            "last_successful_proposal_age_ms",
+            gate.last_successful_proposal_age_ms,
+        ),
+    ])
+}
+
 fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value {
     let highest_qc = json_object(vec![
         json_entry("height", snap.highest_qc_height),
@@ -60457,6 +60527,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "pacemaker_backpressure_deferrals_total",
             snap.pacemaker_backpressure_deferrals_total,
         ),
+        json_entry("proposal_gate", proposal_gate_json(snap.proposal_gate)),
         json_entry(
             "commit_pipeline_tick_total",
             snap.commit_pipeline_tick_total,
@@ -62784,6 +62855,7 @@ pub async fn handle_v1_sumeragi_status(
                     .drop_unsolicited_share_blocks_total,
             },
             pacemaker_backpressure_deferrals_total: snap.pacemaker_backpressure_deferrals_total,
+            proposal_gate: proposal_gate_status(snap.proposal_gate),
             commit_pipeline_tick_total: snap.commit_pipeline_tick_total,
             da_reschedule_total: snap.da_reschedule_total,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {

@@ -59521,6 +59521,13 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
         "sourceStateProof must be a TON source-state stark-fri-v1 proof"
         in javascript_impl_markers
     )
+    assert "export const buildTonSccpProofRequest = (input) => {" in (
+        javascript_impl_markers
+    )
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in javascript_impl_markers
+    )
     assert (
         "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
         "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
@@ -59537,6 +59544,13 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
         "sourceStateProof must be a TON source-state stark-fri-v1 proof"
         in javascript_dist_markers
     )
+    assert "export const buildTonSccpProofRequest = (input) => {" in (
+        javascript_dist_markers
+    )
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in javascript_dist_markers
+    )
     assert (
         "export function wrapTonSccpSourceStateVerificationProof(proofBytes, request) {\n"
         "  const proofRequest = normalizeTonSourceStateProofRequestForWrapping(request);\n"
@@ -59551,6 +59565,10 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     assert "oversizedTonCallbackProver" in javascript_test_markers
     assert 'proofFamily: "debug-proof-family"' in javascript_test_markers
     assert "TON source-state stark-fri-v1 proof" in javascript_test_markers
+    assert (
+        "/requires non-zero source adapter deployment binding/"
+        in javascript_test_markers
+    )
     javascript_package_dist_markers = inventory_by_path[
         "javascript/iroha_js/test/package_dist.test.js"
     ]
@@ -59635,6 +59653,12 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
         "sourceProofBytes required for non-SORA source bundle"
         in python_impl_markers
     )
+    assert "def build_ton_sccp_proof_request" in python_impl_markers
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in python_impl_markers
+    )
+    assert "sourceAdapterDeploymentBinding must be non-zero" in python_impl_markers
     python_test_markers = inventory_by_path[
         "python/iroha_torii_client/tests/sccp_test.py"
     ]
@@ -59659,6 +59683,10 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     assert "package_root_ton_debug_proof_family" in python_test_markers
     assert (
         "oversized_package_root_ton_source_state_proof"
+        in python_test_markers
+    )
+    assert (
+        'match="requires non-zero source adapter deployment binding"'
         in python_test_markers
     )
     assert (
@@ -59690,6 +59718,11 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     )
     assert "proof.proofFamily == STARK_FRI_PROOF_FAMILY_V1" in kotlin_ton_impl_markers
     assert "proofBytes.size <= SOURCE_STATE_MAX_PROOF_BYTES" in kotlin_ton_impl_markers
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in kotlin_ton_impl_markers
+    )
+    assert "sourceAdapterDeploymentBinding must be non-zero" in kotlin_ton_impl_markers
     kotlin_ton_test_markers = inventory_by_path[
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
     ]
@@ -59699,6 +59732,10 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     )
     assert "oversizedCallbackProver" in kotlin_ton_test_markers
     assert 'proofFamily = "debug-proof-family"' in kotlin_ton_test_markers
+    assert "zeroDeploymentError" in kotlin_ton_test_markers
+    assert (
+        "requires non-zero source adapter deployment binding" in kotlin_ton_test_markers
+    )
     java_ton_impl_markers = inventory_by_path[
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java"
     ]
@@ -59714,6 +59751,11 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
         "normalizedProofBytes.length > SOURCE_STATE_MAX_PROOF_BYTES"
         in java_ton_impl_markers
     )
+    assert (
+        "TON SCCP proof request requires non-zero source adapter deployment binding"
+        in java_ton_impl_markers
+    )
+    assert "sourceAdapterDeploymentBinding must be non-zero" in java_ton_impl_markers
     java_ton_test_markers = inventory_by_path[
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
     ]
@@ -59723,6 +59765,10 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     assert (
         "TON source-state verification proof family must be stark-fri-v1"
         in java_ton_test_markers
+    )
+    assert "zero TON deployment binding must be rejected" in java_ton_test_markers
+    assert (
+        "requires non-zero source adapter deployment binding" in java_ton_test_markers
     )
     kotlin_evm_test_markers = inventory_by_path[
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt"
@@ -59855,6 +59901,14 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     )
     assert "proofBytes.count <= sccpSourceStateMaxProofBytes" in swift_ton_impl_markers
     assert "proof.proofFamily == tonStarkFriProofFamilyV1" in swift_ton_impl_markers
+    assert "public func buildTonSccpProofRequest" in swift_ton_impl_markers
+    assert (
+        "guard deploymentBinding.sourceAdapterDeploymentHash != sccpZeroHashV1 else"
+        in swift_ton_impl_markers
+    )
+    assert (
+        "request.sourceAdapterDeploymentBinding.sourceDomain" in swift_ton_impl_markers
+    )
     swift_ton_test_markers = inventory_by_path[
         "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift"
     ]
@@ -59869,6 +59923,11 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
     assert 'proofFamily: "debug-proof-family"' in swift_ton_test_markers
     assert "tamperedBscBase64ProofResult" in swift_ton_test_markers
     assert "tamperedEthereumBase64ProofResult" in swift_ton_test_markers
+    assert "sourceAdapterDeploymentHash: sccpZeroHashV1" in swift_ton_test_markers
+    assert (
+        "sourceAdapterDeploymentReceiptHash: sccpZeroHashV1" in swift_ton_test_markers
+    )
+    assert ".sourceAdapterDeploymentBindingMismatch" in swift_ton_test_markers
     assert (
         "buildBscMainnetSccpDestinationSubmission(EvmSccpSubmissionInput("
         in swift_ton_test_markers

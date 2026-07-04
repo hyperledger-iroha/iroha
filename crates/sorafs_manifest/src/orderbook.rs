@@ -1795,31 +1795,22 @@ mod tests {
     }
 
     fn snapshot_channel(trade: &TradeEventV1) -> SettlementChannelV1 {
-        SettlementChannelV1 {
-            version: SETTLEMENT_CHANNEL_VERSION_V1,
-            channel_id: id(5),
-            trade_id: trade.trade_id,
-            buyer_account: account(9),
-            provider_id: id(6),
-            total_bytes: BYTES_PER_GIB,
-            remaining_bytes: BYTES_PER_GIB - 32,
-            xor_locked: XorAmount::from_micro(1_000),
-            status: SettlementChannelStatusV1::Open,
-            opened_at_unix: 1_800_000_100,
-            updated_at_unix: 1_800_000_200,
-        }
+        open_settlement_channel_for_trade_v1(trade, id(5), account(9), id(6), 1_800_000_100)
+            .expect("snapshot channel should open")
     }
 
     fn runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
         let mut open = book_order(9, OrderSideV1::Ask, 1_700_000, 1);
         open.expiry_unix = 1_800_000_300;
         let trade = snapshot_trade();
-        let channel = snapshot_channel(&trade);
+        let opened_channel = snapshot_channel(&trade);
         let mut accepted_receipt = receipt();
-        accepted_receipt.channel_id = channel.channel_id;
-        accepted_receipt.trade_id = channel.trade_id;
-        accepted_receipt.issued_at_unix = channel.updated_at_unix;
+        accepted_receipt.channel_id = opened_channel.channel_id;
+        accepted_receipt.trade_id = opened_channel.trade_id;
+        accepted_receipt.issued_at_unix = 1_800_000_200;
         accepted_receipt = sign_receipt(accepted_receipt, 0x55);
+        let channel = apply_settlement_receipt_v1(&opened_channel, &accepted_receipt)
+            .expect("snapshot receipt should apply");
 
         OrderbookRuntimeSnapshotV1 {
             version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
@@ -2597,6 +2588,90 @@ mod tests {
             snapshot.validate(),
             Err(OrderbookValidationError::SnapshotReceiptRangeOverlap { .. })
         ));
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_channel_total_byte_drift() {
+        let mut snapshot = runtime_snapshot();
+        snapshot.settlement_channels[0].total_bytes += 1;
+
+        assert_eq!(
+            snapshot.validate(),
+            Err(
+                OrderbookValidationError::SnapshotChannelTotalBytesMismatch {
+                    channel_id: id(5),
+                    total_bytes: 2 * BYTES_PER_GIB + 1,
+                    expected_total_bytes: 2 * BYTES_PER_GIB,
+                },
+            )
+        );
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_receipt_remaining_byte_drift() {
+        let mut snapshot = runtime_snapshot();
+        snapshot.settlement_channels[0].remaining_bytes += 1;
+
+        assert_eq!(
+            snapshot.validate(),
+            Err(
+                OrderbookValidationError::SnapshotChannelReceiptBytesMismatch {
+                    channel_id: id(5),
+                    remaining_bytes: 2 * BYTES_PER_GIB - 31,
+                    expected_remaining_bytes: 2 * BYTES_PER_GIB - 32,
+                },
+            )
+        );
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_receipt_escrow_drift() {
+        let mut snapshot = runtime_snapshot();
+        snapshot.settlement_channels[0].xor_locked = XorAmount::from_micro(2_841_901);
+
+        assert_eq!(
+            snapshot.validate(),
+            Err(OrderbookValidationError::SnapshotChannelEscrowMismatch {
+                channel_id: id(5),
+                escrow_micro: 2_841_901,
+                expected_escrow_micro: 2_841_900,
+            })
+        );
+    }
+
+    #[test]
+    fn orderbook_runtime_snapshot_rejects_receipt_range_beyond_channel_total() {
+        let mut snapshot = runtime_snapshot();
+        let total_bytes = snapshot.settlement_channels[0].total_bytes;
+        let receipt = &mut snapshot.settlement_receipts[0];
+        receipt.range = ByteRangeV1 {
+            start: total_bytes - 16,
+            end: total_bytes + 16,
+        };
+        receipt.bytes_delivered = 32;
+        receipt.chunk_hash = id(12);
+        *receipt = sign_receipt(receipt.clone(), 0x57);
+
+        assert_eq!(
+            snapshot.validate(),
+            Err(OrderbookValidationError::ReceiptExceedsChannelBytes {
+                range_end: total_bytes + 16,
+                total_bytes,
+            })
+        );
+    }
+
+    #[test]
+    fn channel_rejects_closed_state_with_remaining_bytes() {
+        let mut channel = snapshot_channel(&snapshot_trade());
+        channel.status = SettlementChannelStatusV1::Closed;
+
+        assert_eq!(
+            channel.validate(),
+            Err(OrderbookValidationError::ClosedChannelHasRemainingBytes {
+                remaining_bytes: 2 * BYTES_PER_GIB,
+            })
+        );
     }
 
     #[test]

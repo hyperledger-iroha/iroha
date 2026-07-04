@@ -126,6 +126,99 @@ def test_write_json_completes_partial_descriptor_writes(
     assert len(writes) > 1
 
 
+def test_write_json_fsyncs_descriptor_before_close(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "generated" / "fixture.json"
+    payload = {"ready": True}
+    original_fsync = os.fsync
+    fsynced: list[int] = []
+
+    def fsync(fd: int) -> None:
+        fsynced.append(fd)
+        original_fsync(fd)
+
+    monkeypatch.setattr(MODULE.os, "fsync", fsync)
+
+    MODULE.write_json(output, payload, label="Android fixture")
+
+    assert json.loads(output.read_text(encoding="utf-8")) == payload
+    assert len(fsynced) == 2
+
+
+def test_write_json_propagates_fsync_failure_without_leaking_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "bad\nfixture.json"
+    bad_message = "fsync denied"
+
+    def fsync(_fd: int) -> None:
+        raise OSError(bad_message)
+
+    monkeypatch.setattr(MODULE.os, "fsync", fsync)
+
+    try:
+        MODULE.write_json(output, {"ready": True}, label="Android fixture")
+    except ValueError as error:
+        assert str(error) == (
+            "failed to write Android fixture `<non-canonical-path>`: "
+            "<non-canonical-error>"
+        )
+        assert str(output) not in str(error)
+        assert bad_message not in str(error)
+    else:
+        raise AssertionError("Android fixture write ignored fsync failure")
+
+
+def test_write_json_fsyncs_output_parent_after_descriptor_close(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "generated" / "fixture.json"
+    calls: list[tuple[Path, str]] = []
+
+    def record_parent_sync(path: Path, *, label: str) -> list[str]:
+        calls.append((path, label))
+        return []
+
+    monkeypatch.setattr(MODULE, "fsync_checker_output_parent", record_parent_sync)
+
+    MODULE.write_json(output, {"ready": True}, label="Android fixture")
+
+    assert calls == [(output, "Android fixture")]
+
+
+def test_write_json_parent_fsync_failure_does_not_leak_path(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "bad\nfixture.json"
+    raw_message = f"parent fsync denied for {output}\nsecret"
+
+    def fail_parent_sync(_path: Path, *, label: str) -> list[str]:
+        assert label == "Android fixture"
+        return [
+            "failed to fsync Android fixture parent `<non-canonical-path>`: "
+            "<non-canonical-error>"
+        ]
+
+    monkeypatch.setattr(MODULE, "fsync_checker_output_parent", fail_parent_sync)
+
+    try:
+        MODULE.write_json(output, {"ready": True}, label="Android fixture")
+    except ValueError as error:
+        assert str(error) == (
+            "failed to fsync Android fixture parent `<non-canonical-path>`: "
+            "<non-canonical-error>"
+        )
+        assert str(output) not in str(error)
+        assert raw_message not in str(error)
+    else:
+        raise AssertionError("Android fixture write ignored parent fsync failure")
+
+
 def test_write_json_rejects_symlinked_parent_before_create(
     tmp_path: Path,
     monkeypatch,

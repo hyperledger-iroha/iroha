@@ -1361,6 +1361,171 @@ mod tests {
         }
     }
 
+    fn allocated_summary(
+        lane_backlog: Vec<LaneRbcSnapshot>,
+        dataspace_backlog: Vec<DataspaceRbcSnapshot>,
+    ) -> Summary {
+        Summary {
+            block_hash: hash(0xA1),
+            height: 101,
+            view: 0,
+            total_chunks: 4,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 0,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog,
+            dataspace_backlog,
+        }
+    }
+
+    #[test]
+    fn summary_allocation_error_rejects_overflowing_aggregate_totals() {
+        let lane_chunk_overflow = allocated_summary(
+            vec![
+                LaneRbcSnapshot {
+                    lane_id: 7,
+                    tx_count: 1,
+                    total_chunks: u64::MAX,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 1,
+                },
+                LaneRbcSnapshot {
+                    lane_id: 8,
+                    tx_count: 1,
+                    total_chunks: 1,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 1,
+                },
+            ],
+            vec![
+                DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 42,
+                    tx_count: 1,
+                    total_chunks: u64::MAX,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 1,
+                },
+                DataspaceRbcSnapshot {
+                    lane_id: 8,
+                    dataspace_id: 43,
+                    tx_count: 1,
+                    total_chunks: 1,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 1,
+                },
+            ],
+        );
+        assert_eq!(
+            summary_allocation_error(&lane_chunk_overflow),
+            Some("lane allocation chunk sum overflow")
+        );
+
+        let dataspace_tx_overflow = allocated_summary(
+            vec![LaneRbcSnapshot {
+                lane_id: 7,
+                tx_count: u64::MAX,
+                total_chunks: 4,
+                pending_chunks: 0,
+                rbc_bytes_total: 4,
+            }],
+            vec![
+                DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 42,
+                    tx_count: u64::MAX,
+                    total_chunks: 2,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 2,
+                },
+                DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 43,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 2,
+                },
+            ],
+        );
+        assert_eq!(
+            summary_allocation_error(&dataspace_tx_overflow),
+            Some("dataspace allocation transaction sum overflow")
+        );
+
+        let dataspace_chunk_overflow = allocated_summary(
+            vec![LaneRbcSnapshot {
+                lane_id: 7,
+                tx_count: 2,
+                total_chunks: 4,
+                pending_chunks: 0,
+                rbc_bytes_total: 4,
+            }],
+            vec![
+                DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 42,
+                    tx_count: 1,
+                    total_chunks: u64::MAX,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 2,
+                },
+                DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 43,
+                    tx_count: 1,
+                    total_chunks: 1,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 2,
+                },
+            ],
+        );
+        assert_eq!(
+            summary_allocation_error(&dataspace_chunk_overflow),
+            Some("dataspace allocation chunk sum overflow")
+        );
+
+        let dataspace_byte_overflow = allocated_summary(
+            vec![LaneRbcSnapshot {
+                lane_id: 7,
+                tx_count: 2,
+                total_chunks: 4,
+                pending_chunks: 0,
+                rbc_bytes_total: 4,
+            }],
+            vec![
+                DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 42,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 0,
+                    rbc_bytes_total: u64::MAX,
+                },
+                DataspaceRbcSnapshot {
+                    lane_id: 7,
+                    dataspace_id: 43,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    pending_chunks: 0,
+                    rbc_bytes_total: 1,
+                },
+            ],
+        );
+        assert_eq!(
+            summary_allocation_error(&dataspace_byte_overflow),
+            Some("dataspace allocation byte sum overflow")
+        );
+    }
+
     #[test]
     fn temp_store_path_preserves_extensions() {
         let base = Path::new("/var/lib/iroha/rbc/sessions.norito");

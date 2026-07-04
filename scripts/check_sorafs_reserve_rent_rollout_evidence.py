@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -41,8 +42,10 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_fingerprint,
     evidence_artifact_schema,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
+    record_observed_evidence_value,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
@@ -52,12 +55,11 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_bool_true,
     require_count_equal,
     require_false,
-    require_false_or_absent,
     require_hex,
     require_config_backed_governance_approval,
     require_iroha_config_binding,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_minimum_value,
     require_non_negative_int,
@@ -94,10 +96,109 @@ DEFAULT_MAX_ROUTE_LATENCY_MS = 1_500
 DEFAULT_MAX_BAKE_AGE_SECS = 14 * 24 * 60 * 60
 DEFAULT_MAX_EVIDENCE_AGE_SECS = 14 * 24 * 60 * 60
 HEX64_LEN = 64
+BAKE_ID_PATTERN = re.compile(r"^reserve-bake-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+BAKE_ID_ERROR = "bake_id must match canonical lowercase `reserve-bake-*`"
+PROVIDER_LABEL_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-*`"
+RENT_CYCLE_LABEL_PATTERN = re.compile(r"^reserve-rent-cycle-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+RENT_CYCLE_LABEL_ERROR = (
+    "rent_cycles[].name must match canonical lowercase `reserve-rent-cycle-*`"
+)
+TOP_UP_CYCLE_LABEL_PATTERN = re.compile(
+    r"^reserve-top-up-cycle-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+TOP_UP_CYCLE_LABEL_ERROR = (
+    "top_up_cycles[].name must match canonical lowercase `reserve-top-up-cycle-*`"
+)
+APPEAL_CYCLE_LABEL_PATTERN = re.compile(
+    r"^reserve-appeal-cycle-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+APPEAL_CYCLE_LABEL_ERROR = (
+    "appeal_cycles[].name must match canonical lowercase `reserve-appeal-cycle-*`"
+)
+DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_PATTERN = re.compile(
+    r"^reserve-compliance-consumer-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_ERROR = (
+    "downstream_compliance_consumers[].name must match canonical lowercase "
+    "`reserve-compliance-consumer-*`"
+)
+LEDGER_REF_LABEL_PATTERN = re.compile(r"^reserve-ledger-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+LEDGER_REF_LABEL_ERROR = "ledgers[].name must match canonical lowercase `reserve-ledger-*`"
+INSTRUCTION_REF_LABEL_PATTERN = re.compile(
+    r"^reserve-instruction-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+INSTRUCTION_REF_LABEL_ERROR = (
+    "instructions[].name must match canonical lowercase `reserve-instruction-*`"
+)
+PERSISTED_STAGE_LABEL_PATTERN = re.compile(
+    r"^reserve-lifecycle-stage-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+PERSISTED_STAGE_LABEL_ERROR = (
+    "persisted_stages[].name must match canonical lowercase "
+    "`reserve-lifecycle-stage-*`"
+)
+SCHEDULED_LIFECYCLE_TICK_LABEL_PATTERN = re.compile(
+    r"^reserve-lifecycle-tick-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+SCHEDULED_LIFECYCLE_TICK_LABEL_ERROR = (
+    "scheduled_lifecycle_canary_ticks[].name must match canonical lowercase "
+    "`reserve-lifecycle-tick-*`"
+)
+FORBIDDEN_BAKE_ID_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_PROVIDER_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_CYCLE_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 REQUIRED_STORAGE_CLASSES = ("hot", "warm", "archive")
 REQUIRED_TIERS = ("tier-a", "tier-b", "tier-c")
 REQUIRED_DURATIONS = ("monthly", "quarterly", "annual")
+REQUIRED_QUOTE_MATRIX_SCENARIOS = (
+    len(REQUIRED_STORAGE_CLASSES) * len(REQUIRED_TIERS) * len(REQUIRED_DURATIONS)
+)
 REQUIRED_LIFECYCLE_ROUTES = (
     "provider_summary",
     "lifecycle_status",
@@ -110,6 +211,25 @@ REQUIRED_SIGNED_ROUTES = (
     "appeal_submit",
     "policy_update",
     "provider_status",
+)
+REQUIRED_RESERVE_MOVEMENT_ACTIONS = (
+    "rent_settlement",
+    "reserve_top_up",
+    "withdrawal_limit",
+    "custody_reconciliation",
+)
+REQUIRED_APPEAL_POLICY_PROBES = (
+    "approved_policy_override",
+    "rejected_unauthorized_appeal",
+)
+APPEAL_POLICY_OUTCOMES = frozenset({"approved", "rejected"})
+REQUIRED_CREDIT_LINE_MUTATIONS = (
+    "credit_draw_cap",
+    "manual_approval_tier",
+)
+REQUIRED_CREDIT_LINE_ACCRUAL_CYCLES = (
+    "apr_accrual",
+    "credit_shortfall",
 )
 REQUIRED_METRICS = (
     "sorafs_reserve_ledger_rent_due_xor",
@@ -151,6 +271,96 @@ SENSITIVE_KEYS = {
     "signed_transaction",
     "token",
 }
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
+def require_bake_id(payload: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed lowercase reserve provider-bake identifier."""
+
+    bake_id = require_string(payload, "bake_id", errors)
+    if not bake_id:
+        return ""
+    if BAKE_ID_PATTERN.fullmatch(bake_id) is None:
+        errors.append(BAKE_ID_ERROR)
+        return ""
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_BAKE_ID_MARKERS if marker in bake_id.split("-")
+    )
+    if forbidden:
+        errors.append(f"bake_id must not contain non-production markers {forbidden}")
+        return ""
+    return bake_id
+
+
+def require_provider_label(record: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed lowercase production provider inventory label."""
+
+    provider = require_string(record, "name", errors)
+    if not provider:
+        return ""
+    if PROVIDER_LABEL_PATTERN.fullmatch(provider) is None:
+        errors.append(PROVIDER_LABEL_ERROR)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
+        if marker in provider.split("-")
+    )
+    if forbidden:
+        errors.append(
+            f"providers[].name must not contain non-production markers {forbidden}"
+        )
+        return ""
+    return provider
+
+
+def require_inventory_label(
+    record: dict[str, Any],
+    errors: list[str],
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    path: str,
+) -> str:
+    """Require a reviewed lowercase production inventory label."""
+
+    label = require_string(record, "name", errors)
+    if not label:
+        return ""
+    if pattern.fullmatch(label) is None:
+        errors.append(label_error)
+        return ""
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_CYCLE_LABEL_MARKERS if marker in label.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return label
 
 
 @dataclass(frozen=True)
@@ -228,7 +438,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "matrix_digest_hex",
         "ledger_digest_hex",
         "ledger_count",
+        "ledgers",
         "instruction_count",
+        "instructions",
         "rent_transfer_present",
         "reserve_top_up_transfer_present",
         "instruction_hashes_verified",
@@ -246,6 +458,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "routes",
         "max_lifecycle_lag_seconds",
         "persisted_stage_count",
+        "persisted_stages",
         "stage_transition_replay_passed",
         "governance_event_emitted",
         "manual_override_audited",
@@ -274,6 +487,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "accepted_movement_count",
         "failed_movement_count",
         "unexpected_failure_count",
+        "movements",
         "rent_settlement_present",
         "reserve_top_up_present",
         "withdrawal_limits_enforced",
@@ -302,7 +516,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "matrix_digest_hex",
         "ledger_digest_hex",
         "credit_line_mutation_count",
+        "credit_line_mutations",
         "accrual_cycle_count",
+        "accrual_cycles",
         "credit_draw_cap_enforced",
         "apr_accrual_verified",
         "manual_approval_tier_blocked",
@@ -324,6 +540,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "appeal_probe_count",
         "approved_appeal_count",
         "rejected_appeal_count",
+        "appeal_probes",
         "appeal_route_present",
         "policy_update_route_present",
         "governance_recorded",
@@ -342,6 +559,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "alert_rules_installed",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "response_bodies_included",
     ),
     "provider_bake": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -353,15 +571,20 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "started_at_unix",
         "completed_at_unix",
         "provider_count",
+        "providers",
         "completed_provider_count",
         "failure_count",
         "rent_cycle_count",
+        "rent_cycles",
         "top_up_cycle_count",
+        "top_up_cycles",
         "appeal_cycle_count",
+        "appeal_cycles",
         "scheduler_config_bound",
         "scheduled_lifecycle_canary_passed",
         "scheduled_lifecycle_canary_last_tick_unix",
         "scheduled_lifecycle_canary_tick_count",
+        "scheduled_lifecycle_canary_ticks",
         "scheduled_lifecycle_canary_defaulted_provider_count",
         "scheduled_lifecycle_canary_gateway_sync_verified",
         "scheduled_lifecycle_canary_orderbook_rejection_verified",
@@ -386,6 +609,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "governance_source_entries_published",
         "downstream_compliance_policy_applied",
         "downstream_compliance_consumer_count",
+        "downstream_compliance_consumers",
         "non_reserve_compliance_entries_preserved",
         "governance_source_entry_handoff_verified",
         "denylist_and_policy_consumers_consistent",
@@ -416,9 +640,14 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "policy_digest_hex",
     "matrix_digest_hex",
     "ledger_digest_hex",
+    "metric_count",
+    "metrics",
     "started_at_unix",
     "completed_at_unix",
     "provider_count",
+    "scheduled_lifecycle_canary_last_tick_unix",
+    "scheduled_lifecycle_canary_tick_count",
+    "scheduled_lifecycle_canary_defaulted_provider_count",
 )
 PROVIDER_BAKE_FIELDS: tuple[str, ...] = (
     "bake_id",
@@ -430,6 +659,9 @@ PROVIDER_BAKE_FIELDS: tuple[str, ...] = (
     "started_at_unix",
     "completed_at_unix",
     "provider_count",
+    "scheduled_lifecycle_canary_last_tick_unix",
+    "scheduled_lifecycle_canary_tick_count",
+    "scheduled_lifecycle_canary_defaulted_provider_count",
 )
 
 
@@ -469,6 +701,13 @@ def validate_route_records(
             errors,
             path=f"routes[{index}].status_code",
         )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
         if require_authz:
             require_bool_true(
                 record,
@@ -482,14 +721,13 @@ def validate_route_records(
             errors,
             path=f"routes[{index}].signature_verified",
         )
-        if record.get("latency_ms") is not None:
-            require_maximum_number(
-                record,
-                "latency_ms",
-                options.max_route_latency_ms,
-                errors,
-                path=f"routes[{index}].latency_ms",
-            )
+        require_maximum_int(
+            record,
+            "latency_ms",
+            options.max_route_latency_ms,
+            errors,
+            path=f"routes[{index}].latency_ms",
+        )
 
 
 def validate_route_inventory(
@@ -507,6 +745,7 @@ def validate_route_inventory(
         field="name",
         allow_scalar_items=False,
     )
+    require_only_required_values(payload, "routes", "name", required_routes, errors)
 
 
 def validate_policy_config(payload: dict[str, Any], errors: list[str]) -> None:
@@ -554,13 +793,16 @@ def validate_quote_matrix(payload: dict[str, Any], errors: list[str]) -> None:
     require_minimum_value(
         scenario_count,
         "scenario_count",
-        27,
+        REQUIRED_QUOTE_MATRIX_SCENARIOS,
         errors,
         message="scenario_count must cover at least the 3x3x3 policy matrix",
     )
     require_string_coverage(payload, "storage_classes", "", REQUIRED_STORAGE_CLASSES, errors)
     require_string_coverage(payload, "tiers", "", REQUIRED_TIERS, errors)
     require_string_coverage(payload, "durations", "", REQUIRED_DURATIONS, errors)
+    require_only_required_values(payload, "storage_classes", "", REQUIRED_STORAGE_CLASSES, errors)
+    require_only_required_values(payload, "tiers", "", REQUIRED_TIERS, errors)
+    require_only_required_values(payload, "durations", "", REQUIRED_DURATIONS, errors)
     storage_class_count = unique_scalar_inventory_count(payload, "storage_classes", errors)
     tier_count = unique_scalar_inventory_count(payload, "tiers", errors)
     duration_count = unique_scalar_inventory_count(payload, "durations", errors)
@@ -589,6 +831,38 @@ def validate_ledger_digest(
     )
     require_positive_int(payload, "ledger_count", errors)
     require_positive_int(payload, "instruction_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "ledgers",
+        "ledger_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(payload, "ledgers", errors):
+        require_inventory_label(
+            record,
+            errors,
+            pattern=LEDGER_REF_LABEL_PATTERN,
+            label_error=LEDGER_REF_LABEL_ERROR,
+            path=f"ledgers[{index}].name",
+        )
+    require_string_inventory_count_match(
+        payload,
+        "instructions",
+        "instruction_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(payload, "instructions", errors):
+        require_inventory_label(
+            record,
+            errors,
+            pattern=INSTRUCTION_REF_LABEL_PATTERN,
+            label_error=INSTRUCTION_REF_LABEL_ERROR,
+            path=f"instructions[{index}].name",
+        )
     require_bool_true(payload, "rent_transfer_present", errors)
     require_bool_true(payload, "reserve_top_up_transfer_present", errors)
     require_bool_true(payload, "instruction_hashes_verified", errors)
@@ -604,13 +878,29 @@ def validate_lifecycle_service(
 ) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
     validate_route_inventory(payload, REQUIRED_LIFECYCLE_ROUTES, errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_lifecycle_lag_seconds",
         options.max_lifecycle_lag_secs,
         errors,
     )
     require_positive_int(payload, "persisted_stage_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "persisted_stages",
+        "persisted_stage_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(payload, "persisted_stages", errors):
+        require_inventory_label(
+            record,
+            errors,
+            pattern=PERSISTED_STAGE_LABEL_PATTERN,
+            label_error=PERSISTED_STAGE_LABEL_ERROR,
+            path=f"persisted_stages[{index}].name",
+        )
     require_bool_true(payload, "stage_transition_replay_passed", errors)
     require_bool_true(payload, "governance_event_emitted", errors)
     require_bool_true(payload, "manual_override_audited", errors)
@@ -625,11 +915,12 @@ def validate_signed_routes(
 ) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
     validate_route_inventory(payload, REQUIRED_SIGNED_ROUTES, errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_route_latency_ms",
         options.max_route_latency_ms,
         errors,
+        minimum=1,
     )
     require_bool_true(payload, "replay_attack_rejected", errors)
     require_bool_true(payload, "unsigned_request_rejected", errors)
@@ -643,6 +934,48 @@ def validate_reserve_movement(payload: dict[str, Any], errors: list[str]) -> Non
     accepted_movement_count = require_count_equal(
         payload, "movement_count", "accepted_movement_count", errors
     )
+    require_string_coverage(
+        payload,
+        "movements",
+        "action",
+        REQUIRED_RESERVE_MOVEMENT_ACTIONS,
+        errors,
+        allow_scalar_items=False,
+        trim_values=False,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "movements",
+        "movement_count",
+        errors,
+        field="action",
+        allow_scalar_items=False,
+    )
+    require_only_required_values(
+        payload,
+        "movements",
+        "action",
+        REQUIRED_RESERVE_MOVEMENT_ACTIONS,
+        errors,
+    )
+    accepted_record_count = 0
+    for index, record in require_object_array(payload, "movements", errors):
+        require_string(record, "action", errors)
+        for field in (
+            "accepted",
+            "chain_submitted",
+            "finality_confirmed",
+            "custody_reconciled",
+        ):
+            require_bool_true(record, field, errors, path=f"movements[{index}].{field}")
+        if record.get("accepted") is True:
+            accepted_record_count += 1
+    if (
+        isinstance(accepted_movement_count, int)
+        and not isinstance(accepted_movement_count, bool)
+        and accepted_movement_count != accepted_record_count
+    ):
+        errors.append("accepted_movement_count must match accepted movements count")
     require_zero_count(payload, "failed_movement_count", errors)
     require_zero_count(payload, "unexpected_failure_count", errors)
     require_bool_true(payload, "rent_settlement_present", errors)
@@ -692,7 +1025,71 @@ def validate_reserve_movement(payload: dict[str, Any], errors: list[str]) -> Non
 def validate_credit_line(payload: dict[str, Any], errors: list[str]) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
     require_positive_int(payload, "credit_line_mutation_count", errors)
+    require_string_coverage(
+        payload,
+        "credit_line_mutations",
+        "name",
+        REQUIRED_CREDIT_LINE_MUTATIONS,
+        errors,
+        allow_scalar_items=False,
+        trim_values=False,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "credit_line_mutations",
+        "credit_line_mutation_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    require_only_required_values(
+        payload,
+        "credit_line_mutations",
+        "name",
+        REQUIRED_CREDIT_LINE_MUTATIONS,
+        errors,
+    )
+    for index, record in require_object_array(payload, "credit_line_mutations", errors):
+        require_string(record, "name", errors)
+        require_bool_true(
+            record,
+            "verified",
+            errors,
+            path=f"credit_line_mutations[{index}].verified",
+        )
     require_positive_int(payload, "accrual_cycle_count", errors)
+    require_string_coverage(
+        payload,
+        "accrual_cycles",
+        "name",
+        REQUIRED_CREDIT_LINE_ACCRUAL_CYCLES,
+        errors,
+        allow_scalar_items=False,
+        trim_values=False,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "accrual_cycles",
+        "accrual_cycle_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    require_only_required_values(
+        payload,
+        "accrual_cycles",
+        "name",
+        REQUIRED_CREDIT_LINE_ACCRUAL_CYCLES,
+        errors,
+    )
+    for index, record in require_object_array(payload, "accrual_cycles", errors):
+        require_string(record, "name", errors)
+        require_bool_true(
+            record,
+            "posted_to_account_state",
+            errors,
+            path=f"accrual_cycles[{index}].posted_to_account_state",
+        )
     require_bool_true(payload, "credit_draw_cap_enforced", errors)
     require_bool_true(payload, "apr_accrual_verified", errors)
     require_bool_true(payload, "manual_approval_tier_blocked", errors)
@@ -712,6 +1109,53 @@ def validate_appeal_policy(payload: dict[str, Any], errors: list[str]) -> None:
     probe_count = require_positive_int(payload, "appeal_probe_count", errors)
     approved = require_non_negative_int(payload, "approved_appeal_count", errors)
     rejected = require_non_negative_int(payload, "rejected_appeal_count", errors)
+    require_string_coverage(
+        payload,
+        "appeal_probes",
+        "name",
+        REQUIRED_APPEAL_POLICY_PROBES,
+        errors,
+        allow_scalar_items=False,
+        trim_values=False,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "appeal_probes",
+        "appeal_probe_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    require_only_required_values(
+        payload,
+        "appeal_probes",
+        "name",
+        REQUIRED_APPEAL_POLICY_PROBES,
+        errors,
+    )
+    approved_probe_count = 0
+    rejected_probe_count = 0
+    for index, record in require_object_array(payload, "appeal_probes", errors):
+        require_string(record, "name", errors)
+        outcome = require_string(record, "outcome", errors)
+        if outcome not in APPEAL_POLICY_OUTCOMES:
+            errors.append(f"appeal_probes[{index}].outcome must be approved or rejected")
+        elif outcome == "approved":
+            approved_probe_count += 1
+        else:
+            rejected_probe_count += 1
+        require_bool_true(
+            record,
+            "governance_recorded",
+            errors,
+            path=f"appeal_probes[{index}].governance_recorded",
+        )
+        require_bool_true(
+            record,
+            "policy_digest_bound",
+            errors,
+            path=f"appeal_probes[{index}].policy_digest_bound",
+        )
     require_sum_equal(
         probe_count,
         (
@@ -721,6 +1165,18 @@ def validate_appeal_policy(payload: dict[str, Any], errors: list[str]) -> None:
         "appeal_probe_count",
         errors,
     )
+    if (
+        isinstance(approved, int)
+        and not isinstance(approved, bool)
+        and approved != approved_probe_count
+    ):
+        errors.append("approved_appeal_count must match approved appeal probes count")
+    if (
+        isinstance(rejected, int)
+        and not isinstance(rejected, bool)
+        and rejected != rejected_probe_count
+    ):
+        errors.append("rejected_appeal_count must match rejected appeal probes count")
     require_bool_true(payload, "appeal_route_present", errors)
     require_bool_true(payload, "policy_update_route_present", errors)
     require_bool_true(payload, "governance_recorded", errors)
@@ -737,6 +1193,9 @@ def validate_metrics_alerts(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "alert_rules_installed", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -746,7 +1205,7 @@ def validate_provider_bake(
     options: ValidationOptions,
 ) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
-    require_string(payload, "bake_id", errors)
+    require_bake_id(payload, errors)
     started_at = require_recent_timestamp(
         payload,
         "started_at_unix",
@@ -793,15 +1252,164 @@ def validate_provider_bake(
                 "scheduled_lifecycle_canary_last_tick_unix must be within "
                 f"{options.max_lifecycle_lag_secs} seconds of completed_at_unix"
             )
-    require_count_equal(payload, "provider_count", "completed_provider_count", errors)
+    provider_count = require_count_equal(
+        payload,
+        "provider_count",
+        "completed_provider_count",
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "providers",
+        "provider_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    completed_provider_rows = 0
+    defaulted_provider_rows = 0
+    for index, record in require_object_array(payload, "providers", errors):
+        require_provider_label(record, errors)
+        if record.get("completed") is True:
+            completed_provider_rows += 1
+        if record.get("defaulted") is True:
+            defaulted_provider_rows += 1
+        require_bool_true(
+            record,
+            "completed",
+            errors,
+            path=f"providers[{index}].completed",
+        )
+        require_bool_true(
+            record,
+            "scheduler_tick_observed",
+            errors,
+            path=f"providers[{index}].scheduler_tick_observed",
+        )
+    completed_provider_count = payload.get("completed_provider_count")
+    if (
+        isinstance(completed_provider_count, int)
+        and not isinstance(completed_provider_count, bool)
+        and completed_provider_count != completed_provider_rows
+    ):
+        errors.append("completed_provider_count must match completed providers count")
     require_zero_count(payload, "failure_count", errors)
     require_positive_int(payload, "rent_cycle_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "rent_cycles",
+        "rent_cycle_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(payload, "rent_cycles", errors):
+        require_inventory_label(
+            record,
+            errors,
+            pattern=RENT_CYCLE_LABEL_PATTERN,
+            label_error=RENT_CYCLE_LABEL_ERROR,
+            path="rent_cycles[].name",
+        )
+        require_bool_true(
+            record,
+            "settled",
+            errors,
+            path=f"rent_cycles[{index}].settled",
+        )
     require_positive_int(payload, "top_up_cycle_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "top_up_cycles",
+        "top_up_cycle_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(payload, "top_up_cycles", errors):
+        require_inventory_label(
+            record,
+            errors,
+            pattern=TOP_UP_CYCLE_LABEL_PATTERN,
+            label_error=TOP_UP_CYCLE_LABEL_ERROR,
+            path="top_up_cycles[].name",
+        )
+        require_bool_true(
+            record,
+            "reconciled",
+            errors,
+            path=f"top_up_cycles[{index}].reconciled",
+        )
     require_positive_int(payload, "appeal_cycle_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "appeal_cycles",
+        "appeal_cycle_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(payload, "appeal_cycles", errors):
+        require_inventory_label(
+            record,
+            errors,
+            pattern=APPEAL_CYCLE_LABEL_PATTERN,
+            label_error=APPEAL_CYCLE_LABEL_ERROR,
+            path="appeal_cycles[].name",
+        )
+        require_bool_true(
+            record,
+            "reviewed",
+            errors,
+            path=f"appeal_cycles[{index}].reviewed",
+        )
     require_bool_true(payload, "scheduler_config_bound", errors)
     require_bool_true(payload, "scheduled_lifecycle_canary_passed", errors)
     require_positive_int(payload, "scheduled_lifecycle_canary_tick_count", errors)
-    require_positive_int(payload, "scheduled_lifecycle_canary_defaulted_provider_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "scheduled_lifecycle_canary_ticks",
+        "scheduled_lifecycle_canary_tick_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(
+        payload,
+        "scheduled_lifecycle_canary_ticks",
+        errors,
+    ):
+        require_inventory_label(
+            record,
+            errors,
+            pattern=SCHEDULED_LIFECYCLE_TICK_LABEL_PATTERN,
+            label_error=SCHEDULED_LIFECYCLE_TICK_LABEL_ERROR,
+            path=f"scheduled_lifecycle_canary_ticks[{index}].name",
+        )
+    defaulted_provider_count = require_positive_int(
+        payload,
+        "scheduled_lifecycle_canary_defaulted_provider_count",
+        errors,
+    )
+    if (
+        isinstance(defaulted_provider_count, int)
+        and not isinstance(defaulted_provider_count, bool)
+        and defaulted_provider_count != defaulted_provider_rows
+    ):
+        errors.append(
+            "scheduled_lifecycle_canary_defaulted_provider_count must match "
+            "defaulted providers count"
+        )
+    require_minimum_value(
+        provider_count,
+        "provider_count",
+        defaulted_provider_count,
+        errors,
+        message=(
+            "provider_count must cover every "
+            "scheduled_lifecycle_canary_defaulted_provider_count"
+        ),
+    )
     require_bool_true(payload, "scheduled_lifecycle_canary_gateway_sync_verified", errors)
     require_bool_true(payload, "scheduled_lifecycle_canary_orderbook_rejection_verified", errors)
     require_bool_true(payload, "governance_packet_attached", errors)
@@ -821,6 +1429,26 @@ def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> 
     require_bool_true(payload, "governance_source_entries_published", errors)
     require_bool_true(payload, "downstream_compliance_policy_applied", errors)
     require_positive_int(payload, "downstream_compliance_consumer_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "downstream_compliance_consumers",
+        "downstream_compliance_consumer_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(
+        payload,
+        "downstream_compliance_consumers",
+        errors,
+    ):
+        require_inventory_label(
+            record,
+            errors,
+            pattern=DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_PATTERN,
+            label_error=DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_ERROR,
+            path=f"downstream_compliance_consumers[{index}].name",
+        )
     require_bool_true(payload, "non_reserve_compliance_entries_preserved", errors)
     require_bool_true(payload, "governance_source_entry_handoff_verified", errors)
     require_bool_true(payload, "denylist_and_policy_consumers_consistent", errors)
@@ -915,6 +1543,8 @@ def build_summary(
     valid_policy_digests: set[str] = set()
     valid_policy_matrix_bindings: set[tuple[str, str]] = set()
     valid_policy_matrix_ledger_bindings: set[tuple[str, str, str]] = set()
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     policy_bound_artifacts: list[dict[str, Any]] = []
     ledger_bound_artifacts: list[dict[str, Any]] = []
     files = discover_evidence_files(
@@ -956,6 +1586,12 @@ def build_summary(
             ledger_digest = fingerprint.get("ledger_digest_hex")
             if kind_name == "policy_config" and isinstance(policy_digest, str):
                 valid_policy_digests.add(policy_digest.lower())
+            if kind_name == "metrics_alerts":
+                record_observed_evidence_value(
+                    metric_counts,
+                    payload.get("metric_count"),
+                )
+                metric_names.update(hashable_evidence_values(payload.get("metrics")))
             if kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append(artifact)
             if kind_name in LEDGER_BOUND_KINDS:
@@ -1118,6 +1754,8 @@ def build_summary(
             )
         ],
         "valid_provider_bakes": valid_provider_bakes,
+        "metric_count_values": sorted(metric_counts),
+        "metrics": sorted(metric_names),
         "required": required,
         "errors": errors,
     }

@@ -16,7 +16,8 @@ Utility scripts for Android telemetry readiness and SoraFS chaos drill tracking.
 - `check_redaction_status.py`: summarises Android telemetry redaction health by reading the local cache (`artifacts/android/telemetry/status.json`) or a staging endpoint. Emits the runbook-friendly `STATUS`/`ALERT` lines, supports salt verification via `--expected-salt-epoch` / `--expected-salt-rotation` (or the matching env vars `ANDROID_TELEMETRY_EXPECTED_SALT_EPOCH` / `ANDROID_TELEMETRY_EXPECTED_SALT_ROTATION`), and can dump JSON for incident artefacts via `--json` (stdout only, suppresses text) or `--json-out <path>` (writes to a file while keeping the summary on stdout).
 - `log_sorafs_drill.sh`: appends a row to `ops/drill-log.md` (or a custom `--log`
   target) so chaos drills and incident rehearsals remain auditable. Supports
-  statuses `pass`, `fail`, `follow-up`, and `scheduled`.
+  exact lowercase statuses `pass`, `fail`, `follow-up`, and `scheduled`, and
+  rejects impossible calendar dates or UTC times before appending evidence.
 - `inject_redaction_failure.sh`: injects or clears redaction mismatches for chaos
   rehearsals. By default it mutates the local status cache used by
   `check_redaction_status.py`; with `--status-url` it POSTs to a live admin
@@ -29,8 +30,15 @@ Utility scripts for Android telemetry readiness and SoraFS chaos drill tracking.
   forces `--report-json` into `artifacts/sorafs_gateway_probe/`, captures the
   stdout/stderr log, parses the JSON summary, appends drill-log entries, and
   (optionally) triggers PagerDuty (`--pagerduty-dry-run` supported) plus
-  rollback hooks whenever the probe fails so TLS/ECH drills have deterministic
-  evidence.
+  rollback hooks whenever the probe fails. Drill timestamp overrides are
+  validated before artifacts or cargo execution, and rollback hooks must be
+  existing non-symlink executable files before launch. PagerDuty custom-detail
+  keys must be canonical, unique, and cannot override wrapper-owned evidence
+  fields such as `status` or `probe_log`; custom PagerDuty endpoints must be
+  credential-free HTTPS URLs. Wrapper options reject missing or option-shaped
+  values before artifacts are prepared, while `--rollback-hook-arg` still allows
+  flag-like values intended for the hook. These preflights keep TLS/ECH drills
+  deterministic.
 - `reserve_ledger_digest.py`: converts `sorafs reserve ledger` JSON into
   dashboard-friendly summaries. The helper now accepts multiple `--ledger`
   paths + optional `--label` overrides, emits Markdown/JSON/NDJSON batches, and
@@ -42,8 +50,9 @@ Utility scripts for Android telemetry readiness and SoraFS chaos drill tracking.
   and reports missing/overpaid settlements or penalties. It writes JSON
   summaries and Prometheus textfiles so Alertmanager can fire on reconciliation
   gaps during nightly treasury runs.
-- `validate_drill_log.sh [path]`: verifies that the drill log header matches the
-  expected schema and that every row uses an allowed status.
+- `validate_drill_log.sh [path]`: verifies that the drill log header and
+  separator match the expected schema and that every row uses an exact lowercase
+  status plus real calendar and UTC time fields.
 - SoraFS alert suites can be checked directly with `promtool test rules`; the
   fetch (`dashboards/alerts/tests/sorafs_fetch_rules.test.yml`), provider
   admission (`dashboards/alerts/tests/sorafs_provider_admission_rules.test.yml`),
@@ -99,7 +108,9 @@ Utility scripts for Android telemetry readiness and SoraFS chaos drill tracking.
   telemetry cron job backing DG-5a.
 - `schedule_soradns_ir_drill.sh`: computes the next quarterly SoraDNS
   transparency IR drill slot and appends a scheduled entry to `ops/drill-log.md`
-  so incident response rehearsals stay on cadence.
+  so incident response rehearsals stay on cadence. Default slots are derived
+  from the current UTC date, and custom `--date`/`--start` values are validated
+  before the drill log is touched.
 - `test_torii_norito_rpc_alerts.sh`: runs `promtool test rules` against the Norito
   RPC alert suite (`dashboards/alerts/tests/torii_norito_rpc_rules.test.yml`) so
   the Torii Norito dashboards and alerts remain in sync during rollout.

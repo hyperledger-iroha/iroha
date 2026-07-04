@@ -8936,6 +8936,114 @@ def test_live_evidence_route_canary_collection_rejects_non_string_destination_me
         raise AssertionError("route-canary used-message proof accepted hostile address")
 
 
+def test_live_evidence_route_canary_collection_rejects_non_string_transaction_hash_fields_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+    args = live_full_rollout_args(
+        setup.fake,
+        setup.expected,
+        source_code_hash=setup.source_code_hash,
+        route_canary_transaction_id=bytes.fromhex(
+            TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+        ),
+    )
+    original_transaction_summary = module._route_canary_transaction_summary
+
+    for field in (
+        "message_id",
+        "commitment_root",
+        "statement_hash",
+        "destination_binding_hash",
+        "verifier_backend_hash",
+        "proof_family_hash",
+        "network_id",
+    ):
+
+        def tampered_transaction_summary(*args, _field=field, **kwargs):
+            summary = original_transaction_summary(*args, **kwargs)
+            summary[_field] = HostileImportedScalar()
+            return summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                module,
+                "_route_canary_transaction_summary",
+                tampered_transaction_summary,
+            )
+            try:
+                module.collect_live_evidence(args, opener=setup.fake.opener)
+            except (
+                module.argparse.ArgumentTypeError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                assert "must be an exact non-empty string" in str(exc), field
+                assert "secret-token" not in str(exc), field
+            else:
+                raise AssertionError(
+                    f"route-canary collection accepted hostile {field} metadata"
+                )
+
+
+def test_live_evidence_route_canary_collection_rejects_non_string_trigger_hash_fields_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+    args = live_full_rollout_args(
+        setup.fake,
+        setup.expected,
+        source_code_hash=setup.source_code_hash,
+        route_canary_transaction_id=bytes.fromhex(
+            TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+        ),
+    )
+    original_trigger_summary = module._route_canary_trigger_contract_summary
+
+    for field in (
+        "call_data_sha256",
+        "public_inputs_payload_hash",
+        "public_inputs_finality_height",
+        "public_inputs_finality_block_hash",
+        "signature_sha256",
+    ):
+
+        def tampered_trigger_summary(*args, _field=field, **kwargs):
+            summary = original_trigger_summary(*args, **kwargs)
+            summary[_field] = HostileImportedScalar()
+            return summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                module,
+                "_route_canary_trigger_contract_summary",
+                tampered_trigger_summary,
+            )
+            try:
+                module.collect_live_evidence(args, opener=setup.fake.opener)
+            except (
+                module.argparse.ArgumentTypeError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                assert "must be an exact non-empty string" in str(exc), field
+                assert "secret-token" not in str(exc), field
+            else:
+                raise AssertionError(
+                    f"route-canary collection accepted hostile {field} metadata"
+                )
+
+
 def test_live_evidence_derives_route_canary_from_verifier_transaction():
     module = load_live_module()
     destination_runtime_bytecode = bytes.fromhex("6003600055")
@@ -9186,6 +9294,48 @@ def test_live_evidence_full_toml_rejects_non_string_route_canary_metadata_withou
 
         assert module._route_canary_transaction_verified(tampered_summary) is False
         assert module._offline_full_toml_args(tampered_summary) is None, case_id
+
+
+def test_live_evidence_route_canary_verification_rejects_non_string_call_summary_fields_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+    original_call_summary = module._route_canary_submit_call_data_summary
+
+    for field in (
+        "call_data_sha256",
+        "public_inputs_payload_hash",
+        "public_inputs_finality_height",
+        "public_inputs_finality_block_hash",
+    ):
+
+        def tampered_call_summary(*args, _field=field, **kwargs):
+            call_summary = original_call_summary(*args, **kwargs)
+            call_summary[_field] = HostileImportedScalar()
+            return call_summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                module,
+                "_route_canary_submit_call_data_summary",
+                tampered_call_summary,
+            )
+            assert module._route_canary_transaction_verified(summary) is False, field
 
 
 def test_live_evidence_full_toml_rejects_non_string_base_metadata_without_stringifying():

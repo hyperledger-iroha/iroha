@@ -19164,6 +19164,39 @@ mod tests {
     }
 
     #[test]
+    fn sm2_verify_rejects_zero_scalar_signature_material() {
+        let distid = "js-sm2-zero-scalar-signature".to_owned();
+        let private =
+            Sm2PrivateKey::from_seed(&distid, b"js-sm2-zero-scalar-seed").expect("SM2 key");
+        let public_key = private.public_key().to_sec1_bytes(false);
+        let message = b"js-host SM2 zero-scalar signature";
+
+        let mut zero_r = [0u8; SM2_SIGNATURE_LENGTH];
+        zero_r[SM2_SIGNATURE_LENGTH - 1] = 1;
+        let mut zero_s = [0u8; SM2_SIGNATURE_LENGTH];
+        zero_s[31] = 1;
+
+        for (label, signature) in [
+            ("all-zero", [0u8; SM2_SIGNATURE_LENGTH]),
+            ("zero-r", zero_r),
+            ("zero-s", zero_s),
+        ] {
+            let err = sm2_verify(
+                Uint8Array::from(public_key.clone()),
+                Uint8Array::from(message.to_vec()),
+                Uint8Array::from(signature.to_vec()),
+                Some(distid.clone()),
+            )
+            .expect_err("zero-scalar SM2 signature must fail before verification");
+
+            assert!(
+                err.to_string().contains("SM2 signature"),
+                "{label} signature produced unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn alias_proof_fixture_uses_checked_council_signer_payload() {
         let fixture = sorafs_alias_proof_fixture(Some(JsAliasProofFixtureOptions {
             generated_at_unix: Some(10),

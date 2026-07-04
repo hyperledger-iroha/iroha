@@ -712,7 +712,7 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
     metadata_slot = int.from_bytes(programdata_metadata[4:12], "little")
     if metadata_slot != programdata_slot:
         raise ValueError("Solana ProgramData metadata slot must match ProgramData slot")
-    if programdata_metadata[12] != 0 or any(programdata_metadata[13:45]):
+    if programdata_metadata[12] != 0:
         raise ValueError("Solana ProgramData metadata must encode no upgrade authority")
 
     normalized = {
@@ -876,32 +876,81 @@ def _offline_args_from_summary(
 ) -> list[str]:
     offline = [
         "--verifier-program-id",
-        str(live["verifier_program_id"]),
+        _exact_live_string(live, "verifier_program_id", label="verifier_program_id"),
         "--verifier-code-hash",
-        str(live["verifier_code_hash"]),
+        _hex(
+            _parse_hex32(
+                _exact_live_string(
+                    live,
+                    "verifier_code_hash",
+                    label="verifier_code_hash",
+                ),
+                label="verifier_code_hash",
+            )
+        ),
         "--programdata-address",
-        str(live["programdata_address"]),
+        _exact_live_string(live, "programdata_address", label="programdata_address"),
         "--programdata-slot",
-        str(live["programdata_slot"]),
+        str(
+            _live_positive_u64(
+                live,
+                "programdata_slot",
+                label="Solana ProgramData slot metadata",
+            )
+        ),
         "--program-account-context-slot",
-        str(live["program_account_context_slot"]),
+        str(
+            _live_positive_u64(
+                live,
+                "program_account_context_slot",
+                label="Solana program account RPC context slot metadata",
+            )
+        ),
         "--programdata-account-context-slot",
-        str(live["programdata_account_context_slot"]),
+        str(
+            _live_positive_u64(
+                live,
+                "programdata_account_context_slot",
+                label="Solana ProgramData account RPC context slot metadata",
+            )
+        ),
         "--verifier-program-bytes-base64",
-        str(live["programdata_executable_base64"]),
+        _exact_live_string(
+            live,
+            "programdata_executable_base64",
+            label="Solana ProgramData executable base64 metadata",
+        ),
     ]
     if summary.get("expected_destination_binding_hash_matches") is True:
         offline.extend(
             [
                 "--expected-destination-binding-hash",
-                str(summary["destination_binding_hash"]),
+                _hex(
+                    _parse_hex32(
+                        _exact_live_string(
+                            summary,
+                            "destination_binding_hash",
+                            label="destination binding hash",
+                        ),
+                        label="destination binding hash",
+                    )
+                ),
             ]
         )
     if "route_allowlist_hash" in summary:
         offline.extend(
             [
                 "--route-allowlist-hash",
-                str(summary["route_allowlist_hash"]),
+                _hex(
+                    _parse_hex32(
+                        _exact_live_string(
+                            summary,
+                            "route_allowlist_hash",
+                            label="route allowlist hash",
+                        ),
+                        label="route allowlist hash",
+                    )
+                ),
                 "--source-verifier-material-hash",
                 _hex(args.source_verifier_material_hash),
                 "--source-adapter-engine-deployment-hash",
@@ -913,7 +962,16 @@ def _offline_args_from_summary(
             offline.extend(
                 [
                     "--route-canary-evidence-hash",
-                    str(route_canary["evidence_hash"]),
+                    _hex(
+                        _parse_hex32(
+                            _exact_live_string(
+                                route_canary,
+                                "evidence_hash",
+                                label="route canary evidence hash",
+                            ),
+                            label="route canary evidence hash",
+                        )
+                    ),
                 ]
             )
     return offline

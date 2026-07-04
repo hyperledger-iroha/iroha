@@ -23530,6 +23530,9 @@ pub struct SorafsStorage {
     /// Local SFM-4c privacy aggregate publication scheduler.
     #[config(nested)]
     pub privacy_aggregates: SorafsPrivacyAggregateScheduleConfig,
+    /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
+    #[config(nested)]
+    pub evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig,
     /// Local SFM-6 reserve lifecycle advancement scheduler.
     #[config(nested)]
     pub reserve_lifecycle: SorafsReserveLifecycleScheduleConfig,
@@ -23561,6 +23564,7 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsStreamTokenConfig::default(),
             orderbook: SorafsOrderbookConfig::default(),
             privacy_aggregates: SorafsPrivacyAggregateScheduleConfig::default(),
+            evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig::default(),
             reserve_lifecycle: SorafsReserveLifecycleScheduleConfig::default(),
             pin: SorafsStoragePin::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
@@ -23586,6 +23590,7 @@ impl SorafsStorage {
             stream_tokens: self.stream_tokens.parse(),
             orderbook: self.orderbook.parse(),
             privacy_aggregates: self.privacy_aggregates.parse(),
+            evidence_viewer_audits: self.evidence_viewer_audits.parse(),
             reserve_lifecycle: self.reserve_lifecycle.parse(),
             pin: self.pin.parse(),
             governance_dag_dir: self.governance_dag_dir,
@@ -23652,6 +23657,41 @@ impl Default for SorafsPrivacyAggregateScheduleConfig {
 impl SorafsPrivacyAggregateScheduleConfig {
     fn parse(self) -> actual::SorafsPrivacyAggregateSchedule {
         actual::SorafsPrivacyAggregateSchedule {
+            enabled: self.enabled,
+            cycle_seconds: self.cycle_seconds.max(1),
+            publish_delay_seconds: self.publish_delay_seconds,
+        }
+    }
+}
+
+/// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsEvidenceViewerAuditScheduleConfig {
+    /// Whether config-backed due-cycle publication is enabled.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer_audits::ENABLED")]
+    pub enabled: bool,
+    /// Width of each evidence-viewer audit-report cycle, in seconds.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer_audits::CYCLE_SECONDS")]
+    pub cycle_seconds: u64,
+    /// Delay after a cycle closes before publication, in seconds.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer_audits::PUBLISH_DELAY_SECONDS")]
+    pub publish_delay_seconds: u64,
+}
+
+impl Default for SorafsEvidenceViewerAuditScheduleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::evidence_viewer_audits::ENABLED,
+            cycle_seconds: defaults::sorafs::storage::evidence_viewer_audits::CYCLE_SECONDS,
+            publish_delay_seconds:
+                defaults::sorafs::storage::evidence_viewer_audits::PUBLISH_DELAY_SECONDS,
+        }
+    }
+}
+
+impl SorafsEvidenceViewerAuditScheduleConfig {
+    fn parse(self) -> actual::SorafsEvidenceViewerAuditSchedule {
+        actual::SorafsEvidenceViewerAuditSchedule {
             enabled: self.enabled,
             cycle_seconds: self.cycle_seconds.max(1),
             publish_delay_seconds: self.publish_delay_seconds,
@@ -26005,6 +26045,27 @@ publish_delay_seconds = 17
 
         let actual = load_root(table);
         let schedule = actual.torii.sorafs_storage.privacy_aggregates;
+        assert!(schedule.enabled);
+        assert_eq!(schedule.cycle_seconds, 1);
+        assert_eq!(schedule.publish_delay_seconds, 17);
+    }
+
+    #[test]
+    fn sorafs_storage_evidence_viewer_audit_schedule_parses_and_clamps_cycle() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r"
+[storage.evidence_viewer_audits]
+enabled = true
+cycle_seconds = 0
+publish_delay_seconds = 17
+",
+        )
+        .expect("parse sorafs evidence viewer audit schedule");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let schedule = actual.torii.sorafs_storage.evidence_viewer_audits;
         assert!(schedule.enabled);
         assert_eq!(schedule.cycle_seconds, 1);
         assert_eq!(schedule.publish_delay_seconds, 17);

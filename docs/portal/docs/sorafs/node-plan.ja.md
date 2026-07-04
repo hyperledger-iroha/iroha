@@ -50,12 +50,13 @@ SF-3 は、Iroha/Torii プロセスを SoraFS ストレージプロバイダに�
 
 ### C. ゲートウェイエンドポイント
 
-| エンドポイント | 挙動 | タスク |
-|---------------|------|------|
-| `POST /sorafs/pin` | `PinProposalV1` を受け入れ、manifest を検証し、取り込みをキューし、manifest CID を返す。 | チャンクプロファイル検証、クォータ適用、chunk store へのストリーミング。 |
-| `GET /sorafs/chunks/{cid}` + range クエリ | `Content-Chunker` ヘッダ付きでチャンクバイトを返し、range 能力仕様を尊重。 | scheduler + ストリーム予算を使用 (SF-2d の range 能力と連動)。 |
-| `POST /sorafs/por/sample` | manifest の PoR サンプリングを実行し、証明バンドルを返す。 | chunk store のサンプリングを再利用し、Norito JSON で応答。 |
-| `GET /sorafs/telemetry` | 収容力、PoR 成功、fetch エラーカウントの概要。 | ダッシュボード/運用向けにデータ提供。 |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 ランタイム配線は PoR のやり取りを `sorafs_node::por` 経由に通します。トラッカーが `PorChallengeV1`、`PorProofV1`、`AuditVerdictV1` を記録し、`CapacityMeter` のメトリクスが Torii 固有のロジックなしでガバナンス判定を反映します。【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ SF-3 は、Iroha/Torii プロセスを SoraFS ストレージプロバイダに�
 ## マイルストーン終了条件
 
 - `cargo run -p sorafs_node --example pin_fetch` がローカル fixtures で動作。
-- Torii が `--features sorafs-storage` でビルドされ、統合テストに合格。
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - ドキュメント ([ノードストレージガイド](node-storage.md)) が設定デフォルト + CLI 例で更新され、運用 runbook が利用可能。
 - ステージングダッシュボードでテレメトリが可視化され、容量飽和と PoR 失敗のアラートが構成済み。
 
@@ -116,4 +117,4 @@ SF-3 は、Iroha/Torii プロセスを SoraFS ストレージプロバイダに�
 
 - [ノードストレージ参照](node-storage.md) を設定デフォルト、CLI 使用方法、トラブルシューティング手順で更新する。
 - [ノード運用 runbook](node-operations.md) を SF-3 の進化に合わせて実装と整合させる。
-- `/sorafs/*` エンドポイントの API 参照を開発者ポータルに公開し、Torii ハンドラが入ったら OpenAPI マニフェストへ接続する。
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

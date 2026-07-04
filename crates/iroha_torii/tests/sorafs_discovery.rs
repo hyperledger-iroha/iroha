@@ -90,7 +90,7 @@ use sorafs_manifest::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
 };
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 use tower::ServiceExt as _;
 
 const ISSUED_AT: u64 = 1_700_000_000;
@@ -100,6 +100,24 @@ const GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
 
 fn ingest_tests_enabled() -> bool {
     std::env::var("SORAFS_TORII_SKIP_INGEST_TESTS").map_or(true, |value| value != "1")
+}
+
+fn storage_temp_data_dir(temp_dir: &TempDir) -> PathBuf {
+    temp_dir
+        .path()
+        .canonicalize()
+        .expect("canonical storage temp dir")
+        .join("storage")
+}
+
+#[test]
+fn sorafs_storage_temp_data_dir_uses_canonical_parent() {
+    let temp_dir = tempdir().expect("storage temp dir");
+    let data_dir = storage_temp_data_dir(&temp_dir);
+    assert_eq!(
+        data_dir.parent().expect("storage path parent"),
+        temp_dir.path().canonicalize().expect("canonical temp dir")
+    );
 }
 
 fn range_capability_payload(span: u32, granularity: u32) -> Vec<u8> {
@@ -1991,7 +2009,7 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
 
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
@@ -2059,7 +2077,7 @@ async fn sorafs_storage_endpoints_round_trip() {
     cfg.torii.sorafs_gateway.enforce_admission = false;
     cfg.torii.sorafs_gateway.require_manifest_envelope = false;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let expected_capacity = cfg.torii.sorafs_storage.max_capacity_bytes.0;
 
     let harness = build_torii_harness(&cfg);
@@ -2370,7 +2388,7 @@ async fn sorafs_storage_pin_uses_configured_torii_body_limit() {
     cfg.torii.sorafs_gateway.enforce_admission = false;
     cfg.torii.sorafs_gateway.require_manifest_envelope = false;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
 
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
@@ -2448,7 +2466,7 @@ async fn sorafs_pin_register_route_accepts_manifest() {
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2509,7 +2527,7 @@ async fn sorafs_pin_register_route_accepts_prefixed_hex_and_returns_chunker_hand
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2581,7 +2599,7 @@ async fn sorafs_pin_register_rejects_chunker_descriptor_mismatch() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2618,7 +2636,7 @@ async fn sorafs_pin_register_rejects_invalid_pin_policy() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2655,7 +2673,7 @@ async fn sorafs_pin_register_rejects_invalid_alias_proof() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2696,7 +2714,7 @@ async fn sorafs_pin_register_rejects_invalid_json_body() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2734,7 +2752,7 @@ async fn sorafs_pin_register_accepts_norito_payload() {
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2783,7 +2801,7 @@ async fn sorafs_pin_register_rejects_invalid_norito_body() {
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2817,7 +2835,7 @@ async fn sorafs_pin_register_rejects_malformed_successor_hex() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2855,7 +2873,7 @@ async fn sorafs_pin_register_rejects_malformed_manifest_digest_hex() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2893,7 +2911,7 @@ async fn sorafs_pin_register_rejects_wrong_sized_chunk_digest_hex() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
-    cfg.torii.sorafs_storage.data_dir = temp_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
 
@@ -2944,7 +2962,7 @@ async fn sorafs_pin_manifest_returns_ok_with_fresh_alias_cache_headers() {
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
 
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
@@ -3117,7 +3135,7 @@ async fn sorafs_pin_manifest_reports_refresh_window_alias_headers() {
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
 
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
@@ -3252,7 +3270,7 @@ async fn sorafs_pin_manifest_returns_service_unavailable_for_stale_alias() {
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
 
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
@@ -3387,7 +3405,7 @@ async fn sorafs_pin_manifest_returns_precondition_failed_for_expired_alias() {
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
 
     let harness = build_torii_harness(&cfg);
     let mut next_height = 1;
@@ -3497,7 +3515,7 @@ async fn sorafs_pin_manifest_returns_gone_for_revoked_alias() {
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
 
@@ -3599,7 +3617,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
 
@@ -3762,7 +3780,7 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
     cfg.torii.sorafs_storage.max_pins = 8;
     cfg.torii.sorafs_storage.max_capacity_bytes = Bytes(1_048_576);
     let storage_dir = tempdir().expect("storage dir");
-    cfg.torii.sorafs_storage.data_dir = storage_dir.path().join("storage");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&storage_dir);
     cfg.torii.sorafs_alias_cache.successor_grace = Duration::from_secs(0);
     cfg.torii.sorafs_alias_cache.governance_grace = Duration::from_secs(0);
 

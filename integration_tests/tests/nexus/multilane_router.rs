@@ -198,6 +198,24 @@ fn install_state_nexus(
     Ok(state)
 }
 
+fn seed_committed_height(state: &mut State, height: u64) {
+    for idx in 0..height {
+        state.push_block_hash_for_testing(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(
+            iroha_crypto::Hash::new(idx.to_le_bytes())
+        ));
+    }
+    state.update_latest_block_header_cache_for_tests(iroha_data_model::block::BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("committed height must be nonzero"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    ));
+}
+
 fn build_tx(
     chain_id: &ChainId,
     authority: &AccountId,
@@ -287,7 +305,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("gov", "universal")?,
+            DomainId::try_new("gov", "governance")?,
         )))],
     );
     let zk_tx = build_tx(
@@ -297,7 +315,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         vec![InstructionBox::from(Mint::asset_numeric(
             1_u32,
             AssetId::new(
-                AssetDefinitionId::new(DomainId::try_new("nexus", "universal")?, "xor".parse()?),
+                AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),
                 authority.clone(),
             ),
         ))],
@@ -343,7 +361,8 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
         dataspace_catalog.clone(),
         lane_catalog.clone(),
     ));
-    let state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
+    let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
+    seed_committed_height(&mut state, 7);
 
     let (authority, keypair) = gen_account_in("nexus");
     let chain_id = ChainId::from("nexus-multilane-autoscale");
@@ -353,7 +372,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("governed", "universal")?,
+            DomainId::try_new("governed", "governance")?,
         )))],
     );
     let governance = router.route_with_view(&governance_tx, &state.view());
@@ -367,7 +386,7 @@ fn multilane_router_shards_default_route_over_autoscale_elastic_lanes() -> Resul
         vec![InstructionBox::from(Mint::asset_numeric(
             1_u32,
             AssetId::new(
-                AssetDefinitionId::new(DomainId::try_new("nexus", "universal")?, "xor".parse()?),
+                AssetDefinitionId::new(DomainId::try_new("nexus", "zk")?, "xor".parse()?),
                 authority.clone(),
             ),
         ))],
@@ -471,8 +490,9 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
             dataspace_catalog.clone(),
             lane_catalog.clone(),
         ));
-        let state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))
+        let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))
             .unwrap_or_else(|err| panic!("{}: install Nexus state: {err}", case.name));
+        seed_committed_height(&mut state, 7);
 
         let (authority, keypair) = gen_account_in("nexus");
         let chain_id = ChainId::from(format!("nexus-multilane-corrupt-{}", case.name));
@@ -521,7 +541,8 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_autoscale_disabled() -> R
         dataspace_catalog.clone(),
         lane_catalog.clone(),
     ));
-    let state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
+    let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
+    seed_committed_height(&mut state, 7);
     state.nexus.write().autoscale.enabled = false;
 
     let (authority, keypair) = gen_account_in("nexus");
@@ -569,7 +590,8 @@ fn multilane_router_ignores_stale_autoscale_lanes_when_nexus_disabled() -> Resul
         dataspace_catalog.clone(),
         lane_catalog.clone(),
     ));
-    let state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
+    let mut state = install_state_nexus(lane_catalog, dataspace_catalog, policy, Some((3, 5)))?;
+    seed_committed_height(&mut state, 7);
     state.nexus.write().enabled = false;
 
     let (authority, keypair) = gen_account_in("nexus");

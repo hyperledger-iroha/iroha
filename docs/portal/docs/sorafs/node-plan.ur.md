@@ -51,10 +51,11 @@ SF-3 پہلا runnable `sorafs-node` crate فراہم کرتا ہے جو Iroha/T
 
 | Endpoint | Behaviour | Tasks |
 |----------|-----------|-------|
-| `POST /sorafs/pin` | `PinProposalV1` قبول کریں، manifests validate کریں، ingestion queue کریں، manifest CID واپس دیں۔ | chunk profile validate کریں، quotas enforce کریں، chunk store کے ذریعے data stream کریں۔ |
-| `GET /sorafs/chunks/{cid}` + range query | `Content-Chunker` headers کے ساتھ chunk bytes serve کریں؛ range capability spec respect کریں۔ | scheduler + stream budgets استعمال کریں (SF-2d range capability کے ساتھ tie کریں)۔ |
-| `POST /sorafs/por/sample` | manifest کے لیے PoR sampling چلائیں اور proof bundle واپس کریں۔ | chunk store sampling reuse کریں، Norito JSON payloads کے ساتھ respond کریں۔ |
-| `GET /sorafs/telemetry` | Summaries: capacity، PoR success، fetch error counts۔ | dashboards/operators کے لیے data فراہم کریں۔ |
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 Runtime plumbing `sorafs_node::por` کے ذریعے PoR interactions کو thread کرتی ہے: tracker ہر `PorChallengeV1`, `PorProofV1`, `AuditVerdictV1` کو record کرتا ہے تاکہ `CapacityMeter` metrics governance verdicts کو Torii-specific logic کے بغیر reflect کریں۔【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -107,7 +108,7 @@ Logs / events:
 ## Milestone exit criteria
 
 - `cargo run -p sorafs_node --example pin_fetch` local fixtures کے خلاف کام کرے۔
-- Torii `--features sorafs-storage` کے ساتھ build ہو اور integration tests پاس کرے۔
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - Documentation ([node storage guide](node-storage.md)) config defaults + CLI examples کے ساتھ updated ہو؛ operator runbook دستیاب ہو۔
 - Telemetry staging dashboards میں نظر آئے؛ capacity saturation اور PoR failures کے لیے alerts configure ہوں۔
 
@@ -115,4 +116,4 @@ Logs / events:
 
 - [node storage reference](node-storage.md) کو config defaults، CLI usage اور troubleshooting steps کے ساتھ update کریں۔
 - [node operations runbook](node-operations.md) کو implementation کے ساتھ align رکھیں جیسے SF-3 evolve ہو۔
-- `/sorafs/*` endpoints کی API references developer portal میں publish کریں اور Torii handlers آنے کے بعد OpenAPI manifest سے wire کریں۔
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

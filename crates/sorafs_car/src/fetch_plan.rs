@@ -138,13 +138,19 @@ fn parse_chunk_fetch_specs(array: &[Value]) -> Result<Vec<ChunkFetchSpec>, Fetch
         let obj = entry
             .as_object()
             .ok_or(FetchPlanError::InvalidEntry { index })?;
-        let chunk_index =
+        let chunk_index_raw =
             obj.get("chunk_index")
                 .and_then(Value::as_u64)
                 .ok_or(FetchPlanError::MissingField {
                     index,
                     field: "chunk_index",
-                })? as usize;
+                })?;
+        let chunk_index =
+            usize::try_from(chunk_index_raw).map_err(|_| FetchPlanError::InvalidField {
+                index,
+                field: "chunk_index",
+                reason: format!("value {chunk_index_raw} exceeds platform usize"),
+            })?;
         let offset =
             obj.get("offset")
                 .and_then(Value::as_u64)
@@ -159,6 +165,25 @@ fn parse_chunk_fetch_specs(array: &[Value]) -> Result<Vec<ChunkFetchSpec>, Fetch
                     index,
                     field: "length",
                 })?;
+        let length = u32::try_from(length).map_err(|_| FetchPlanError::InvalidField {
+            index,
+            field: "length",
+            reason: "value exceeds u32::MAX".to_string(),
+        })?;
+        if length == 0 {
+            return Err(FetchPlanError::InvalidField {
+                index,
+                field: "length",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        offset
+            .checked_add(u64::from(length))
+            .ok_or_else(|| FetchPlanError::InvalidField {
+                index,
+                field: "offset",
+                reason: "offset + length overflows u64".to_string(),
+            })?;
         let digest_hex = obj.get("digest_blake3").and_then(Value::as_str).ok_or(
             FetchPlanError::MissingField {
                 index,
@@ -169,51 +194,50 @@ fn parse_chunk_fetch_specs(array: &[Value]) -> Result<Vec<ChunkFetchSpec>, Fetch
             digest: digest_hex.to_string(),
             index,
         })?;
-        let taikai_segment_hint =
-            obj.get("taikai_segment_hint")
-                .and_then(Value::as_object)
-                .map(|hint_obj| -> Result<_, FetchPlanError> {
-                    let event = hint_obj
-                        .get("event")
-                        .and_then(Value::as_str)
-                        .ok_or(FetchPlanError::MissingField {
+        let taikai_segment_hint = match obj.get("taikai_segment_hint") {
+            Some(Value::Object(hint_obj)) => Some((|| -> Result<_, FetchPlanError> {
+                let event = hint_obj
+                    .get("event")
+                    .and_then(Value::as_str)
+                    .ok_or(FetchPlanError::MissingField {
+                        index,
+                        field: "taikai_segment_hint.event",
+                    })?
+                    .to_owned();
+                let stream = hint_obj
+                    .get("stream")
+                    .and_then(Value::as_str)
+                    .ok_or(FetchPlanError::MissingField {
+                        index,
+                        field: "taikai_segment_hint.stream",
+                    })?
+                    .to_owned();
+                let rendition = hint_obj
+                    .get("rendition")
+                    .and_then(Value::as_str)
+                    .ok_or(FetchPlanError::MissingField {
+                        index,
+                        field: "taikai_segment_hint.rendition",
+                    })?
+                    .to_owned();
+                let sequence = hint_obj.get("sequence").and_then(Value::as_u64).ok_or(
+                    FetchPlanError::MissingField {
+                        index,
+                        field: "taikai_segment_hint.sequence",
+                    },
+                )?;
+                let payload_len = hint_obj
+                    .get("payload_len")
+                    .map(|value| {
+                        value.as_u64().ok_or(FetchPlanError::InvalidField {
                             index,
-                            field: "taikai_segment_hint.event",
-                        })?
-                        .to_owned();
-                    let stream = hint_obj
-                        .get("stream")
-                        .and_then(Value::as_str)
-                        .ok_or(FetchPlanError::MissingField {
-                            index,
-                            field: "taikai_segment_hint.stream",
-                        })?
-                        .to_owned();
-                    let rendition = hint_obj
-                        .get("rendition")
-                        .and_then(Value::as_str)
-                        .ok_or(FetchPlanError::MissingField {
-                            index,
-                            field: "taikai_segment_hint.rendition",
-                        })?
-                        .to_owned();
-                    let sequence = hint_obj.get("sequence").and_then(Value::as_u64).ok_or(
-                        FetchPlanError::MissingField {
-                            index,
-                            field: "taikai_segment_hint.sequence",
-                        },
-                    )?;
-                    let payload_len = hint_obj
-                        .get("payload_len")
-                        .map(|value| {
-                            value.as_u64().ok_or(FetchPlanError::InvalidField {
-                                index,
-                                field: "taikai_segment_hint.payload_len",
-                                reason: "expected unsigned integer".to_string(),
-                            })
+                            field: "taikai_segment_hint.payload_len",
+                            reason: "expected unsigned integer".to_string(),
                         })
-                        .transpose()?;
-                    let payload_digest = match hint_obj.get("payload_blake3_hex") {
+                    })
+                    .transpose()?;
+                let payload_digest =
+                    match hint_obj.get("payload_blake3_hex") {
                         Some(Value::String(hex)) => Some(decode_digest_hex(hex).map_err(|_| {
                             FetchPlanError::InvalidDigest {
                                 digest: hex.to_string(),
@@ -229,20 +253,28 @@ fn parse_chunk_fetch_specs(array: &[Value]) -> Result<Vec<ChunkFetchSpec>, Fetch
                         }
                         None => None,
                     };
-                    Ok(TaikaiSegmentHint {
-                        event,
-                        stream,
-                        rendition,
-                        sequence,
-                        payload_len,
-                        payload_digest,
-                    })
+                Ok(TaikaiSegmentHint {
+                    event,
+                    stream,
+                    rendition,
+                    sequence,
+                    payload_len,
+                    payload_digest,
                 })
-                .transpose()?;
+            })()?),
+            Some(other) => {
+                return Err(FetchPlanError::InvalidField {
+                    index,
+                    field: "taikai_segment_hint",
+                    reason: format!("expected object, found {other:?}"),
+                });
+            }
+            None => None,
+        };
         specs.push(ChunkFetchSpec {
             chunk_index,
             offset,
-            length: length as u32,
+            length,
             digest,
             taikai_segment_hint,
         });
@@ -267,7 +299,6 @@ fn decode_hex_nibble(byte: u8) -> Result<u8, ()> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
         b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(()),
     }
 }
@@ -341,7 +372,112 @@ mod tests {
     fn parse_missing_specs_returns_error() {
         let value = norito::json!({ "payload_digest_hex": "deadbeef" });
         let err = chunk_fetch_specs_from_json(&value).unwrap_err();
-        matches!(err, FetchPlanError::MissingChunkFetchSpecs);
+        assert!(matches!(err, FetchPlanError::MissingChunkFetchSpecs));
+    }
+
+    #[test]
+    fn parse_rejects_noncanonical_uppercase_digest() {
+        let value = norito::json!([
+            {
+                "chunk_index": 0,
+                "offset": 0,
+                "length": 512,
+                "digest_blake3": "ABCDEF0000000000000000000000000000000000000000000000000000000000"
+            }
+        ]);
+        let err = chunk_fetch_specs_from_json(&value).unwrap_err();
+        assert!(matches!(
+            err,
+            FetchPlanError::InvalidDigest { index: 0, .. }
+        ));
+        assert!(
+            parse_digest_hex("ABCDEF0000000000000000000000000000000000000000000000000000000000")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn parse_rejects_zero_and_oversized_lengths() {
+        let zero = norito::json!([
+            {
+                "chunk_index": 0,
+                "offset": 0,
+                "length": 0,
+                "digest_blake3": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        ]);
+        let err = chunk_fetch_specs_from_json(&zero).unwrap_err();
+        assert!(matches!(
+            err,
+            FetchPlanError::InvalidField {
+                index: 0,
+                field: "length",
+                ..
+            }
+        ));
+
+        let oversized_length = u64::from(u32::MAX) + 1;
+        let oversized = norito::json!([
+            {
+                "chunk_index": 0,
+                "offset": 0,
+                "length": oversized_length,
+                "digest_blake3": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        ]);
+        let err = chunk_fetch_specs_from_json(&oversized).unwrap_err();
+        assert!(matches!(
+            err,
+            FetchPlanError::InvalidField {
+                index: 0,
+                field: "length",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_rejects_offset_length_overflow() {
+        let max_offset = u64::MAX;
+        let value = norito::json!([
+            {
+                "chunk_index": 0,
+                "offset": max_offset,
+                "length": 1,
+                "digest_blake3": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+        ]);
+        let err = chunk_fetch_specs_from_json(&value).unwrap_err();
+        assert!(matches!(
+            err,
+            FetchPlanError::InvalidField {
+                index: 0,
+                field: "offset",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_rejects_non_object_taikai_segment_hint() {
+        let value = norito::json!([
+            {
+                "chunk_index": 0,
+                "offset": 0,
+                "length": 512,
+                "digest_blake3": "0000000000000000000000000000000000000000000000000000000000000000",
+                "taikai_segment_hint": "ignored-before-hardening"
+            }
+        ]);
+        let err = chunk_fetch_specs_from_json(&value).unwrap_err();
+        assert!(matches!(
+            err,
+            FetchPlanError::InvalidField {
+                index: 0,
+                field: "taikai_segment_hint",
+                ..
+            }
+        ));
     }
 
     #[test]

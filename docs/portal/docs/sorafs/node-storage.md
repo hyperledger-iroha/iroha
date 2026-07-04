@@ -161,12 +161,12 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
 > The Torii gateway now exposes read-only helpers backed by the same
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
+> - `GET /v1/sorafs/storage/manifest/{manifest_id}` — returns the stored
 >   Norito manifest (base64) alongside digest/metadata. Supplying `?limit=N`
 >   bounds the returned `files` metadata array (max 500) while preserving
 >   `file_count`/`returned_file_count`/`truncated_files`; omitting `limit`
 >   returns the complete file list for remote cache compatibility.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
+> - `GET /v1/sorafs/storage/plan/{manifest_id}` — returns the deterministic
 >   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling. The `files`,
 >   `chunk_digests_blake3`, and `chunks` arrays are bounded by `limit` (default
 >   50, max 500), with full count/returned count/truncation metadata for

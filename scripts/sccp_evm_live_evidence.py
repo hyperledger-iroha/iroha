@@ -151,6 +151,25 @@ def _summary_exact_string(record: dict[str, Any], field: str, *, label: str) -> 
     return value
 
 
+def _summary_exact_u32(record: dict[str, Any], field: str, *, label: str) -> int:
+    value = record.get(field)
+    if type(value) is not int or value < 0 or value > 0xFFFFFFFF:
+        raise ValueError(f"{label} must be an exact u32 integer") from None
+    return value
+
+
+def _summary_exact_positive_u64(
+    record: dict[str, Any],
+    field: str,
+    *,
+    label: str,
+) -> int:
+    value = record.get(field)
+    if type(value) is not int or value <= 0 or value > 0xFFFFFFFFFFFFFFFF:
+        raise ValueError(f"{label} must be an exact positive u64 integer") from None
+    return value
+
+
 def _summary_runtime_bytes(record: dict[str, Any], field: str, *, label: str) -> bytes:
     value = record.get(field)
     if not isinstance(value, str) or not value.startswith("0x"):
@@ -1213,16 +1232,19 @@ def _route_canary_submit_call_data_summary(
         raise RuntimeError("route-canary proofBytes must be a 384-byte Groth16 tuple")
     if not any(proof_bytes):
         raise RuntimeError("route-canary proofBytes must not be all zero")
-    message_id = _parse_hex32(
-        str(event_summary["message_id"]),
+    message_id = _summary_hex32(
+        event_summary,
+        "message_id",
         label="route-canary event message id",
     )
-    commitment_root = _parse_hex32(
-        str(event_summary["commitment_root"]),
+    commitment_root = _summary_hex32(
+        event_summary,
+        "commitment_root",
         label="route-canary event commitment root",
     )
-    event_statement_hash = _parse_hex32(
-        str(event_summary["statement_hash"]),
+    event_statement_hash = _summary_hex32(
+        event_summary,
+        "statement_hash",
         label="route-canary event statement hash",
     )
     if public_inputs[0] != message_id:
@@ -1491,7 +1513,11 @@ def _collect_route_canary_transaction_evidence(
                 "block_hash",
                 label="route-canary receipt block hash",
             ),
-            expected_block_number=int(receipt_block["block_number"]),
+            expected_block_number=_summary_exact_positive_u64(
+                receipt_block,
+                "block_number",
+                label="route-canary receipt block number",
+            ),
             route_allowlist_hash=route_allowlist_hash,
             bridge_address=bridge_address,
             expected_source_domain=expected_source_domain,
@@ -1532,13 +1558,18 @@ def _collect_route_canary_transaction_evidence(
             "block_hash",
             label="route-canary receipt block hash",
         ),
-        expected_block_number=int(receipt_block["block_number"]),
+        expected_block_number=_summary_exact_positive_u64(
+            receipt_block,
+            "block_number",
+            label="route-canary receipt block number",
+        ),
         event_summary=event_summary,
         expected_source_domain=expected_source_domain,
         expected_target_domain=expected_target_domain,
     )
-    message_id = _parse_hex32(
-        str(event_summary["message_id"]),
+    message_id = _summary_hex32(
+        event_summary,
+        "message_id",
         label="route-canary message id",
     )
     used_summary = _route_canary_used_message_proof_summary(
@@ -1553,8 +1584,16 @@ def _collect_route_canary_transaction_evidence(
         route_allowlist_hash=route_allowlist_hash,
         bridge_address=bridge_address,
         transaction_hash=transaction_hash,
-        log_index=int(event_summary["log_index"]),
-        receipt_block_number=int(receipt_block["block_number"]),
+        log_index=_summary_exact_u32(
+            event_summary,
+            "log_index",
+            label="route-canary log index",
+        ),
+        receipt_block_number=_summary_exact_positive_u64(
+            receipt_block,
+            "block_number",
+            label="route-canary receipt block number",
+        ),
         receipt_block_hash=_summary_hex32(
             receipt_block,
             "block_hash",
@@ -1565,35 +1604,53 @@ def _collect_route_canary_transaction_evidence(
             "block_receipts_root",
             label="route-canary block receiptsRoot",
         ),
-        call_data_sha256=_parse_hex32(
-            str(call_summary["call_data_sha256"]),
+        call_data_sha256=_summary_hex32(
+            call_summary,
+            "call_data_sha256",
             label="route-canary call data SHA-256",
         ),
         message_id=message_id,
-        payload_hash=_parse_hex32(
-            str(call_summary["public_inputs_payload_hash"]),
+        payload_hash=_summary_hex32(
+            call_summary,
+            "public_inputs_payload_hash",
             label="route-canary payload hash",
         ),
         source_domain=expected_source_domain,
-        target_domain=int(call_summary["public_inputs_target_domain"]),
-        commitment_root=_parse_hex32(
-            str(event_summary["commitment_root"]),
+        target_domain=_summary_exact_u32(
+            call_summary,
+            "public_inputs_target_domain",
+            label="route-canary target domain",
+        ),
+        commitment_root=_summary_hex32(
+            event_summary,
+            "commitment_root",
             label="route-canary commitment root",
         ),
-        finality_height=_parse_hex32(
-            str(call_summary["public_inputs_finality_height"]),
+        finality_height=_summary_hex32(
+            call_summary,
+            "public_inputs_finality_height",
             label="route-canary finality height",
         ),
-        finality_block_hash=_parse_hex32(
-            str(call_summary["public_inputs_finality_block_hash"]),
+        finality_block_hash=_summary_hex32(
+            call_summary,
+            "public_inputs_finality_block_hash",
             label="route-canary finality block hash",
         ),
-        statement_hash=_parse_hex32(
-            str(event_summary["statement_hash"]),
+        statement_hash=_summary_hex32(
+            event_summary,
+            "statement_hash",
             label="route-canary statement hash",
         ),
-        proof_version=int(call_summary["proof_version"]),
-        proof_source_domain=int(call_summary["proof_source_domain"]),
+        proof_version=_summary_exact_u32(
+            call_summary,
+            "proof_version",
+            label="route-canary proof version",
+        ),
+        proof_source_domain=_summary_exact_u32(
+            call_summary,
+            "proof_source_domain",
+            label="route-canary proof source domain",
+        ),
         destination_binding_hash=expected_destination_binding_hash,
         verifier_backend_hash=expected_verifier_backend_hash,
         proof_family_hash=expected_proof_family_hash,
@@ -1692,7 +1749,11 @@ def _route_canary_finalized_block_summary(
         finalized.get("hash"),
         label="route-canary finalized block hash",
     )
-    receipt_block_number = int(receipt_block["block_number"])
+    receipt_block_number = _summary_exact_positive_u64(
+        receipt_block,
+        "block_number",
+        label="route-canary receipt block number",
+    )
     if receipt_block_number > finalized_block_number:
         raise RuntimeError(
             "route-canary receipt block is newer than the finalized execution block"
@@ -1820,39 +1881,141 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
             args.extend(
                 [
                     "--route-canary-transaction-hash",
-                    str(route_canary_transaction["transaction_hash"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "transaction_hash",
+                            label="route canary transaction hash",
+                        )
+                    ),
                     "--route-canary-transaction-block-number",
-                    str(route_canary_transaction["transaction_block_number"]),
+                    str(
+                        _summary_exact_positive_u64(
+                            route_canary_transaction,
+                            "transaction_block_number",
+                            label="route canary transaction block number",
+                        )
+                    ),
                     "--route-canary-transaction-block-hash",
-                    str(route_canary_transaction["transaction_block_hash"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "transaction_block_hash",
+                            label="route canary transaction block hash",
+                        )
+                    ),
                     "--route-canary-log-index",
-                    str(route_canary_transaction["log_index"]),
+                    str(
+                        _summary_exact_u32(
+                            route_canary_transaction,
+                            "log_index",
+                            label="route canary log index",
+                        )
+                    ),
                     "--route-canary-receipt-block-number",
-                    str(route_canary_transaction["block_number"]),
+                    str(
+                        _summary_exact_positive_u64(
+                            route_canary_transaction,
+                            "block_number",
+                            label="route canary receipt block number",
+                        )
+                    ),
                     "--route-canary-receipt-block-hash",
-                    str(route_canary_transaction["block_hash"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "block_hash",
+                            label="route canary receipt block hash",
+                        )
+                    ),
                     "--route-canary-block-receipts-root",
-                    str(route_canary_transaction["block_receipts_root"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "block_receipts_root",
+                            label="route canary block receiptsRoot",
+                        )
+                    ),
                     "--route-canary-call-data-sha256",
-                    str(route_canary_transaction["call_data_sha256"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "call_data_sha256",
+                            label="route canary call data SHA-256",
+                        )
+                    ),
                     "--route-canary-message-id",
-                    str(route_canary_transaction["message_id"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "message_id",
+                            label="route canary message id",
+                        )
+                    ),
                     "--route-canary-payload-hash",
-                    str(route_canary_transaction["public_inputs_payload_hash"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "public_inputs_payload_hash",
+                            label="route canary payload hash",
+                        )
+                    ),
                     "--route-canary-target-domain",
-                    str(route_canary_transaction["public_inputs_target_domain"]),
+                    str(
+                        _summary_exact_u32(
+                            route_canary_transaction,
+                            "public_inputs_target_domain",
+                            label="route canary target domain",
+                        )
+                    ),
                     "--route-canary-statement-hash",
-                    str(route_canary_transaction["statement_hash"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "statement_hash",
+                            label="route canary statement hash",
+                        )
+                    ),
                     "--route-canary-commitment-root",
-                    str(route_canary_transaction["commitment_root"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "commitment_root",
+                            label="route canary commitment root",
+                        )
+                    ),
                     "--route-canary-finality-height",
-                    str(route_canary_transaction["public_inputs_finality_height"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "public_inputs_finality_height",
+                            label="route canary finality height",
+                        )
+                    ),
                     "--route-canary-finality-block-hash",
-                    str(route_canary_transaction["public_inputs_finality_block_hash"]),
+                    _hex(
+                        _summary_hex32(
+                            route_canary_transaction,
+                            "public_inputs_finality_block_hash",
+                            label="route canary finality block hash",
+                        )
+                    ),
                     "--route-canary-proof-version",
-                    str(route_canary_transaction["proof_version"]),
+                    str(
+                        _summary_exact_u32(
+                            route_canary_transaction,
+                            "proof_version",
+                            label="route canary proof version",
+                        )
+                    ),
                     "--route-canary-proof-source-domain",
-                    str(route_canary_transaction["proof_source_domain"]),
+                    str(
+                        _summary_exact_u32(
+                            route_canary_transaction,
+                            "proof_source_domain",
+                            label="route canary proof source domain",
+                        )
+                    ),
                     "--route-canary-used-message-proof",
                     "true"
                     if route_canary_transaction.get("message_proof_used") is True
@@ -2427,8 +2590,9 @@ def collect_live_evidence(
             opener=opener,
             timeout=args.timeout,
         )
-        derived_canary_hash = _parse_hex32(
-            str(route_canary_transaction["route_canary_evidence_hash"]),
+        derived_canary_hash = _summary_hex32(
+            route_canary_transaction,
+            "route_canary_evidence_hash",
             label="route canary evidence hash",
         )
         if (
@@ -2475,58 +2639,80 @@ def collect_live_evidence(
             "bridge_address",
             label="destination bridge address",
         )
-        args.route_canary_message_id = _parse_hex32(
-            str(route_canary_transaction["message_id"]),
+        args.route_canary_message_id = _summary_hex32(
+            route_canary_transaction,
+            "message_id",
             label="route canary message id",
         )
-        args.route_canary_call_data_sha256 = _parse_hex32(
-            str(route_canary_transaction["call_data_sha256"]),
+        args.route_canary_call_data_sha256 = _summary_hex32(
+            route_canary_transaction,
+            "call_data_sha256",
             label="route canary call data SHA-256",
         )
-        args.route_canary_transaction_block_number = int(
-            route_canary_transaction["transaction_block_number"]
+        args.route_canary_transaction_block_number = _summary_exact_positive_u64(
+            route_canary_transaction,
+            "transaction_block_number",
+            label="route canary transaction block number",
         )
-        args.route_canary_transaction_block_hash = _parse_hex32(
-            str(route_canary_transaction["transaction_block_hash"]),
+        args.route_canary_transaction_block_hash = _summary_hex32(
+            route_canary_transaction,
+            "transaction_block_hash",
             label="route canary transaction block hash",
         )
-        args.route_canary_receipt_block_number = int(
-            route_canary_transaction["block_number"]
+        args.route_canary_receipt_block_number = _summary_exact_positive_u64(
+            route_canary_transaction,
+            "block_number",
+            label="route canary receipt block number",
         )
-        args.route_canary_receipt_block_hash = _parse_hex32(
-            str(route_canary_transaction["block_hash"]),
+        args.route_canary_receipt_block_hash = _summary_hex32(
+            route_canary_transaction,
+            "block_hash",
             label="route canary receipt block hash",
         )
-        args.route_canary_block_receipts_root = _parse_hex32(
-            str(route_canary_transaction["block_receipts_root"]),
+        args.route_canary_block_receipts_root = _summary_hex32(
+            route_canary_transaction,
+            "block_receipts_root",
             label="route canary block receiptsRoot",
         )
-        args.route_canary_payload_hash = _parse_hex32(
-            str(route_canary_transaction["public_inputs_payload_hash"]),
+        args.route_canary_payload_hash = _summary_hex32(
+            route_canary_transaction,
+            "public_inputs_payload_hash",
             label="route canary payload hash",
         )
-        args.route_canary_target_domain = int(
-            route_canary_transaction["public_inputs_target_domain"]
+        args.route_canary_target_domain = _summary_exact_u32(
+            route_canary_transaction,
+            "public_inputs_target_domain",
+            label="route canary target domain",
         )
-        args.route_canary_statement_hash = _parse_hex32(
-            str(route_canary_transaction["statement_hash"]),
+        args.route_canary_statement_hash = _summary_hex32(
+            route_canary_transaction,
+            "statement_hash",
             label="route canary statement hash",
         )
-        args.route_canary_commitment_root = _parse_hex32(
-            str(route_canary_transaction["commitment_root"]),
+        args.route_canary_commitment_root = _summary_hex32(
+            route_canary_transaction,
+            "commitment_root",
             label="route canary commitment root",
         )
-        args.route_canary_finality_height = _parse_hex32(
-            str(route_canary_transaction["public_inputs_finality_height"]),
+        args.route_canary_finality_height = _summary_hex32(
+            route_canary_transaction,
+            "public_inputs_finality_height",
             label="route canary finality height",
         )
-        args.route_canary_finality_block_hash = _parse_hex32(
-            str(route_canary_transaction["public_inputs_finality_block_hash"]),
+        args.route_canary_finality_block_hash = _summary_hex32(
+            route_canary_transaction,
+            "public_inputs_finality_block_hash",
             label="route canary finality block hash",
         )
-        args.route_canary_proof_version = int(route_canary_transaction["proof_version"])
-        args.route_canary_proof_source_domain = int(
-            route_canary_transaction["proof_source_domain"]
+        args.route_canary_proof_version = _summary_exact_u32(
+            route_canary_transaction,
+            "proof_version",
+            label="route canary proof version",
+        )
+        args.route_canary_proof_source_domain = _summary_exact_u32(
+            route_canary_transaction,
+            "proof_source_domain",
+            label="route canary proof source domain",
         )
         args.route_canary_used_message_proof = (
             route_canary_transaction.get("message_proof_used") is True

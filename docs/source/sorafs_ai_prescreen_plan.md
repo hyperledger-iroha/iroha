@@ -54,9 +54,11 @@ promotion packets cannot mix screening, operator, executor, transparency, or
 governance records from different deployed moderation runs. Governance DAG
 evidence must also carry a `policy_digest_hex` matching a valid runner
 artifact, so the DAG policy surface is tied to the screening policy that was
-actually deployed. Runner-bound, workflow-bound, and policy-bound mismatches
-mark the offending artifact invalid in the summary instead of only blocking the
-top-level promotion status. Valid juror-notification transport artifacts now
+actually deployed. Runner evidence must carry both `evidence_digest_hex` and
+`policy_digest_hex` before it can anchor downstream Governance DAG policy
+binding. Runner-bound, workflow-bound, and policy-bound mismatches mark the
+offending artifact invalid in the summary instead of only blocking the top-level
+promotion status. Valid juror-notification transport artifacts now
 also surface their `manifest_body_blake3` values as
 `valid_notification_manifest_digests`, and valid commit/reveal executor
 artifacts surface their execution-summary digests as
@@ -64,24 +66,77 @@ artifacts surface their execution-summary digests as
 bind deployed transport and executor proof facts back to recognized artifact
 fingerprints instead of trusting summary-only metadata.
 Committee artifacts also bind `result_count` to the unique canonical
-`results[].name` inventory and reject duplicate committee-result entries before
-promotion can report ready.
+`results[].name` inventory, require reviewed
+`ai-prescreen-committee-result-*` labels without non-production markers, and
+reject duplicate committee-result entries before promotion can report ready.
+Runner and committee rollout evidence must also use a shipped moderation
+screening verdict label: `pass`, `warn`, `quarantine`, `escalate`, or `block`.
+Runner `combined_score_bps` and committee `aggregated_score_bps` evidence must
+be integer basis-point scores in the inclusive `0..=10000` range before those
+artifacts can anchor promotion readiness.
+Operator workflow artifacts also bind `route_count` and `passed_route_count` to
+the unique canonical `routes[].name` inventory and reject duplicate or unknown
+route entries before promotion can report ready. Each route row must use the
+reviewed `GET` method and the expected operator path for its route name and
+quarantine id, and its URL must match the top-level `operator_url` plus that
+reviewed route path before promotion can report ready. Operator route content
+types must also match the reviewed route table, with JSON routes reporting
+`application/json` and the browser UI reporting `text/html; charset=utf-8`;
+every route response must include a `body_blake3_hex` digest alongside its
+positive body-byte count.
+Runner, committee, operator workflow, optional operator-route, and juror
+notification webhook URL fields are validated with the shared SoraFS URL
+preflight before external evidence can report ready, so userinfo, query strings,
+encoded traversal, encoded separators, encoded drive prefixes, and
+secret-looking host/path components cannot enter accepted staged evidence.
 Juror notification transport artifacts also bind `probe_count` and
 `accepted_count` to the unique canonical `probes[].delivery_id` inventory and
-reject duplicate notification delivery probes before promotion can report
-ready. Transparency publication artifacts also bind `probe_count`,
+require reviewed `ai-prescreen-notification-delivery-*` labels without
+non-production markers and at least one accepted notification delivery before
+promotion can report ready. Each probe's dedup key must also be unique, bound
+to its reviewed delivery ID, and accompanied by a shipped `commit` or `reveal`
+action plus non-empty case, round, and juror identifiers. Notification probe
+byte counts must also be well-formed: notification bodies require positive byte
+counts, webhook response byte counts must be non-negative, and malformed
+byte-count evidence blocks the artifact before promotion can report ready.
+Duplicate notification delivery probes are rejected before promotion can report
+ready. Operator workflow route responses likewise require positive body-byte
+counts. Transparency publication
+artifacts also bind `probe_count`,
 `passed_probe_count`, and `source_entry_probe_count` to the unique canonical
-`probes[].source_kind` inventory and reject duplicate source-entry probes before
-promotion can report ready.
+`probes[].source_kind` inventory, require source-entry probe coverage for every
+required transparency source kind, and reject duplicate or unknown source-entry
+probes before promotion can report ready. Transparency request byte counts must
+be positive and response byte counts must be non-negative for every source-entry
+probe.
 Commit/reveal executor artifacts also bind `artifact_count` and
 `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and
-reject duplicate artifact entries before promotion can report ready.
+require the reviewed executor bundle to cover `executor.env` and `run.sh`.
+The checker also binds `executor.env` to an `env` artifact at `executor.env`
+and `run.sh` to a `script` artifact at `run.sh`. Duplicate or unknown artifact
+entries are rejected before promotion can report ready. Swapped-path or
+mislabeled artifact entries are also rejected before promotion can report
+ready. Executor bundle metadata, bundle artifact byte counts, execution-summary
+byte counts, and commit/reveal/tally action counts are validated, and the
+per-action counts must sum to `action_count` before executor evidence can be
+accepted.
+Notification manifest paths, commit/reveal executor artifact paths,
+execution-summary paths, and transparency payload paths must also be
+archive-portable after repeated percent-decoding, so encoded traversal, hidden
+separators, drive prefixes, and URI-scheme-like components cannot enter
+accepted staged evidence.
 Governance DAG artifacts also bind `producer_count` to the unique canonical
-`producers[].name` inventory and reject duplicate producer entries before
-promotion can report ready. End-to-end workflow artifacts also bind
-`step_count` and `passed_step_count` to the unique canonical `steps[].name`
-inventory and reject duplicate workflow-step entries before promotion can
-report ready.
+`producers[].name` inventory and `edge_count` to the unique canonical
+`edges[].name` inventory and the required governance producer inventory,
+require reviewed `ai-prescreen-governance-edge-*` labels without
+non-production markers and edges covering every required producer, and reject
+duplicate or unknown producer entries plus duplicate edge, malformed edge-label,
+or inflated edge-count entries before promotion can report ready. End-to-end workflow artifacts also require
+`workflow_id` to match a reviewed lowercase `sfm-4a-*` label without
+non-production markers, bind `step_count` and `passed_step_count` to the unique
+canonical `steps[].name` inventory, require reviewed steps to cover every
+required end-to-end workflow phase, and reject duplicate or unknown
+workflow-step entries before promotion can report ready.
 
 Implemented locally:
 
@@ -851,12 +906,45 @@ Completed local foundations:
   transparency source-entry, Governance DAG, and end-to-end workflow evidence;
   cross-artifact runner/workflow binding failures are reflected on the
   offending artifacts in the emitted summary. Committee artifacts also bind
-  `result_count` to the unique canonical `results[].name` inventory and reject
-  duplicate committee-result entries before promotion can report ready. Operator workflow artifacts also
+  `result_count` to the unique canonical `results[].name` inventory, require
+  reviewed `ai-prescreen-committee-result-*` labels without non-production
+  markers, and reject duplicate committee-result entries before promotion can
+  report ready. Runner
+  and committee artifacts must use reviewed `cid:*` subject references without
+  non-production markers and reject unshipped verdict labels before promotion
+  can report ready. Operator workflow artifacts also
   bind `route_count` and `passed_route_count` to the unique canonical
-  `routes[].name` inventory and reject duplicate route entries before promotion
-  can report ready. The checker exports its required top-level payload fields
-  as `EVIDENCE_REQUIRED_FIELDS`.
+  `routes[].name` inventory and reject duplicate or unknown route entries
+  before promotion can report ready, while requiring the reviewed `GET` method
+  and exact route path plus matching `operator_url`-rooted URL for each
+  operator route name, the reviewed JSON/browser content types, and a response
+  body digest for every route. Juror notification transport artifacts
+  bind delivery probes to reviewed `ai-prescreen-notification-delivery-*`
+  labels without non-production markers and require at least one accepted
+  delivery with positive notification byte counts and non-negative webhook
+  response byte counts, commit/reveal executor artifacts require the reviewed
+  `executor.env` and `run.sh` bundle files with exact path and kind bindings
+  while rejecting unknown, swapped-path, mislabeled artifact names, malformed
+  bundle metadata byte counts, invalid execution-summary byte counts, and
+  commit/reveal/tally action totals that do not sum to `action_count`,
+  transparency publication artifacts require every required source-entry
+  probe, reject unknown source kinds, and validate request/response byte counts.
+  Transparency publication artifacts must explicitly set
+  `payload_bytes_included`, `private_payloads_included`, and
+  `response_bodies_included` to `false` before promotion can report ready.
+  AI pre-screen payload-safety artifacts must also explicitly set
+  `payload_bytes_included` and `private_payloads_included` to `false` on
+  operator workflow, juror notification transport, commit/reveal executor,
+  transparency publication, Governance DAG, end-to-end workflow, and their
+  nested route, probe, artifact, and execution-summary records; executor
+  artifacts must set `private_payload_files_copied` to `false`, and
+  transparency probes must set `response_body_included` to `false` before
+  promotion can report ready.
+  Governance DAG artifacts reject unknown
+  producers and malformed `ai-prescreen-governance-edge-*` labels, and
+  end-to-end workflow artifacts require every required workflow phase while
+  rejecting unknown step names before promotion can report ready. The checker
+  exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`.
 - Provide `scripts/run_sorafs_ai_prescreen_rollout_evidence.py` as the
   collection planner/runner that composes existing runner, committee, operator,
   notification, executor, and transparency canaries before invoking the gate;
@@ -871,9 +959,26 @@ Completed local foundations:
   operator workflow, juror notification transport, commit/reveal executor,
   transparency publication, Governance DAG, and end-to-end workflow artifacts.
   The builder requires reviewed deployment context, runner tuple digests,
-  workflow digest bindings, reviewed committee-result labels whose unique
-  inventory matches `--result-count`, complete operator route/transparency
-  source/Governance DAG producer/workflow-step coverage where applicable, and
+  reviewed `--subject` references matching the gate's `cid:*` production
+  shape, runner `--evidence-digest-hex` and `--policy-digest-hex` evidence
+  anchors, integer `--score-bps` values capped at `10000`, workflow digest
+  bindings, reviewed committee-result labels whose
+  unique inventory matches `--result-count` and the
+  `ai-prescreen-committee-result-*` production family, generated notification
+  delivery labels in the `ai-prescreen-notification-delivery-*` production
+  family, complete operator route/transparency source/Governance DAG
+  producer/workflow-step coverage where applicable,
+  reviewed `--workflow-id` labels matching the gate's `sfm-4a-*` production
+  shape,
+  duplicate/unknown rejection for reviewed operator routes, transparency
+  source kinds, Governance DAG producers, and workflow steps before writing,
+  Governance DAG `--edge-count` binding to the required producer inventory,
+  reviewed `ai-prescreen-governance-edge-*` edge labels without non-production
+  markers, and
+  shared URL preflight for runner, committee, operator, and webhook URLs so
+  userinfo, query strings, fragments, encoded traversal/separators/drive
+  prefixes, URI-like path tokens, and secret-looking host/path components fail
+  before evidence is written, and
   validates every generated artifact through
   `scripts/check_sorafs_ai_prescreen_rollout_evidence.py` before writing.
   Checked-in response-file examples cover the end-to-end workflow anchor,

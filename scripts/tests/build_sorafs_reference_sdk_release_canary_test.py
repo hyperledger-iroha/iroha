@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = SCRIPT_ROOT / "build_sorafs_reference_sdk_release_canary.py"
@@ -99,6 +101,21 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     return args
 
 
+def assert_rejected_without_artifact(
+    args: list[str],
+    *,
+    kind: str,
+    tmp_path: Path,
+    capsys,
+    expected_error: str,
+) -> None:
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, kind).exists()
+
+
 def test_builds_payload_free_release_archive_canary(tmp_path: Path) -> None:
     assert MODULE.main(args_for("release_archive", tmp_path)) == 0
 
@@ -172,6 +189,32 @@ def test_signed_manifest_requires_policy_digest_before_write(
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
+def test_signed_manifest_rejects_unsupported_signature_algorithm_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("signed_manifest", tmp_path)
+    args.extend(["--signature-algorithm", "none"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--signature-algorithm must be `ed25519` or `rsa-sha256`" in captured.err
+    assert not canary_path(tmp_path, "signed_manifest").exists()
+
+
+def test_signed_manifest_canary_accepts_rsa_sha256_signature_algorithm(
+    tmp_path: Path,
+) -> None:
+    args = args_for("signed_manifest", tmp_path)
+    args.extend(["--signature-algorithm", "rsa-sha256"])
+
+    assert MODULE.main(args) == 0
+
+    payload = json.loads(canary_path(tmp_path, "signed_manifest").read_text("utf-8"))
+    assert payload["signature_algorithm"] == "rsa-sha256"
+
+
 def test_missing_release_target_coverage_fails_closed(tmp_path: Path, capsys) -> None:
     args = args_for("release_archive", tmp_path)
     index = args.index("--target")
@@ -182,6 +225,125 @@ def test_missing_release_target_coverage_fails_closed(tmp_path: Path, capsys) ->
     captured = capsys.readouterr()
     assert "--target must include every required value" in captured.err
     assert not canary_path(tmp_path, "release_archive").exists()
+
+
+def test_duplicate_release_target_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("release_archive", tmp_path)
+    args.extend(["--target", MODULE.REQUIRED_RELEASE_TARGETS[0]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--target must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "release_archive").exists()
+
+
+def test_unknown_release_target_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("release_archive", tmp_path)
+    args.extend(["--target", "shadow-release-target"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--target contains an unknown value" in captured.err
+    assert not canary_path(tmp_path, "release_archive").exists()
+
+
+def test_missing_downstream_package_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("downstream_bindings", tmp_path)
+    index = args.index("--package")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--package must include every required value" in captured.err
+    assert not canary_path(tmp_path, "downstream_bindings").exists()
+
+
+def test_duplicate_downstream_package_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("downstream_bindings", tmp_path)
+    args.extend(["--package", MODULE.REQUIRED_DOWNSTREAM_PACKAGES[0]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--package must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "downstream_bindings").exists()
+
+
+def test_unknown_downstream_package_coverage_fails_closed(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("downstream_bindings", tmp_path)
+    args.extend(["--package", "shadow-sdk-package"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--package contains an unknown value" in captured.err
+    assert not canary_path(tmp_path, "downstream_bindings").exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "option", "duplicate_value", "unknown_value"),
+    (
+        (
+            "release_archive",
+            "--target",
+            MODULE.REQUIRED_RELEASE_TARGETS[0],
+            "shadow-release-target",
+        ),
+        (
+            "downstream_bindings",
+            "--package",
+            MODULE.REQUIRED_DOWNSTREAM_PACKAGES[0],
+            "shadow-sdk-package",
+        ),
+    ),
+)
+def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
+    kind: str,
+    option: str,
+    duplicate_value: str,
+    unknown_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    duplicate_args = args_for(kind, tmp_path)
+    duplicate_args.extend([option, duplicate_value])
+    assert_rejected_without_artifact(
+        duplicate_args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain duplicates",
+    )
+
+    unknown_dir = tmp_path / "unknown"
+    unknown_dir.mkdir()
+    unknown_args = args_for(kind, unknown_dir)
+    unknown_args.extend([option, unknown_value])
+    assert_rejected_without_artifact(
+        unknown_args,
+        kind=kind,
+        tmp_path=unknown_dir,
+        capsys=capsys,
+        expected_error=f"{option} contains an unknown value",
+    )
 
 
 def test_smoke_duration_threshold_fails_before_write(tmp_path: Path, capsys) -> None:
@@ -208,3 +370,16 @@ def test_output_symlink_is_refused(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
     assert "must not be a symlink" in captured.err
     assert not target.exists()
+
+
+def test_output_directory_is_refused(tmp_path: Path, capsys) -> None:
+    directory = tmp_path / "out-dir"
+    directory.mkdir()
+    args = args_for("governance_approval", tmp_path)
+    index = args.index("--out")
+    args[index + 1] = str(directory)
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "must not be a directory" in captured.err

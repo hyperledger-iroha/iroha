@@ -12,6 +12,8 @@ production
 1800500000
 --seed-replay-digest-hex
 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--route-body-blake3-hex
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --runtime-route
 por_status
 --runtime-route

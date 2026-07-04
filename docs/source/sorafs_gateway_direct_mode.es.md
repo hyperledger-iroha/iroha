@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_direct_mode.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d811b95f39cf7b2d8b7e554a5242d24b7e9eee8a0716be1da86644163b000fa7
+source_hash: 7e50a7c828048181d294ae8af24111e34fa38e6ae0c346829051984d8eee183c
 source_last_modified: "2025-11-02T07:24:32.542935+00:00"
 translation_last_reviewed: "2026-01-30"
 ---
@@ -79,3 +79,12 @@ iroha app sorafs gateway direct-mode rollback
 
 Pega el snippet en tu configuracion o usalo como checklist cuando reviertas
 cambios en tu sistema de gestion de configuracion.
+
+## Smoke Wrapper Output Safety
+
+`scripts/sorafs_direct_mode_smoke.sh` fails before invoking `sorafs_cli` when
+the payload output, fetch summary, adoption report, or policy-derived
+scoreboard path is a symlink, points at a non-regular file, or sits under a
+symlinked parent component. This keeps direct-mode rollout evidence from being
+written through ambiguous filesystem aliases while still allowing the wrapper to
+create missing ordinary output directories.

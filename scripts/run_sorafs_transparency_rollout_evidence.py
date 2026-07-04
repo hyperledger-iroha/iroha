@@ -25,6 +25,7 @@ from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     SUMMARY_SCHEMA,
 )
 from sorafs_evidence_json import load_evidence_json  # noqa: E402
+from sorafs_checker_preflight import fsync_checker_output_parent  # noqa: E402
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
@@ -391,12 +392,15 @@ def write_deployment_context_artifact(path: Path, payload: dict[str, object]) ->
         rendered = render_runner_plan(payload).encode("utf-8")
         fd = os.open(path, deployment_context_write_open_flags())
         write_all_deployment_context_bytes(fd, rendered)
+        os.fsync(fd)
     except (OSError, RuntimeError, TypeError, ValueError) as error:
         del error
         return [DEPLOYMENT_CONTEXT_ARTIFACT_WRITE_DIAGNOSTIC]
     finally:
         if fd >= 0:
             os.close(fd)
+    if fsync_checker_output_parent(path, label="deployment-context artifact"):
+        return [DEPLOYMENT_CONTEXT_ARTIFACT_WRITE_DIAGNOSTIC]
     return []
 
 

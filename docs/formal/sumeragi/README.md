@@ -18374,6 +18374,9 @@ drift while proof commands stay unchanged.
 Formal workflow header key inventories must stay exact,
 so `run-name`, duplicate `env`, or other unreviewed top-level controls cannot
 change proof metadata or inherited workflow behavior.
+Formal workflow full top-level key inventories must stay exact,
+so post-`jobs` `permissions`, `defaults`, duplicate `jobs`, or other late
+top-level controls cannot bypass the header-only proof workflow guards.
 Formal workflow trigger event inventories must stay exact,
 so extra `push`, `pull_request_target`, or inline trigger forms cannot run
 checked proof jobs outside the reviewed PR and scheduled/manual surfaces.
@@ -18393,6 +18396,22 @@ scheduled/manual nightly workflow environment.
 Formal workflow top-level env bindings must stay exact,
 so approved inherited PR CI variables cannot change values while keeping the
 same keys.
+Formal workflow step-name inventories must stay exact,
+so GitHub proof transcript labels cannot drift while the underlying checked
+actions and proof commands remain pinned.
+Formal workflow job key inventories must stay exact,
+so checked proof jobs cannot gain job-level metadata, outputs, concurrency, or
+duplicate `steps` blocks while runner, timeout, and command guards still pass.
+Formal workflow step key inventories must stay exact,
+so checked proof steps cannot gain `id` metadata or other step-level fields
+while the reviewed names, actions, inputs, and commands remain unchanged.
+Formal workflow checked job declarations must stay singular,
+so PR and nightly formal evidence cannot disappear or be shadowed by duplicate
+`sumeragi_formal` or `frontier-nightly` declarations while unrelated PR jobs
+remain allowed.
+Formal nightly workflow job inventory must stay exact,
+so scheduled/manual formal evidence cannot gain unrelated reporting, publishing,
+or status jobs beside `frontier-nightly`.
 Workflow Apalache install and toolchain version pins must come from active commands,
 so comments or step names cannot satisfy the pinned model-checker install contract.
 Formal workflows must verify the pinned Apalache binary before running proof jobs,

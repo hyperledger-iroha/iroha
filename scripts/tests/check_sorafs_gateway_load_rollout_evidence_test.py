@@ -69,12 +69,12 @@ def local_conformance() -> dict:
 
 
 def staging_load(*, duration: int = 3_600, p95: int = 1_200) -> dict:
-    streams = [{"name": f"stream-{index:04d}"} for index in range(1_200)]
+    streams = [{"name": f"gateway-load-stream-{index:04d}"} for index in range(1_200)]
     providers = [
-        {"name": "provider-a"},
-        {"name": "provider-b"},
-        {"name": "provider-c"},
-        {"name": "provider-d"},
+        {"name": "gateway-load-provider-a"},
+        {"name": "gateway-load-provider-b"},
+        {"name": "gateway-load-provider-c"},
+        {"name": "gateway-load-provider-d"},
     ]
     payload = base("sorafs.gateway_load.staging_load.v1")
     payload.update(
@@ -84,7 +84,7 @@ def staging_load(*, duration: int = 3_600, p95: int = 1_200) -> dict:
             "fixture_bundle_digest_hex": POLICY_DIGEST,
             "policy_digest_hex": POLICY_DIGEST,
             "gateway_version": "iroha-gateway 1.0.0-rc.1",
-            "hardware_profile": {"name": "staging-c6i-2xlarge"},
+            "hardware_profile": {"name": "gateway-load-hardware-c6i-2xlarge"},
             "cache_state": {"mode": "cold-cache"},
             "duration_seconds": duration,
             "stream_count": len(streams),
@@ -113,6 +113,7 @@ def telemetry_slo() -> dict:
             "cold_cache_baseline_recorded": True,
             "critical_alerts_firing": False,
             "metrics": list(MODULE.REQUIRED_METRICS),
+            "metric_count": len(MODULE.REQUIRED_METRICS),
             "response_bodies_included": False,
         }
     )
@@ -168,6 +169,19 @@ def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
 
+def validation_options() -> object:
+    return MODULE.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_evidence_age_secs=MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+        min_staging_duration_secs=MODULE.DEFAULT_MIN_STAGING_DURATION_SECS,
+        min_streams=MODULE.DEFAULT_MIN_STREAMS,
+        min_success_rate_bps=MODULE.DEFAULT_MIN_SUCCESS_RATE_BPS,
+        max_error_rate_bps=MODULE.DEFAULT_MAX_ERROR_RATE_BPS,
+        max_p95_latency_ms=MODULE.DEFAULT_MAX_P95_LATENCY_MS,
+        max_p99_latency_ms=MODULE.DEFAULT_MAX_P99_LATENCY_MS,
+    )
+
+
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -181,6 +195,93 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_suite_report_digests"] == [SUITE_DIGEST]
     assert payload["valid_staging_report_digests"] == [STAGING_DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    telemetry_artifact = payload["required"]["telemetry_slo"]["artifacts"][0]
+    assert telemetry_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert telemetry_artifact["fingerprint"]["metrics"] == list(
+        MODULE.REQUIRED_METRICS
+    )
+
+
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        (
+            "local-conformance.json",
+            "local_conformance",
+            local_conformance,
+            ("raw_report_included", "private_keys_included"),
+        ),
+        (
+            "staging-load.json",
+            "staging_load",
+            staging_load,
+            ("response_bodies_included", "raw_payloads_included"),
+        ),
+        (
+            "telemetry-slo.json",
+            "telemetry_slo",
+            telemetry_slo,
+            ("critical_alerts_firing", "response_bodies_included"),
+        ),
+        (
+            "transport-scope.json",
+            "transport_scope",
+            transport_scope,
+            (
+                "http3_config_surface_documented",
+                "http3_scenarios_passed",
+                "response_bodies_included",
+            ),
+        ),
+        (
+            "transport-scope.json",
+            "transport_scope",
+            lambda: transport_scope(http3_committed=True),
+            ("http3_scenarios_deferred",),
+        ),
+    )
+
+    for artifact_file, kind, make_payload, fields in cases:
+        for field in fields:
+            case_dir = tmp_path / kind / field
+            case_dir.mkdir(parents=True)
+            write_complete_evidence(case_dir)
+            payload = make_payload()
+            payload.pop(field)
+            write_json(case_dir / artifact_file, payload)
+            summary = case_dir / "summary.json"
+
+            assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            artifact = result["required"][kind]["artifacts"][0]
+            assert artifact["valid"] is False
+            assert f"{field} must be false" in artifact["errors"]
+
+
+def test_staging_gateway_version_must_be_concrete() -> None:
+    for version in ("iroha-gateway 1.0.0", "iroha-gateway 1.0.0-rc.1"):
+        payload = staging_load()
+        payload["gateway_version"] = version
+        kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
+        assert kind == "staging_load"
+        assert errors == []
+
+    for version in (
+        "latest",
+        "1.0.0",
+        "iroha-gateway 01.0.0",
+        "iroha-gateway 1.0.0-rc.0",
+        "iroha-gateway 1.0.0-dev",
+    ):
+        payload = staging_load()
+        payload["gateway_version"] = version
+        kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
+        assert kind == "staging_load"
+        assert MODULE.GATEWAY_VERSION_ERROR in errors
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -192,6 +293,35 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     )
 
     assert MODULE.main([f"@{args}"]) == 0
+
+
+def test_local_conformance_cargo_command_must_be_reviewed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = local_conformance()
+    payload["cargo_command"] = MODULE.LOCKED_GATEWAY_CONFORMANCE_CARGO_COMMAND
+    write_json(tmp_path / "local-conformance.json", payload)
+    assert run_gate(tmp_path) == 0
+
+    for command in (
+        "echo sorafs_gateway_conformance",
+        (
+            f"{MODULE.DEFAULT_GATEWAY_CONFORMANCE_CARGO_COMMAND} "
+            "&& cat /tmp/private-key"
+        ),
+    ):
+        payload = local_conformance()
+        payload["cargo_command"] = command
+        write_json(tmp_path / "local-conformance.json", payload)
+        summary = tmp_path / "summary.json"
+        summary.unlink(missing_ok=True)
+
+        assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["local_conformance"]["artifacts"][0]
+        assert "cargo_command must be cargo test" in "\n".join(
+            artifact["errors"]
+        )
 
 
 def test_raw_report_leakage_fails(tmp_path: Path) -> None:
@@ -216,6 +346,92 @@ def test_staging_load_thresholds_fail(tmp_path: Path) -> None:
     assert "p95_latency_ms must be <= 1500" in artifact["errors"]
 
 
+def test_staging_load_integer_unit_metrics_must_be_non_negative_ints(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["success_rate_bps"] = 9_950.5
+    payload["error_rate_bps"] = 12.5
+    payload["p95_latency_ms"] = -1
+    payload["p99_latency_ms"] = 2_200.5
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert "success_rate_bps must be a positive integer" in artifact["errors"]
+    assert "error_rate_bps must be a non-negative integer" in artifact["errors"]
+    assert "p95_latency_ms must be a non-negative integer" in artifact["errors"]
+    assert "p99_latency_ms must be a non-negative integer" in artifact["errors"]
+
+
+def test_staging_load_success_rate_bps_must_be_basis_points(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["success_rate_bps"] = 10_001
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert "success_rate_bps must be <= 10000" in artifact["errors"]
+
+
+def test_staging_load_error_rate_bps_must_be_basis_points() -> None:
+    payload = staging_load()
+    payload["error_rate_bps"] = 10_001
+    options = MODULE.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_evidence_age_secs=MODULE.DEFAULT_MAX_EVIDENCE_AGE_SECS,
+        min_staging_duration_secs=MODULE.DEFAULT_MIN_STAGING_DURATION_SECS,
+        min_streams=MODULE.DEFAULT_MIN_STREAMS,
+        min_success_rate_bps=MODULE.DEFAULT_MIN_SUCCESS_RATE_BPS,
+        max_error_rate_bps=MODULE.MAX_ERROR_RATE_BPS + 1,
+        max_p95_latency_ms=MODULE.DEFAULT_MAX_P95_LATENCY_MS,
+        max_p99_latency_ms=MODULE.DEFAULT_MAX_P99_LATENCY_MS,
+    )
+
+    kind, errors = MODULE.validate_evidence_payload(payload, options)
+
+    assert kind == "staging_load"
+    assert "error_rate_bps must be <= 10000" in errors
+
+
+def test_basis_point_thresholds_must_be_possible(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--summary-out",
+                str(summary),
+                "--now-unix",
+                str(NOW_UNIX),
+                "--min-success-rate-bps",
+                "10001",
+                "--max-error-rate-bps",
+                "10001",
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "--min-success-rate-bps must be <= 10000" in captured.err
+    assert "--max-error-rate-bps must be <= 10000" in captured.err
+    assert not summary.exists()
+
+
 def test_telemetry_requires_gateway_metrics(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = telemetry_slo()
@@ -231,6 +447,35 @@ def test_telemetry_requires_gateway_metrics(tmp_path: Path) -> None:
         "metrics must include value `sorafs_gateway_refusals_total`"
         in artifact["errors"]
     )
+
+
+def test_telemetry_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = telemetry_slo()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "telemetry-slo.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["telemetry_slo"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_telemetry_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = telemetry_slo()
+    payload["metrics"].append("sorafs_gateway_debug_metric")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "telemetry-slo.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["telemetry_slo"]["artifacts"][0]
+    assert "metrics must not include unknown values" in artifact["errors"]
 
 
 def test_local_conformance_scenario_count_must_match_unique_scenarios(
@@ -265,6 +510,23 @@ def test_local_conformance_scenarios_must_not_duplicate(tmp_path: Path) -> None:
     assert "scenario_count must match unique scenarios count" in artifact["errors"]
 
 
+def test_local_conformance_scenarios_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = local_conformance()
+    payload["scenarios"].append("debug_gateway_path")
+    payload["scenario_count"] = len(payload["scenarios"])
+    write_json(tmp_path / "local-conformance.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["local_conformance"]["artifacts"][0]
+    assert "scenarios must not include unknown values" in artifact["errors"]
+
+
 def test_staging_load_stream_count_must_match_unique_streams(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = staging_load()
@@ -282,7 +544,7 @@ def test_staging_load_stream_count_must_match_unique_streams(tmp_path: Path) -> 
 def test_staging_load_streams_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = staging_load()
-    payload["streams"].append({"name": "stream-0000"})
+    payload["streams"].append({"name": "gateway-load-stream-0000"})
     payload["stream_count"] = len(payload["streams"])
     write_json(tmp_path / "staging-load.json", payload)
     summary = tmp_path / "summary.json"
@@ -312,7 +574,7 @@ def test_staging_load_provider_count_must_match_unique_providers(tmp_path: Path)
 def test_staging_load_providers_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = staging_load()
-    payload["providers"].append({"name": "provider-a"})
+    payload["providers"].append({"name": "gateway-load-provider-a"})
     payload["provider_count"] = len(payload["providers"])
     write_json(tmp_path / "staging-load.json", payload)
     summary = tmp_path / "summary.json"
@@ -323,6 +585,126 @@ def test_staging_load_providers_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["staging_load"]["artifacts"][0]
     assert "providers must not contain duplicate values" in artifact["errors"]
     assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_staging_hardware_profile_must_be_reviewed_label(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["hardware_profile"] = {"name": "gateway-load-hardware-placeholder"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert (
+        "hardware_profile.name must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
+
+
+def test_staging_hardware_profile_must_be_object(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["hardware_profile"] = "gateway-load-hardware-c6i-2xlarge"
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert "hardware_profile must be an object" in artifact["errors"]
+
+
+def test_staging_cache_state_must_be_reviewed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["cache_state"] = {"mode": "debug-cache"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert MODULE.CACHE_STATE_ERROR in artifact["errors"]
+
+
+def test_staging_hardware_profile_must_use_gateway_load_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["hardware_profile"] = {"name": "staging-c6i-2xlarge"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert MODULE.HARDWARE_PROFILE_ERROR in artifact["errors"]
+
+
+def test_staging_stream_names_must_be_generated_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["streams"][0] = {"name": "debug-stream"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert MODULE.STREAM_NAME_ERROR in artifact["errors"]
+
+
+def test_staging_stream_names_reject_generic_stream_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["streams"][0] = {"name": "stream-0000"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert MODULE.STREAM_NAME_ERROR in artifact["errors"]
+
+
+def test_staging_provider_names_must_be_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["providers"][0] = {"name": "gateway-load-provider-placeholder"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert (
+        "providers[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_staging_provider_names_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["providers"][0] = {"name": "provider-a"}
+    write_json(tmp_path / "staging-load.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["staging_load"]["artifacts"][0]
+    assert MODULE.PROVIDER_NAME_ERROR in artifact["errors"]
 
 
 def test_http3_committed_requires_passed_scenarios(tmp_path: Path) -> None:

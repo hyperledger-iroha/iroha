@@ -162,9 +162,9 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
 > The Torii gateway now exposes read-only helpers backed by the same
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — returns the stored
+> - `GET /v1/sorafs/storage/manifest/{manifest_id}` — returns the stored
 >   Norito manifest (base64) alongside digest/metadata.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — returns the deterministic
+> - `GET /v1/sorafs/storage/plan/{manifest_id}` — returns the deterministic
 >   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling.【crates/iroha_torii/src/sorafs/api.rs:1259】
 >
 > These endpoints mirror the CLI output so pipelines can switch from local

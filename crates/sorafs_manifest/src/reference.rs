@@ -6632,19 +6632,14 @@ mod tests {
     }
 
     fn orderbook_settlement_channel(trade: &TradeEventV1) -> SettlementChannelV1 {
-        SettlementChannelV1 {
-            version: crate::SETTLEMENT_CHANNEL_VERSION_V1,
-            channel_id: [0x82; 32],
-            trade_id: trade.trade_id,
-            buyer_account: b"buyer@sora".to_vec(),
-            provider_id: [0x91; 32],
-            total_bytes: 512,
-            remaining_bytes: 256,
-            xor_locked: crate::XorAmount::from_micro(900),
-            status: SettlementChannelStatusV1::Open,
-            opened_at_unix: 1_800_000_005,
-            updated_at_unix: 1_800_000_010,
-        }
+        crate::open_settlement_channel_for_trade_v1(
+            trade,
+            [0x82; 32],
+            b"buyer@sora".to_vec(),
+            [0x91; 32],
+            1_800_000_005,
+        )
+        .expect("orderbook fixture channel should open")
     }
 
     fn orderbook_runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
@@ -6659,7 +6654,8 @@ mod tests {
         let mut receipt = orderbook_settlement_receipt();
         receipt.channel_id = channel.channel_id;
         receipt.trade_id = channel.trade_id;
-        receipt.issued_at_unix = channel.updated_at_unix;
+        let channel = crate::apply_settlement_receipt_v1(&channel, &receipt)
+            .expect("orderbook fixture receipt should apply");
         OrderbookRuntimeSnapshotV1 {
             version: crate::ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
             next_sequence: 4,

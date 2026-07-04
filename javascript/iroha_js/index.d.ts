@@ -19865,7 +19865,7 @@ export function isKagemushaRecursiveSpendLineageProofCircuitId(
   proofCircuitId?: string | null,
 ): boolean;
 export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
-  outputProofCircuitId?: string | null,
+  outputProofCircuitId: string,
 ): boolean;
 export function isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
   verifierOpeningLen: unknown,
@@ -19896,7 +19896,7 @@ export function validateKagemushaRecursiveSpendLineageKeyArtifacts(
 ): KagemushaRecursiveSpendLineageKeyArtifacts;
 export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(): boolean;
 export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
-  outputProofCircuitId?: string | null,
+  outputProofCircuitId: string,
 ): boolean;
 export function requiresKagemushaRecursiveSpendLineageWitnessForRedeem(
   proofCircuitId: string,
@@ -19906,10 +19906,10 @@ export function canAppendKagemushaRecursiveSpendWitnesslessLineage(
   previousHopCount: number,
 ): boolean;
 export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
-  outputProofCircuitId?: string | null,
+  outputProofCircuitId: string,
 ): string;
 export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(
-  outputProofCircuitId?: string | null,
+  outputProofCircuitId: string,
 ): boolean;
 export function isSupportedKagemushaRecursiveSpendPreviousProofCircuitId(
   previousProofCircuitId?: string | null,
@@ -19919,22 +19919,22 @@ export function requiresKagemushaRecursiveSpendPreviousLineageVerifierRecordForA
 ): boolean;
 export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
   previousProofCircuitId: string | null | undefined,
-  outputProofCircuitId: string | null | undefined,
+  outputProofCircuitId: string,
 ): boolean;
 export function preferredKagemushaRecursiveSpendAppendOutputProofCircuitId(
   previousHopCount: number,
 ): string;
 export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
-  outputProofCircuitId: string | null | undefined,
+  outputProofCircuitId: string,
   previousHopCount: number,
 ): boolean;
 export function canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
   previousProofCircuitId: string | null | undefined,
-  outputProofCircuitId: string | null | undefined,
+  outputProofCircuitId: string,
   previousHopCount: number,
 ): boolean;
 export function requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend(
-  outputProofCircuitId: string | null | undefined,
+  outputProofCircuitId: string,
   previousHopCount: number,
 ): boolean;
 export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
@@ -20022,7 +20022,7 @@ export interface KagemushaRecursiveSpendInitRequestInput {
   readonly blockHeight?: number | bigint | string | null;
   readonly block_height?: number | bigint | string | null;
 }
-export interface KagemushaRecursiveSpendAppendRequestInput {
+export interface KagemushaRecursiveSpendAppendRequestBaseInput {
   readonly previousBundle?: BinaryLike;
   readonly previous_bundle?: BinaryLike;
   readonly recordBundle?: BinaryLike;
@@ -20032,8 +20032,6 @@ export interface KagemushaRecursiveSpendAppendRequestInput {
   readonly pallasOpenEnvelopesArchive?: BinaryLike;
   readonly currentNote?: KagemushaRecursiveSpendableNoteDescriptorInput;
   readonly current_note?: KagemushaRecursiveSpendableNoteDescriptorInput;
-  readonly outputProofCircuitId?: string | null;
-  readonly output_proof_circuit_id?: string | null;
   readonly previousLineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
   readonly previous_lineage_verifier_record?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
   readonly previousProofOpenEnvelopes?: BinaryLike | null;
@@ -20048,6 +20046,18 @@ export interface KagemushaRecursiveSpendAppendRequestInput {
   readonly blockHeight?: number | bigint | string | null;
   readonly block_height?: number | bigint | string | null;
 }
+export type KagemushaRecursiveSpendAppendRequestInput =
+  KagemushaRecursiveSpendAppendRequestBaseInput &
+    (
+      | {
+          readonly outputProofCircuitId: string;
+          readonly output_proof_circuit_id?: never;
+        }
+      | {
+          readonly outputProofCircuitId?: never;
+          readonly output_proof_circuit_id: string;
+        }
+    );
 export interface KagemushaRecursiveSpendVerifyRequestInput {
   readonly bundle: BinaryLike;
   readonly lineageVerifierRecord?: KagemushaRecursiveSpendVerifierRecordRefInput | null;
