@@ -794,6 +794,8 @@ fn verify_signature_hex(
     let signature = match algorithm {
         Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(&signature_bytes)
             .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?,
+        Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(&signature_bytes)
+            .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?,
         _ => Signature::try_from_bytes(&signature_bytes)
             .map_err(|_| TryReadError::SignatureMalformed(signature_hex.to_owned()))?,
     };
@@ -1236,10 +1238,20 @@ fn reconcile_snapshot_hashes_with_kura(
         iroha_logger::warn!(
             "Snapshot has incorrect latest block hash, discarding changes made by this block"
         );
+        let rollback_height = height.saturating_sub(1);
+        let latest_header_after_rollback = NonZeroUsize::new(rollback_height)
+            .and_then(|height| kura.get_block(height))
+            .map(|block| block.header().clone());
         state
             .block_and_revert(kura_block.header())
             .commit()
             .map_err(TryReadError::StateCommit)?;
+        state.revert_latest_block_metadata_for_snapshot_reconcile(latest_header_after_rollback);
+        let rollback_height = u64::try_from(rollback_height)
+            .map_err(crate::kura::Error::from)
+            .map_err(TryReadError::Kura)?;
+        kura.prune_to_height(rollback_height)
+            .map_err(TryReadError::Kura)?;
     }
 
     Ok(())
@@ -2131,6 +2143,10 @@ mod tests {
 
     const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
     const TEST_CHAIN_ID: &str = "test-chain";
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
     const NONCANONICAL_ED25519_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -2883,7 +2899,8 @@ mod tests {
         let digest = hex::decode(digest_hex.trim()).expect("snapshot digest hex");
         let signature_hex = std::fs::read_to_string(store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME))
             .expect("snapshot signature");
-        let signature = Signature::from_hex(signature_hex.trim()).expect("snapshot signature hex");
+        let signature =
+            Signature::try_from_hex(signature_hex.trim()).expect("snapshot signature hex");
         signature
             .verify(key_pair.public_key(), &digest)
             .expect("checked snapshot signature must verify");
@@ -2959,7 +2976,7 @@ mod tests {
     }
 
     #[test]
-    async fn snapshot_read_rejects_noncanonical_ed25519_signature_r_before_verification() {
+    async fn snapshot_read_rejects_malformed_ed25519_signature_r_before_verification() {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
@@ -2968,29 +2985,91 @@ mod tests {
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
         let signature_hex = std::fs::read_to_string(store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME))
             .expect("snapshot signature");
-        let mut signature_bytes = hex::decode(signature_hex.trim()).expect("signature hex");
-        signature_bytes[..NONCANONICAL_ED25519_R.len()].copy_from_slice(&NONCANONICAL_ED25519_R);
-        std::fs::write(
-            store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
-            hex::encode(signature_bytes),
-        )
-        .expect("replace snapshot signature");
+        let valid_signature_bytes = hex::decode(signature_hex.trim()).expect("signature hex");
 
-        let Err(error) = try_read_snapshot(
-            &store_dir,
-            &Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test,
-            BlockCount(state.view().height()),
-            TEST_CHUNK_SIZE,
-            key_pair.public_key(),
-            &state.chain_id,
-            #[cfg(feature = "telemetry")]
-            StateTelemetry::default(),
-        ) else {
-            panic!("snapshot with noncanonical Ed25519 signature R should be rejected")
-        };
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut signature_bytes = valid_signature_bytes.clone();
+            signature_bytes[..replacement_r.len()].copy_from_slice(&replacement_r);
+            std::fs::write(
+                store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+                hex::encode(signature_bytes),
+            )
+            .expect("replace snapshot signature");
 
-        assert!(matches!(error, TryReadError::SignatureMalformed(_)));
+            let Err(error) = try_read_snapshot(
+                &store_dir,
+                &Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test,
+                BlockCount(state.view().height()),
+                TEST_CHUNK_SIZE,
+                key_pair.public_key(),
+                &state.chain_id,
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::default(),
+            ) else {
+                panic!("snapshot with malformed Ed25519 signature R should be rejected")
+            };
+
+            assert!(
+                matches!(error, TryReadError::SignatureMalformed(_)),
+                "{label} snapshot signature R produced unexpected error: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    async fn snapshot_read_rejects_malformed_mldsa_signature_lengths_before_verification() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let state = state_factory();
+        let key_pair =
+            KeyPair::try_from_seed(b"snapshot-mldsa-signature".to_vec(), Algorithm::MlDsa)
+                .expect("snapshot ML-DSA fixture key generation should succeed");
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
+        let signature_hex = std::fs::read_to_string(store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME))
+            .expect("snapshot signature");
+        let valid_signature_bytes = hex::decode(signature_hex.trim()).expect("signature hex");
+
+        for label in ["short", "overlong"] {
+            let mut signature_bytes = valid_signature_bytes.clone();
+            match label {
+                "short" => {
+                    signature_bytes
+                        .pop()
+                        .expect("ML-DSA snapshot signature is non-empty");
+                }
+                "overlong" => signature_bytes.push(0xA5),
+                _ => unreachable!("covered labels"),
+            }
+            std::fs::write(
+                store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME),
+                hex::encode(signature_bytes),
+            )
+            .expect("replace snapshot signature");
+
+            let Err(error) = try_read_snapshot(
+                &store_dir,
+                &Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test,
+                BlockCount(state.view().height()),
+                TEST_CHUNK_SIZE,
+                key_pair.public_key(),
+                &state.chain_id,
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::default(),
+            ) else {
+                panic!("snapshot with malformed ML-DSA signature length should be rejected")
+            };
+
+            assert!(
+                matches!(error, TryReadError::SignatureMalformed(_)),
+                "{label} snapshot ML-DSA signature length produced unexpected error: {error:?}"
+            );
+        }
     }
 
     #[test]

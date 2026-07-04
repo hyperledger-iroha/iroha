@@ -52,6 +52,28 @@ def load_evidence_module():
     return module
 
 
+class HostileExpectedDestinationBindingHash:
+    def __str__(self):
+        raise AssertionError(
+            "secret-token EVM destination expected binding hash was stringified"
+        )
+
+    def __repr__(self):
+        raise AssertionError(
+            "secret-token EVM destination expected binding hash was repr'd"
+        )
+
+    def __eq__(self, _other):
+        raise AssertionError(
+            "secret-token EVM destination expected binding hash was compared"
+        )
+
+    def __ne__(self, _other):
+        raise AssertionError(
+            "secret-token EVM destination expected binding hash was compared"
+        )
+
+
 def test_evm_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
@@ -249,6 +271,98 @@ def full_toml_args(material):
         ),
         material,
     )
+
+
+def test_evm_destination_rejects_hostile_expected_binding_hash_without_hooks(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    material = evm_runtime_material(module, domain=1)
+
+    class FakeParser:
+        prog = "sccp-evm-destination-evidence-test"
+
+        def __init__(self, args):
+            self.args = args
+
+        def parse_args(self, _argv):
+            return self.args
+
+        def exit(self, code, message=None):
+            raise SystemExit((code, message or ""))
+
+    cli_args = [
+        "--domain",
+        "eth",
+        "--network-id",
+        "0x" + material.network_id.hex(),
+        "--verifier-address",
+        "0x" + material.verifier_address.hex(),
+        "--bridge-address",
+        "0x" + material.bridge_address.hex(),
+        "--bridge-code-hash",
+        "0x" + material.bridge_code_hash.hex(),
+        "--verifier-code-hash",
+        "0x" + material.verifier_code_hash.hex(),
+        "--verifier-key-hash",
+        "0x" + material.verifier_key_hash.hex(),
+        "--expected-destination-binding-hash",
+        "0x" + material.destination_binding_hash.hex(),
+    ]
+    malformed_cases = (
+        (
+            HostileExpectedDestinationBindingHash,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+        (
+            lambda: bytes(32),
+            "--expected-destination-binding-hash must not be zero",
+        ),
+        (
+            lambda: b"\x11" * 31,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+    )
+
+    for make_value, expected_error in malformed_cases:
+        for direct_call in (
+            lambda args: module.render_toml(args, material.destination_binding_hash),
+            lambda args: module._json_summary(
+                args,
+                material.destination_binding_hash,
+                False,
+            ),
+        ):
+            direct_args = full_toml_args(material)
+            direct_args.expected_destination_binding_hash = make_value()
+            try:
+                direct_call(direct_args)
+            except ValueError as exc:
+                message = str(exc)
+                assert expected_error in message
+                assert "secret-token" not in message
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "direct EVM destination accepted malformed expected binding"
+                )
+
+        main_args = module.build_parser().parse_args(cli_args)
+        main_args.expected_destination_binding_hash = make_value()
+        fake_parser = FakeParser(main_args)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "build_parser", lambda: fake_parser)
+            try:
+                module.main([])
+            except SystemExit as exc:
+                code, message = exc.code
+                assert code == 2
+                assert expected_error in message
+                assert "secret-token" not in message
+            else:
+                raise AssertionError(
+                    "EVM destination main accepted malformed expected binding"
+                )
 
 
 def test_evm_destination_json_summary_rejects_non_boolean_runtime_readiness(

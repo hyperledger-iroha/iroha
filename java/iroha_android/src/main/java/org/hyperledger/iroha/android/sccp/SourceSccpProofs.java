@@ -2354,12 +2354,12 @@ public final class SourceSccpProofs {
     BigInteger computedSignedPower = BigInteger.ZERO;
     for (int i = 0; i < proof.signatures.size(); i++) {
       final byte[] signature = Objects.requireNonNull(proof.signatures.get(i), "signatures entry");
-      if (!tronRecoverableSignatureIsCanonical(signature)) {
+      if (!bscRecoverableSignatureIsCanonical(signature)) {
         throw new IllegalArgumentException(
             "signatures[" + i + "] must be a canonical recoverable secp256k1 signature");
       }
       final int signerIndex = signerIndices.get(i);
-      final byte[] recoveredAddress = tronRecoveredSignerAddress20(commitMessageHash, signature);
+      final byte[] recoveredAddress = bscRecoveredSignerAddress20(commitMessageHash, signature);
       if (recoveredAddress == null || !Arrays.equals(recoveredAddress, validatorAddresses.get(signerIndex))) {
         throw new IllegalArgumentException(
             "signatures[" + i + "] must recover the selected validator address");
@@ -3155,7 +3155,7 @@ public final class SourceSccpProofs {
     if (!tronRecoverableSignatureIsCanonical(signature)
         || !tronRecoverableSignatureIsCanonical(parentSignature)) {
       throw new IllegalArgumentException(
-          "TRON header signatures must be canonical low-S with recovery id 0..3 or 27..30");
+          "TRON header signatures must be canonical low-S with recovery id 0..3");
     }
     final byte[] witness = hexBytes(witnessAddress, "witnessAddress", 21);
     if (!isNonZeroTronAddress(witness)) {
@@ -7156,12 +7156,8 @@ public final class SourceSccpProofs {
     return true;
   }
 
-  private static boolean tronRecoverableSignatureIsCanonical(final byte[] signature) {
+  private static boolean recoverableSignatureScalarsAreCanonical(final byte[] signature) {
     if (signature.length != 65) {
-      return false;
-    }
-    final int recoveryId = signature[64] & 0xff;
-    if (!((recoveryId >= 0 && recoveryId <= 3) || (recoveryId >= 27 && recoveryId <= 30))) {
       return false;
     }
     final byte[] rValue = Arrays.copyOfRange(signature, 0, 32);
@@ -7172,13 +7168,30 @@ public final class SourceSccpProofs {
         && compareUnsignedBytes(sValue, SECP256K1_SCALAR_HALF_ORDER_BE) <= 0;
   }
 
-  private static byte[] tronRecoveredSignerAddress20(
-      final byte[] messageHash, final byte[] signature) {
-    if (messageHash.length != 32 || !tronRecoverableSignatureIsCanonical(signature)) {
+  private static boolean tronRecoverableSignatureIsCanonical(final byte[] signature) {
+    if (signature.length != 65) {
+      return false;
+    }
+    final int recoveryId = signature[64] & 0xff;
+    return recoveryId >= 0
+        && recoveryId <= 3
+        && recoverableSignatureScalarsAreCanonical(signature);
+  }
+
+  private static boolean bscRecoverableSignatureIsCanonical(final byte[] signature) {
+    if (signature.length != 65) {
+      return false;
+    }
+    final int recoveryId = signature[64] & 0xff;
+    return (recoveryId == 27 || recoveryId == 28)
+        && recoverableSignatureScalarsAreCanonical(signature);
+  }
+
+  private static byte[] secp256k1RecoveredSignerAddress20(
+      final byte[] messageHash, final byte[] signature, final int recoveryId) {
+    if (messageHash.length != 32 || signature.length != 65) {
       return null;
     }
-    final int recoveryIdByte = signature[64] & 0xff;
-    final int recoveryId = recoveryIdByte >= 27 ? recoveryIdByte - 27 : recoveryIdByte;
     final BigInteger rValue = new BigInteger(1, Arrays.copyOfRange(signature, 0, 32));
     final BigInteger sValue = new BigInteger(1, Arrays.copyOfRange(signature, 32, 64));
     final BigInteger x =
@@ -7210,6 +7223,22 @@ public final class SourceSccpProofs {
     }
     final byte[] encoded = publicKey.getEncoded(false);
     return Arrays.copyOfRange(keccak256(Arrays.copyOfRange(encoded, 1, encoded.length)), 12, 32);
+  }
+
+  private static byte[] tronRecoveredSignerAddress20(
+      final byte[] messageHash, final byte[] signature) {
+    if (!tronRecoverableSignatureIsCanonical(signature)) {
+      return null;
+    }
+    return secp256k1RecoveredSignerAddress20(messageHash, signature, signature[64] & 0xff);
+  }
+
+  private static byte[] bscRecoveredSignerAddress20(
+      final byte[] messageHash, final byte[] signature) {
+    if (!bscRecoverableSignatureIsCanonical(signature)) {
+      return null;
+    }
+    return secp256k1RecoveredSignerAddress20(messageHash, signature, (signature[64] & 0xff) - 27);
   }
 
   private static byte[] bigIntegerToFixedBytes(final BigInteger value, final int byteLength) {

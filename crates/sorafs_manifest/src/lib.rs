@@ -8,6 +8,7 @@
 //! gateways, and storage nodes without bespoke parsers.
 
 use blake3::Hash;
+use ed25519_dalek::Signature as DalekSig;
 use norito::{
     core::Error as NoritoError,
     derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize},
@@ -50,7 +51,7 @@ pub mod validation;
 /// Decode a fixed-width Ed25519 signature after rejecting inert or malformed `R` payloads.
 pub(crate) fn checked_ed25519_signature_from_bytes(
     signature: &[u8; ed25519_dalek::SIGNATURE_LENGTH],
-) -> Result<ed25519_dalek::Signature, String> {
+) -> Result<DalekSig, String> {
     if inert_bytes(signature) {
         return Err("signature payload must not be all zero".to_owned());
     }
@@ -63,7 +64,7 @@ pub(crate) fn checked_ed25519_signature_from_bytes(
     }
     iroha_crypto::ed25519_parse_signature(signature)
         .map_err(|err| format!("signature R is small-order (weak); rejected: {err}"))?;
-    Ok(ed25519_dalek::Signature::from_bytes(signature))
+    Ok(DalekSig::from_bytes(signature))
 }
 
 /// Decode a fixed-width Ed25519 verifying key after rejecting inert or weak keys.
@@ -122,6 +123,12 @@ mod checked_ed25519_signature_tests {
         0xff, 0x7f,
     ];
 
+    const ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT: [u8; PUBLIC_KEY_LENGTH] = [
+        0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[test]
     fn checked_ed25519_signature_rejects_all_zero_signature_material() {
         let err = super::checked_ed25519_signature_from_bytes(&[0; SIGNATURE_LENGTH])
@@ -159,6 +166,12 @@ mod checked_ed25519_signature_tests {
 
         let err = super::checked_ed25519_verifying_key_from_bytes(&ED25519_NON_CANONICAL_IDENTITY)
             .expect_err("noncanonical public key material must fail");
+        assert!(err.contains("not a canonical"), "unexpected error: {err}");
+
+        let err = super::checked_ed25519_verifying_key_from_bytes(
+            &ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT,
+        )
+        .expect_err("noncanonical non-small-order public key material must fail");
         assert!(err.contains("not a canonical"), "unexpected error: {err}");
 
         let signing_key = SigningKey::from_bytes(&[0x41; 32]);

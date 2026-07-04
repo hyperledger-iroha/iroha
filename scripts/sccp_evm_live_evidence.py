@@ -475,6 +475,47 @@ def _parse_exact_hex32_blob(
     return parsed
 
 
+def _optional_namespace_bytes32_arg(
+    args: argparse.Namespace,
+    name: str,
+) -> bytes | None:
+    value = getattr(args, name, None)
+    if value is None:
+        return None
+    if not isinstance(value, (bytes, bytearray)):
+        raise ValueError(f"--{name.replace('_', '-')} must be bytes")
+    raw = bytes(value)
+    if len(raw) != 32:
+        raise ValueError(f"--{name.replace('_', '-')} must be 32 bytes")
+    if not any(raw):
+        raise ValueError(f"--{name.replace('_', '-')} must not be zero")
+    return raw
+
+
+def _optional_namespace_u32_arg(
+    args: argparse.Namespace,
+    name: str,
+) -> int | None:
+    value = getattr(args, name, None)
+    if value is None:
+        return None
+    if type(value) is not int or value < 0 or value > 0xFFFF_FFFF:
+        raise ValueError(f"--{name.replace('_', '-')} must be a u32 integer")
+    return value
+
+
+def _optional_namespace_positive_u64_arg(
+    args: argparse.Namespace,
+    name: str,
+) -> int | None:
+    value = getattr(args, name, None)
+    if value is None:
+        return None
+    if type(value) is not int or value <= 0 or value > 0xFFFF_FFFF_FFFF_FFFF:
+        raise ValueError(f"--{name.replace('_', '-')} must be a positive u64 integer")
+    return value
+
+
 def _parse_exact_address(value: Any, *, label: str) -> bytes:
     parsed = _parse_exact_hex_blob(value, label=label)
     if len(parsed) != 20:
@@ -2155,14 +2196,19 @@ def _validate_route_allowlist_hash(
 ) -> dict[str, Any]:
     if type(include_route_canary) is not bool:
         raise ValueError("include_route_canary must be a boolean")
-    route_allowlist_hash = getattr(args, "route_allowlist_hash", None)
+    route_allowlist_hash = _optional_namespace_bytes32_arg(
+        args,
+        "route_allowlist_hash",
+    )
     if route_allowlist_hash is None:
         return {}
-    source_material_hash = getattr(args, "source_verifier_material_hash", None)
-    source_deployment_hash = getattr(
+    source_material_hash = _optional_namespace_bytes32_arg(
+        args,
+        "source_verifier_material_hash",
+    )
+    source_deployment_hash = _optional_namespace_bytes32_arg(
         args,
         "source_adapter_engine_deployment_hash",
-        None,
     )
     if source_material_hash is None or source_deployment_hash is None:
         raise ValueError(
@@ -2231,12 +2277,100 @@ def collect_live_evidence(
     expected_rpc_chain_id = getattr(args, "expected_rpc_chain_id", None)
     if expected_rpc_chain_id is None:
         expected_rpc_chain_id = canonical_rpc_chain_id
+    elif (
+        type(expected_rpc_chain_id) is not int
+        or expected_rpc_chain_id <= 0
+        or expected_rpc_chain_id > 0xFFFF_FFFF_FFFF_FFFF
+    ):
+        raise ValueError("--expected-rpc-chain-id must be a positive u64 integer")
     elif expected_rpc_chain_id != canonical_rpc_chain_id:
         chain = evidence.DOMAIN_PROFILES[args.domain]["chain"]
         raise ValueError(
             "--expected-rpc-chain-id must match the canonical "
             f"{chain} mainnet chain id {canonical_rpc_chain_id}"
         )
+    canonical_network_id = _default_network_id_for_domain(args.domain)
+    expected_network_id = _optional_namespace_bytes32_arg(
+        args,
+        "expected_network_id",
+    )
+    if expected_network_id is None:
+        expected_network_id = canonical_network_id
+    elif expected_network_id != canonical_network_id:
+        chain = evidence.DOMAIN_PROFILES[args.domain]["chain"]
+        raise ValueError(
+            "--expected-network-id must match the canonical "
+            f"{chain} mainnet EIP-155 network id {_hex(canonical_network_id)}"
+        )
+    expected_bridge_code_hash = _optional_namespace_bytes32_arg(
+        args,
+        "expected_bridge_code_hash",
+    )
+    expected_binding = _optional_namespace_bytes32_arg(
+        args,
+        "expected_destination_binding_hash",
+    )
+    route_allowlist_hash = _optional_namespace_bytes32_arg(
+        args,
+        "route_allowlist_hash",
+    )
+    route_canary_evidence_hash = _optional_namespace_bytes32_arg(
+        args,
+        "route_canary_evidence_hash",
+    )
+    route_canary_transaction_hash = _optional_namespace_bytes32_arg(
+        args,
+        "route_canary_transaction_hash",
+    )
+    route_canary_log_index = _optional_namespace_u32_arg(
+        args,
+        "route_canary_log_index",
+    )
+    route_canary_receipt_block_number = _optional_namespace_positive_u64_arg(
+        args,
+        "route_canary_receipt_block_number",
+    )
+    route_canary_receipt_block_hash = _optional_namespace_bytes32_arg(
+        args,
+        "route_canary_receipt_block_hash",
+    )
+    route_canary_block_receipts_root = _optional_namespace_bytes32_arg(
+        args,
+        "route_canary_block_receipts_root",
+    )
+    source_material_hash = _optional_namespace_bytes32_arg(
+        args,
+        "source_verifier_material_hash",
+    )
+    source_deployment_hash = _optional_namespace_bytes32_arg(
+        args,
+        "source_adapter_engine_deployment_hash",
+    )
+    if (
+        route_canary_evidence_hash is not None
+        and route_canary_transaction_hash is None
+    ):
+        raise ValueError(
+            "--route-canary-evidence-hash requires "
+            "--route-canary-transaction-hash"
+        )
+    if (
+        route_canary_transaction_hash is not None
+        and route_allowlist_hash is None
+    ):
+        raise ValueError("--route-canary-transaction-hash requires --route-allowlist-hash")
+    if route_canary_transaction_hash is not None and route_canary_log_index is None:
+        raise ValueError("--route-canary-transaction-hash requires --route-canary-log-index")
+    if route_allowlist_hash is not None:
+        if source_material_hash is None or source_deployment_hash is None:
+            raise ValueError(
+                "--route-allowlist-hash requires --source-verifier-material-hash "
+                "and --source-adapter-engine-deployment-hash"
+            )
+        if expected_binding is None:
+            raise ValueError(
+                "--route-allowlist-hash requires --expected-destination-binding-hash"
+            )
     destination = collect_destination_bridge_evidence(
         args.rpc_url,
         domain=args.domain,
@@ -2253,16 +2387,6 @@ def collect_live_evidence(
         )
     destination["expected_rpc_chain_id"] = expected_rpc_chain_id
     destination["expected_rpc_chain_id_matches"] = True
-    canonical_network_id = _default_network_id_for_domain(args.domain)
-    expected_network_id = getattr(args, "expected_network_id", None)
-    if expected_network_id is None:
-        expected_network_id = canonical_network_id
-    elif expected_network_id != canonical_network_id:
-        raise ValueError(
-            "--expected-network-id must match the canonical "
-            f"{destination['chain']} mainnet EIP-155 network id "
-            f"{_hex(canonical_network_id)}"
-        )
     if _hex(expected_network_id) != destination["network_id"]:
         raise ValueError(
             "--expected-network-id does not match bridge networkId(): "
@@ -2270,7 +2394,6 @@ def collect_live_evidence(
         )
     destination["expected_network_id"] = _hex(expected_network_id)
     destination["expected_network_id_matches"] = True
-    expected_bridge_code_hash = getattr(args, "expected_bridge_code_hash", None)
     if expected_bridge_code_hash is not None:
         if _hex(expected_bridge_code_hash) != destination["bridge_code_hash"]:
             raise ValueError(
@@ -2281,7 +2404,6 @@ def collect_live_evidence(
             )
         destination["expected_bridge_code_hash"] = _hex(expected_bridge_code_hash)
         destination["expected_bridge_code_hash_matches"] = True
-    expected_binding = getattr(args, "expected_destination_binding_hash", None)
     if expected_binding is not None:
         if _hex(expected_binding) != destination["destination_binding_hash"]:
             raise ValueError(
@@ -2293,25 +2415,6 @@ def collect_live_evidence(
         destination["expected_destination_binding_hash"] = _hex(expected_binding)
         destination["expected_destination_binding_hash_matches"] = True
     summary["destination_bridge"] = destination
-    route_allowlist_hash = getattr(args, "route_allowlist_hash", None)
-    route_canary_evidence_hash = getattr(args, "route_canary_evidence_hash", None)
-    route_canary_transaction_hash = getattr(args, "route_canary_transaction_hash", None)
-    route_canary_log_index = getattr(args, "route_canary_log_index", None)
-    if (
-        route_canary_evidence_hash is not None
-        and route_canary_transaction_hash is None
-    ):
-        raise ValueError(
-            "--route-canary-evidence-hash requires "
-            "--route-canary-transaction-hash"
-        )
-    if (
-        route_canary_transaction_hash is not None
-        and route_allowlist_hash is None
-    ):
-        raise ValueError("--route-canary-transaction-hash requires --route-allowlist-hash")
-    if route_canary_transaction_hash is not None and route_canary_log_index is None:
-        raise ValueError("--route-canary-transaction-hash requires --route-canary-log-index")
     route_canary_transaction = None
     if route_canary_transaction_hash is not None:
         route_canary_transaction = _collect_route_canary_transaction_evidence(
@@ -2338,38 +2441,24 @@ def collect_live_evidence(
                 f"expected {_hex(derived_canary_hash)}, "
                 f"got {_hex(route_canary_evidence_hash)}"
             )
-        expected_receipt_block_number = getattr(
-            args,
-            "route_canary_receipt_block_number",
-            None,
-        )
         if (
-            expected_receipt_block_number is not None
-            and expected_receipt_block_number != route_canary_transaction["block_number"]
+            route_canary_receipt_block_number is not None
+            and route_canary_receipt_block_number
+            != route_canary_transaction["block_number"]
         ):
             raise ValueError(
                 "--route-canary-receipt-block-number does not match "
                 "MessageProofAccepted transaction receipt block"
             )
-        expected_receipt_block_hash = getattr(
-            args,
-            "route_canary_receipt_block_hash",
-            None,
-        )
-        if expected_receipt_block_hash is not None and _hex(
-            expected_receipt_block_hash
+        if route_canary_receipt_block_hash is not None and _hex(
+            route_canary_receipt_block_hash
         ) != route_canary_transaction["block_hash"]:
             raise ValueError(
                 "--route-canary-receipt-block-hash does not match "
                 "MessageProofAccepted transaction receipt block"
             )
-        expected_block_receipts_root = getattr(
-            args,
-            "route_canary_block_receipts_root",
-            None,
-        )
-        if expected_block_receipts_root is not None and _hex(
-            expected_block_receipts_root
+        if route_canary_block_receipts_root is not None and _hex(
+            route_canary_block_receipts_root
         ) != route_canary_transaction["block_receipts_root"]:
             raise ValueError(
                 "--route-canary-block-receipts-root does not match "

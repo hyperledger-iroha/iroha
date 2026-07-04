@@ -1232,7 +1232,8 @@ mod tests {
             None,
             RetentionClass::default(),
             StorageTicketId::new([0x22; 32]),
-            Signature::from_bytes(&[0x33; 64]),
+            Signature::try_from_bytes(&[0x33; 64])
+                .expect("checked core DA shard cursor acknowledgement signature fixture"),
         )
     }
 
@@ -1574,7 +1575,8 @@ mod tests {
                 None,
                 RetentionClass::default(),
                 StorageTicketId::new([0xEE; 32]),
-                Signature::from_bytes(&[0x11; 64]),
+                Signature::try_from_bytes(&[0x11; 64])
+                    .expect("checked core DA shard cursor acknowledgement signature fixture"),
             );
             journal
                 .record_commitment(1, &record)

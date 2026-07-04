@@ -3854,8 +3854,11 @@ fn parse_identifier_receipt_attestation(
     let kind =
         parse_identifier_exact_str(object.get("kind").ok_or(BridgeError::IdentifierReceipt)?)?;
     match kind.as_str() {
-        "signed" => parse_identifier_receipt_signature(object.get("signature"))
-            .map(RamLfeReceiptAttestation::Signed),
+        "signed" => {
+            let algorithm = parse_identifier_receipt_signature_algorithm(object.get("algorithm"))?;
+            parse_identifier_receipt_signature_for_algorithm(object.get("signature"), algorithm)
+                .map(RamLfeReceiptAttestation::Signed)
+        }
         "proof" => {
             let proof_backend = parse_identifier_exact_str(
                 object
@@ -3879,12 +3882,45 @@ fn parse_identifier_receipt_attestation(
     }
 }
 
+fn parse_identifier_receipt_signature_algorithm(
+    value: Option<&JsonValue>,
+) -> BridgeResult<Algorithm> {
+    let algorithm = value
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    if algorithm.is_empty() || algorithm.trim() != algorithm {
+        return Err(BridgeError::IdentifierReceipt);
+    }
+    algorithm
+        .parse::<Algorithm>()
+        .map_err(|_| BridgeError::IdentifierReceipt)
+}
+
 fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult<Signature> {
     let signature_hex = value
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::IdentifierReceipt)?;
     let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
     Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
+}
+
+fn parse_identifier_receipt_signature_for_algorithm(
+    value: Option<&JsonValue>,
+    algorithm: Algorithm,
+) -> BridgeResult<Signature> {
+    let signature_hex = value
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
+    match algorithm {
+        Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(&signature_bytes)
+            .map_err(|_| BridgeError::IdentifierReceipt),
+        Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(&signature_bytes)
+            .map_err(|_| BridgeError::IdentifierReceipt),
+        _ => {
+            Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
+        }
+    }
 }
 
 fn parse_identifier_receipt_payload_value(
@@ -5387,6 +5423,7 @@ fn connect_signature_from_algorithm_bytes(
 ) -> Option<Signature> {
     match algorithm {
         Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(signature).ok(),
+        Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(signature).ok(),
         _ => Signature::try_from_bytes(signature).ok(),
     }
 }
@@ -9210,7 +9247,8 @@ mod offline_note_prover_tests {
         for (index, byte) in bytes.iter_mut().enumerate() {
             *byte = seed.wrapping_add(u8::try_from(index).expect("signature index fits"));
         }
-        Signature::from_bytes(&bytes)
+        Signature::try_from_bytes(&bytes)
+            .expect("offline-note bridge fixture signature passes admission")
     }
 
     fn fixture_key_pair(seed: u8) -> KeyPair {
@@ -19830,7 +19868,7 @@ mod accel_tests {
         let value: JsonValue = norito::json::from_str(&json).expect("json");
         let attachment =
             parse_proof_attachment_value(&value).expect("matching envelope hash should parse");
-        assert_eq!(attachment.envelope_hash, Some(Hash::new(&[0_u8]).into()));
+        assert_eq!(attachment.envelope_hash, Some(Hash::new([0_u8]).into()));
     }
 
     #[test]
@@ -28149,26 +28187,12 @@ mod tests {
     #[cfg(feature = "privacy-production-enabled")]
     const PRIVACY_IN_SCOPE_PLACEHOLDER_VERIFY_ERROR_CODE: u32 = PRIVACY_FFI_ERROR_PROVING_FAILED;
 
-    fn fixture_key_pair(seed: u8) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-            .expect("fixture seed must derive a valid keypair")
-    }
-
     struct ResetConfig(AccelerationConfig);
 
     impl Drop for ResetConfig {
         fn drop(&mut self) {
             ivm::set_acceleration_config(self.0);
         }
-    }
-
-    fn fixture_key_pair(seed: u8) -> KeyPair {
-        let mut material = [0u8; 32];
-        let domain = b"connect-bridge-test-seed";
-        material[..domain.len()].copy_from_slice(domain);
-        material[31] = seed;
-        KeyPair::try_from_seed(material.to_vec(), Algorithm::Ed25519)
-            .expect("fixture seed must derive a valid keypair")
     }
 
     fn take_privacy_output_bytes(out_ptr: *mut c_uchar, out_len: c_ulong) -> Vec<u8> {
@@ -32587,6 +32611,18 @@ mod tests {
         0xff, 0x7f,
     ];
 
+    const SMALL_ORDER_ED25519_PUBLIC_KEY: [u8; 32] = [
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00,
+    ];
+
+    const NONCANONICAL_ED25519_PUBLIC_KEY: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[test]
     fn identifier_receipt_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_identifier_receipt_ed25519_key_fixture();
@@ -32805,6 +32841,10 @@ mod tests {
             json_object([
                 ("kind", JsonValue::from("signed")),
                 (
+                    "algorithm",
+                    JsonValue::from(Algorithm::Ed25519.as_static_str()),
+                ),
+                (
                     "signature",
                     JsonValue::from(sample_identifier_signature_hex(payload)),
                 ),
@@ -32865,6 +32905,10 @@ mod tests {
             &payload,
             json_object([
                 ("kind", JsonValue::from("signed")),
+                (
+                    "algorithm",
+                    JsonValue::from(Algorithm::MlDsa.as_static_str()),
+                ),
                 ("signature", JsonValue::from(signature_hex.clone())),
             ]),
         ))
@@ -32881,6 +32925,48 @@ mod tests {
     }
 
     #[test]
+    fn parse_identifier_receipt_rejects_malformed_mldsa_signed_attestation_lengths() {
+        let payload = sample_identifier_receipt_payload();
+        let signer = KeyPair::try_from_seed(
+            b"identifier-receipt-mldsa-length".to_vec(),
+            Algorithm::MlDsa,
+        )
+        .expect("derive ML-DSA identifier receipt attestation signer");
+        let signature = SignatureOf::try_new(signer.private_key(), &payload)
+            .expect("sign ML-DSA identifier receipt fixture payload");
+        for label in ["short", "overlong"] {
+            let mut signature_bytes = signature.payload().to_vec();
+            match label {
+                "short" => {
+                    signature_bytes
+                        .pop()
+                        .expect("ML-DSA fixture signature is non-empty");
+                }
+                "overlong" => signature_bytes.push(0xA5),
+                _ => unreachable!("covered labels"),
+            }
+            let receipt = sample_identifier_receipt_json(
+                &payload,
+                json_object([
+                    ("kind", JsonValue::from("signed")),
+                    (
+                        "algorithm",
+                        JsonValue::from(Algorithm::MlDsa.as_static_str()),
+                    ),
+                    ("signature", JsonValue::from(hex::encode(signature_bytes))),
+                ]),
+            );
+
+            let err = parse_identifier_receipt_value(receipt)
+                .expect_err("malformed ML-DSA identifier receipt signature length must reject");
+            assert!(
+                matches!(err, BridgeError::IdentifierReceipt),
+                "{label} ML-DSA signature length produced unexpected parse error: {err:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_identifier_receipt_rejects_all_zero_signed_attestation() {
         let payload = sample_identifier_receipt_payload();
         let mut value = sample_identifier_signed_receipt_json(&payload);
@@ -32892,9 +32978,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_identifier_receipt_defers_malformed_ed25519_signed_attestation_r() {
+    fn parse_identifier_receipt_rejects_missing_signed_attestation_algorithm() {
         let payload = sample_identifier_receipt_payload();
-        let signer = sample_identifier_receipt_attestation_signer();
+        let mut value = sample_identifier_signed_receipt_json(&payload);
+        value
+            .as_object_mut()
+            .expect("receipt object")
+            .get_mut("attestation")
+            .expect("attestation")
+            .as_object_mut()
+            .expect("attestation object")
+            .remove("algorithm");
+
+        let err = parse_identifier_receipt_value(value)
+            .expect_err("signed identifier receipt attestation must declare its algorithm");
+        assert!(matches!(err, BridgeError::IdentifierReceipt));
+    }
+
+    #[test]
+    fn parse_identifier_receipt_rejects_malformed_ed25519_signed_attestation_r() {
+        let payload = sample_identifier_receipt_payload();
 
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
@@ -32910,14 +33013,42 @@ mod tests {
                 hex::encode(signature_bytes),
             );
 
-            let receipt = parse_identifier_receipt_value(value)
-                .expect("malformed Ed25519 identifier receipt signature R stays opaque");
-            let err = receipt
-                .verify(signer.public_key())
-                .expect_err("malformed Ed25519 identifier receipt signature R must not verify");
+            let err = parse_identifier_receipt_value(value)
+                .expect_err("malformed Ed25519 identifier receipt signature R must reject");
             assert!(
-                matches!(err, CryptoError::BadSignature),
-                "{label} signature R produced unexpected verification error: {err:?}"
+                matches!(err, BridgeError::IdentifierReceipt),
+                "{label} signature R produced unexpected parse error: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_identifier_receipt_output_opening_rejects_malformed_ed25519_r_on_verify() {
+        let opening_signer = checked_identifier_receipt_ed25519_key_fixture();
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut payload = sample_identifier_receipt_payload();
+            let mut signature = payload.opening.signature.payload().to_vec();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            payload.opening.signature = Signature::from_bytes(&signature);
+            let receipt =
+                parse_identifier_receipt_value(sample_identifier_signed_receipt_json(&payload))
+                    .expect("receipt with outer-valid malformed opening should parse");
+            receipt
+                .verify(sample_identifier_receipt_attestation_signer().public_key())
+                .expect("outer receipt attestation remains valid for mutated payload");
+
+            let err = receipt
+                .payload
+                .opening
+                .verify_signature(opening_signer.public_key())
+                .expect_err("malformed output-opening signature R must reject on verification");
+            assert!(
+                matches!(err, iroha_crypto::Error::BadSignature),
+                "{label} output-opening signature R produced unexpected error: {err:?}"
             );
         }
     }
@@ -32997,6 +33128,10 @@ mod tests {
             (
                 vec!["attestation", "signature"],
                 format!("{} ", sample_identifier_signature_hex(&payload)),
+            ),
+            (
+                vec!["attestation", "algorithm"],
+                format!("{} ", Algorithm::Ed25519.as_static_str()),
             ),
             (vec!["attestation", "kind"], " signed".to_owned()),
         ];
@@ -33121,8 +33256,8 @@ mod tests {
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
             attestation: RamLfeReceiptAttestation::Signed(
-                Signature::from_hex(sample_identifier_signature_hex(&payload))
-                    .expect("valid signature hex"),
+                Signature::try_from_hex(sample_identifier_signature_hex(&payload))
+                    .expect("valid checked signature hex"),
             ),
         };
         let instruction = ClaimIdentifier {
@@ -33274,7 +33409,7 @@ mod tests {
 
     #[test]
     fn ffi_sign_verify_ed25519() {
-        let private = vec![0x11; 32];
+        let private = [0x11; 32];
         let message = b"ffi-ed25519-signing";
         let (signature, public) = sign_and_verify_roundtrip(Algorithm::Ed25519, &private, message);
         assert_eq!(public.len(), 32);
@@ -33283,7 +33418,7 @@ mod tests {
 
     #[test]
     fn ffi_verify_detached_rejects_all_zero_signature_material() {
-        let private = vec![0x11; 32];
+        let private = [0x11; 32];
         let message = b"ffi-ed25519-signing";
         let mut pk_ptr: *mut c_uchar = ptr::null_mut();
         let mut pk_len: c_ulong = 0;
@@ -33323,7 +33458,12 @@ mod tests {
     }
 
     #[test]
-    fn ffi_verify_detached_rejects_noncanonical_ed25519_signature_r() {
+    fn ffi_verify_detached_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
         const NONCANONICAL_R: [u8; 32] = [
             0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -33348,30 +33488,69 @@ mod tests {
 
         let key_pair =
             KeyPair::try_from_seed(private, Algorithm::Ed25519).expect("fixture keypair");
-        let mut signature = Signature::try_new(key_pair.private_key(), message)
+        let valid_signature = Signature::try_new(key_pair.private_key(), message)
             .expect("fixture signature")
             .payload()
             .to_vec();
-        signature[..32].copy_from_slice(&NONCANONICAL_R);
-        let mut valid: c_uchar = 1;
-        let rc_verify = unsafe {
-            connect_norito_verify_detached(
-                Algorithm::Ed25519 as u8,
-                public_key.as_ptr(),
-                public_key.len() as c_ulong,
-                message.as_ptr(),
-                message.len() as c_ulong,
-                signature.as_ptr(),
-                signature.len() as c_ulong,
-                &mut valid,
-            )
-        };
 
-        assert_eq!(
-            rc_verify, 0,
-            "verification call must stay fallible only for API errors"
-        );
-        assert_eq!(valid, 0, "noncanonical Ed25519 signature R must not verify");
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature = valid_signature.clone();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let mut valid: c_uchar = 1;
+            let rc_verify = unsafe {
+                connect_norito_verify_detached(
+                    Algorithm::Ed25519 as u8,
+                    public_key.as_ptr(),
+                    public_key.len() as c_ulong,
+                    message.as_ptr(),
+                    message.len() as c_ulong,
+                    signature.as_ptr(),
+                    signature.len() as c_ulong,
+                    &mut valid,
+                )
+            };
+
+            assert_eq!(
+                rc_verify, 0,
+                "verification call must stay fallible only for API errors"
+            );
+            assert_eq!(valid, 0, "{label} Ed25519 signature R must not verify");
+        }
+    }
+
+    #[test]
+    fn ffi_verify_detached_rejects_weak_or_noncanonical_ed25519_public_key_material() {
+        let message = b"ffi-ed25519-malformed-public-key";
+        let signature = [0_u8; 64];
+
+        for (label, public_key) in [
+            ("all-zero", [0_u8; 32]),
+            ("small-order", SMALL_ORDER_ED25519_PUBLIC_KEY),
+            ("noncanonical", NONCANONICAL_ED25519_PUBLIC_KEY),
+        ] {
+            let mut valid: c_uchar = 1;
+            let rc_verify = unsafe {
+                connect_norito_verify_detached(
+                    Algorithm::Ed25519 as u8,
+                    public_key.as_ptr(),
+                    public_key.len() as c_ulong,
+                    message.as_ptr(),
+                    message.len() as c_ulong,
+                    signature.as_ptr(),
+                    signature.len() as c_ulong,
+                    &mut valid,
+                )
+            };
+
+            assert_eq!(
+                rc_verify, ERR_PRIVATE_KEY_PARSE,
+                "{label} Ed25519 public key must be rejected before verification"
+            );
+            assert_eq!(valid, 0, "{label} Ed25519 public key must clear validity");
+        }
     }
 
     #[test]
@@ -33403,8 +33582,53 @@ mod tests {
     }
 
     #[test]
+    fn ffi_verify_detached_rejects_malformed_mldsa_signature_lengths() {
+        let keypair =
+            KeyPair::try_from_seed(b"ffi-mldsa-malformed-signature".to_vec(), Algorithm::MlDsa)
+                .expect("fixture seed must derive a valid ML-DSA keypair");
+        let (_public_key, private_key) = keypair.into_parts();
+        let (_alg, private_bytes) = private_key.to_bytes();
+        let message = b"ffi-mldsa-malformed-signature";
+        let (signature, public) =
+            sign_and_verify_roundtrip(Algorithm::MlDsa, &private_bytes, message);
+        let mut short = signature.clone();
+        short.pop();
+        let mut overlong = signature.clone();
+        overlong.push(0x42);
+
+        for (label, malformed) in [
+            ("short", short),
+            ("overlong", overlong),
+            ("all-zero", vec![0_u8; signature.len()]),
+        ] {
+            let mut valid: c_uchar = 1;
+            let rc_verify = unsafe {
+                connect_norito_verify_detached(
+                    Algorithm::MlDsa as u8,
+                    public.as_ptr(),
+                    public.len() as c_ulong,
+                    message.as_ptr(),
+                    message.len() as c_ulong,
+                    malformed.as_ptr(),
+                    malformed.len() as c_ulong,
+                    &mut valid,
+                )
+            };
+
+            assert_eq!(
+                rc_verify, 0,
+                "{label} malformed ML-DSA signature must not become an API error"
+            );
+            assert_eq!(
+                valid, 0,
+                "{label} malformed ML-DSA signature must not verify"
+            );
+        }
+    }
+
+    #[test]
     fn java_detached_signing_helper_signs_and_verifies() {
-        let private = vec![0x21; 32];
+        let private = [0x21; 32];
         let message = b"java-helper-detached-signing";
         let algorithm = Algorithm::Ed25519 as jni::sys::jint;
 
@@ -33422,8 +33646,48 @@ mod tests {
     }
 
     #[test]
+    fn java_detached_verify_helper_rejects_malformed_mldsa_signature_lengths() {
+        let keypair = KeyPair::try_from_seed(
+            b"java-helper-mldsa-malformed-signature".to_vec(),
+            Algorithm::MlDsa,
+        )
+        .expect("fixture seed must derive a valid ML-DSA keypair");
+        let (_, public) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("checked ML-DSA public key");
+        let (_alg, private) = keypair.private_key().to_bytes();
+        let public = public.to_vec();
+        let message = b"java-helper-mldsa-malformed-signature";
+        let algorithm = Algorithm::MlDsa as jni::sys::jint;
+        let signature =
+            java_sign_detached_bytes(algorithm, &private, message).expect("Java helper signs");
+        assert!(
+            java_verify_detached_bytes(algorithm, &public, message, &signature)
+                .expect("Java verify helper runs"),
+            "valid ML-DSA signature must verify"
+        );
+        let mut short = signature.clone();
+        short.pop();
+        let mut overlong = signature.clone();
+        overlong.push(0x42);
+
+        for (label, malformed) in [
+            ("short", short),
+            ("overlong", overlong),
+            ("all-zero", vec![0_u8; signature.len()]),
+        ] {
+            assert!(
+                !java_verify_detached_bytes(algorithm, &public, message, &malformed)
+                    .expect("Java verify helper runs"),
+                "{label} malformed ML-DSA signature must not verify"
+            );
+        }
+    }
+
+    #[test]
     fn java_detached_verify_helper_rejects_all_zero_signature_material() {
-        let private = vec![0x21; 32];
+        let private = [0x21; 32];
         let message = b"java-helper-detached-signing";
         let algorithm = Algorithm::Ed25519 as jni::sys::jint;
         let public = java_public_key_from_private_bytes(algorithm, &private)
@@ -33438,7 +33702,32 @@ mod tests {
     }
 
     #[test]
-    fn java_detached_verify_helper_rejects_noncanonical_ed25519_signature_r() {
+    fn java_detached_verify_helper_rejects_weak_or_noncanonical_ed25519_public_key_material() {
+        let message = b"java-helper-detached-malformed-public-key";
+        let algorithm = Algorithm::Ed25519 as jni::sys::jint;
+        let signature = [0_u8; 64];
+
+        for (label, public_key) in [
+            ("all-zero", [0_u8; 32]),
+            ("small-order", SMALL_ORDER_ED25519_PUBLIC_KEY),
+            ("noncanonical", NONCANONICAL_ED25519_PUBLIC_KEY),
+        ] {
+            let err = java_verify_detached_bytes(algorithm, &public_key, message, &signature)
+                .expect_err("weak Ed25519 public key material must fail parsing");
+            assert!(
+                err.contains("invalid public key bytes"),
+                "{label} Ed25519 public key produced unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn java_detached_verify_helper_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
         const NONCANONICAL_R: [u8; 32] = [
             0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -33451,17 +33740,24 @@ mod tests {
             .expect("Java public-key helper derives key");
         let key_pair =
             KeyPair::try_from_seed(private, Algorithm::Ed25519).expect("fixture keypair");
-        let mut signature = Signature::try_new(key_pair.private_key(), message)
+        let valid_signature = Signature::try_new(key_pair.private_key(), message)
             .expect("fixture signature")
             .payload()
             .to_vec();
-        signature[..32].copy_from_slice(&NONCANONICAL_R);
 
-        assert!(
-            !java_verify_detached_bytes(algorithm, &public, message, &signature)
-                .expect("Java verify helper runs"),
-            "noncanonical Ed25519 signature R must not verify"
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature = valid_signature.clone();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+
+            assert!(
+                !java_verify_detached_bytes(algorithm, &public, message, &signature)
+                    .expect("Java verify helper runs"),
+                "{label} Ed25519 signature R must not verify"
+            );
+        }
     }
 
     #[test]
@@ -33503,7 +33799,12 @@ mod tests {
     }
 
     #[test]
-    fn encode_control_approve_ext_with_alg_rejects_noncanonical_ed25519_signature_r() {
+    fn encode_control_approve_ext_with_alg_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
         const NONCANONICAL_R: [u8; 32] = [
             0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -33515,43 +33816,50 @@ mod tests {
         let algorithm = b"ed25519";
         let key_pair =
             KeyPair::try_from_seed(vec![0x62; 32], Algorithm::Ed25519).expect("fixture keypair");
-        let mut signature = Signature::try_new(
+        let valid_signature = Signature::try_new(
             key_pair.private_key(),
             b"connect approve ext with alg malformed R",
         )
         .expect("fixture signature")
         .payload()
         .to_vec();
-        signature[..32].copy_from_slice(&NONCANONICAL_R);
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
 
-        let rc = unsafe {
-            connect_norito_encode_control_approve_ext_with_alg(
-                sid.as_ptr(),
-                1,
-                7,
-                wallet_pk.as_ptr(),
-                account.as_ptr().cast::<c_char>(),
-                account.len() as c_ulong,
-                ptr::null(),
-                0,
-                ptr::null(),
-                0,
-                algorithm.as_ptr().cast::<c_char>(),
-                algorithm.len() as c_ulong,
-                signature.as_ptr(),
-                signature.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        if !out_ptr.is_null() {
-            connect_norito_free(out_ptr);
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature = valid_signature.clone();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let rc = unsafe {
+                connect_norito_encode_control_approve_ext_with_alg(
+                    sid.as_ptr(),
+                    1,
+                    7,
+                    wallet_pk.as_ptr(),
+                    account.as_ptr().cast::<c_char>(),
+                    account.len() as c_ulong,
+                    ptr::null(),
+                    0,
+                    ptr::null(),
+                    0,
+                    algorithm.as_ptr().cast::<c_char>(),
+                    algorithm.len() as c_ulong,
+                    signature.as_ptr(),
+                    signature.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            if !out_ptr.is_null() {
+                connect_norito_free(out_ptr);
+            }
+
+            assert_eq!(rc, -4, "{label} signature R must be rejected");
+            assert_eq!(out_len, 0, "{label} signature R must not produce output");
         }
-
-        assert_eq!(rc, -4);
-        assert_eq!(out_len, 0);
     }
 
     #[test]
@@ -33581,7 +33889,12 @@ mod tests {
     }
 
     #[test]
-    fn encode_envelope_sign_result_ok_with_alg_rejects_noncanonical_ed25519_signature_r() {
+    fn encode_envelope_sign_result_ok_with_alg_rejects_malformed_ed25519_signature_r() {
+        const SMALL_ORDER_R: [u8; 32] = [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+        ];
         const NONCANONICAL_R: [u8; 32] = [
             0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -33590,34 +33903,41 @@ mod tests {
         let algorithm = b"ed25519";
         let key_pair =
             KeyPair::try_from_seed(vec![0x63; 32], Algorithm::Ed25519).expect("fixture keypair");
-        let mut signature = Signature::try_new(
+        let valid_signature = Signature::try_new(
             key_pair.private_key(),
             b"connect envelope sign result malformed R",
         )
         .expect("fixture signature")
         .payload()
         .to_vec();
-        signature[..32].copy_from_slice(&NONCANONICAL_R);
-        let mut out_ptr: *mut c_uchar = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
 
-        let rc = unsafe {
-            connect_norito_encode_envelope_sign_result_ok_with_alg(
-                9,
-                algorithm.as_ptr().cast::<c_char>(),
-                algorithm.len() as c_ulong,
-                signature.as_ptr(),
-                signature.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        if !out_ptr.is_null() {
-            connect_norito_free(out_ptr);
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut signature = valid_signature.clone();
+            signature[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let mut out_ptr: *mut c_uchar = ptr::null_mut();
+            let mut out_len: c_ulong = 0;
+
+            let rc = unsafe {
+                connect_norito_encode_envelope_sign_result_ok_with_alg(
+                    9,
+                    algorithm.as_ptr().cast::<c_char>(),
+                    algorithm.len() as c_ulong,
+                    signature.as_ptr(),
+                    signature.len() as c_ulong,
+                    &mut out_ptr,
+                    &mut out_len,
+                )
+            };
+            if !out_ptr.is_null() {
+                connect_norito_free(out_ptr);
+            }
+
+            assert_eq!(rc, -2, "{label} signature R must be rejected");
+            assert_eq!(out_len, 0, "{label} signature R must not produce output");
         }
-
-        assert_eq!(rc, -2);
-        assert_eq!(out_len, 0);
     }
 
     #[test]

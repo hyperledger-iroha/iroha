@@ -1831,6 +1831,9 @@ pub enum ModerationBallotsCommand {
     List(ModerationBallotsListArgs),
     /// Get one local moderation ballot record.
     Get(ModerationBallotsGetArgs),
+    /// Get the payload-free no-show plan for one closed moderation ballot.
+    #[command(name = "no-show-plan")]
+    NoShowPlan(ModerationBallotsNoShowPlanArgs),
     /// List local moderation ballot governance events.
     Events(ModerationBallotsEventsArgs),
     /// Submit a juror ballot commit payload.
@@ -1852,6 +1855,7 @@ impl Run for ModerationBallotsCommand {
         match self {
             Self::List(args) => args.run(context),
             Self::Get(args) => args.run(context),
+            Self::NoShowPlan(args) => args.run(context),
             Self::Events(args) => args.run(context),
             Self::Commit(args) => args.run(context),
             Self::Reveal(args) => args.run(context),
@@ -1919,6 +1923,36 @@ impl ModerationBallotsGetArgs {
         let filter = SorafsModerationBallotsFilter { limit: self.limit };
         let client = context.client_from_config();
         let response = get(&client, &case_id, &round_id, filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsNoShowPlanArgs {
+    /// Moderation or appeal case identifier.
+    #[arg(long = "case-id", value_name = "TEXT")]
+    case_id: String,
+    /// Moderation ballot round identifier.
+    #[arg(long = "round-id", value_name = "TEXT")]
+    round_id: String,
+}
+
+impl Run for ModerationBallotsNoShowPlanArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_moderation_ballot_no_show_plan)
+    }
+}
+
+impl ModerationBallotsNoShowPlanArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &str) -> Result<Response<Vec<u8>>>,
+    {
+        let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
+        let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
+        let client = context.client_from_config();
+        let response = get(&client, &case_id, &round_id)?;
         render_json_response(context, response)
     }
 }
@@ -9226,10 +9260,7 @@ impl ReconciliationTransferSummary {
         let (amount_nanos, amount_conversion_error) = match numeric_to_nanos_checked(&record.amount)
         {
             Ok(nanos) => (Some(nanos), None),
-            Err(error) => (
-                None,
-                Some(numeric_to_nanos_error_label(error).to_string()),
-            ),
+            Err(error) => (None, Some(numeric_to_nanos_error_label(error).to_string())),
         };
         Self {
             relay_id: relay_id_to_hex(record.relay_id),
@@ -22336,10 +22367,12 @@ mod tests {
             summary.amount_conversion_errors[0].record.amount_nanos,
             None
         );
-        assert!(summary.amount_conversion_errors[0]
-            .record
-            .amount_conversion_error
-            .is_some());
+        assert!(
+            summary.amount_conversion_errors[0]
+                .record
+                .amount_conversion_error
+                .is_some()
+        );
     }
 
     fn sample_account_id(name: &str) -> AccountId {
@@ -24574,6 +24607,36 @@ mod tests {
 
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"case-401\""));
+    }
+
+    #[test]
+    fn moderation_ballots_no_show_plan_trims_identifiers_and_prints_payload() {
+        let args = ModerationBallotsNoShowPlanArgs {
+            case_id: " case-401 ".to_string(),
+            round_id: " round-7 ".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, case_id, round_id| {
+            assert_eq!(case_id, "case-401");
+            assert_eq!(round_id, "round-7");
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "schema": "sorafs.moderation.ballot.no_show_plan.v1",
+                    "case_id": "case-401",
+                    "round_id": "round-7",
+                    "no_show_count": 2,
+                    "penalty_plan_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"no_show_count\""));
+        assert!(ctx.printed[0].contains("\"penalty_plan_digest_hex\""));
     }
 
     #[test]
@@ -28950,7 +29013,7 @@ mod tests {
         assert!(
             relays
                 .iter()
-            .any(|relay| relay["warning_epochs"].as_u64() == Some(1))
+                .any(|relay| relay["warning_epochs"].as_u64() == Some(1))
         );
     }
 

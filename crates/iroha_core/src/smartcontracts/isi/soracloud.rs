@@ -313,8 +313,14 @@ fn verify_signature_for_signer(
     signer: &PublicKey,
     payload: &[u8],
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(signer, payload)
 }
@@ -18035,11 +18041,18 @@ mod tests {
         0, 0,
     ];
 
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn signature_with_malformed_ed25519_r(
         signature: &iroha_crypto::Signature,
+        replacement_r: &[u8; 32],
     ) -> iroha_crypto::Signature {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         iroha_crypto::Signature::from_bytes(&payload)
     }
 
@@ -18049,12 +18062,52 @@ mod tests {
             .expect("derive checked Soracloud Ed25519 provenance keypair");
         let payload = b"soracloud-provenance-ed25519-admission";
         let signature = checked_signature(key_pair.private_key(), payload);
-        let signature = signature_with_malformed_ed25519_r(&signature);
 
-        assert!(
-            verify_signature_for_signer(&signature, key_pair.public_key(), payload).is_err(),
-            "Soracloud provenance Ed25519 admission must reject malformed R before backend verification"
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let malformed_signature =
+                signature_with_malformed_ed25519_r(&signature, &replacement_r);
+
+            assert!(
+                verify_signature_for_signer(&malformed_signature, key_pair.public_key(), payload)
+                    .is_err(),
+                "{label} Soracloud provenance Ed25519 admission must reject malformed R before backend verification"
+            );
+        }
+    }
+
+    #[test]
+    fn soracloud_provenance_signature_admission_rejects_malformed_mldsa_signature_lengths() {
+        let key_pair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::MlDsa)
+            .expect("generate checked Soracloud ML-DSA provenance keypair");
+        let payload = b"soracloud-provenance-mldsa-admission";
+        let signature = checked_signature(key_pair.private_key(), payload);
+        verify_signature_for_signer(&signature, key_pair.public_key(), payload)
+            .expect("valid Soracloud ML-DSA provenance signature verifies");
+        let valid_signature = signature.payload().to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x64);
+                payload
+            }),
+        ] {
+            let malformed_signature = iroha_crypto::Signature::from_bytes(&replacement_signature);
+
+            assert_eq!(
+                verify_signature_for_signer(&malformed_signature, key_pair.public_key(), payload)
+                    .expect_err("malformed Soracloud ML-DSA signature length must fail admission"),
+                iroha_crypto::Error::BadSignature,
+                "{label} Soracloud ML-DSA signature length was not rejected"
+            );
+        }
     }
 
     #[track_caller]
@@ -28164,7 +28217,7 @@ mod tests {
             &vk_box,
         )
         .expect_err("material prover must reject stale prover-key artifacts");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(err, "artifact");
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -28176,7 +28229,7 @@ mod tests {
             &vk_box,
         )
         .expect_err("material prover must reject stale verifier-key artifacts");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(err, "artifact");
     }
 
     #[cfg(feature = "zk-stark")]
@@ -28486,7 +28539,7 @@ mod tests {
             )
             .expect_err("material release audit gate must reject stale prover-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(err, "artifact");
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -28504,7 +28557,7 @@ mod tests {
             )
             .expect_err("material release audit gate must reject stale verifier-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(err, "artifact");
     }
 
     #[cfg(feature = "zk-stark")]
@@ -32882,7 +32935,10 @@ mod tests {
         )
         .expect_err("execution proof helper must reject stale prover-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "artifact bundle failed validation");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(
+            err,
+            "artifact digest does not match governed full-bootstrap material",
+        );
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -32900,7 +32956,10 @@ mod tests {
         )
         .expect_err("execution proof helper must reject stale verifier-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "artifact bundle failed validation");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(
+            err,
+            "artifact digest does not match governed full-bootstrap material",
+        );
     }
 
     #[cfg(feature = "zk-stark")]
@@ -33846,7 +33905,7 @@ mod tests {
             )
             .expect_err("release audit gate must reject stale prover-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(err, "artifact");
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -33869,7 +33928,7 @@ mod tests {
             )
             .expect_err("release audit gate must reject stale verifier-key artifacts");
         assert_invalid_parameter_contains(err.clone(), "release audit package failed validation");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(err, "artifact");
     }
 
     #[cfg(feature = "zk-stark")]
@@ -35400,7 +35459,7 @@ mod tests {
             &vk_box,
         )
         .expect_err("stale same-role prover-key artifact must fail before proof generation");
-        assert_invalid_parameter_contains(err, "prover-key");
+        assert_invalid_parameter_contains(err, "artifact bundle digest mismatch");
 
         let mut stale_verifier_artifacts = artifacts.clone();
         stale_verifier_artifacts.verifier_key = stale_verifier_key_artifact;
@@ -35412,7 +35471,7 @@ mod tests {
             &vk_box,
         )
         .expect_err("stale same-role verifier-key artifact must fail before proof generation");
-        assert_invalid_parameter_contains(err, "verifier-key");
+        assert_invalid_parameter_contains(err, "artifact bundle digest mismatch");
     }
 
     #[cfg(feature = "zk-stark")]

@@ -71,6 +71,8 @@ use iroha_data_model::{
         DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
     },
     transaction::Executable,
+    transaction::signed::TransactionResultInner,
+    trigger::DataTriggerSequence,
 };
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_primitives::{
@@ -3146,10 +3148,11 @@ impl Network {
                 .iter()
                 .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
                 .collect::<Vec<_>>();
-            let placeholder_results = hashes
-                .iter()
-                .map(|_| Ok(iroha_data_model::trigger::DataTriggerSequence::default()))
-                .collect::<Vec<_>>();
+            let placeholder_results = std::iter::repeat_with(|| {
+                TransactionResultInner::Ok(DataTriggerSequence::default())
+            })
+            .take(hashes.len())
+            .collect::<Vec<_>>();
             working
                 .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
                 .expect("genesis placeholder hashes should match payload");

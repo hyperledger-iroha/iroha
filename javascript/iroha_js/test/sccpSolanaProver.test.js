@@ -315,6 +315,7 @@ import {
   buildTairaXorTonTransferPayload,
   buildTairaXorTronToTairaTransferPayload,
   buildTairaXorBscToTairaTransferPayload,
+  buildTairaXorTonToTairaTransferPayload,
   buildTairaXorSccpRecordDescriptor,
   buildTairaXorBscSccpRecordDescriptor,
   buildTairaXorTonSccpRecordDescriptor,
@@ -335,6 +336,7 @@ import {
   tairaXorTronToTairaCanonicalTransferPayloadBytes,
   tairaXorTronToTairaTransferMessageId,
   tairaXorBscToTairaTransferMessageId,
+  tairaXorTonToTairaTransferMessageId,
   tairaXorBscToTairaTransferPayloadHash,
   tairaXorTransferPayloadHash,
   tairaXorBurnSourceEventDigest,
@@ -348,6 +350,7 @@ import {
   bindTairaXorTronBurnStartedEvent,
   bindTairaXorTronToTairaSourceProofPackage,
   bindTairaXorBscToTairaSourceProofPackage,
+  bindTairaXorTonToTairaSourceProofPackage,
   tronSccpReceiptProofHash,
   tronSccpReceiptStateProofHash,
   tronSccpSourceMessageCallData,
@@ -706,6 +709,57 @@ test("derives Solana ProgramData route canary evidence hash", () => {
       ),
     /expectedDestinationBindingHash must match canonical Solana destination binding/,
   );
+  for (const [override, expected] of [
+    [
+      { route_allowlist_hash: evidence.routeAllowlistHash },
+      /routeAllowlistHash must not use multiple aliases/,
+    ],
+    [
+      { destination_binding_hash: evidence.destinationBindingHash },
+      /destinationBindingHash must not use multiple aliases/,
+    ],
+    [
+      {
+        expectedDestinationBindingHash: evidence.destinationBindingHash,
+        expected_destination_binding_hash: evidence.destinationBindingHash,
+      },
+      /expectedDestinationBindingHash must not use multiple aliases/,
+    ],
+    [
+      { source_verifier_material_hash: evidence.sourceVerifierMaterialHash },
+      /sourceVerifierMaterialHash must not use multiple aliases/,
+    ],
+    [
+      {
+        source_adapter_engine_deployment_hash:
+          evidence.sourceAdapterEngineDeploymentHash,
+      },
+      /sourceAdapterEngineDeploymentHash must not use multiple aliases/,
+    ],
+    [
+      { verifier_identity: evidence.verifierIdentity },
+      /verifierIdentity must not use multiple aliases/,
+    ],
+    [
+      { solana_programdata_address: evidence.solanaProgramdataAddress },
+      /solanaProgramdataAddress must not use multiple aliases/,
+    ],
+    [
+      {
+        solana_programdata_executable_base64:
+          evidence.solanaProgramdataExecutableBase64,
+      },
+      /solanaProgramdataExecutableBase64 must not use multiple aliases/,
+    ],
+  ]) {
+    assert.throws(
+      () =>
+        solanaSccpRouteCanaryEvidenceHash(
+          sampleSolanaRouteCanaryEvidence(override),
+        ),
+      expected,
+    );
+  }
   for (const override of [
     { routeAllowlistHash: evidence.destinationBindingHash },
     { routeAllowlistHash: evidence.sourceVerifierMaterialHash },
@@ -987,12 +1041,12 @@ const BSC_COMMIT_VALIDATOR_SET_HASH =
 const BSC_COMMIT_MESSAGE_HASH =
   "0x5832165d1a87ed49a323f2ecaecbef973489aed1a42e7eab369244e7abec43c7";
 const BSC_COMMIT_SIGNATURES = [
-  "0x1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f00",
-  "0x921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f001",
-  "0xcfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d3619600",
+  "0x1b8802069b82c3d4cb6d7bec82323853f36d965c1e71647560084e7c7a0de9c17c85fcc3c6222f905cbbc4ba5b5f3f005f07d144304184181be67b3d02d1ba9f1b",
+  "0x921d39c29fb793c496f96cf647128232d228024ed2f3e68cc6a52aa4cf64facf6bbd9dfcf7d703165f7880e7e1310f34d1b0fb8ca6dd8f506bf289ba012387f01c",
+  "0xcfa11aa1ec214278afdb4ef7f3c40af97a2784e0336afb5ebef345c0d2eaa9ef629ad2d25cf9709eb9b842fb2fb3f749ce365af97af6e7064771614312d361961b",
 ];
 const BSC_COMMIT_SEAL_HASH =
-  "0xcd9d87b24d8c1cf7615cb4267cde5a3fc24bbb770807134ee75d4ddaba992172";
+  "0x14659b4643d3a7961f7f86f46319992444617392c8e84967a3bb2a5ad7bc72fb";
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HEX = `010200000041${"11".repeat(20)}010000000000000041${"22".repeat(20)}0200000000000000`;
 const TRON_WITNESS_SCHEDULE_PAYLOAD_HASH =
   "0xd6087d6ea6a1b58b17523587f28e457d84d5d2214298f93a09dbb509ea2cf429";
@@ -1132,7 +1186,7 @@ const TRON_PARENT_BLOCK_ID =
 const TRON_BLOCK_ID =
   "0x0000000000003039b6bc08fb34f737c093d9dd2adefccb04344715e2619c8286";
 const TRON_SOLID_BLOCK_HEADER_PROOF_HASH =
-  "0x25416bda5734ecef1ab9920d15f1011e962f6ff90e9c6247ff6b2ce34a5ab49f";
+  "0x362579d1667137b9dac3fc20772de7b0b4adb3888d4508bb5d75e53596d43771";
 const TRON_SOLID_BLOCK_MESSAGE_HASH =
   "0x065173d89272a549b504258936729c5226dfdb866ccb9422757d95ec9fa6d688";
 const TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR =
@@ -1160,6 +1214,13 @@ const tronHeaderSignature = (recoveryId) => {
   signature.fill(0x01, 32, 64);
   signature[64] = recoveryId;
   return signature;
+};
+const tronSignatureHexWithRecoveryId = (signatureHex, recoveryId) => {
+  const prefix = signatureHex.startsWith("0x") ? "0x" : "";
+  const raw = Buffer.from(signatureHex.replace(/^0x/u, ""), "hex");
+  assert.equal(raw.length, 65);
+  raw[64] = recoveryId;
+  return `${prefix}${raw.toString("hex")}`;
 };
 const TRON_RECEIPT_STATE_MPT_NODE_HEX = `0xe4822080a0${"bb".repeat(32)}`;
 const EVM_RECEIPT_ROOT_MPT_VALUE_HEX = `0xf8409e736363703a65766d3a726563656970742d726f6f742d76616c75653a7631a0${"bb".repeat(32)}`;
@@ -1192,6 +1253,9 @@ const TRON_TRANSACTION_SOURCE_BYTES_HEX =
   "34343434343434343434347090e5ee3a900180e1eb171241cc58d7ac52c91117" +
   "92495fee682b53cab96ff4229043c5b8b90c31447f5934553d8854ab35de3437" +
   "2c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c012a0410001801";
+const TRON_TRANSACTION_SOURCE_SIGNATURE_HEX =
+  "cc58d7ac52c9111792495fee682b53cab96ff4229043c5b8b90c31447f593455" +
+  "3d8854ab35de34372c13331bf3ef5cefd8f2cc5ad026faf223da83969fe8973c01";
 const TRON_TRANSACTION_SOURCE_ROOT =
   "0x1751c62dce36d5d642e48480b45d48ed16dd1b9b40ce216bc2f15c1b1ccf300b";
 const TRON_TRANSACTION_SOURCE_PROOF_HASH =
@@ -2242,6 +2306,38 @@ const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
     sdk: "javascript",
   };
 };
+
+test("derives BSC commit seal hash and rejects non-EVM recovery ids", () => {
+  const commitSeal = {
+    totalPower: 4n,
+    signedPower: 3n,
+    commitMessageHash: BSC_COMMIT_MESSAGE_HASH,
+    validatorPublicKeys: BSC_COMMIT_VALIDATOR_PUBLIC_KEYS,
+    validatorPowers: BSC_COMMIT_VALIDATOR_POWERS,
+    signersBitmap: "0x07",
+    signatures: BSC_COMMIT_SIGNATURES,
+    validatorSetHash: BSC_COMMIT_VALIDATOR_SET_HASH,
+  };
+
+  assert.equal(canonicalBscCommitSealBytes(commitSeal).length, 297);
+  assert.equal(bscCommitSealHash(commitSeal), BSC_COMMIT_SEAL_HASH);
+  for (const rejectedRecoveryId of [0, 1, 29, 30]) {
+    assert.throws(
+      () =>
+        canonicalBscCommitSealBytes({
+          ...commitSeal,
+          signatures: [
+            tronSignatureHexWithRecoveryId(
+              BSC_COMMIT_SIGNATURES[0],
+              rejectedRecoveryId,
+            ),
+            ...BSC_COMMIT_SIGNATURES.slice(1),
+          ],
+        }),
+      /canonical recoverable/,
+    );
+  }
+});
 
 test("rejects boolean SCCP domains in web portal payload helpers", () => {
   const assetId = `0x${"11".repeat(32)}`;
@@ -8301,6 +8397,40 @@ test("binds source adapter deployment context for UI provers", () => {
   assert.throws(
     () =>
       normalizeSccpSourceAdapterDeploymentBinding({
+        sourceDomain: SCCP_DOMAIN_SOL,
+        source_domain: SCCP_DOMAIN_TON,
+      }),
+    /sourceDomain must not use multiple aliases/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
+        targetDomain: SCCP_DOMAIN_SORA,
+        target_domain: SCCP_DOMAIN_TON,
+      }),
+    /targetDomain must not use multiple aliases/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
+        sourceAdapterDeploymentHash: HEX32_A,
+        source_adapter_deployment_hash: HEX32_B,
+        sourceAdapterDeploymentReceiptHash: HEX32_C,
+      }),
+    /sourceAdapterDeploymentHash must not use multiple aliases/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
+        sourceAdapterDeploymentHash: HEX32_A,
+        sourceAdapterDeploymentReceiptHash: HEX32_B,
+        source_adapter_deployment_receipt_hash: HEX32_C,
+      }),
+    /sourceAdapterDeploymentReceiptHash must not use multiple aliases/,
+  );
+  assert.throws(
+    () =>
+      normalizeSccpSourceAdapterDeploymentBinding({
         sourceDomain: 99,
         targetDomain: SCCP_DOMAIN_SORA,
         sourceAdapterDeploymentHash: HEX32_A,
@@ -8409,6 +8539,14 @@ test("derives canonical source adapter verifier VK hashes for UI tooling", () =>
   assert.throws(
     () =>
       sccpSourceAdapterVerifierVkHash({
+        sourceDomain: SCCP_DOMAIN_ETH,
+        source_domain: SCCP_DOMAIN_BSC,
+      }),
+    /sourceDomain must not use multiple aliases/,
+  );
+  assert.throws(
+    () =>
+      sccpSourceAdapterVerifierVkHash({
         sourceDomain: SCCP_DOMAIN_TON,
         targetDomain: SCCP_DOMAIN_TON,
       }),
@@ -8437,6 +8575,22 @@ test("derives native destination binding hashes for UI tooling", () => {
     assert.equal(sccpDestinationBindingKey({ targetDomain }), expectedKey);
     assert.equal(sccpDestinationBindingHash(targetDomain), expectedHash);
   }
+  assert.throws(
+    () =>
+      sccpDestinationBindingKey({
+        targetDomain: SCCP_DOMAIN_SOL,
+        target_domain: SCCP_DOMAIN_TON,
+      }),
+    /targetDomain must not use multiple aliases/,
+  );
+  assert.throws(
+    () =>
+      sccpDestinationBindingHash({
+        targetDomain: SCCP_DOMAIN_SOL,
+        domain: SCCP_DOMAIN_TON,
+      }),
+    /targetDomain must not use multiple aliases/,
+  );
   assert.throws(
     () => sccpDestinationBindingHash(SCCP_DOMAIN_ETH),
     /native SCCP destination lane/,
@@ -10825,6 +10979,14 @@ test("wraps externally generated Solana SCCP proof bytes", async () => {
   assert.throws(
     () => wrapSolanaSccpProofResult([1], { ...request, witnessHash: HEX32_A }),
     /Solana SCCP proof request must be canonical/,
+  );
+  assert.throws(
+    () =>
+      wrapSolanaSccpProofResult([1], {
+        ...request,
+        mainnet_genesis_hash: request.mainnetGenesisHash,
+      }),
+    /mainnetGenesisHash must not use multiple aliases/,
   );
   assert.throws(
     () =>
@@ -13984,6 +14146,117 @@ test("parses and binds canonical TRON TriggerSmartContract raw_data bytes", () =
   );
 });
 
+test("rejects legacy TRON recoverable-signature recovery-id aliases", () => {
+  const sourceEventDigest = `0x${"34".repeat(32)}`;
+  const transactionSourceInput = {
+    sourceEventDigest,
+    receiptRoot: HEX32_B,
+    transactionRoot: TRON_TRANSACTION_SOURCE_ROOT,
+    transactionIndex: 0n,
+    transactionCount: 1n,
+    transactionBytes: TRON_TRANSACTION_SOURCE_BYTES_HEX,
+    transactionMerkleBranch: [],
+    inclusionBranch: [`0x${"aa".repeat(32)}`],
+  };
+  assert.equal(
+    canonicalTronSccpTransactionSourceProofBytes(transactionSourceInput).length,
+    476,
+  );
+  assert.equal(
+    tronSccpTransactionSourceProofHash(transactionSourceInput),
+    TRON_TRANSACTION_SOURCE_PROOF_HASH,
+  );
+
+  const witnessSeal = {
+    version: 1,
+    totalWeight: 1n,
+    signedWeight: 1n,
+    solidBlockMessageHash: `0x${TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR}`,
+    witnessAddresses: [TRON_TEST_OWNER_ADDRESS],
+    witnessWeights: [1n],
+    signersBitmap: "0x01",
+    signatures: [`0x${TRON_SOURCE_EVENT_SIGNATURE_VECTOR}`],
+  };
+  assert.equal(canonicalTronWitnessSealBytes(witnessSeal).length, 200);
+  assert.equal(tronWitnessSealHash(witnessSeal), TRON_WITNESS_SEAL_HASH);
+
+  const rawHeader = Buffer.from(TRON_RAW_HEADER_HEX, "hex");
+  const parentRawHeader = Buffer.from(TRON_PARENT_RAW_HEADER_HEX, "hex");
+  const solidHeaderProof = {
+    rawData: rawHeader,
+    witnessSignature: tronHeaderSignature(0),
+    parentRawData: parentRawHeader,
+    parentWitnessSignature: tronHeaderSignature(1),
+    rawDataHash: TRON_RAW_HEADER_HASH,
+    parentRawDataHash: TRON_PARENT_RAW_HEADER_HASH,
+    blockId: TRON_BLOCK_ID,
+    txTrieRoot: HEX32_D,
+    accountStateRoot: `0x${"ee".repeat(32)}`,
+    parentBlockId: TRON_PARENT_BLOCK_ID,
+    witnessAddress: `0x41${"11".repeat(20)}`,
+    timestampMs: 1_700_000_012_345n,
+    headerVersion: 1,
+  };
+  assert.equal(
+    canonicalTronSolidBlockHeaderProofBytes(solidHeaderProof).length,
+    650,
+  );
+  assert.equal(
+    tronSolidBlockHeaderProofHash(solidHeaderProof),
+    TRON_SOLID_BLOCK_HEADER_PROOF_HASH,
+  );
+
+  for (const legacyRecoveryId of [27, 28, 29, 30]) {
+    const legacyTransactionBytes = TRON_TRANSACTION_SOURCE_BYTES_HEX.replace(
+      TRON_TRANSACTION_SOURCE_SIGNATURE_HEX,
+      tronSignatureHexWithRecoveryId(
+        TRON_TRANSACTION_SOURCE_SIGNATURE_HEX,
+        legacyRecoveryId,
+      ),
+    );
+    assert.notEqual(legacyTransactionBytes, TRON_TRANSACTION_SOURCE_BYTES_HEX);
+    assert.throws(
+      () =>
+        canonicalTronSccpTransactionSourceProofBytes({
+          ...transactionSourceInput,
+          transactionBytes: legacyTransactionBytes,
+        }),
+      /successful TRON TriggerSmartContract source call/u,
+    );
+
+    assert.throws(
+      () =>
+        canonicalTronWitnessSealBytes({
+          ...witnessSeal,
+          signatures: [
+            tronSignatureHexWithRecoveryId(
+              `0x${TRON_SOURCE_EVENT_SIGNATURE_VECTOR}`,
+              legacyRecoveryId,
+            ),
+          ],
+        }),
+      /canonical low-S 65-byte TRON signature/u,
+    );
+
+    assert.throws(
+      () =>
+        canonicalTronSolidBlockHeaderProofBytes({
+          ...solidHeaderProof,
+          witnessSignature: tronHeaderSignature(legacyRecoveryId),
+        }),
+      /recovery id 0\.\.3/u,
+    );
+    assert.throws(
+      () =>
+        canonicalTronSolidBlockHeaderProofBytes({
+          ...solidHeaderProof,
+          parentWitnessSignature: tronHeaderSignature(legacyRecoveryId),
+        }),
+      /recovery id 0\.\.3/u,
+    );
+  }
+});
+
 test("derives TRON witness-schedule transition transcript hashes from UI witness material", () => {
   const parentPayload = Buffer.from(
     TRON_PARENT_WITNESS_SCHEDULE_PAYLOAD_HEX,
@@ -14199,6 +14472,24 @@ test("derives TRON witness-schedule transition transcript hashes from UI witness
       }),
     /transitionMessageHash/,
   );
+  for (const legacyRecoveryId of [27, 28, 29, 30]) {
+    assert.throws(
+      () =>
+        canonicalTronWitnessScheduleTransitionSealBytes({
+          ...sealInput,
+          sealProof: {
+            ...sealInput.sealProof,
+            signatures: [
+              tronSignatureHexWithRecoveryId(
+                TRON_WITNESS_SCHEDULE_TRANSITION_SIGNATURE,
+                legacyRecoveryId,
+              ),
+            ],
+          },
+        }),
+      /canonical low-S 65-byte TRON signature/u,
+    );
+  }
   const badSignature = `0x${(
     Number.parseInt(
       TRON_WITNESS_SCHEDULE_TRANSITION_SIGNATURE.slice(2, 4),
@@ -16387,6 +16678,13 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
   assert.throws(
     () =>
       bind((pkg) => {
+        pkg.settlement.payload_bytes = "0x01";
+      }),
+    /payload/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
         pkg.settlement.entrypoint = "record";
       }),
     /finalize_inbound/u,
@@ -16401,9 +16699,287 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
   assert.throws(
     () =>
       bind((pkg) => {
+        pkg.settlement.route_id = SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1;
+      }),
+    /proofPackage\.settlement\.route must not use multiple aliases/u,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { entrypoint: "record" },
+      }),
+    /settlementDefaults\.entrypoint must be finalize_inbound/u,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { route: SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1 },
+      }),
+    /settlementDefaults\.route must be taira_bsc_xor/u,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { payloadJson: { unsafe: true } },
+      }),
+    /settlementDefaults payload must be generated by Torii/u,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: {
+          route: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+          route_id: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+        },
+      }),
+    /settlementDefaults\.route must not use multiple aliases/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
         pkg.messageBundle.payload.kind = "Burn";
       }),
     /Transfer/u,
+  );
+});
+
+test("binds TAIRA XOR TON-source proof packages for TAIRA settlement", () => {
+  const tonSender = `0:${"11".repeat(32)}`;
+  const tairaRecipient = TAIRA_ACCOUNT_ID;
+  const amount = 25_000_000_000_000_000n;
+  const nonce = 42n;
+  const txId = `0x${"11".repeat(32)}`;
+  const payload = buildTairaXorTonToTairaTransferPayload({
+    tonSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  assert.equal(Object.isFrozen(payload), true);
+  assert.deepEqual(payload, {
+    version: 1,
+    source_domain: SCCP_DOMAIN_TON,
+    dest_domain: SCCP_DOMAIN_SORA,
+    nonce: nonce.toString(),
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: amount.toString(),
+    sender_codec: SCCP_CODEC_TON_RAW,
+    sender: tonSender,
+    recipient_codec: SCCP_CODEC_TEXT_UTF8,
+    recipient: tairaRecipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
+  });
+
+  const messageId = tairaXorTonToTairaTransferMessageId({
+    tonSender,
+    tairaRecipient,
+    amount,
+    nonce,
+  });
+  const payloadHash = sccpPayloadHash(
+    canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
+  );
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    targetDomain: SCCP_DOMAIN_SORA,
+    messageId,
+    payloadHash,
+  };
+  const merkleProof = { steps: [] };
+  const commitmentRoot = sccpMerkleRootFromCommitment(
+    {
+      version: commitment.version,
+      kind: commitment.kind,
+      target_domain: commitment.targetDomain,
+      message_id: commitment.messageId,
+      payload_hash: commitment.payloadHash,
+    },
+    merkleProof,
+  );
+  const messageBundle = {
+    version: 1,
+    commitmentRoot,
+    commitment,
+    merkleProof,
+    payload: { kind: "Transfer", value: payload },
+    finalityProof: "0x010203",
+  };
+  const sourceEventDigest = testSccpSourceEventDigest(
+    SCCP_DOMAIN_TON,
+    SCCP_DOMAIN_SORA,
+    messageId,
+    payloadHash,
+  );
+  const proofPackage = {
+    messageBundle,
+    settlement: {
+      entrypoint: "finalize_inbound",
+      route: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
+    },
+    sourceEventDigest,
+    txId,
+    messageId,
+    commitmentRoot,
+  };
+
+  const bound = bindTairaXorTonToTairaSourceProofPackage({
+    proofPackage,
+    settlementDefaults: { contract_alias: "sccp.taira_ton_xor" },
+    txId,
+    tonSender,
+    tairaRecipient,
+    amount,
+  });
+
+  assert.equal(bound.txId, txId);
+  assert.equal(bound.messageId, messageId);
+  assert.equal(bound.commitmentRoot, commitmentRoot);
+  assert.equal(bound.sourceEventDigest, sourceEventDigest);
+  assert.equal(bound.amount, amount.toString());
+  assert.deepEqual(bound.settlement, {
+    contract_alias: "sccp.taira_ton_xor",
+    entrypoint: "finalize_inbound",
+    route: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
+  });
+
+  const bind = (mutate = () => {}, inputOverrides = {}) => {
+    const candidate = structuredClone(proofPackage);
+    mutate(candidate);
+    return bindTairaXorTonToTairaSourceProofPackage({
+      proofPackage: candidate,
+      txId,
+      tonSender,
+      tairaRecipient,
+      amount,
+      ...inputOverrides,
+    });
+  };
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.txId = `0x${"22".repeat(32)}`;
+      }),
+    /txId/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.commitment.targetDomain = SCCP_DOMAIN_TON;
+      }),
+    /target TAIRA|target_domain/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.payload.value.sender = `0:${"22".repeat(32)}`;
+      }),
+    /sender/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.payload.value.route_id =
+          SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1;
+      }),
+    /route/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.commitment.payloadHash = HEX32_A;
+      }),
+    /payload hash/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageId = HEX32_A;
+      }),
+    /messageId/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.commitmentRoot = HEX32_A;
+      }),
+    /commitmentRoot/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.sourceEventDigest = HEX32_E;
+      }),
+    /TON SCCP source event digest/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.payload = { unsafe: true };
+      }),
+    /payload/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.payload_bytes = "0x01";
+      }),
+    /payload/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.entrypoint = "record";
+      }),
+    /finalize_inbound/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.route = SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1;
+      }),
+    /taira_ton_xor/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.settlement.route_id = SCCP_TAIRA_TON_XOR_ROUTE_ID_V1;
+      }),
+    /proofPackage\.settlement\.route must not use multiple aliases/u,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { entrypoint: "record" },
+      }),
+    /settlementDefaults\.entrypoint must be finalize_inbound/u,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { route: SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1 },
+      }),
+    /settlementDefaults\.route must be taira_ton_xor/u,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: { payloadJson: { unsafe: true } },
+      }),
+    /settlementDefaults payload must be generated by Torii/u,
+  );
+  assert.throws(
+    () =>
+      bind(undefined, {
+        settlementDefaults: {
+          route: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
+          route_id: SCCP_TAIRA_TON_XOR_ROUTE_ID_V1,
+        },
+      }),
+    /settlementDefaults\.route must not use multiple aliases/u,
   );
 });
 

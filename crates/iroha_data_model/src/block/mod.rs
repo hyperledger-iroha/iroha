@@ -1585,7 +1585,8 @@ mod tests {
             Some(Hash::prehashed([0x55; 32])),
             RetentionPolicy::default(),
             StorageTicketId::new([0x66; 32]),
-            Signature::from_bytes(&[0x77; 64]),
+            Signature::try_from_bytes(&[0x77; 64])
+                .expect("checked signed-block DA commitment acknowledgement signature fixture"),
         );
         DaCommitmentBundle::new(vec![record])
     }
@@ -2385,7 +2386,8 @@ mod tests {
             Some(Hash::prehashed([0xEE; 32])),
             RetentionPolicy::default(),
             StorageTicketId::new([0xFF; 32]),
-            Signature::from_bytes(&[0x11; 64]),
+            Signature::try_from_bytes(&[0x11; 64])
+                .expect("checked signed-block DA commitment acknowledgement signature fixture"),
         );
         let bundle = DaCommitmentBundle::new(vec![record]);
         let expected = Some(bundle.canonical_hash());
@@ -3152,7 +3154,7 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut missing_result_block =
-            SignedBlock::presigned(signature.clone(), header.clone(), vec![tx.clone()]);
+            SignedBlock::presigned(signature.clone(), header, vec![tx.clone()]);
 
         let err = missing_result_block
             .set_transaction_results(Vec::new(), &[entry_hash], Vec::new())

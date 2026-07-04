@@ -474,8 +474,14 @@ fn verify_signature_for_signer(
     signer: &PublicKey,
     payload: &[u8],
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(signer, payload)
 }
@@ -622,7 +628,8 @@ mod tests {
             proof_manifest_cid: IpfsPath::from_str("/ipfs/bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .expect("cid"),
             builder_public_key: builder_keys.public_key().clone(),
-            builder_signature: Signature::from_bytes(&[0; 64]),
+            builder_signature: Signature::try_from_bytes(&[0x42; 64])
+                .expect("nonzero SoraDNS directory signature fixture"),
         }
     }
 
@@ -631,13 +638,22 @@ mod tests {
             .expect("SoraDNS fixture key generation should succeed")
     }
 
+    fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} SoraDNS fixture key generation should succeed: {err}")
+        })
+    }
+
     #[test]
     fn checked_ed25519_keypair_preserves_algorithm() {
         assert_eq!(checked_ed25519_keypair().algorithm(), Algorithm::Ed25519);
     }
 
     fn signed_record() -> (ResolverDirectoryRecordV1, KeyPair) {
-        let keypair = checked_ed25519_keypair();
+        signed_record_with_keypair(checked_ed25519_keypair())
+    }
+
+    fn signed_record_with_keypair(keypair: KeyPair) -> (ResolverDirectoryRecordV1, KeyPair) {
         let mut record = sample_record(&keypair);
         let payload = signing_payload_bytes(&record).expect("payload");
         record.builder_signature = Signature::try_new(keypair.private_key(), &payload)
@@ -650,9 +666,18 @@ mod tests {
         0, 0,
     ];
 
-    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
 
@@ -735,17 +760,65 @@ mod tests {
 
     #[test]
     fn directory_builder_signature_rejects_malformed_ed25519_signature_r() {
-        let (mut record, _) = signed_record();
-        record.builder_signature = signature_with_malformed_ed25519_r(&record.builder_signature);
+        let (record, _) = signed_record();
 
-        let err = verify_builder_signature(&record)
-            .expect_err("malformed builder signature R must be rejected");
-        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            message,
-        )) = err
-        else {
-            panic!("malformed builder signature should fail as an invalid parameter: {err:?}");
-        };
-        assert!(message.contains("builder signature verification failed"));
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut invalid_record = record.clone();
+            invalid_record.builder_signature =
+                signature_with_malformed_ed25519_r(&record.builder_signature, &replacement_r);
+
+            let err = verify_builder_signature(&invalid_record)
+                .expect_err("malformed builder signature R must be rejected");
+            let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) = err
+            else {
+                panic!("malformed builder signature should fail as an invalid parameter: {err:?}");
+            };
+            assert!(
+                message.contains("builder signature verification failed"),
+                "{label} builder signature R produced unexpected error: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn directory_builder_signature_rejects_malformed_mldsa_signature_lengths() {
+        let (record, _) =
+            signed_record_with_keypair(checked_keypair_with_algorithm(Algorithm::MlDsa));
+        verify_builder_signature(&record)
+            .expect("valid SoraDNS ML-DSA builder signature should verify");
+        let valid_signature = record.builder_signature.payload().to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x66);
+                payload
+            }),
+        ] {
+            let mut invalid_record = record.clone();
+            invalid_record.builder_signature = Signature::from_bytes(&replacement_signature);
+
+            let err = verify_builder_signature(&invalid_record)
+                .expect_err("malformed ML-DSA builder signature length must be rejected");
+            let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) = err
+            else {
+                panic!("malformed builder signature should fail as an invalid parameter: {err:?}");
+            };
+            assert!(
+                message.contains("builder signature verification failed"),
+                "{label} builder ML-DSA signature length produced unexpected error: {message}"
+            );
+        }
     }
 }

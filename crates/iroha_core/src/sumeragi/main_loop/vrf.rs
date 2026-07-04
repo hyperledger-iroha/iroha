@@ -173,14 +173,30 @@ enum VrfSignatureCheckError {
     Invalid,
 }
 
+fn vrf_signature_for_peer(
+    payload: &[u8],
+    peer: &PeerId,
+) -> std::result::Result<Signature, VrfSignatureCheckError> {
+    match peer
+        .public_key()
+        .try_algorithm()
+        .map_err(|_| VrfSignatureCheckError::Malformed)?
+    {
+        iroha_crypto::Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(payload)
+            .map_err(|_| VrfSignatureCheckError::Malformed),
+        iroha_crypto::Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(payload)
+            .map_err(|_| VrfSignatureCheckError::Malformed),
+        _ => Signature::try_from_bytes(payload).map_err(|_| VrfSignatureCheckError::Malformed),
+    }
+}
+
 fn vrf_commit_signature_check(
     chain_id: &ChainId,
     mode_tag: &str,
     commit: &crate::sumeragi::consensus::VrfCommit,
     peer: &PeerId,
 ) -> std::result::Result<(), VrfSignatureCheckError> {
-    let signature = Signature::try_from_bytes(&commit.bls_sig)
-        .map_err(|_| VrfSignatureCheckError::Malformed)?;
+    let signature = vrf_signature_for_peer(&commit.bls_sig, peer)?;
     let preimage = vrf_commit_preimage(chain_id, mode_tag, commit);
     signature
         .verify(peer.public_key(), &preimage)
@@ -193,8 +209,7 @@ fn vrf_reveal_signature_check(
     reveal: &crate::sumeragi::consensus::VrfReveal,
     peer: &PeerId,
 ) -> std::result::Result<(), VrfSignatureCheckError> {
-    let signature = Signature::try_from_bytes(&reveal.bls_sig)
-        .map_err(|_| VrfSignatureCheckError::Malformed)?;
+    let signature = vrf_signature_for_peer(&reveal.bls_sig, peer)?;
     let preimage = vrf_reveal_preimage(chain_id, mode_tag, reveal);
     signature
         .verify(peer.public_key(), &preimage)
@@ -1292,6 +1307,27 @@ mod checked_vrf_signature_tests {
             .expect("derive VRF BLS fixture key")
     }
 
+    fn checked_ed25519_keypair() -> KeyPair {
+        KeyPair::try_from_seed(vec![0x68; 32], Algorithm::Ed25519)
+            .expect("derive VRF Ed25519 fixture key")
+    }
+
+    fn checked_mldsa_keypair() -> KeyPair {
+        KeyPair::try_from_seed(b"vrf-mldsa-signature-length".to_vec(), Algorithm::MlDsa)
+            .expect("derive VRF ML-DSA fixture key")
+    }
+
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[test]
     fn vrf_commit_signature_check_rejects_all_zero_signature_material() {
         let chain: ChainId = "vrf-commit-all-zero-helper".parse().expect("chain id");
@@ -1311,6 +1347,39 @@ mod checked_vrf_signature_tests {
     }
 
     #[test]
+    fn vrf_commit_signature_check_rejects_malformed_ed25519_signature_r() {
+        let chain: ChainId = "vrf-commit-malformed-ed25519-r-helper"
+            .parse()
+            .expect("chain id");
+        let keypair = checked_ed25519_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let mut commit = VrfCommit {
+            epoch: 7,
+            commitment: [0xE7; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit);
+        let valid_signature = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("sign VRF commit")
+            .payload()
+            .to_vec();
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            commit.bls_sig = valid_signature.clone();
+            commit.bls_sig[..replacement_r.len()].copy_from_slice(&replacement_r);
+            assert_eq!(
+                vrf_commit_signature_check(&chain, PERMISSIONED_TAG, &commit, &peer),
+                Err(VrfSignatureCheckError::Malformed),
+                "{label} VRF commit Ed25519 signature R must fail admission"
+            );
+        }
+    }
+
+    #[test]
     fn vrf_reveal_signature_check_rejects_all_zero_signature_material() {
         let chain: ChainId = "vrf-reveal-all-zero-helper".parse().expect("chain id");
         let keypair = checked_bls_keypair();
@@ -1326,6 +1395,120 @@ mod checked_vrf_signature_tests {
             vrf_reveal_signature_check(&chain, PERMISSIONED_TAG, &reveal, &peer),
             Err(VrfSignatureCheckError::Malformed)
         );
+    }
+
+    #[test]
+    fn vrf_reveal_signature_check_rejects_malformed_ed25519_signature_r() {
+        let chain: ChainId = "vrf-reveal-malformed-ed25519-r-helper"
+            .parse()
+            .expect("chain id");
+        let keypair = checked_ed25519_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let mut reveal = VrfReveal {
+            epoch: 7,
+            reveal: [0xF7; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal);
+        let valid_signature = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("sign VRF reveal")
+            .payload()
+            .to_vec();
+
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            reveal.bls_sig = valid_signature.clone();
+            reveal.bls_sig[..replacement_r.len()].copy_from_slice(&replacement_r);
+            assert_eq!(
+                vrf_reveal_signature_check(&chain, PERMISSIONED_TAG, &reveal, &peer),
+                Err(VrfSignatureCheckError::Malformed),
+                "{label} VRF reveal Ed25519 signature R must fail admission"
+            );
+        }
+    }
+
+    #[test]
+    fn vrf_signature_checks_reject_malformed_mldsa_signature_lengths() {
+        let chain: ChainId = "vrf-malformed-mldsa-length-helper"
+            .parse()
+            .expect("chain id");
+        let keypair = checked_mldsa_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+
+        let mut commit = VrfCommit {
+            epoch: 7,
+            commitment: [0xC8; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let commit_preimage = vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit);
+        let commit_signature = Signature::try_new(keypair.private_key(), &commit_preimage)
+            .expect("sign VRF commit")
+            .payload()
+            .to_vec();
+        commit.bls_sig = commit_signature.clone();
+        assert_eq!(
+            vrf_commit_signature_check(&chain, PERMISSIONED_TAG, &commit, &peer),
+            Ok(())
+        );
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                commit_signature[..commit_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = commit_signature.clone();
+                payload.push(0xC9);
+                payload
+            }),
+        ] {
+            commit.bls_sig = replacement_signature;
+            assert_eq!(
+                vrf_commit_signature_check(&chain, PERMISSIONED_TAG, &commit, &peer),
+                Err(VrfSignatureCheckError::Malformed),
+                "{label} VRF commit ML-DSA signature length must fail admission"
+            );
+        }
+
+        let mut reveal = VrfReveal {
+            epoch: 7,
+            reveal: [0xD8; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let reveal_preimage = vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal);
+        let reveal_signature = Signature::try_new(keypair.private_key(), &reveal_preimage)
+            .expect("sign VRF reveal")
+            .payload()
+            .to_vec();
+        reveal.bls_sig = reveal_signature.clone();
+        assert_eq!(
+            vrf_reveal_signature_check(&chain, PERMISSIONED_TAG, &reveal, &peer),
+            Ok(())
+        );
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                reveal_signature[..reveal_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = reveal_signature.clone();
+                payload.push(0xD9);
+                payload
+            }),
+        ] {
+            reveal.bls_sig = replacement_signature;
+            assert_eq!(
+                vrf_reveal_signature_check(&chain, PERMISSIONED_TAG, &reveal, &peer),
+                Err(VrfSignatureCheckError::Malformed),
+                "{label} VRF reveal ML-DSA signature length must fail admission"
+            );
+        }
     }
 
     #[test]

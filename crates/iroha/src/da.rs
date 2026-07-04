@@ -1840,7 +1840,8 @@ mod tests {
             },
             queued_at_unix: 1_701_900_000,
             rent_quote: DaRentQuote::default(),
-            operator_signature: iroha_crypto::Signature::from_bytes(&[0u8; 64]),
+            operator_signature: iroha_crypto::Signature::try_from_bytes(&[0x42u8; 64])
+                .expect("nonzero DA receipt signature fixture"),
         }
     }
 

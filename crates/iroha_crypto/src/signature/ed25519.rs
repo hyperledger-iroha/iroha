@@ -796,6 +796,12 @@ mod test {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
+
+    const ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT: [u8; 32] = [
+        0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
     const ED25519_INVALID_ENCODING: [u8; 32] = [0x02; 32];
 
     #[cfg(feature = "rand")]
@@ -1439,6 +1445,13 @@ mod test {
     #[test]
     fn parse_public_key_rejects_non_canonical_encoding() {
         let err = Ed25519Sha512::parse_public_key(&ED25519_NON_CANONICAL_IDENTITY).unwrap_err();
+        assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
+    }
+
+    #[test]
+    fn parse_public_key_rejects_non_canonical_non_small_order_encoding() {
+        let err = Ed25519Sha512::parse_public_key(&ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT)
+            .unwrap_err();
         assert!(err.0.contains("non-canonical"), "unexpected error: {err:?}");
     }
 

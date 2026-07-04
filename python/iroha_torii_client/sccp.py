@@ -5759,11 +5759,8 @@ def _compare_bytes_lexicographically(left: bytes, right: bytes) -> int:
     return (left > right) - (left < right)
 
 
-def _tron_recoverable_signature_is_canonical(signature: bytes) -> bool:
+def _recoverable_signature_scalars_are_canonical(signature: bytes) -> bool:
     if len(signature) != 65:
-        return False
-    recovery_id = signature[64]
-    if not (0 <= recovery_id <= 3 or 27 <= recovery_id <= 30):
         return False
     r_value = signature[:32]
     s_value = signature[32:64]
@@ -5773,6 +5770,20 @@ def _tron_recoverable_signature_is_canonical(signature: bytes) -> bool:
         and any(s_value)
         and s_value <= _SECP256K1_SCALAR_HALF_ORDER_BE
     )
+
+
+def _tron_recoverable_signature_is_canonical(signature: bytes) -> bool:
+    if len(signature) != 65:
+        return False
+    recovery_id = signature[64]
+    return 0 <= recovery_id <= 3 and _recoverable_signature_scalars_are_canonical(signature)
+
+
+def _bsc_recoverable_signature_is_canonical(signature: bytes) -> bool:
+    if len(signature) != 65:
+        return False
+    recovery_id = signature[64]
+    return recovery_id in (27, 28) and _recoverable_signature_scalars_are_canonical(signature)
 
 
 _SecpPoint = Optional[tuple[int, int]]
@@ -5823,12 +5834,13 @@ def _secp256k1_point_mul(scalar: int, point: _SecpPoint) -> _SecpPoint:
     return result
 
 
-def _secp256k1_recover_address20(message_hash: bytes, signature: bytes) -> bytes | None:
-    if len(message_hash) != 32 or not _tron_recoverable_signature_is_canonical(signature):
+def _secp256k1_recover_address20_with_recovery_id(
+    message_hash: bytes,
+    signature: bytes,
+    recovery_id: int,
+) -> bytes | None:
+    if len(message_hash) != 32 or len(signature) != 65:
         return None
-    recovery_id = signature[64]
-    if recovery_id >= 27:
-        recovery_id -= 27
     r_value = int.from_bytes(signature[:32], "big")
     s_value = int.from_bytes(signature[32:64], "big")
     x = r_value + (recovery_id >> 1) * _SECP256K1_SCALAR_ORDER
@@ -5857,6 +5869,18 @@ def _secp256k1_recover_address20(message_hash: bytes, signature: bytes) -> bytes
         return None
     public_key_bytes = public_key[0].to_bytes(32, "big") + public_key[1].to_bytes(32, "big")
     return _keccak_256(public_key_bytes)[12:]
+
+
+def _secp256k1_recover_address20(message_hash: bytes, signature: bytes) -> bytes | None:
+    if not _tron_recoverable_signature_is_canonical(signature):
+        return None
+    return _secp256k1_recover_address20_with_recovery_id(message_hash, signature, signature[64])
+
+
+def _secp256k1_recover_bsc_address20(message_hash: bytes, signature: bytes) -> bytes | None:
+    if not _bsc_recoverable_signature_is_canonical(signature):
+        return None
+    return _secp256k1_recover_address20_with_recovery_id(message_hash, signature, signature[64] - 27)
 
 
 def canonical_solana_sccp_account_inclusion_node_bytes(left: Any, right: Any) -> bytes:
@@ -9045,9 +9069,9 @@ def canonical_bsc_commit_seal_bytes(input_value: Any) -> bytes:
     signatures: list[bytes] = []
     for signature_index, (signature_value, signer_index) in enumerate(zip(signatures_value, signer_indices)):
         signature = _to_bytes(signature_value, f"signatures[{signature_index}]")
-        if not _tron_recoverable_signature_is_canonical(signature):
+        if not _bsc_recoverable_signature_is_canonical(signature):
             raise ValueError(f"signatures[{signature_index}] must be a canonical recoverable secp256k1 signature")
-        recovered_address = _secp256k1_recover_address20(commit_message_hash, signature)
+        recovered_address = _secp256k1_recover_bsc_address20(commit_message_hash, signature)
         if recovered_address != validator_addresses[signer_index]:
             raise ValueError(f"signatures[{signature_index}] must recover the selected validator address")
         computed_signed_power += validator_powers[signer_index]
@@ -15280,7 +15304,7 @@ def canonical_tron_solid_block_header_proof_bytes(input_value: Any) -> bytes:
         witness_signature
     ) or not _tron_recoverable_signature_is_canonical(parent_witness_signature):
         raise ValueError(
-            "TRON header signatures must be canonical low-S with recovery id 0..3 or 27..30"
+            "TRON header signatures must be canonical low-S with recovery id 0..3"
         )
     witness_address = _hex_to_bytes(
         _mapping_value_without_aliases(value, "witnessAddress", "witnessAddress", "witness_address"),
@@ -16459,14 +16483,14 @@ def normalize_sccp_source_adapter_deployment_binding(input_value: Any) -> Dict[s
     """Normalize source-adapter deployment binding material for UI-generated proofs."""
 
     value = _require_mapping(input_value, "SCCP source adapter deployment binding")
-    source_domain = _normalize_optional_u32(
+    source_domain = _normalize_optional_u32_without_aliases(
         value,
         "sourceDomain",
         SCCP_DOMAIN_SOL,
         "sourceDomain",
         "source_domain",
     )
-    target_domain = _normalize_optional_u32(
+    target_domain = _normalize_optional_u32_without_aliases(
         value,
         "targetDomain",
         SCCP_DOMAIN_SORA,
@@ -16484,8 +16508,9 @@ def normalize_sccp_source_adapter_deployment_binding(input_value: Any) -> Dict[s
     if target_domain != SCCP_DOMAIN_SORA:
         raise TypeError("sourceAdapterDeploymentBinding.targetDomain must be SORA")
     deployment_hash = _normalize_hex32(
-        _mapping_value_or_default(
+        _mapping_value_or_default_without_aliases(
             value,
+            "sourceAdapterDeploymentHash",
             SCCP_ZERO_HASH_V1,
             "sourceAdapterDeploymentHash",
             "source_adapter_deployment_hash",
@@ -16493,8 +16518,9 @@ def normalize_sccp_source_adapter_deployment_binding(input_value: Any) -> Dict[s
         "sourceAdapterDeploymentHash",
     )
     receipt_hash = _normalize_hex32(
-        _mapping_value_or_default(
+        _mapping_value_or_default_without_aliases(
             value,
+            "sourceAdapterDeploymentReceiptHash",
             SCCP_ZERO_HASH_V1,
             "sourceAdapterDeploymentReceiptHash",
             "source_adapter_deployment_receipt_hash",
@@ -16715,8 +16741,9 @@ def _solana_verifier_program_code_hash(program_bytes: bytes) -> str:
 
 def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any]) -> Dict[str, Any]:
     verifier_program = _decode_solana_base58_fixed(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "verifierIdentity",
             "verifierIdentity",
             "verifier_identity",
             "verifierProgramId",
@@ -16726,8 +16753,9 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
         _SCCP_SOLANA_PROGRAM_ID_BYTES,
     )
     programdata_address = _decode_solana_base58_fixed(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaProgramdataAddress",
             "solanaProgramdataAddress",
             "solana_programdata_address",
             "programdataAddress",
@@ -16739,8 +16767,9 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
     if verifier_program == programdata_address:
         raise TypeError("solanaProgramdataAddress must differ from verifierIdentity")
     programdata_slot = _canonical_positive_u64_text(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaProgramdataSlot",
             "solanaProgramdataSlot",
             "solana_programdata_slot",
             "programdataSlot",
@@ -16749,8 +16778,9 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
         "solanaProgramdataSlot",
     )
     expected_programdata_slot = _canonical_positive_u64_text(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaExpectedProgramdataSlot",
             "solanaExpectedProgramdataSlot",
             "solana_expected_programdata_slot",
             "expectedProgramdataSlot",
@@ -16761,8 +16791,9 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
     if programdata_slot != expected_programdata_slot:
         raise TypeError("solanaExpectedProgramdataSlot must match solanaProgramdataSlot")
     program_context_slot = _canonical_positive_u64_text(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaProgramAccountContextSlot",
             "solanaProgramAccountContextSlot",
             "solana_program_account_context_slot",
             "programAccountContextSlot",
@@ -16771,8 +16802,9 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
         "solanaProgramAccountContextSlot",
     )
     programdata_context_slot = _canonical_positive_u64_text(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaProgramdataAccountContextSlot",
             "solanaProgramdataAccountContextSlot",
             "solana_programdata_account_context_slot",
             "programdataAccountContextSlot",
@@ -16783,17 +16815,38 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
     if int(program_context_slot) < int(programdata_slot) or int(programdata_context_slot) < int(programdata_slot):
         raise ValueError("Solana ProgramData context slots must be at or after programdataSlot")
     rpc_commitment = _normalize_non_empty_string(
-        _mapping_value(value, "solanaRpcCommitment", "solana_rpc_commitment", "rpcCommitment", "rpc_commitment"),
+        _mapping_value_without_aliases(
+            value,
+            "solanaRpcCommitment",
+            "solanaRpcCommitment",
+            "solana_rpc_commitment",
+            "rpcCommitment",
+            "rpc_commitment",
+        ),
         "solanaRpcCommitment",
     )
     if rpc_commitment != "finalized":
         raise TypeError("solanaRpcCommitment must be finalized")
     program_owner = _normalize_non_empty_string(
-        _mapping_value(value, "solanaProgramOwner", "solana_program_owner", "programOwner", "program_owner"),
+        _mapping_value_without_aliases(
+            value,
+            "solanaProgramOwner",
+            "solanaProgramOwner",
+            "solana_program_owner",
+            "programOwner",
+            "program_owner",
+        ),
         "solanaProgramOwner",
     )
     programdata_owner = _normalize_non_empty_string(
-        _mapping_value(value, "solanaProgramdataOwner", "solana_programdata_owner", "programdataOwner", "programdata_owner"),
+        _mapping_value_without_aliases(
+            value,
+            "solanaProgramdataOwner",
+            "solanaProgramdataOwner",
+            "solana_programdata_owner",
+            "programdataOwner",
+            "programdata_owner",
+        ),
         "solanaProgramdataOwner",
     )
     if program_owner != SCCP_SOLANA_UPGRADEABLE_LOADER_ID:
@@ -16801,12 +16854,20 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
     if programdata_owner != SCCP_SOLANA_UPGRADEABLE_LOADER_ID:
         raise TypeError("solanaProgramdataOwner must be the BPF upgradeable loader")
     _require_true(
-        _mapping_value(value, "solanaProgramImmutable", "solana_program_immutable", "programImmutable", "program_immutable"),
+        _mapping_value_without_aliases(
+            value,
+            "solanaProgramImmutable",
+            "solanaProgramImmutable",
+            "solana_program_immutable",
+            "programImmutable",
+            "program_immutable",
+        ),
         "solanaProgramImmutable",
     )
     program_account_data = _decode_base64_strict(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaProgramAccountDataBase64",
             "solanaProgramAccountDataBase64",
             "solana_program_account_data_base64",
             "programAccountDataBase64",
@@ -16817,8 +16878,9 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
     if program_account_data != _solana_upgradeable_program_account_data(programdata_address):
         raise TypeError("solanaProgramAccountDataBase64 must bind solanaProgramdataAddress")
     programdata_metadata = _decode_base64_strict(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaProgramdataMetadataBase64",
             "solanaProgramdataMetadataBase64",
             "solana_programdata_metadata_base64",
             "programdataMetadataBase64",
@@ -16834,8 +16896,9 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
         raise TypeError("solanaProgramdataMetadataBase64 must bind immutable ProgramData metadata")
     metadata_hash = _bytes_to_hex(hashlib.blake2b(programdata_metadata, digest_size=32).digest())
     if _normalize_nonzero_hex32(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaProgramdataMetadataBlake2b256",
             "solanaProgramdataMetadataBlake2b256",
             "solana_programdata_metadata_blake2b256",
             "programdataMetadataBlake2b256",
@@ -16845,8 +16908,9 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
     ) != metadata_hash:
         raise TypeError("solanaProgramdataMetadataBlake2b256 must match metadata bytes")
     programdata_executable = _decode_base64_strict(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaProgramdataExecutableBase64",
             "solanaProgramdataExecutableBase64",
             "solana_programdata_executable_base64",
             "programdataExecutableBase64",
@@ -16856,8 +16920,9 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
     )
     executable_hash = _solana_verifier_program_code_hash(programdata_executable)
     if _normalize_nonzero_hex32(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "solanaProgramdataExecutableBlake2b256",
             "solanaProgramdataExecutableBlake2b256",
             "solana_programdata_executable_blake2b256",
             "programdataExecutableBlake2b256",
@@ -16867,7 +16932,12 @@ def _normalize_solana_destination_programdata_evidence(value: Mapping[str, Any])
     ) != executable_hash:
         raise TypeError("solanaProgramdataExecutableBlake2b256 must match executable bytes")
     if _normalize_nonzero_hex32(
-        _mapping_value(value, "verifierCodeHash", "verifier_code_hash"),
+        _mapping_value_without_aliases(
+            value,
+            "verifierCodeHash",
+            "verifierCodeHash",
+            "verifier_code_hash",
+        ),
         "verifierCodeHash",
     ) != executable_hash:
         raise TypeError("verifierCodeHash must match ProgramData executable hash")
@@ -16893,16 +16963,27 @@ def canonical_solana_sccp_route_canary_evidence_bytes(input_value: Any) -> bytes
 
     value = _require_mapping(input_value, "Solana route canary evidence")
     route_allowlist_hash = _nonzero_hex32_to_bytes(
-        _mapping_value(value, "routeAllowlistHash", "route_allowlist_hash"),
+        _mapping_value_without_aliases(
+            value,
+            "routeAllowlistHash",
+            "routeAllowlistHash",
+            "route_allowlist_hash",
+        ),
         "routeAllowlistHash",
     )
     destination_binding_hash = _nonzero_hex32_to_bytes(
-        _mapping_value(value, "destinationBindingHash", "destination_binding_hash"),
+        _mapping_value_without_aliases(
+            value,
+            "destinationBindingHash",
+            "destinationBindingHash",
+            "destination_binding_hash",
+        ),
         "destinationBindingHash",
     )
     canonical_solana_destination_binding_hash = sccp_destination_binding_hash(SCCP_DOMAIN_SOL)
-    expected_destination_binding_hash_input = _mapping_optional_value(
+    expected_destination_binding_hash_input = _mapping_optional_value_without_aliases(
         value,
+        "expectedDestinationBindingHash",
         "expectedDestinationBindingHash",
         "expected_destination_binding_hash",
     )
@@ -16924,12 +17005,18 @@ def canonical_solana_sccp_route_canary_evidence_bytes(input_value: Any) -> bytes
             "destinationBindingHash must match canonical Solana destination binding"
         )
     source_material_hash = _nonzero_hex32_to_bytes(
-        _mapping_value(value, "sourceVerifierMaterialHash", "source_verifier_material_hash"),
+        _mapping_value_without_aliases(
+            value,
+            "sourceVerifierMaterialHash",
+            "sourceVerifierMaterialHash",
+            "source_verifier_material_hash",
+        ),
         "sourceVerifierMaterialHash",
     )
     source_deployment_hash = _nonzero_hex32_to_bytes(
-        _mapping_value(
+        _mapping_value_without_aliases(
             value,
+            "sourceAdapterEngineDeploymentHash",
             "sourceAdapterEngineDeploymentHash",
             "source_adapter_engine_deployment_hash",
         ),

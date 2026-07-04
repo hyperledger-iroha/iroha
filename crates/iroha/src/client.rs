@@ -13267,6 +13267,28 @@ impl Client {
             .send()
     }
 
+    /// Convenience: GET `/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan`.
+    ///
+    /// # Errors
+    /// Returns an error if identifiers are blank, request construction, or the HTTP call fails.
+    pub fn get_sorafs_moderation_ballot_no_show_plan(
+        &self,
+        case_id: &str,
+        round_id: &str,
+    ) -> Result<Response<Vec<u8>>> {
+        let case_id = require_non_empty_path_segment(case_id, "case_id")?;
+        let round_id = require_non_empty_path_segment(round_id, "round_id")?;
+        let url = join_torii_url_with_path_segments(
+            &self.torii_url,
+            "v1/sorafs/moderation/ballots",
+            &[case_id, round_id, "no-show-plan"],
+        );
+        self.default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON)
+            .build()?
+            .send()
+    }
+
     /// Convenience: GET `/v1/sorafs/moderation/ballots/events`.
     ///
     /// # Errors
@@ -19913,7 +19935,8 @@ mod tests {
             },
             queued_at_unix: 1,
             rent_quote: DaRentQuote::default(),
-            operator_signature: iroha_crypto::Signature::from_bytes(&[0x11; 64]),
+            operator_signature: iroha_crypto::Signature::try_from_bytes(&[0x42u8; 64])
+                .expect("nonzero DA receipt signature fixture"),
         }
     }
 
@@ -19954,7 +19977,8 @@ mod tests {
             },
             queued_at_unix: 1,
             rent_quote: DaRentQuote::default(),
-            operator_signature: iroha_crypto::Signature::from_bytes(&[0x11; 64]),
+            operator_signature: iroha_crypto::Signature::try_from_bytes(&[0x42u8; 64])
+                .expect("nonzero DA response receipt signature fixture"),
         };
         let response_payload = DaIngestResponsePayload {
             status: "accepted".into(),
@@ -25008,6 +25032,37 @@ mod tests {
     }
 
     #[test]
+    fn sorafs_moderation_ballot_no_show_plan_targets_endpoint() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_sorafs_moderation_ballot_no_show_plan("case/401", "round 7")
+                .expect("moderation ballot no-show plan request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            "/v1/sorafs/moderation/ballots/case%2F401/round%207/no-show-plan"
+        );
+        assert_eq!(snapshot.url.query(), None);
+    }
+
+    #[test]
+    fn sorafs_moderation_ballot_no_show_plan_rejects_blank_round_id() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .get_sorafs_moderation_ballot_no_show_plan("case-401", "   ")
+            .expect_err("blank round id must be rejected");
+        assert!(err.to_string().contains("round_id"));
+    }
+
+    #[test]
     fn sorafs_moderation_ballot_events_targets_endpoint() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -26684,7 +26739,8 @@ mod tests {
                     .as_bytes(),
             )
             .expect("signature header should decode");
-        let signature = Signature::from_bytes(&signature_bytes);
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .expect("operator-panel signature header must pass checked admission");
         let signed_message = Client::operator_request_message(
             &HttpMethod::GET,
             &snapshot.url,
@@ -27271,7 +27327,8 @@ mod tests {
             proof_digest: None,
             retention_class: RetentionPolicy::default(),
             storage_ticket: StorageTicketId::new([0x64; 32]),
-            acknowledgement_sig: iroha_crypto::Signature::from_bytes(&[0x65; 64]),
+            acknowledgement_sig: iroha_crypto::Signature::try_from_bytes(&[0x65; 64])
+                .expect("checked iroha client DA commitment acknowledgement signature fixture"),
         }
     }
 

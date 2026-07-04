@@ -1424,6 +1424,12 @@ private enum OfflineProofVerifierSupport {
         signature: Data,
         rawPublicKey: Data
     ) throws -> Bool {
+        guard Ed25519SignatureAdmission.isValidSignature(signature) else {
+            return false
+        }
+        guard Ed25519PublicKeyAdmission.isValidPublicKey(rawPublicKey) else {
+            return false
+        }
         let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: rawPublicKey)
         return publicKey.isValidSignature(signature, for: payload)
     }
@@ -1566,6 +1572,20 @@ private enum OfflineProofVerifierSupport {
             throw OfflineProofVerifierError.invalidBinding(invalidMessage)
         }
         return components.joined(separator: ".")
+    }
+}
+
+enum OfflineProofVerifierSupportTestHooks {
+    static func verifyEd25519Signature(
+        payload: Data,
+        signature: Data,
+        rawPublicKey: Data
+    ) throws -> Bool {
+        try OfflineProofVerifierSupport.verifyEd25519Signature(
+            payload: payload,
+            signature: signature,
+            rawPublicKey: rawPublicKey
+        )
     }
 }
 

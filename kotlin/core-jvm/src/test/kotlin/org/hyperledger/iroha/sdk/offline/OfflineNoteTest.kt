@@ -971,6 +971,9 @@ class OfflineNoteTest {
         assertFailsWith<IllegalArgumentException> {
             token.outputClaimForNoteCommitmentHex("${string(derivation, "change_output_commitment")} ")
         }
+        assertFailsWith<IllegalArgumentException> {
+            token.outputClaimForNoteCommitmentHex("ab".repeat(31))
+        }
         assertEquals(
             string(changeOutput, "amount"),
             token.outputClaimForNoteCommitmentHex(string(derivation, "change_output_commitment"))?.amount,
@@ -980,6 +983,7 @@ class OfflineNoteTest {
         ))
         assertFalse(token.containsOutputNoteCommitment(ByteArray(32) { 0xff.toByte() }))
         assertFalse(token.containsOutputNoteCommitmentHex("not-hex"))
+        assertFalse(token.containsOutputNoteCommitmentHex("ab".repeat(31)))
     }
 
     @Test

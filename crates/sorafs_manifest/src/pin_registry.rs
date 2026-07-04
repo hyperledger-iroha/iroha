@@ -883,7 +883,8 @@ mod tests {
         let (bundle, keypair) = signed_alias_proof_bundle();
         let digest = alias_proof_signature_digest(&bundle);
         let signature = &bundle.council_signatures[0].signature;
-        let signature = Signature::from_bytes(signature);
+        let signature = Signature::try_from_bytes(signature)
+            .expect("checked alias proof fixture signature passes admission");
 
         signature
             .verify(keypair.public_key(), digest.as_ref())

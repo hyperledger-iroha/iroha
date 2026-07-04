@@ -1011,7 +1011,8 @@ mod tests {
         let proof = make_finality_proof("chain-a", 1, 0, &keys);
         let preimage = commit_vote_preimage(&proof.chain_id, &proof.commit_qc);
         let signature_payload = checked_commit_vote_signature_payload(&keys[0], &preimage);
-        let signature = Signature::from_bytes(&signature_payload);
+        let signature = Signature::try_from_bytes(&signature_payload)
+            .expect("checked bridge commit-vote signature payload passes admission");
 
         signature
             .verify(keys[0].public_key(), &preimage)

@@ -2126,7 +2126,7 @@ mod tests {
             nonce,
             asset_home_domain: source_domain,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 5,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
@@ -2506,7 +2506,7 @@ mod tests {
             sccp_transfer_payload(3, iroha_sccp::SCCP_DOMAIN_SORA, iroha_sccp::SCCP_DOMAIN_ETH);
         let canonical_payload = iroha_sccp::canonical_sccp_payload_bytes(&payload);
         let binary = InstructionBox::from(iroha_data_model::isi::bridge::RecordSccpMessage::new(
-            canonical_payload.clone(),
+            canonical_payload,
         ));
         let expected =
             key_sccp_outbound_message(&crate::bridge::sccp_outbound_message_key(&payload));

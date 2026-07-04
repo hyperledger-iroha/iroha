@@ -5054,6 +5054,8 @@ fn ci_sample_fixtures_are_consistent() {
         .as_slice()
         .try_into()
         .expect("signature must be 64 bytes");
+    let _checked_signature = iroha_crypto::ed25519_parse_signature(&signature_bytes)
+        .expect("generated manifest signature must pass checked Ed25519 admission");
     let signature = Signature::from_bytes(&signature_bytes);
 
     let public_key_hex = bundle_signature

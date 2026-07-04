@@ -788,10 +788,10 @@ fn try_append_consensus_handshake_meta_override(
         .iter()
         .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
         .collect::<Vec<_>>();
-    let placeholder_results = hashes
-        .iter()
-        .map(|_| Ok(DataTriggerSequence::default()))
-        .collect::<Vec<_>>();
+    let placeholder_results =
+        std::iter::repeat_with(|| TransactionResultInner::Ok(DataTriggerSequence::default()))
+            .take(hashes.len())
+            .collect::<Vec<_>>();
     working
         .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
         .expect("genesis placeholder hashes should match payload");
@@ -840,13 +840,14 @@ pub(crate) fn ensure_genesis_results(
     let tx_count = block.0.transactions_vec().len();
     let result_count = block.0.results().count();
     let missing_results = tx_count > 0 && tx_count != result_count;
+    let synthetic_results_need_preexecution = block.0.committed_fragment_count() == Some(0);
     let signature_is_canonical = genesis_signature_is_canonical(&block.0, genesis_key_pair);
-    if !missing_results && signature_is_canonical {
+    if !missing_results && !synthetic_results_need_preexecution && signature_is_canonical {
         return;
     }
 
     // Preserve already computed execution results while restoring the canonical genesis signature.
-    if !missing_results {
+    if !missing_results && !synthetic_results_need_preexecution {
         block.0 = rebuild_block_with_results(&block.0, genesis_key_pair);
         return;
     }
@@ -1434,7 +1435,7 @@ mod tests {
             PeerId::new(bls.public_key().clone()),
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
-        let (mut block, _genesis_account, _topology_vec, genesis_key_pair) =
+        let (mut block, genesis_account, topology_vec, genesis_key_pair) =
             super::build_minimal_genesis_unexecuted(
                 Vec::new(),
                 topology,
@@ -1455,6 +1456,11 @@ mod tests {
         .expect("checked genesis metadata override signing succeeds");
 
         assert_eq!(block.0.transactions_vec().len(), original_len + 1);
+        assert_eq!(
+            block.0.committed_fragment_count(),
+            Some(0),
+            "synthetic append results should force genesis pre-execution before final use"
+        );
         let appended_tx = block
             .0
             .transactions_vec()
@@ -1467,11 +1473,24 @@ mod tests {
             &block.0,
             &genesis_key_pair
         ));
-        assert_eq!(
-            block.0.committed_fragment_count(),
-            Some(0),
-            "placeholder override block must let validation derive committed fragment count"
+
+        super::ensure_genesis_results(
+            &mut block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+            None,
         );
+
+        assert!(matches!(
+            block.0.committed_fragment_count(),
+            Some(count) if count > 0
+        ));
+        assert!(super::genesis_signature_is_canonical(
+            &block.0,
+            &genesis_key_pair
+        ));
     }
 
     #[test]

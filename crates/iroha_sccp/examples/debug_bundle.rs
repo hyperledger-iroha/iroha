@@ -369,8 +369,9 @@ fn main() {
                 if let Some(mut expected) =
                     sccp_evm_family_mainnet_source_verifier_material_v1(material.source_domain)
                 {
-                    expected.source_bridge_emitter_address =
-                        material.source_bridge_emitter_address.clone();
+                    expected
+                        .source_bridge_emitter_address
+                        .clone_from(&material.source_bridge_emitter_address);
                     expected.source_bridge_emitter_code_hash =
                         material.source_bridge_emitter_code_hash;
                     println!(

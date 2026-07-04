@@ -542,7 +542,6 @@ fn proposal_route_is_active(
 }
 
 #[cfg(test)]
-#[cfg(test)]
 fn collect_sccp_messages_for_committable_proposal_routes(
     tx_batch: &[AcceptedTransaction<'static>],
     routing_batch: &[RoutingDecision],
@@ -609,7 +608,6 @@ fn collect_sccp_messages_for_committable_proposal_routes(
 }
 
 #[cfg(test)]
-#[cfg(test)]
 fn collect_sccp_messages_after_ordered_preflight<F>(
     tx_batch: &[AcceptedTransaction<'static>],
     routing_batch: &[RoutingDecision],
@@ -656,7 +654,6 @@ where
     committable_messages
 }
 
-#[cfg(test)]
 #[cfg(test)]
 fn signed_transaction_for_proposal_preflight<'a>(
     transaction: &'a AcceptedTransaction<'_>,
@@ -1583,6 +1580,10 @@ impl Actor {
                                 .iter()
                                 .map(|domain| domain.accepted_candidates)
                                 .sum::<usize>(),
+                            accepted_lane_candidate_indices = ?domains
+                                .iter()
+                                .map(|domain| domain.accepted_candidate_indices.clone())
+                                .collect::<Vec<_>>(),
                             validator_count = domains
                                 .iter()
                                 .map(|domain| domain.validator_set.len())
@@ -1590,7 +1591,7 @@ impl Actor {
                                 .unwrap_or_default(),
                             first_quorum = domains
                                 .first()
-                                .map_or(0, |domain| domain.quorum.validator_count),
+                                .map_or(0, |domain| domain.quorum.min_quorum),
                             first_qc_mode_tag = domains
                                 .first()
                                 .map_or("", |domain| domain.qc_mode_tag.as_str()),
@@ -8265,6 +8266,115 @@ mod tests {
         .expect("autoscale route should collect at creation height");
         assert_eq!(messages_at_creation.len(), 1);
         assert_eq!(messages_at_creation[0].tx_index, 0);
+    }
+
+    #[test]
+    fn proposal_sccp_collection_filters_stale_retired_lane_route() {
+        let mut state = blank_state();
+        let retired_lane = LaneId::new(5);
+        let stale_catalog = LaneCatalog::new(
+            NonZeroU32::new(6).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: retired_lane,
+                    alias: "retired-sccp-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("stale retired lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&stale_catalog);
+            nexus.lane_catalog = LaneCatalog::default();
+        }
+        let routing = vec![RoutingDecision::new(retired_lane, DataSpaceId::UNIVERSAL)];
+        let nexus = state.nexus_snapshot();
+
+        let messages = collect_sccp_messages_for_active_proposal_routes(
+            &[accepted_sccp_record_transaction(11)],
+            &routing,
+            &nexus,
+            11,
+            |_| false,
+        )
+        .expect("stale retired lane route should filter without aborting proposal assembly");
+
+        assert!(
+            messages.is_empty(),
+            "proposal roots must not commit SCCP records for routes whose lane id was retired"
+        );
+    }
+
+    #[test]
+    fn proposal_sccp_collection_requires_recreated_lane_dataspace_match() {
+        let mut state = blank_state();
+        let recreated_lane = LaneId::new(4);
+        let retired_dataspace = DataSpaceId::new(20);
+        let recreated_dataspace = DataSpaceId::new(21);
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(recreated_lane.as_u32() + 1).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: recreated_lane,
+                    dataspace_id: recreated_dataspace,
+                    alias: "recreated-sccp-lane".to_owned(),
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("recreated lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: recreated_dataspace,
+                alias: "recreated-sccp-dataspace".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("recreated dataspace catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.lane_catalog = lane_catalog;
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            nexus.dataspace_catalog = dataspace_catalog;
+        }
+        let nexus = state.nexus_snapshot();
+
+        let stale_messages = collect_sccp_messages_for_active_proposal_routes(
+            &[accepted_sccp_record_transaction(12)],
+            &[RoutingDecision::new(recreated_lane, retired_dataspace)],
+            &nexus,
+            12,
+            |_| false,
+        )
+        .expect("stale recreated-lane dataspace should filter without aborting proposal assembly");
+        assert!(
+            stale_messages.is_empty(),
+            "proposal roots must not commit SCCP records for a recreated lane under its retired dataspace"
+        );
+
+        let fresh_messages = collect_sccp_messages_for_active_proposal_routes(
+            &[accepted_sccp_record_transaction(13)],
+            &[RoutingDecision::new(recreated_lane, recreated_dataspace)],
+            &nexus,
+            13,
+            |_| false,
+        )
+        .expect("fresh recreated-lane route should collect");
+        assert_eq!(
+            fresh_messages.len(),
+            1,
+            "recreated lane ids remain usable only with their current dataspace binding"
+        );
+        assert_eq!(fresh_messages[0].tx_index, 0);
     }
 
     #[test]

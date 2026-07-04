@@ -21,6 +21,8 @@ jobs:
           java-version: '17'
       - name: Install pinned Apalache
         run: bash scripts/formal/install_apalache.sh 0.52.2
+      - name: Apalache version
+        run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version
       - name: Sumeragi formal CI baseline
         run: bash ci/check_sumeragi_formal.sh
       - name: Sumeragi frontier nightly formal check

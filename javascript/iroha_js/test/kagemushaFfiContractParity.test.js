@@ -2427,6 +2427,16 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     /recursiveCompact(?:KeyArtifactsArchive|VerifierKeysArchive)\?:\s*BinaryLike/u,
     "JavaScript TypeScript recursive compact key packages must not be optional",
   );
+  assert.match(
+    dts,
+    /export type KagemushaRecursiveSpendAppendRequestInput =\s*KagemushaRecursiveSpendAppendRequestBaseInput &\s*\(\s*\|\s*\{\s*readonly outputProofCircuitId: string;\s*readonly output_proof_circuit_id\?: never;\s*\}\s*\|\s*\{\s*readonly outputProofCircuitId\?: never;\s*readonly output_proof_circuit_id: string;\s*\}\s*\);/u,
+    "JavaScript TypeScript recursive append request declaration must require exactly one output selector alias",
+  );
+  assert.doesNotMatch(
+    dts,
+    /readonly output(?:ProofCircuitId|_proof_circuit_id)\?: string \| null/u,
+    "JavaScript TypeScript recursive append output selector must not be optional or nullable",
+  );
   assertContainsAll(
     source("javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"),
     [

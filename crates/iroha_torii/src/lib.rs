@@ -4124,6 +4124,31 @@ async fn handler_gov_propose_deploy(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_gov_propose_sccp_route_manifest(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: crate::utils::extractors::NoritoJson<crate::gov::ProposeSccpRouteManifestDto>,
+) -> Result<JsonBody<crate::gov::ProposeSccpRouteManifestResponse>, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/gov/proposals/sccp-route-manifest",
+    )
+    .await?;
+    crate::gov::handle_gov_propose_sccp_route_manifest(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        body,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_gov_protected_set(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -30673,15 +30698,22 @@ fn enforce_sorafs_repair_worker_auth(
             ),
         ));
     };
-    if matches!(
-        signatory.try_algorithm(),
-        Ok(iroha_crypto::Algorithm::Ed25519)
-    ) {
-        iroha_crypto::ed25519_parse_signature(signature.payload()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
-                "repair worker signature material malformed: {err}",
-            )))
-        })?;
+    match signatory.try_algorithm() {
+        Ok(iroha_crypto::Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload()).map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
+                    "repair worker signature material malformed: {err}",
+                )))
+            })?;
+        }
+        Ok(iroha_crypto::Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload()).map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
+                    "repair worker signature material malformed: {err}",
+                )))
+            })?;
+        }
+        _ => {}
     }
     signature.verify(signatory, &payload).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
@@ -33243,6 +33275,17 @@ mod transaction_ingress_decode_tests {
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(tx)
     }
 
+    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn transaction_with_invalid_signature(message: &str) -> SignedTransaction {
         let mut tx = signed_transaction_for_test_with_message(message);
         let mut signature = tx.signature().payload().payload().to_vec();
@@ -33250,6 +33293,19 @@ mod transaction_ingress_decode_tests {
             .last_mut()
             .expect("test signature payload is non-empty");
         *last ^= 0xff;
+        tx.set_signature(TransactionSignature(SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&signature),
+        )));
+        tx
+    }
+
+    fn transaction_with_malformed_signature_r(
+        message: &str,
+        replacement_r: &[u8; 32],
+    ) -> SignedTransaction {
+        let mut tx = signed_transaction_for_test_with_message(message);
+        let mut signature = tx.signature().payload().payload().to_vec();
+        signature[..replacement_r.len()].copy_from_slice(replacement_r);
         tx.set_signature(TransactionSignature(SignatureOf::from_signature(
             iroha_crypto::Signature::from_bytes(&signature),
         )));
@@ -33349,6 +33405,44 @@ mod transaction_ingress_decode_tests {
         assert!(prechecks.iter().all(|precheck| {
             !precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_some()
         }));
+    }
+
+    #[test]
+    fn transaction_batch_ed25519_precheck_rejects_malformed_signature_r() {
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let tx = transaction_with_malformed_signature_r(
+                &format!("ed25519-precheck-malformed-r-{label}"),
+                &replacement_r,
+            );
+            let decoded =
+                decode_transaction_batch_payloads(vec![versioned_signed_transaction(&tx)])
+                    .expect("well-formed malformed-signature transaction decodes");
+
+            let mut prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
+
+            assert_eq!(prechecks.len(), 1);
+            assert!(
+                !prechecks[0].single_ed25519_prechecked,
+                "{label} signature R must not be marked prechecked"
+            );
+            let rejection = prechecks[0]
+                .precheck_rejection
+                .take()
+                .expect("malformed signature R should be marked");
+            match rejection {
+                AcceptTransactionFail::SignatureVerification(fail) => {
+                    assert_eq!(
+                        fail.code(),
+                        SignatureRejectionCode::InvalidSignature,
+                        "{label} signature R produced unexpected rejection code"
+                    );
+                }
+                other => panic!("expected invalid signature rejection, got {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -40445,6 +40539,10 @@ impl Torii {
                     .route(
                         iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY,
                         post(handler_gov_propose_deploy),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_MANIFEST,
+                        post(handler_gov_propose_sccp_route_manifest),
                     )
                     // Read endpoints: proposal/referendum/locks/tally
                     .route(
@@ -53219,10 +53317,9 @@ pub(crate) mod tests_runtime_handlers {
         );
     }
 
-    fn enable_unready_sccp_transparent_proofs_for_test(app: &mut SharedAppState) {
+    fn raise_sccp_proof_size_cap_for_test(app: &mut SharedAppState) {
         let app_mut = Arc::get_mut(app).expect("unique app state");
         let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for test");
-        state.zk.sccp_allow_unready_transparent_proofs = true;
         state.zk.max_proof_size_bytes = 1_000_000;
     }
 
@@ -53405,7 +53502,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 13,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53477,7 +53574,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 12,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53525,7 +53622,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 14,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53541,7 +53638,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 15,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 88,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53595,7 +53692,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 16,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53611,7 +53708,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 17,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 88,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53666,7 +53763,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 12,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53714,7 +53811,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_artifact_allows_disabled_lane_when_unready_config_allows() {
+    async fn sccp_artifact_rejects_disabled_lane_even_with_large_proof_cap() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -53724,7 +53821,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 21,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53735,9 +53832,9 @@ pub(crate) mod tests_runtime_handlers {
             route_id: b"nexus:ton:xor".to_vec(),
         });
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
-        enable_unready_sccp_transparent_proofs_for_test(&mut app);
+        raise_sccp_proof_size_cap_for_test(&mut app);
 
-        let response = routing::handle_v1_sccp_message_proof_artifact(
+        let err = routing::handle_v1_sccp_message_proof_artifact(
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
@@ -53745,20 +53842,17 @@ pub(crate) mod tests_runtime_handlers {
             None,
         )
         .await
-        .expect("unready config should allow artifact generation for non-Groth16 test lanes");
-        assert_eq!(
-            response
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .map(HeaderValue::as_bytes),
-            Some(b"application/json".as_slice())
+        .expect_err("disabled SCCP lanes must stay blocked when the proof-size cap is raised");
+        assert!(
+            query_conversion_message(&err).is_some_and(|message| message.contains("disabled")),
+            "unexpected error: {err:?}"
         );
 
         routing::clear_sccp_bundles_for_tests();
     }
 
     #[tokio::test]
-    async fn sccp_job_allows_disabled_lane_when_unready_config_allows() {
+    async fn sccp_job_rejects_disabled_lane_even_with_large_proof_cap() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -53768,7 +53862,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 21,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53779,9 +53873,9 @@ pub(crate) mod tests_runtime_handlers {
             route_id: b"nexus:ton:xor".to_vec(),
         });
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
-        enable_unready_sccp_transparent_proofs_for_test(&mut app);
+        raise_sccp_proof_size_cap_for_test(&mut app);
 
-        let response = routing::handle_v1_sccp_message_proof_job(
+        let err = routing::handle_v1_sccp_message_proof_job(
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
@@ -53789,20 +53883,17 @@ pub(crate) mod tests_runtime_handlers {
             None,
         )
         .await
-        .expect("unready config should allow proof job generation for non-Groth16 test lanes");
-        assert_eq!(
-            response
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .map(HeaderValue::as_bytes),
-            Some(b"application/json".as_slice())
+        .expect_err("disabled SCCP lanes must stay blocked when the proof-size cap is raised");
+        assert!(
+            query_conversion_message(&err).is_some_and(|message| message.contains("disabled")),
+            "unexpected error: {err:?}"
         );
 
         routing::clear_sccp_bundles_for_tests();
     }
 
     #[tokio::test]
-    async fn sccp_artifact_requires_groth16_material_when_unready_config_allows() {
+    async fn sccp_artifact_requires_groth16_material_for_unready_lane() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -53812,7 +53903,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 31,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 44,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -53823,7 +53914,7 @@ pub(crate) mod tests_runtime_handlers {
         });
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         install_evm_da_receipt_signer_for_test(&mut app);
-        enable_unready_sccp_transparent_proofs_for_test(&mut app);
+        raise_sccp_proof_size_cap_for_test(&mut app);
 
         let err = routing::handle_v1_sccp_message_proof_artifact(
             app.state.as_ref(),
@@ -53833,13 +53924,10 @@ pub(crate) mod tests_runtime_handlers {
             None,
         )
         .await
-        .expect_err(
-            "Groth16 lanes still require deployment fields and proof bytes in unready mode",
-        );
-        assert!(
-            query_conversion_message(&err)
-                .is_some_and(|message| message.contains("proof_bytes_hex"))
-        );
+        .expect_err("Groth16 lanes must stay blocked without production material");
+        assert!(query_conversion_message(&err).is_some_and(|message| {
+            message.contains("disabled") || message.contains("proof_bytes_hex")
+        }));
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -54008,9 +54096,9 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_manifests_endpoint_advertises_configured_unready_route_manifest() {
+    async fn sccp_manifests_endpoint_hides_configured_unready_route_manifest() {
         let mut app = mk_app_state_for_tests();
-        enable_unready_sccp_transparent_proofs_for_test(&mut app);
+        raise_sccp_proof_size_cap_for_test(&mut app);
         let configured_route = sample_taira_xor_nile_route_manifest_for_test();
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -54028,38 +54116,9 @@ pub(crate) mod tests_runtime_handlers {
             .expect("json body");
         let decoded: routing::SccpProofManifestSetDto =
             norito::json::from_slice(&bytes).expect("decode json manifests");
-        assert_eq!(decoded.routes.len(), 1);
-        let route = decoded.routes.first().expect("route manifest");
-        assert_eq!(route.route_id, configured_route.route_id);
-        assert_eq!(route.asset_key, configured_route.asset_key);
-        assert_eq!(route.tron_network, "nile");
-        assert_eq!(route.chain_id_hex, "0xcd8690dc");
-        assert_eq!(route.production_ready, false);
-        assert_eq!(
-            route.taira_xor_bridge_address,
-            configured_route.taira_xor_bridge_address
-        );
-        assert_eq!(
-            route.destination_rollout.destination_network_id,
-            configured_route.network_id_hex
-        );
-        assert_eq!(
-            route.destination_rollout.verifier_identity,
-            configured_route.tron_verifier_address
-        );
-        assert_eq!(
-            route.destination_binding.binding_hash,
-            configured_route.destination_binding_hash
-        );
-        assert_eq!(
-            route.taira_xor_burn_record.settlement_asset_definition_id,
-            configured_route.taira_burn_record_settlement_asset_definition_id
-        );
-        assert_eq!(route.taira_xor_burn_record.vk_ref.backend, "halo2/ipa");
-        assert_eq!(route.settlement.mode, "finalize_inbound");
-        assert_eq!(
-            route.settlement.contract_alias.as_deref(),
-            Some("taira_xor_burn_record")
+        assert!(
+            decoded.routes.is_empty(),
+            "unready configured routes must not be advertised"
         );
 
         let norito_response = routing::handle_v1_sccp_manifests(
@@ -54073,12 +54132,11 @@ pub(crate) mod tests_runtime_handlers {
             .expect("norito body");
         let decoded_norito: routing::SccpProofManifestSetDto =
             norito::decode_from_bytes(&norito_bytes).expect("decode norito manifests");
-        assert_eq!(decoded_norito.routes.len(), 1);
-        assert_eq!(decoded_norito.routes[0].route_id, "taira_tron_xor");
+        assert!(decoded_norito.routes.is_empty());
     }
 
     #[tokio::test]
-    async fn bridge_proof_submit_requires_groth16_material_when_unready_config_allows() {
+    async fn bridge_proof_submit_requires_groth16_material_for_unready_lane() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -54088,7 +54146,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 13,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 88,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -54099,7 +54157,7 @@ pub(crate) mod tests_runtime_handlers {
         });
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         install_evm_da_receipt_signer_for_test(&mut app);
-        enable_unready_sccp_transparent_proofs_for_test(&mut app);
+        raise_sccp_proof_size_cap_for_test(&mut app);
         let bundle_response = match routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
             hex::encode(message_id),
@@ -54161,10 +54219,9 @@ pub(crate) mod tests_runtime_handlers {
                 panic!("Groth16 proof submit should require proof bytes and deployment fields")
             }
         };
-        assert!(
-            query_conversion_message(&err)
-                .is_some_and(|message| message.contains("proof_bytes_hex"))
-        );
+        assert!(query_conversion_message(&err).is_some_and(|message| {
+            message.contains("disabled") || message.contains("proof_bytes_hex")
+        }));
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -54252,7 +54309,7 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 14,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 88,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
@@ -54321,7 +54378,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn bridge_message_submit_skips_disabled_gate_when_unready_config_allows() {
+    async fn bridge_message_submit_requires_source_chain_proof_for_unready_lane() {
         let _sccp_guard = sccp_bundle_test_guard().await;
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -54342,7 +54399,7 @@ pub(crate) mod tests_runtime_handlers {
         });
         let mut app = mk_app_state_for_tests();
         install_evm_da_receipt_signer_for_test(&mut app);
-        enable_unready_sccp_transparent_proofs_for_test(&mut app);
+        raise_sccp_proof_size_cap_for_test(&mut app);
         let bundle_value = invalid_non_sora_sccp_message_bundle_value_for_test(payload);
 
         let authority = checked_torii_test_account_id(
@@ -54401,14 +54458,14 @@ pub(crate) mod tests_runtime_handlers {
             nonce: 11,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 5,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
             recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
             recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            route_id: b"sora:eth:xor".to_vec(),
+            route_id: b"nexus:eth:xor".to_vec(),
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         let bundle_response = match routing::handle_v1_sccp_message_bundle(
@@ -65615,6 +65672,12 @@ mod tests {
             0x00, 0x00, 0x00, 0x00,
         ];
 
+        const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
         let app = mk_app_state_for_tests();
         let report = repair_report("REP-900B", [0x12; 32], [0x23; 32], 1_701_000_020);
         app.sorafs_node
@@ -65644,31 +65707,105 @@ mod tests {
         };
         let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
             .expect("sign repair worker malformed-signature fixture");
-        let mut signature_payload = signature.payload().to_vec();
-        signature_payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
-            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
-        let malformed_signature =
-            SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(&signature_payload));
 
-        let auth = enforce_sorafs_repair_worker_auth(
-            &app,
-            &report.ticket_id,
-            &hex::encode(report.evidence.manifest_digest),
-            &worker_id_literal,
-            idempotency_key,
-            RepairWorkerActionV1::Claim {
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let mut signature_payload = signature.payload().to_vec();
+            signature_payload[..replacement_r.len()].copy_from_slice(&replacement_r);
+            let malformed_signature = SignatureOf::from_signature(
+                iroha_crypto::Signature::from_bytes(&signature_payload),
+            );
+
+            let auth = enforce_sorafs_repair_worker_auth(
+                &app,
+                &report.ticket_id,
+                &hex::encode(report.evidence.manifest_digest),
+                &worker_id_literal,
+                idempotency_key,
+                RepairWorkerActionV1::Claim {
+                    claimed_at_unix: claimed_at,
+                },
+                &malformed_signature,
+            );
+            match auth {
+                Err(Error::Query(ValidationFail::NotPermitted(reason))) => {
+                    assert!(
+                        reason.contains("signature material malformed"),
+                        "{label} repair worker signature R produced unexpected rejection reason: {reason}"
+                    );
+                }
+                other => panic!("unexpected repair worker auth result: {other:?}"),
+            }
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_repair_worker_auth_rejects_malformed_mldsa_signature_lengths() {
+        let app = mk_app_state_for_tests();
+        let report = repair_report("REP-900C", [0x13; 32], [0x24; 32], 1_701_000_040);
+        app.sorafs_node
+            .enqueue_repair_report(&report)
+            .expect("enqueue report");
+
+        let worker_key = KeyPair::try_from_seed(vec![0x8b; 32], Algorithm::MlDsa)
+            .expect("derive Sorafs malformed ML-DSA repair worker fixture key");
+        let worker_id = AccountId::new(worker_key.public_key().clone());
+        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
+        let worker_id_literal = "repair-mldsa@universal";
+        bind_account_alias_for_test(&app, &worker_id, worker_id_literal);
+
+        let claimed_at = report.submitted_at_unix + 10;
+        let idempotency_key = "claim-900c";
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            worker_id: worker_id_literal.to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,
             },
-            &malformed_signature,
-        );
-        match auth {
-            Err(Error::Query(ValidationFail::NotPermitted(reason))) => {
-                assert!(
-                    reason.contains("signature material malformed"),
-                    "unexpected rejection reason: {reason}"
-                );
+        };
+        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
+            .expect("sign repair worker malformed ML-DSA signature fixture");
+
+        let mut extended = signature.payload().to_vec();
+        extended.push(0);
+        for (label, signature_payload) in [
+            (
+                "truncated",
+                signature.payload()[..signature.payload().len() - 1].to_vec(),
+            ),
+            ("extended", extended),
+        ] {
+            let malformed_signature = SignatureOf::from_signature(
+                iroha_crypto::Signature::from_bytes(&signature_payload),
+            );
+
+            let auth = enforce_sorafs_repair_worker_auth(
+                &app,
+                &report.ticket_id,
+                &hex::encode(report.evidence.manifest_digest),
+                worker_id_literal,
+                idempotency_key,
+                RepairWorkerActionV1::Claim {
+                    claimed_at_unix: claimed_at,
+                },
+                &malformed_signature,
+            );
+            match auth {
+                Err(Error::Query(ValidationFail::NotPermitted(reason))) => {
+                    assert!(
+                        reason.contains("signature material malformed"),
+                        "{label} repair worker ML-DSA signature length produced unexpected rejection reason: {reason}"
+                    );
+                }
+                other => panic!("unexpected repair worker auth result: {other:?}"),
             }
-            other => panic!("unexpected repair worker auth result: {other:?}"),
         }
     }
 

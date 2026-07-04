@@ -1329,6 +1329,30 @@ def _source_record_template_hash_errors(
     return errors
 
 
+def _source_record_hash_role_errors(
+    label: str,
+    source_hashes: Any,
+) -> list[str]:
+    """Return errors for copied source-record hashes that reuse another role."""
+
+    if not isinstance(source_hashes, dict):
+        return []
+    # Source-inventory marker: source_adapter_engine_deployment_hash must not reuse source_verifier_material_hash
+    return _distinct_nonzero_bytes32_field_errors(
+        f"{label} hash role",
+        (
+            (
+                "source_verifier_material_hash",
+                source_hashes.get("source_verifier_material_hash"),
+            ),
+            (
+                "source_adapter_engine_deployment_hash",
+                source_hashes.get("source_adapter_engine_deployment_hash"),
+            ),
+        ),
+    )
+
+
 def _route_canary_template_hash_errors(
     label: str,
     domain: Any,
@@ -1951,10 +1975,6 @@ def _cryptographic_evidence_source_adapter_gate_hash_role_errors(
     payload: dict[str, Any],
     audit_hashes: Any,
 ) -> list[str]:
-    if not isinstance(audit_hashes, dict):
-        return []
-
-    audit_label = f"{label} source_adapter_gate_audit_hashes"
     fields: list[tuple[str, Any]] = [
         ("source_verifier_material_hash", payload.get("source_verifier_material_hash")),
         (
@@ -1969,13 +1989,26 @@ def _cryptographic_evidence_source_adapter_gate_hash_role_errors(
         (field, payload.get(field))
         for field in CRYPTOGRAPHIC_ROUTE_CANARY_TEMPLATE_HASH_FIELDS
     )
-    for audit_key, audit_hash in sorted(
-        audit_hashes.items(),
-        key=lambda item: _safe_public_key_sort_key(item[0]),
+    # Source-inventory marker: public source_adapter_gate top-level hash roles must be checked even when audit hashes are malformed
+    gate_hash = payload.get("source_adapter_gate_hash")
+    semantic_audit_hash_values: set[Any] = set()
+    if isinstance(audit_hashes, dict):
+        audit_label = f"{label} source_adapter_gate_audit_hashes"
+        for audit_key, audit_hash in sorted(
+            audit_hashes.items(),
+            key=lambda item: _safe_public_key_sort_key(item[0]),
+        ):
+            if _source_adapter_gate_audit_key_error(audit_key, audit_label) is not None:
+                continue
+            if _is_nonzero_bytes32_hex_text(audit_hash):
+                semantic_audit_hash_values.add(audit_hash)
+            fields.append((f"source_adapter_gate_audit_hashes.{audit_key}", audit_hash))
+    if (
+        _is_nonzero_bytes32_hex_text(gate_hash)
+        and gate_hash not in semantic_audit_hash_values
     ):
-        if _source_adapter_gate_audit_key_error(audit_key, audit_label) is not None:
-            continue
-        fields.append((f"source_adapter_gate_audit_hashes.{audit_key}", audit_hash))
+        # Source-inventory marker: public source_adapter_gate_hash must not reuse source, destination, route, or canary roles when audit hashes are malformed
+        fields.append(("source_adapter_gate_hash", gate_hash))
     return _distinct_nonzero_bytes32_field_errors(
         f"{label} source_adapter_gate hash role",
         tuple(fields),
@@ -5585,6 +5618,13 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
             payload,
         )
     )
+    # Source-inventory marker: public crypto source-record hash roles must remain distinct
+    errors.extend(
+        _source_record_hash_role_errors(
+            label,
+            payload,
+        )
+    )
     # Source-inventory marker: public crypto route-canary hashes must reject built-in template material
     errors.extend(
         _route_canary_template_hash_errors(
@@ -6629,13 +6669,27 @@ def _all_lanes_nested_bundle_errors(
         domain == _active_launch_domain()
         or lane.get("production_ready") is True
     )
+    records = lane.get("records")
+    record_flags = records if isinstance(records, dict) else {}
+    copied_source_records_present = (
+        record_flags.get("source_verifier_material") is True
+        and record_flags.get("source_adapter_deployment") is True
+    )
+    copied_destination_record_present = (
+        record_flags.get("destination_rollout") is True
+    )
+    copied_route_record_present = record_flags.get("route_allowlist") is True
 
     def required_fields_for_copied_nested(
         field: str,
         required_fields: frozenset[str],
+        *,
+        record_present: bool = False,
     ) -> frozenset[str]:
         value = lane.get(field)
         if enforce_governed_hash_semantics:
+            return required_fields
+        if record_present:
             return required_fields
         if isinstance(value, dict) and value:
             return required_fields
@@ -6648,6 +6702,7 @@ def _all_lanes_nested_bundle_errors(
         required_fields_for_copied_nested(
             "source_record_hashes",
             field_sets["source_record_hashes"],
+            record_present=copied_source_records_present,
         ),
         errors,
     )
@@ -6880,6 +6935,7 @@ def _all_lanes_nested_bundle_errors(
         required_fields_for_copied_nested(
             "destination_binding",
             frozenset(destination_required_fields),
+            record_present=copied_destination_record_present,
         ),
         errors,
     )
@@ -7059,6 +7115,7 @@ def _all_lanes_nested_bundle_errors(
         required_fields_for_copied_nested(
             "route_allowlist",
             field_sets["route_allowlist"],
+            record_present=copied_route_record_present,
         ),
         errors,
     )

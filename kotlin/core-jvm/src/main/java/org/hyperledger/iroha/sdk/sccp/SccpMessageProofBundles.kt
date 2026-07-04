@@ -13,6 +13,14 @@ import org.hyperledger.iroha.sdk.norito.TypeAdapter
 internal object SccpMessageProofBundles {
     private const val SOURCE_CHAIN_PROOF_ENVELOPE_SCHEMA: String =
         "iroha_sccp::SccpSourceChainProofEnvelopeV1"
+    private const val NEXUS_FINALITY_PROOF_SCHEMA: String =
+        "iroha_sccp::NexusBridgeFinalityProofV1"
+    private const val SCCP_NEXUS_FINALITY_CHAIN_ID_V1: String =
+        "00000000-0000-0000-0000-000000000753"
+    private const val SCCP_TAIRA_FINALITY_CHAIN_ID_V1: String =
+        "809574f5-fee7-5e69-bfcf-52451e42d50f"
+    private const val NEXUS_CONSENSUS_PHASE_COMMIT: Int = 2
+    private const val VALIDATOR_SET_HASH_VERSION_V1: Int = 1
     private const val SOURCE_EVENT_DIGEST_PREFIX_V1: String = "sccp:source:event:v1"
     private const val MAX_SOURCE_MERKLE_BRANCH_NODES: Int = 64
     private const val MSG_PREFIX_ASSET_REGISTER_V1: String = "sccp:asset:register:v1"
@@ -61,6 +69,30 @@ internal object SccpMessageProofBundles {
         val inclusionBranch: List<ByteArray>,
     )
 
+    private data class NexusFinalityProofSummary(
+        val version: Int,
+        val chainId: String,
+        val height: BigInteger,
+        val blockHash: String,
+        val commitmentRoot: String,
+        val blockHeaderBytes: ByteArray,
+        val commitQc: NexusCommitQcSummary,
+    )
+
+    private data class NexusCommitQcSummary(
+        val version: Int,
+        val phase: Int,
+        val height: BigInteger,
+        val modeTag: String,
+        val subjectBlockHash: String,
+        val validatorSetHash: String,
+        val validatorSetHashVersion: Int,
+        val validatorPublicKeys: List<String>,
+        val validatorSetPops: List<ByteArray>,
+        val signersBitmap: ByteArray,
+        val blsAggregateSignature: ByteArray,
+    )
+
     @JvmStatic
     internal fun requireMatchesPublicInputs(
         targetDomain: Int,
@@ -96,9 +128,22 @@ internal object SccpMessageProofBundles {
         finalityBlockHash: String,
         sourceProofBytes: ByteArray,
     ) {
+        val normalizedFinalityHeight = normalizeU64(finalityHeight, "publicInputs.finalityHeight")
+        val normalizedFinalityBlockHash = normalizeHex32(finalityBlockHash, "publicInputs.finalityBlockHash")
         if (summary.sourceDomain == SccpSourceProofs.DOMAIN_SORA) {
             require(sourceProofBytes.isEmpty()) {
                 "sourceProofBytes must be empty for SORA source bundle"
+            }
+            val finalityProof = decodeNexusBridgeFinalityProofSummary(
+                summary.finalityProofBytes,
+                "bundleBytes.finality_proof",
+            )
+            require(
+                finalityProof.commitmentRoot == summary.commitmentRoot &&
+                    finalityProof.height == normalizedFinalityHeight &&
+                    finalityProof.blockHash == normalizedFinalityBlockHash,
+            ) {
+                "bundleBytes.finality_proof must match SORA publicInputs"
             }
             return
         }
@@ -109,8 +154,6 @@ internal object SccpMessageProofBundles {
             "sourceProofBytes must match bundleBytes finality proof"
         }
         val sourceProof = decodeSourceChainProofSummary(sourceProofBytes, "sourceProofBytes")
-        val normalizedFinalityHeight = normalizeU64(finalityHeight, "publicInputs.finalityHeight")
-        val normalizedFinalityBlockHash = normalizeHex32(finalityBlockHash, "publicInputs.finalityBlockHash")
         require(
             sourceProof.sourceDomain == summary.sourceDomain &&
                 sourceProof.targetDomain == summary.targetDomain &&
@@ -222,6 +265,81 @@ internal object SccpMessageProofBundles {
         requireNonZeroHex32(proof.receiptOrMessageRoot, "$label.receipt_or_message_root")
         require(proof.sourceEventDigest == sourceEventDigest(proof.sourceDomain, proof.targetDomain, proof.messageId, proof.payloadHash)) {
             "$label.source_event_digest must match source domains and message"
+        }
+        return proof
+    }
+
+    private fun decodeNexusBridgeFinalityProofSummary(
+        finalityProofBytes: ByteArray,
+        label: String,
+    ): NexusFinalityProofSummary {
+        val proof = try {
+            NoritoCodec.decode(
+                finalityProofBytes,
+                NEXUS_FINALITY_PROOF_ADAPTER,
+                NEXUS_FINALITY_PROOF_SCHEMA,
+            )
+        } catch (ex: RuntimeException) {
+            throw IllegalArgumentException("$label must decode as NexusBridgeFinalityProofV1", ex)
+        }
+        require(proof.version == 1) { "$label.version must be 1" }
+        require(
+            proof.chainId == SCCP_NEXUS_FINALITY_CHAIN_ID_V1 ||
+                proof.chainId == SCCP_TAIRA_FINALITY_CHAIN_ID_V1,
+        ) {
+            "$label.chain_id must be supported"
+        }
+        require(proof.height > BigInteger.ZERO) { "$label.height must not be zero" }
+        requireNonZeroHex32(proof.blockHash, "$label.block_hash")
+        requireNonZeroHex32(proof.commitmentRoot, "$label.commitment_root")
+        require(proof.blockHeaderBytes.isNotEmpty()) { "$label.block_header_bytes must not be empty" }
+        val qc = proof.commitQc
+        require(qc.version == 1) { "$label.commit_qc.version must be 1" }
+        require(qc.phase == NEXUS_CONSENSUS_PHASE_COMMIT) {
+            "$label.commit_qc.phase must be Commit"
+        }
+        require(qc.height == proof.height) { "$label.commit_qc.height must match proof height" }
+        require(qc.subjectBlockHash == proof.blockHash) {
+            "$label.commit_qc.subject_block_hash must match proof block_hash"
+        }
+        require(qc.modeTag.isNotEmpty()) { "$label.commit_qc.mode_tag must not be empty" }
+        requireNonZeroHex32(qc.validatorSetHash, "$label.commit_qc.validator_set_hash")
+        require(qc.validatorSetHashVersion == VALIDATOR_SET_HASH_VERSION_V1) {
+            "$label.commit_qc.validator_set_hash_version must be 1"
+        }
+        require(qc.validatorPublicKeys.isNotEmpty()) {
+            "$label.commit_qc.validator_public_keys must not be empty"
+        }
+        require(qc.validatorSetPops.size == qc.validatorPublicKeys.size) {
+            "$label.commit_qc.validator_set_pops must match validator_public_keys"
+        }
+        val seenKeys = HashSet<String>()
+        qc.validatorPublicKeys.forEachIndexed { index, publicKey ->
+            require(publicKey.isNotEmpty()) {
+                "$label.commit_qc.validator_public_keys[$index] must not be empty"
+            }
+            require(seenKeys.add(publicKey)) {
+                "$label.commit_qc.validator_public_keys[$index] must be unique"
+            }
+        }
+        qc.validatorSetPops.forEachIndexed { index, pop ->
+            require(pop.isNotEmpty()) {
+                "$label.commit_qc.validator_set_pops[$index] must not be empty"
+            }
+        }
+        require(
+            signersBitmapHasValidSigner(
+                qc.signersBitmap,
+                qc.validatorPublicKeys.size,
+            ),
+        ) {
+            "$label.commit_qc.signers_bitmap must select at least one validator"
+        }
+        require(qc.blsAggregateSignature.isNotEmpty()) {
+            "$label.commit_qc.bls_aggregate_signature must not be empty"
+        }
+        require(qc.blsAggregateSignature.any { it.toInt() != 0 }) {
+            "$label.commit_qc.bls_aggregate_signature must not be zero"
         }
         return proof
     }
@@ -769,12 +887,96 @@ internal object SccpMessageProofBundles {
         }
     }
 
+    private val NEXUS_FINALITY_PROOF_ADAPTER = object : TypeAdapter<NexusFinalityProofSummary> {
+        override fun encode(encoder: NoritoEncoder, value: NexusFinalityProofSummary) {
+            throw UnsupportedOperationException("Nexus finality proof encoding is not supported here")
+        }
+
+        override fun decode(decoder: NoritoDecoder): NexusFinalityProofSummary {
+            val label = "bundleBytes.finality_proof"
+            val version = readNoritoField(decoder, "$label.version") { it.readUInt(8).toInt() }
+            val chainId = readNoritoField(decoder, "$label.chain_id") {
+                readNoritoString(it, "$label.chain_id")
+            }
+            val height = readNoritoU64Field(decoder, "$label.height")
+            val blockHash = readNoritoHex32Field(decoder, "$label.block_hash")
+            val commitmentRoot = readNoritoHex32Field(decoder, "$label.commitment_root")
+            val blockHeaderBytes = readNoritoField(decoder, "$label.block_header_bytes") {
+                readNoritoRawByteVec(it, "$label.block_header_bytes")
+            }
+            val commitQc = readNoritoField(decoder, "$label.commit_qc") {
+                readNexusCommitQc(it, "$label.commit_qc")
+            }
+            return NexusFinalityProofSummary(
+                version = version,
+                chainId = chainId,
+                height = height,
+                blockHash = blockHash,
+                commitmentRoot = commitmentRoot,
+                blockHeaderBytes = blockHeaderBytes,
+                commitQc = commitQc,
+            )
+        }
+    }
+
+    private fun readNexusCommitQc(decoder: NoritoDecoder, label: String): NexusCommitQcSummary {
+        val version = readNoritoField(decoder, "$label.version") { it.readUInt(8).toInt() }
+        val phase = readNoritoU32Field(decoder, "$label.phase")
+        val height = readNoritoU64Field(decoder, "$label.height")
+        readNoritoU64Field(decoder, "$label.view")
+        readNoritoU64Field(decoder, "$label.epoch")
+        val modeTag = readNoritoField(decoder, "$label.mode_tag") {
+            readNoritoString(it, "$label.mode_tag")
+        }
+        val subjectBlockHash = readNoritoHex32Field(decoder, "$label.subject_block_hash")
+        readNoritoHex32Field(decoder, "$label.parent_state_root")
+        readNoritoHex32Field(decoder, "$label.post_state_root")
+        readNoritoHex32Field(decoder, "$label.chain_order_hash")
+        readNoritoU64Field(decoder, "$label.rechain_seq")
+        readNoritoField(decoder, "$label.highest_qc") {
+            readNexusQcRefOption(it, "$label.highest_qc")
+        }
+        val validatorSetHash = readNoritoHex32Field(decoder, "$label.validator_set_hash")
+        val validatorSetHashVersion = readNoritoU16Field(decoder, "$label.validator_set_hash_version")
+        val validatorPublicKeys = readNoritoField(decoder, "$label.validator_public_keys") {
+            readNoritoStringSequence(it, "$label.validator_public_keys")
+        }
+        val validatorSetPops = readNoritoField(decoder, "$label.validator_set_pops") {
+            readNoritoRawByteVecSequence(it, "$label.validator_set_pops")
+        }
+        val signersBitmap = readNoritoField(decoder, "$label.signers_bitmap") {
+            readNoritoRawByteVec(it, "$label.signers_bitmap")
+        }
+        val blsAggregateSignature = readNoritoField(decoder, "$label.bls_aggregate_signature") {
+            readNoritoRawByteVec(it, "$label.bls_aggregate_signature")
+        }
+        return NexusCommitQcSummary(
+            version = version,
+            phase = phase,
+            height = height,
+            modeTag = modeTag,
+            subjectBlockHash = subjectBlockHash,
+            validatorSetHash = validatorSetHash,
+            validatorSetHashVersion = validatorSetHashVersion,
+            validatorPublicKeys = validatorPublicKeys,
+            validatorSetPops = validatorSetPops,
+            signersBitmap = signersBitmap,
+            blsAggregateSignature = blsAggregateSignature,
+        )
+    }
+
     private fun readNoritoU32Field(decoder: NoritoDecoder, label: String): Int =
         readNoritoField(decoder, label) {
             val value = it.readUInt(32)
             require(value <= Int.MAX_VALUE.toLong()) { "$label must fit platform size" }
             value.toInt()
         }
+
+    private fun readNoritoU16Field(decoder: NoritoDecoder, label: String): Int =
+        readNoritoField(decoder, label) { it.readUInt(16).toInt() }
+
+    private fun readNoritoU64Field(decoder: NoritoDecoder, label: String): BigInteger =
+        readNoritoField(decoder, label) { readNoritoU64(it, label) }
 
     private fun readNoritoHex32Field(decoder: NoritoDecoder, label: String): String =
         readNoritoField(decoder, label) { "0x" + hexLower(it.readBytes(32)) }
@@ -799,6 +1001,21 @@ internal object SccpMessageProofBundles {
         return value
     }
 
+    private fun readNoritoStringSequence(decoder: NoritoDecoder, label: String): List<String> {
+        val count = decoder.readLength(false)
+        require(count <= Int.MAX_VALUE) { "$label is too large" }
+        val out = ArrayList<String>(count.toInt())
+        for (index in 0 until count.toInt()) {
+            val elementLength = decoder.readLength(decoder.compactLenActive())
+            require(elementLength <= Int.MAX_VALUE) { "$label[$index] is too large" }
+            val child = NoritoDecoder(decoder.readBytes(elementLength.toInt()), decoder.flags, decoder.flagsHint)
+            val value = readNoritoString(child, "$label[$index]")
+            require(child.remaining() == 0) { "$label[$index] must not contain trailing bytes" }
+            out.add(value)
+        }
+        return out
+    }
+
     private fun readNoritoRawByteVec(decoder: NoritoDecoder, label: String): ByteArray {
         val length = decoder.readLength(false)
         require(length <= Int.MAX_VALUE) { "$label is too large" }
@@ -820,9 +1037,47 @@ internal object SccpMessageProofBundles {
         return out
     }
 
+    private fun readNexusQcRefOption(decoder: NoritoDecoder, label: String) {
+        val tag = decoder.readByte()
+        if (tag == 0) return
+        require(tag == 1) { "$label must be a valid Option" }
+        val length = decoder.readLength(decoder.compactLenActive())
+        require(length <= Int.MAX_VALUE) { "$label is too large" }
+        val child = NoritoDecoder(decoder.readBytes(length.toInt()), decoder.flags, decoder.flagsHint)
+        readNexusQcRef(child, label)
+        require(child.remaining() == 0) { "$label must not contain trailing bytes" }
+    }
+
+    private fun readNexusQcRef(decoder: NoritoDecoder, label: String) {
+        val height = readNoritoU64Field(decoder, "$label.height")
+        readNoritoU64Field(decoder, "$label.view")
+        readNoritoU64Field(decoder, "$label.epoch")
+        val subjectBlockHash = readNoritoHex32Field(decoder, "$label.subject_block_hash")
+        val phase = readNoritoU32Field(decoder, "$label.phase")
+        require(height > BigInteger.ZERO) { "$label.height must not be zero" }
+        requireNonZeroHex32(subjectBlockHash, "$label.subject_block_hash")
+        require(phase in 1..3) { "$label.phase must be known" }
+    }
+
     private fun readNoritoU64(decoder: NoritoDecoder, label: String): BigInteger {
         val raw = decoder.readBytes(8)
         return readU64LeAt(raw, 0, label)
+    }
+
+    private fun signersBitmapHasValidSigner(bitmap: ByteArray, rosterLen: Int): Boolean {
+        if (rosterLen <= 0 || bitmap.size != (rosterLen + 7) / 8) return false
+        var selected = false
+        bitmap.forEachIndexed { byteIndex, rawByte ->
+            val value = rawByte.toInt() and 0xff
+            if (value == 0) return@forEachIndexed
+            for (bit in 0 until 8) {
+                if (((value ushr bit) and 1) == 0) continue
+                val index = byteIndex * 8 + bit
+                if (index >= rosterLen) return false
+                selected = true
+            }
+        }
+        return selected
     }
 
     private val MAX_U64: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)

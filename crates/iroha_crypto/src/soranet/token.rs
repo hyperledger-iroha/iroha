@@ -221,7 +221,8 @@ impl AdmissionToken {
     /// Mint a new admission token using the provided issuer secret key.
     ///
     /// # Errors
-    /// Returns [`MintError`] if the time bounds are invalid, random bytes cannot be
+    /// Returns [`MintError`] if the time bounds are invalid, the provided issuer
+    /// fingerprint does not match the signing key, random bytes cannot be
     /// generated, or signing fails.
     #[allow(clippy::too_many_arguments)]
     pub fn mint<R: TryCryptoRng>(
@@ -249,9 +250,16 @@ impl AdmissionToken {
         if flags & !TOKEN_FLAG_MASK != 0 {
             return Err(MintError::InvalidFlags(flags));
         }
-        suite
-            .validate_secret_key(issuer_secret_key)
+        let issuer_public_key = suite
+            .public_key_from_secret_key(issuer_secret_key)
             .map_err(MintError::Signature)?;
+        let expected_fingerprint = compute_issuer_fingerprint(&issuer_public_key);
+        if issuer_fingerprint != expected_fingerprint {
+            return Err(MintError::IssuerFingerprintMismatch {
+                expected: expected_fingerprint,
+                actual: issuer_fingerprint,
+            });
+        }
 
         let mut nonce = [0u8; 16];
         fill_random(rng, "minting admission token nonce", &mut nonce)?;
@@ -1100,7 +1108,15 @@ pub enum MintError {
         /// Underlying RNG error message.
         message: String,
     },
-    /// ML-DSA signing failure.
+    /// Provided issuer fingerprint does not match the ML-DSA signing key.
+    #[error("admission token issuer fingerprint does not match signing key")]
+    IssuerFingerprintMismatch {
+        /// Fingerprint derived from the public key embedded in the signing secret.
+        expected: [u8; 32],
+        /// Fingerprint supplied by the caller.
+        actual: [u8; 32],
+    },
+    /// ML-DSA signing or secret-key validation failure.
     #[error("ml-dsa signing failed: {0}")]
     Signature(MlDsaError),
 }
@@ -1746,6 +1762,67 @@ mod tests {
         )
         .expect_err("invalid secret key length must fail before signing");
         assert_mint_mldsa_bad_encoding(err, "secret key");
+    }
+
+    #[test]
+    fn mint_rejects_all_zero_secret_key_material_before_backend() {
+        let suite = MlDsaSuite::MlDsa44;
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = UNIX_EPOCH + Duration::from_secs(1_700_000_600);
+        let secret_key = vec![0u8; suite.secret_key_len()];
+        let mut rng = StdRng::seed_from_u64(0x5EED);
+
+        let err = AdmissionToken::mint(
+            suite,
+            &secret_key,
+            [0xEF; 32],
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect_err("all-zero secret key material must fail before signing");
+        match err {
+            MintError::Signature(err) => {
+                let message = err.to_string();
+                assert!(message.contains("all zero"), "unexpected error: {message}");
+            }
+            other => panic!("expected all-zero secret key error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mint_rejects_issuer_fingerprint_mismatch_before_rng_or_signing() {
+        let suite = MlDsaSuite::MlDsa44;
+        let keypair = generate_mldsa_keypair(suite).expect("ML-DSA keypair generation");
+        let expected = compute_issuer_fingerprint(keypair.public_key());
+        let mut actual = expected;
+        actual[0] ^= 0xFF;
+        let issued = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let expires = UNIX_EPOCH + Duration::from_secs(1_700_000_600);
+        let mut rng = FailingTryRng;
+
+        let err = AdmissionToken::mint(
+            suite,
+            keypair.secret_key(),
+            actual,
+            RELAY_ID,
+            TRANSCRIPT,
+            issued,
+            expires,
+            0,
+            &mut rng,
+        )
+        .expect_err("fingerprint mismatch must fail before RNG or signing");
+        assert!(matches!(
+            err,
+            MintError::IssuerFingerprintMismatch {
+                expected: found_expected,
+                actual: found_actual,
+            } if found_expected == expected && found_actual == actual
+        ));
     }
 
     #[test]

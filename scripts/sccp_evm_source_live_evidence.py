@@ -300,6 +300,23 @@ def _source_arg_optional_bytes(
     return _source_arg_bytes(args, field, label=label, byte_length=byte_length)
 
 
+def _optional_namespace_bytes32_arg(
+    args: argparse.Namespace,
+    name: str,
+) -> bytes | None:
+    value = getattr(args, name, None)
+    if value is None:
+        return None
+    if not isinstance(value, (bytes, bytearray)):
+        raise ValueError(f"--{name.replace('_', '-')} must be bytes")
+    raw = bytes(value)
+    if len(raw) != 32:
+        raise ValueError(f"--{name.replace('_', '-')} must be 32 bytes")
+    if not any(raw):
+        raise ValueError(f"--{name.replace('_', '-')} must not be zero")
+    return raw
+
+
 def _source_arg_runtime_bytes(args: Any) -> bytes:
     value = getattr(args, "source_bridge_runtime_bytecode_hex", None)
     if not isinstance(value, (bytes, bytearray)):
@@ -1733,18 +1750,79 @@ def collect_live_evidence(
     expected_rpc_chain_id = args.expected_rpc_chain_id
     if expected_rpc_chain_id is None:
         expected_rpc_chain_id = canonical_rpc_chain_id
+    elif (
+        type(expected_rpc_chain_id) is not int
+        or expected_rpc_chain_id <= 0
+        or expected_rpc_chain_id > 0xFFFF_FFFF_FFFF_FFFF
+    ):
+        raise ValueError("--expected-rpc-chain-id must be a positive u64 integer")
     elif expected_rpc_chain_id != canonical_rpc_chain_id:
         chain = "eth" if args.domain == SCCP_DOMAIN_ETH else "bsc"
         raise ValueError(
             "--expected-rpc-chain-id must match the canonical "
             f"{chain} mainnet chain id {canonical_rpc_chain_id}"
         )
+    expected_source_bridge_code_hash = _optional_namespace_bytes32_arg(
+        args,
+        "expected_source_bridge_code_hash",
+    )
+    deployment_transaction_hash = _optional_namespace_bytes32_arg(
+        args,
+        "deployment_transaction_hash",
+    )
+    source_trust_anchor_hash = _optional_namespace_bytes32_arg(
+        args,
+        "source_trust_anchor_hash",
+    )
+    consensus_verifier_hash = _optional_namespace_bytes32_arg(
+        args,
+        "consensus_verifier_hash",
+    )
+    message_inclusion_verifier_hash = _optional_namespace_bytes32_arg(
+        args,
+        "message_inclusion_verifier_hash",
+    )
+    finality_policy_hash = _optional_namespace_bytes32_arg(
+        args,
+        "finality_policy_hash",
+    )
+    adapter_verifier_vk_hash = _optional_namespace_bytes32_arg(
+        args,
+        "adapter_verifier_vk_hash",
+    )
+    deployment_receipt_hash = _optional_namespace_bytes32_arg(
+        args,
+        "deployment_receipt_hash",
+    )
+    expected_source_verifier_material_hash = _optional_namespace_bytes32_arg(
+        args,
+        "expected_source_verifier_material_hash",
+    )
+    expected_source_adapter_engine_deployment_hash = _optional_namespace_bytes32_arg(
+        args,
+        "expected_source_adapter_engine_deployment_hash",
+    )
+    for name, value in (
+        ("source_trust_anchor_hash", source_trust_anchor_hash),
+        ("consensus_verifier_hash", consensus_verifier_hash),
+        ("message_inclusion_verifier_hash", message_inclusion_verifier_hash),
+        ("finality_policy_hash", finality_policy_hash),
+        ("deployment_receipt_hash", deployment_receipt_hash),
+    ):
+        setattr(args, name, value)
+    args.adapter_verifier_vk_hash = adapter_verifier_vk_hash
+    args.expected_source_bridge_code_hash = expected_source_bridge_code_hash
+    args.deployment_transaction_hash = deployment_transaction_hash
+    args.expected_source_verifier_material_hash = expected_source_verifier_material_hash
+    args.expected_source_adapter_engine_deployment_hash = (
+        expected_source_adapter_engine_deployment_hash
+    )
     source_bridge = collect_source_bridge_evidence(
         args.rpc_url,
         domain=args.domain,
         bridge_address=args.bridge_address,
         block_tag=block_tag,
-        deployment_transaction_hash=args.deployment_transaction_hash,
+        deployment_transaction_hash=deployment_transaction_hash,
         opener=opener,
         timeout=args.timeout,
     )
@@ -1757,16 +1835,16 @@ def collect_live_evidence(
     source_bridge["expected_rpc_chain_id"] = expected_rpc_chain_id
     source_bridge["expected_rpc_chain_id_matches"] = True
 
-    if args.expected_source_bridge_code_hash is not None:
-        if _hex(args.expected_source_bridge_code_hash) != source_bridge["bridge_code_hash"]:
+    if expected_source_bridge_code_hash is not None:
+        if _hex(expected_source_bridge_code_hash) != source_bridge["bridge_code_hash"]:
             raise ValueError(
                 "--expected-source-bridge-code-hash does not match live source "
                 "bridge runtime bytecode: "
-                f"expected {_hex(args.expected_source_bridge_code_hash)}, "
+                f"expected {_hex(expected_source_bridge_code_hash)}, "
                 f"got {source_bridge['bridge_code_hash']}"
             )
         source_bridge["expected_source_bridge_code_hash"] = _hex(
-            args.expected_source_bridge_code_hash
+            expected_source_bridge_code_hash
         )
         source_bridge["expected_source_bridge_code_hash_matches"] = True
     summary["source_bridge"] = source_bridge

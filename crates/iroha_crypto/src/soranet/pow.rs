@@ -196,6 +196,7 @@ impl SignedTicket {
         transcript_hash: Option<&[u8; 32]>,
         secret_key: &[u8],
     ) -> Result<Self, Error> {
+        Self::validate_ticket_format(&ticket)?;
         MlDsaSuite::MlDsa44
             .validate_secret_key(secret_key)
             .map_err(|err| Error::Signing(format!("ML-DSA secret key is invalid: {err}")))?;
@@ -220,13 +221,7 @@ impl SignedTicket {
     pub fn decode(bytes: &[u8]) -> Result<Self, Error> {
         let decoded: Self = decode_adaptive(bytes)
             .map_err(|err| Error::Malformed(format!("signed ticket decode failed: {err}")))?;
-        if decoded.ticket.version != Ticket::VERSION {
-            return Err(Error::UnsupportedVersion(decoded.ticket.version));
-        }
-        decoded
-            .ticket
-            .checked_expires_at_time()
-            .ok_or(Error::ExpiryTimestampOverflow(decoded.ticket.expires_at))?;
+        Self::validate_ticket_format(&decoded.ticket)?;
         Self::validate_signature_material(&decoded.signature)?;
         Ok(decoded)
     }
@@ -244,9 +239,7 @@ impl SignedTicket {
     /// [`Error::InvalidSignature`] if verification fails, or [`Error::PostQuantum`]
     /// if the key format is invalid.
     pub fn verify(&self, public_key: &[u8]) -> Result<(), Error> {
-        if self.ticket.version != Ticket::VERSION {
-            return Err(Error::UnsupportedVersion(self.ticket.version));
-        }
+        Self::validate_ticket_format(&self.ticket)?;
         Self::validate_signature_material(&self.signature)?;
         MlDsaSuite::MlDsa44
             .validate_public_key(public_key)
@@ -268,6 +261,16 @@ impl SignedTicket {
 
     fn validate_signature_material(signature: &[u8]) -> Result<(), Error> {
         validate_signed_ticket_signature_material(signature).map_err(Error::Malformed)
+    }
+
+    fn validate_ticket_format(ticket: &Ticket) -> Result<(), Error> {
+        if ticket.version != Ticket::VERSION {
+            return Err(Error::UnsupportedVersion(ticket.version));
+        }
+        ticket
+            .checked_expires_at_time()
+            .ok_or(Error::ExpiryTimestampOverflow(ticket.expires_at))?;
+        Ok(())
     }
 
     fn build_payload(
@@ -2155,6 +2158,27 @@ mod tests {
     }
 
     #[test]
+    fn signed_ticket_verify_rejects_unrepresentable_expiry_before_signature_preflight() {
+        let signed = SignedTicket {
+            ticket: Ticket {
+                version: Ticket::VERSION,
+                difficulty: 0,
+                expires_at: u64::MAX,
+                client_nonce: [0xAA; 32],
+                solution: [0xBB; 32],
+            },
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: Vec::new(),
+        };
+
+        let err = signed
+            .verify(&[])
+            .expect_err("unrepresentable expiry must fail before signature preflight");
+        assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
+    }
+
+    #[test]
     fn signed_ticket_verify_rejects_invalid_signature_length_before_backend() {
         let ticket = Ticket {
             version: Ticket::VERSION,
@@ -2230,6 +2254,36 @@ mod tests {
     }
 
     #[test]
+    fn signed_ticket_sign_rejects_unsupported_version_before_secret_key_preflight() {
+        let ticket = Ticket {
+            version: Ticket::VERSION + 1,
+            difficulty: 0,
+            expires_at: 123,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+
+        let err = SignedTicket::sign(ticket, &RELAY_A, None, &[])
+            .expect_err("unsupported version must fail before secret-key validation");
+        assert!(matches!(err, Error::UnsupportedVersion(_)));
+    }
+
+    #[test]
+    fn signed_ticket_sign_rejects_unrepresentable_expiry_before_secret_key_preflight() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: u64::MAX,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+
+        let err = SignedTicket::sign(ticket, &RELAY_A, None, &[])
+            .expect_err("unrepresentable expiry must fail before secret-key validation");
+        assert!(matches!(err, Error::ExpiryTimestampOverflow(u64::MAX)));
+    }
+
+    #[test]
     fn signed_ticket_sign_rejects_invalid_secret_key_length_before_backend() {
         let ticket = Ticket {
             version: Ticket::VERSION,
@@ -2249,6 +2303,27 @@ mod tests {
                 );
             }
             other => panic!("expected signing key length error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn signed_ticket_sign_rejects_all_zero_secret_key_material_before_backend() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 123,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+        let secret_key = vec![0u8; MlDsaSuite::MlDsa44.secret_key_len()];
+
+        let err = SignedTicket::sign(ticket, &RELAY_A, None, &secret_key)
+            .expect_err("all-zero secret key must fail before signing");
+        match err {
+            Error::Signing(message) => {
+                assert!(message.contains("all zero"), "unexpected error: {message}");
+            }
+            other => panic!("expected all-zero secret key error, got {other:?}"),
         }
     }
 
@@ -2279,6 +2354,34 @@ mod tests {
                 );
             }
             other => panic!("expected public key length error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn signed_ticket_verify_rejects_all_zero_public_key_material_before_backend() {
+        let ticket = Ticket {
+            version: Ticket::VERSION,
+            difficulty: 0,
+            expires_at: 123,
+            client_nonce: [0xAA; 32],
+            solution: [0xBB; 32],
+        };
+        let signed = SignedTicket {
+            ticket,
+            relay_id: RELAY_A,
+            transcript_hash: None,
+            signature: vec![0x11; MlDsaSuite::MlDsa44.signature_len()],
+        };
+        let all_zero_public_key = vec![0u8; MlDsaSuite::MlDsa44.public_key_len()];
+
+        let err = signed
+            .verify(&all_zero_public_key)
+            .expect_err("all-zero public key must fail before backend verification");
+        match err {
+            Error::PostQuantum(message) => {
+                assert!(message.contains("all zero"), "unexpected error: {message}");
+            }
+            other => panic!("expected all-zero public key error, got {other:?}"),
         }
     }
 

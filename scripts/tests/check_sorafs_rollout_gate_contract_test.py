@@ -59,6 +59,8 @@ HEDGING_FIXTURE_GENERATOR_RS = (
 )
 POP_CREDENTIALS_RS = REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "pop_credentials.rs"
 SORAFS_NODE_LIB_RS = REPO_ROOT / "crates" / "sorafs_node" / "src" / "lib.rs"
+IROHA_CLIENT_RS = REPO_ROOT / "crates" / "iroha" / "src" / "client.rs"
+TORII_LIB_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs"
 TORII_SORAFS_API_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "api.rs"
 TORII_OPENAPI_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
 IROHA_CLI_SORAFS_RS = REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs.rs"
@@ -16035,13 +16037,14 @@ def test_commit_reveal_production_services_stay_unshipped_in_docs() -> None:
 
     required_unshipped = (
         "Accepted local ballot state, durable local challenge records, and event backlog are persisted as a validated Norito checkpoint when storage is enabled",
-        "`NodeHandle` now also derives deterministic payload-free no-show penalty plans for closed ballots, separates missing commits from committed no-shows, and binds the plan to a stable digest without mutating ballot state.",
+        "`NodeHandle` now also derives deterministic payload-free no-show penalty plans for closed ballots, separates missing commits from committed no-shows, and binds the plan to a stable digest without mutating ballot state. Torii exposes that plan through the payload-free local `GET /v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan` readback route, using server-side network time and returning only counts, juror identifiers, and the digest.",
         "repository now ships local ballot CLI/client readback, signed commit/reveal/challenge-resolution/tally submission, and payload-free executor automation for the local Torii API. It does not yet ship the SoraFS moderation voting contract, contract-backed ballot orchestrator, production challenge monitor/dispute service, public juror portal, or deployed production service needed to run appeal-panel ballots end to end.",
         "ballot lifecycle and challenge submit/resolve events can also be materialized into the SoraFS Governance DAG filesystem publisher and optional signed runtime DAG",
         "persists successful local ballot transitions, challenge submissions/resolutions, and the sequenced local event backlog to `moderation-ballots/ballots-snapshot.to` as a validated Norito checkpoint and rejects duplicate, mismatched, out-of-window, missing-commit, unresolved or accepted-challenge-with-reveal/tally, bad-tally, insufficient-quorum, non-contiguous-event, missing/duplicated/mutated challenge-event, or event/state-mismatch snapshots",
         "`moderation_ballot_no_show_plan`, which refuses open reveal windows and unresolved or accepted challenges, separates missing-commit and unrevealed-commit jurors, and emits a stable payload-free penalty-plan digest without mutating state or publishing events.",
+        "Torii exposes local moderation ballot endpoints for announcement, list/get, no-show plan readback, commit, challenge submission, challenge resolution, reveal, tally, and event backlog under `/v1/sorafs/moderation/ballots*`.",
         "Ballot event readback now includes `challenge_submitted` and `challenge_resolved` entries with `challenge_count` and the payload-free challenge record",
-        "`iroha::client` and `iroha sorafs moderation ballots list|get|events|commit|reveal|tally` wrap the local readback and signed committee lifecycle endpoints",
+        "`iroha::client` and `iroha sorafs moderation ballots list|get|no-show-plan|events|commit|reveal|tally` wrap the local readback and signed committee lifecycle endpoints",
         "`iroha sorafs moderation ballots execute|executor-bundle|executor-canary` provide local payload-free commit/reveal executor automation",
         "That gate blocks deployed promotion evidence; it does not replace the missing durable service or contract-backed workflow.",
         "Build the production orchestrator around the persisted local ballot lifecycle store, local challenge records, event backlog, and local no-show penalty plans, including retries, scheduled no-show dispatch/settlement handoff, production challenge monitor/dispute workflows, and durable contested-outcome workflows.",
@@ -16068,14 +16071,16 @@ def test_commit_reveal_docs_do_not_reopen_shipped_local_cli_bridge() -> None:
     required_current = (
         "Accepted local ballot state, durable local challenge records, and event backlog are persisted as a validated Norito checkpoint when storage is enabled",
         "`NodeHandle` now also derives deterministic payload-free no-show penalty plans for closed ballots",
+        "`GET /v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan` readback route, using server-side network time and returning only counts, juror identifiers, and the digest",
         "repository now ships local ballot CLI/client readback, signed commit/reveal/challenge-resolution/tally submission, and payload-free executor automation for the local Torii API.",
         "contract-backed ballot orchestrator, production challenge monitor/dispute service, public juror portal, or deployed production service",
         "persists successful local ballot transitions, challenge submissions/resolutions, and the sequenced local event backlog to `moderation-ballots/ballots-snapshot.to` as a validated Norito checkpoint",
         "missing/duplicated/mutated challenge-event",
         "`moderation_ballot_no_show_plan`, which refuses open reveal windows and unresolved or accepted challenges",
+        "Torii exposes local moderation ballot endpoints for announcement, list/get, no-show plan readback, commit, challenge submission, challenge resolution, reveal, tally, and event backlog under `/v1/sorafs/moderation/ballots*`.",
         "Ballot event readback now includes `challenge_submitted` and `challenge_resolved` entries with `challenge_count` and the payload-free challenge record",
         "Restored nodes replay the local event backlog through Torii readback endpoints",
-        "`iroha::client` and `iroha sorafs moderation ballots list|get|events|commit|reveal|tally` wrap the local readback and signed committee lifecycle endpoints",
+        "`iroha::client` and `iroha sorafs moderation ballots list|get|no-show-plan|events|commit|reveal|tally` wrap the local readback and signed committee lifecycle endpoints",
         "`iroha sorafs moderation ballots execute|executor-bundle|executor-canary` provide local payload-free commit/reveal executor automation",
         "Build the production orchestrator around the persisted local ballot lifecycle store, local challenge records, event backlog, and local no-show penalty plans",
         "Promote the shipped local CLI/client bridge and executor automation into audited juror-facing deployment workflows",
@@ -16407,6 +16412,36 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
     assert [item for item in challenge_requirements if item not in pending_challenge] == []
 
 
+def test_commit_reveal_client_cli_no_show_readback_regressions_are_pinned() -> None:
+    client = read(IROHA_CLIENT_RS)
+    cli = read(IROHA_CLI_SORAFS_RS)
+    route_suffix = "no-show-plan"
+
+    client_requirements = (
+        "get_sorafs_moderation_ballot_no_show_plan",
+        "require_non_empty_path_segment(case_id, \"case_id\")",
+        "require_non_empty_path_segment(round_id, \"round_id\")",
+        "no-show-plan",
+        ".header(\"Accept\", APPLICATION_JSON)",
+        "sorafs_moderation_ballot_no_show_plan_targets_endpoint",
+        "sorafs_moderation_ballot_no_show_plan_rejects_blank_round_id",
+    )
+    cli_requirements = (
+        "NoShowPlan(ModerationBallotsNoShowPlanArgs)",
+        "Client::get_sorafs_moderation_ballot_no_show_plan",
+        "required_trimmed_text(&self.case_id, \"--case-id\")",
+        "required_trimmed_text(&self.round_id, \"--round-id\")",
+        "moderation_ballots_no_show_plan_trims_identifiers_and_prints_payload",
+        "sorafs.moderation.ballot.no_show_plan.v1",
+        "penalty_plan_digest_hex",
+    )
+
+    assert route_suffix in client
+    assert route_suffix in cli
+    assert [item for item in client_requirements if item not in client] == []
+    assert [item for item in cli_requirements if item not in cli] == []
+
+
 UNSHIPPED_COMMIT_REVEAL_SERVICE_ROUTE_PATTERNS = (
     "/v1/sorafs/moderation/voting-contract",
     "/v1/sorafs/moderation/ballots/contract",
@@ -16470,6 +16505,7 @@ def test_commit_reveal_service_surface_matcher_has_negative_controls() -> None:
     shipped_local_subcommands = (
         "list",
         "get",
+        "no-show-plan",
         "events",
         "commit",
         "reveal",

@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_commit_reveal_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 9ee3c9662d6a7fdb851be461396378b4af47cec5c6e3bd13b3ec8d9dd5a019f9
-source_last_modified: "2026-07-04T14:48:01.080719+00:00"
+source_hash: 98b24c04757b46996ec0a4a312514b05ec49e7a9d2311cbc881b20d67b9f9042
+source_last_modified: "2026-07-04T15:05:52.498664+00:00"
 translation_last_reviewed: 2026-07-04
 ---
 
@@ -23,8 +23,12 @@ ballot lifecycle and challenge submit/resolve events can also be materialized
 into the SoraFS Governance DAG filesystem publisher and optional signed runtime
 DAG. `NodeHandle` now also derives deterministic payload-free no-show penalty
 plans for closed ballots, separates missing commits from committed no-shows,
-and binds the plan to a stable digest without mutating ballot state. The
-repository now ships local ballot CLI/client readback, signed
+and binds the plan to a stable digest without mutating ballot state. Torii
+exposes that plan through the payload-free local
+`GET /v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan`
+readback route, using server-side network time and returning only counts,
+juror identifiers, and the digest. The repository now ships local ballot
+CLI/client readback, signed
 commit/reveal/challenge-resolution/tally submission, and payload-free executor
 automation for the local Torii API. It
 does not yet ship the SoraFS moderation voting contract, contract-backed
@@ -78,8 +82,9 @@ durable service or contract-backed workflow.
   unrevealed-commit jurors, and emits a stable payload-free penalty-plan digest
   without mutating state or publishing events.
 - Torii exposes local moderation ballot endpoints for announcement, list/get,
-  commit, challenge submission, challenge resolution, reveal, tally, and event backlog under
-  `/v1/sorafs/moderation/ballots*`. Mutating requests require canonical app
+  no-show plan readback, commit, challenge submission, challenge resolution,
+  reveal, tally, and event backlog under `/v1/sorafs/moderation/ballots*`.
+  Mutating requests require canonical app
   authentication, announcement requests require a `deposit_confirmation` object
   that Torii confirms against the runtime native asset-lock ledger before local
   ballot admission, and commit/reveal requests require the authenticated account
@@ -164,6 +169,7 @@ cargo test -p sorafs_node moderation_ballot
 cargo test -p sorafs_node moderation_ballot_no_show -- --nocapture
 cargo test -p sorafs_manifest moderation_ballot_event
 cargo test -p iroha_torii moderation_ballot --features app_api
+cargo test -p iroha_torii moderation_ballot_no_show --features app_api -- --nocapture
 cargo test -p iroha_torii generated_spec_includes_documented_paths --features app_api
 ```
 

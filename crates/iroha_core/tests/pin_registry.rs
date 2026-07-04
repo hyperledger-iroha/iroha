@@ -171,7 +171,8 @@ fn alias_proof_fixture_decodes() {
     let first_sig = &bundle.council_signatures[0];
     let signer =
         PublicKey::from_bytes(Algorithm::Ed25519, &first_sig.signer).expect("parse signer key");
-    let signature = Signature::from_bytes(&first_sig.signature);
+    let signature = Signature::try_from_bytes(&first_sig.signature)
+        .expect("council fixture signature must pass checked admission");
     let digest = alias_proof_signature_digest(&bundle);
     signature
         .verify(&signer, digest.as_ref())

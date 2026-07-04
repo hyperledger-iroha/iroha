@@ -269,6 +269,9 @@ fn load_signing_key(path: &PathBuf) -> Result<SigningKey, StreamTokenIssuerError
             len: key_bytes.len(),
         });
     }
+    if key_bytes.iter().all(|byte| *byte == 0) {
+        return Err(StreamTokenIssuerError::SigningKeyMaterial { path: path.clone() });
+    }
 
     let mut array = [0u8; 32];
     array.copy_from_slice(&key_bytes);
@@ -304,6 +307,12 @@ pub enum StreamTokenIssuerError {
         path: PathBuf,
         /// Actual byte length present in the file.
         len: usize,
+    },
+    /// The signing key file contained inert all-zero seed material.
+    #[error("signing key at {path:?} must not be all zero")]
+    SigningKeyMaterial {
+        /// Path to the Ed25519 signing key file.
+        path: PathBuf,
     },
     /// System clock produced a timestamp prior to the Unix epoch.
     #[error("system time before UNIX epoch")]
@@ -368,6 +377,7 @@ pub fn decode_token_base64(value: &str) -> Result<StreamTokenV1, StreamTokenHead
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
+    use tempfile::NamedTempFile;
 
     use super::*;
 
@@ -438,6 +448,36 @@ mod tests {
             }
             Ok(_) => panic!("RNG failure must be reported"),
             Err(other) => panic!("expected RNG failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_signing_key_rejects_all_zero_raw_seed_material() {
+        let key_file = NamedTempFile::new().expect("create key file");
+        std::fs::write(key_file.path(), [0u8; 32]).expect("write key file");
+        let path = key_file.path().to_path_buf();
+
+        match load_signing_key(&path) {
+            Err(StreamTokenIssuerError::SigningKeyMaterial { path: err_path }) => {
+                assert_eq!(err_path, path);
+            }
+            Ok(_) => panic!("all-zero raw signing key must fail"),
+            Err(other) => panic!("expected all-zero signing key error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn load_signing_key_rejects_all_zero_hex_seed_material() {
+        let key_file = NamedTempFile::new().expect("create key file");
+        std::fs::write(key_file.path(), "00".repeat(32)).expect("write key file");
+        let path = key_file.path().to_path_buf();
+
+        match load_signing_key(&path) {
+            Err(StreamTokenIssuerError::SigningKeyMaterial { path: err_path }) => {
+                assert_eq!(err_path, path);
+            }
+            Ok(_) => panic!("all-zero hex signing key must fail"),
+            Err(other) => panic!("expected all-zero signing key error, got {other:?}"),
         }
     }
 

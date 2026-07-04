@@ -91,9 +91,9 @@ durable service or contract-backed workflow.
   `limit` (default 50, max 500) while preserving full counts and truncation
   metadata.
 - `iroha::client` and `iroha sorafs moderation ballots
-  list|get|events|commit|reveal|tally` wrap the local readback and signed
-  committee lifecycle endpoints, validating JSON or Norito commit/reveal payloads
-  and submitting canonical Norito bytes to Torii.
+  list|get|no-show-plan|events|commit|reveal|tally` wrap the local readback and
+  signed committee lifecycle endpoints, validating JSON or Norito commit/reveal
+  payloads and submitting canonical Norito bytes to Torii.
 - `iroha sorafs moderation ballots execute|executor-bundle|executor-canary`
   provide local payload-free commit/reveal executor automation and scheduled-job
   bundle/canary evidence without copying private commit or reveal payload files.

@@ -10662,7 +10662,7 @@ mod offline_note_tests {
             let offset = u8::try_from(idx).expect("index fits into u8");
             *byte = seed.wrapping_add(offset);
         }
-        Signature::from_bytes(&payload)
+        Signature::try_from_bytes(&payload).expect("checked offline note signature fixture")
     }
 
     fn sample_public_key(seed: u8) -> PublicKey {

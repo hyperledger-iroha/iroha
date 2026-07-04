@@ -12140,7 +12140,8 @@ mod tests {
         assert!(!vote.bls_sig.is_empty());
         assert_ne!(vote.bls_sig, vec![0xAA; 4]);
         let preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
-        Signature::from_bytes(&vote.bls_sig)
+        Signature::try_from_bytes(&vote.bls_sig)
+            .expect("checked local vote signature fixture")
             .verify(key_pair.public_key(), &preimage)
             .expect("signed vote verifies against local key");
     }

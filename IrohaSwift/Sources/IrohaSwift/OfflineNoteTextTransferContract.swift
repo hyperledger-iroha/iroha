@@ -41,14 +41,13 @@ public enum OfflineNoteTextTransferContract {
     }
 
     public static func normalizeTextTransportEnvelope(_ payload: String) throws -> String {
-        let trimmed = trimmingBoundaryWhitespace(payload)
-        guard !trimmed.isEmpty else {
+        guard !payload.isEmpty else {
             throw OfflineNoteTextTransferContractError.emptyPayload
         }
-        guard hasOnlyTextTransportCharacters(trimmed) else {
+        guard hasOnlyTextTransportCharacters(payload) else {
             throw OfflineNoteTextTransferContractError.invalidCharacters
         }
-        return trimmed
+        return payload
     }
 
     public static func requireDeviceToDevicePayloadByteCount(_ byteCount: Int) throws {
@@ -156,8 +155,7 @@ public enum OfflineNativePaymentTextPayloadCodec {
     }
 
     public static func isCompactPaymentToken(_ value: String) -> Bool {
-        let trimmed = OfflineNoteTextTransferContract.trimmingBoundaryWhitespace(value)
-        return trimmed.hasPrefix(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix + compactMarker)
+        value.hasPrefix(OfflineNoteTransferTextPayloadCodec.paymentTokenPrefix + compactMarker)
     }
 
     public static func bearerAuditTrail(

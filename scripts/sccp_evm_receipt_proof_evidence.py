@@ -660,19 +660,21 @@ def _require_mainnet_chain(
         raise ValueError("domain must be an EVM-family source lane")
     if expected_rpc_chain_id is not None and type(expected_rpc_chain_id) is not int:
         raise ValueError("expected RPC chain id must be an exact integer")
-    chain_id = _rpc_quantity(
-        _json_rpc(rpc_url, "eth_chainId", [], opener=opener, timeout=timeout),
-        method="eth_chainId",
-    )
     canonical = EXPECTED_RPC_CHAIN_IDS[domain]
     if expected_rpc_chain_id is None:
         expected_rpc_chain_id = canonical
+    elif expected_rpc_chain_id <= 0 or expected_rpc_chain_id > 0xFFFF_FFFF_FFFF_FFFF:
+        raise ValueError("--expected-rpc-chain-id must be a positive u64 integer")
     elif expected_rpc_chain_id != canonical:
         chain = "eth" if domain == SCCP_DOMAIN_ETH else "bsc"
         raise ValueError(
             "--expected-rpc-chain-id must match the canonical "
             f"{chain} mainnet chain id {canonical}"
         )
+    chain_id = _rpc_quantity(
+        _json_rpc(rpc_url, "eth_chainId", [], opener=opener, timeout=timeout),
+        method="eth_chainId",
+    )
     if chain_id != expected_rpc_chain_id:
         chain = "eth" if domain == SCCP_DOMAIN_ETH else "bsc"
         raise ValueError(
@@ -680,6 +682,19 @@ def _require_mainnet_chain(
             f"{expected_rpc_chain_id}, got {chain_id}"
         )
     return chain_id
+
+
+def _require_direct_bytes_arg(
+    value: object, *, label: str, byte_length: int
+) -> bytes:
+    if not isinstance(value, (bytes, bytearray)):
+        raise ValueError(f"{label} must be bytes")
+    raw = bytes(value)
+    if len(raw) != byte_length:
+        raise ValueError(f"{label} must be {byte_length} bytes")
+    if not any(raw):
+        raise ValueError(f"{label} must not be zero")
+    return raw
 
 
 def _source_event_digest_from_receipt(
@@ -762,6 +777,23 @@ def collect_receipt_proof_evidence(
 
     if type(allow_receipt_only_evidence) is not bool:
         raise ValueError("allow_receipt_only_evidence must be a boolean")
+    transaction_hash = _require_direct_bytes_arg(
+        transaction_hash,
+        label="transaction_hash",
+        byte_length=32,
+    )
+    if source_bridge_address is not None:
+        source_bridge_address = _require_direct_bytes_arg(
+            source_bridge_address,
+            label="source_bridge_address",
+            byte_length=20,
+        )
+    if source_bridge_address is None and not allow_receipt_only_evidence:
+        raise ValueError(
+            "source_bridge_address is required for SCCP source-event evidence; "
+            "set allow_receipt_only_evidence=True only for generic "
+            "receipt-trie diagnostics"
+        )
     chain_id = _require_mainnet_chain(
         rpc_url,
         domain=domain,
@@ -769,12 +801,6 @@ def collect_receipt_proof_evidence(
         opener=opener,
         timeout=timeout,
     )
-    if source_bridge_address is None and not allow_receipt_only_evidence:
-        raise ValueError(
-            "source_bridge_address is required for SCCP source-event evidence; "
-            "set allow_receipt_only_evidence=True only for generic "
-            "receipt-trie diagnostics"
-        )
     receipt = _json_rpc(
         rpc_url,
         "eth_getTransactionReceipt",

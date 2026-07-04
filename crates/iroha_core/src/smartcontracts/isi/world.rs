@@ -79,7 +79,7 @@ pub mod isi {
         },
         governance::types::{
             AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
-            ProposalKind, RuntimeUpgradeProposal,
+            ProposalKind, RuntimeUpgradeProposal, SccpRouteManifestProposal,
         },
         isi::{
             bridge, consensus_keys, endorsement,
@@ -3119,6 +3119,57 @@ pub mod isi {
         Ok(out)
     }
 
+    fn compute_sccp_route_manifest_proposal_id(
+        manifest: &bridge::SccpRouteManifest,
+    ) -> Result<[u8; 32], Error> {
+        let canonical = norito::codec::Encode::encode(manifest);
+        let manifest_len: u32 = canonical.len().try_into().map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "SCCP route manifest length exceeds 2^32 bytes".into(),
+            ))
+        })?;
+        let mut input = Vec::with_capacity(
+            b"iroha:gov:sccp-route-manifest:proposal:v1|".len()
+                + core::mem::size_of::<u32>()
+                + canonical.len(),
+        );
+        input.extend_from_slice(b"iroha:gov:sccp-route-manifest:proposal:v1|");
+        input.extend_from_slice(&manifest_len.to_le_bytes());
+        input.extend_from_slice(&canonical);
+        let digest = Blake2b512::digest(&input);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest[..32]);
+        Ok(out)
+    }
+
+    fn ensure_sccp_route_manifest_proposer(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if has_permission(
+            &state_transaction.world,
+            authority,
+            "CanProposeSccpRouteManifest",
+        ) || has_permission(
+            &state_transaction.world,
+            authority,
+            "CanProposeContractDeployment",
+        ) {
+            return Ok(());
+        }
+
+        let required = state_transaction.gov.citizenship_bond_amount;
+        if let Some(record) = state_transaction.world.citizens.get(authority)
+            && record.amount >= required
+        {
+            return Ok(());
+        }
+
+        Err(InstructionExecutionError::InvariantViolation(
+            "not permitted: registered citizen or CanProposeSccpRouteManifest required".into(),
+        ))
+    }
+
     impl Execute for gov::ProposeRuntimeUpgradeProposal {
         fn execute(
             self,
@@ -3194,6 +3245,145 @@ pub mod isi {
             let kind = ProposalKind::RuntimeUpgrade(payload.clone());
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
                 let Some(existing_payload) = existing.as_runtime_upgrade() else {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                };
+                if existing_payload.manifest != payload.manifest {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                if let Some(ref_rec) = state_transaction.world.governance_referenda.get(&rid) {
+                    if ref_rec.h_start != start
+                        || ref_rec.h_end != end
+                        || ref_rec.mode != desired_mode
+                    {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "existing referendum parameters mismatch".into(),
+                        ));
+                    }
+                }
+                return Ok(());
+            }
+
+            if let Some(ref_rec) = state_transaction.world.governance_referenda.get(&rid) {
+                if ref_rec.h_start != start || ref_rec.h_end != end || ref_rec.mode != desired_mode
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "referendum already exists with different parameters".into(),
+                    ));
+                }
+            } else {
+                state_transaction.world.governance_referenda.insert(
+                    rid.clone(),
+                    crate::state::GovernanceReferendumRecord {
+                        h_start: start,
+                        h_end: end,
+                        status: crate::state::GovernanceReferendumStatus::Proposed,
+                        mode: desired_mode,
+                    },
+                );
+            }
+
+            let created_height = h_now;
+            let referendum_snapshot = state_transaction
+                .world
+                .governance_referenda
+                .get(&rid)
+                .copied();
+            let pipeline = crate::state::GovernancePipeline::seeded(
+                created_height,
+                referendum_snapshot.as_ref(),
+                &state_transaction.gov,
+            );
+            let parliament_snapshot = match resolve_governance_approval_mode(state_transaction) {
+                GovernanceApprovalMode::ParliamentSortitionJit => Some(
+                    derive_jit_parliament_snapshot(id, created_height, state_transaction)?,
+                ),
+                GovernanceApprovalMode::LegacyCouncilEpoch => None,
+            };
+            state_transaction.world.governance_proposals.insert(
+                id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: authority.clone(),
+                    kind,
+                    created_height,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                    pipeline,
+                    parliament_snapshot,
+                },
+            );
+
+            state_transaction.world.emit_events(Some(
+                iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                ),
+            ));
+            Ok(())
+        }
+    }
+
+    impl Execute for gov::ProposeSccpRouteManifest {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            ensure_sccp_route_manifest_proposer(authority, state_transaction)?;
+            let _validated_manifest = sccp_route_manifest_to_actual(self.manifest.clone())?;
+
+            let id = compute_sccp_route_manifest_proposal_id(&self.manifest)?;
+            let rid = hex::encode(id);
+            let desired_mode = match self.mode {
+                Some(iroha_data_model::isi::governance::VotingMode::Plain) => {
+                    crate::state::GovernanceReferendumMode::Plain
+                }
+                _ => crate::state::GovernanceReferendumMode::Zk,
+            };
+
+            let h_now = state_transaction._curr_block.height().get();
+            let min_start = h_now.saturating_add(state_transaction.gov.min_enactment_delay);
+            let (start, end) = if let Some(win) = self.window {
+                if win.upper < win.lower {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.upper must be >= window.lower".into(),
+                        ),
+                    ));
+                }
+                if win.lower < min_start {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "window.lower below minimum enactment delay".into(),
+                        ),
+                    ));
+                }
+                (win.lower, win.upper)
+            } else {
+                let span = state_transaction.gov.window_span.max(1);
+                let end = min_start.saturating_add(span.saturating_sub(1));
+                (min_start, end)
+            };
+
+            if end < start {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "enactment window upper precedes lower".into(),
+                    ),
+                ));
+            }
+
+            let payload = SccpRouteManifestProposal {
+                manifest: self.manifest.clone(),
+            };
+            let kind = ProposalKind::SccpRouteManifest(payload.clone());
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                let Some(existing_payload) = existing.as_sccp_route_manifest() else {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "governance proposal id collision".into(),
                     ));
@@ -5050,6 +5240,10 @@ pub mod isi {
                 ProposalKind::RuntimeUpgrade(payload) => {
                     enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)?;
                 }
+                ProposalKind::SccpRouteManifest(payload) => {
+                    let manifest = sccp_route_manifest_to_actual(payload.manifest.clone())?;
+                    upsert_sccp_route_manifest_actual(state_transaction, manifest);
+                }
             }
 
             if !already_enacted {
@@ -5812,7 +6006,7 @@ pub mod isi {
                 ParliamentBody::PolicyJury,
                 ParliamentBody::OversightCommittee,
             ],
-            ProposalKind::RuntimeUpgrade(_) => &[
+            ProposalKind::RuntimeUpgrade(_) | ProposalKind::SccpRouteManifest(_) => &[
                 ParliamentBody::RulesCommittee,
                 ParliamentBody::AgendaCouncil,
                 ParliamentBody::InterestPanel,
@@ -6339,8 +6533,14 @@ pub mod isi {
         signer: &PublicKey,
         payload: &[u8],
     ) -> Result<(), iroha_crypto::Error> {
-        if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        match signer.try_algorithm() {
+            Ok(Algorithm::Ed25519) => {
+                iroha_crypto::ed25519_parse_signature(signature.payload())?;
+            }
+            Ok(Algorithm::MlDsa) => {
+                iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+            }
+            _ => {}
         }
         signature.verify(signer, payload)
     }
@@ -8694,17 +8894,14 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let source_domain = iroha_sccp::sccp_message_source_domain(&artifact.bundle.payload);
-        let diagnostic_taira_tron_xor = state_transaction.zk.sccp_allow_unready_transparent_proofs
-            && iroha_sccp::verify_sccp_taira_tron_xor_diagnostic_transparent_proof(artifact);
-        let configured_source_material =
-            if source_domain == iroha_sccp::SCCP_DOMAIN_SORA || diagnostic_taira_tron_xor {
-                None
-            } else {
-                configured_sccp_source_verifier_material_for_domain(
-                    &state_transaction.zk,
-                    source_domain,
-                )?
-            };
+        let configured_source_material = if source_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+            None
+        } else {
+            configured_sccp_source_verifier_material_for_domain(
+                &state_transaction.zk,
+                source_domain,
+            )?
+        };
         let configured_source_deployment =
             if let Some(material) = configured_source_material.as_ref() {
                 let deployment = configured_sccp_source_adapter_engine_deployment_for_domain(
@@ -8758,9 +8955,7 @@ pub mod isi {
                 &route_allowlist,
             )?;
         }
-        let artifact_structure_is_valid = if diagnostic_taira_tron_xor {
-            true
-        } else if let (Some(material), Some(deployment)) = (
+        let artifact_structure_is_valid = if let (Some(material), Some(deployment)) = (
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
         ) {
@@ -8791,9 +8986,6 @@ pub mod isi {
                 })?;
             validate_sccp_finality_against_state(&finality, state_transaction)
         } else {
-            if diagnostic_taira_tron_xor {
-                return Ok(());
-            }
             if let (Some(material), Some(deployment)) = (
                 configured_source_material.as_ref(),
                 configured_source_deployment.as_ref(),
@@ -9604,6 +9796,23 @@ pub mod isi {
         )
     }
 
+    fn upsert_sccp_route_manifest_actual(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        manifest: iroha_config::parameters::actual::SccpRouteManifest,
+    ) {
+        let key = sccp_route_manifest_key(&manifest);
+        if let Some(existing) = state_transaction
+            .zk
+            .sccp_route_manifests
+            .iter_mut()
+            .find(|candidate| sccp_route_manifest_key(candidate) == key)
+        {
+            *existing = manifest;
+        } else {
+            state_transaction.zk.sccp_route_manifests.push(manifest);
+        }
+    }
+
     fn sccp_route_manifest_removal_key(
         route_id: String,
         asset_key: String,
@@ -9749,6 +9958,24 @@ pub mod isi {
                 ));
             }
         }
+        if actual.production_ready && actual.counterparty_domain == iroha_sccp::SCCP_DOMAIN_SOL {
+            if actual.route_id != "taira_sol_xor" || actual.asset_key != "xor" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production Solana SCCP route manifest must target taira_sol_xor/xor"
+                            .into(),
+                    ),
+                ));
+            }
+            if actual.verifier_target != "SolanaProgram" {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "production Solana SCCP route manifest verifier_target must be SolanaProgram"
+                            .into(),
+                    ),
+                ));
+            }
+        }
         Ok(actual)
     }
 
@@ -9760,17 +9987,7 @@ pub mod isi {
         ) -> Result<(), Error> {
             ensure_can_manage_sccp_route_manifests(authority, state_transaction)?;
             let manifest = sccp_route_manifest_to_actual(self.manifest)?;
-            let key = sccp_route_manifest_key(&manifest);
-            if let Some(existing) = state_transaction
-                .zk
-                .sccp_route_manifests
-                .iter_mut()
-                .find(|candidate| sccp_route_manifest_key(candidate) == key)
-            {
-                *existing = manifest;
-            } else {
-                state_transaction.zk.sccp_route_manifests.push(manifest);
-            }
+            upsert_sccp_route_manifest_actual(state_transaction, manifest);
             Ok(())
         }
     }
@@ -16740,9 +16957,18 @@ pub mod isi {
             0, 0, 0,
         ];
 
-        fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+        const NONCANONICAL_ED25519_R: [u8; 32] = [
+            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0xff, 0x7f,
+        ];
+
+        fn signature_with_malformed_ed25519_r(
+            signature: &Signature,
+            replacement_r: &[u8; 32],
+        ) -> Signature {
             let mut payload = signature.payload().to_vec();
-            payload[..SMALL_ORDER_ED25519_R.len()].copy_from_slice(&SMALL_ORDER_ED25519_R);
+            payload[..replacement_r.len()].copy_from_slice(replacement_r);
             Signature::from_bytes(&payload)
         }
 
@@ -16751,12 +16977,61 @@ pub mod isi {
             let key_pair = checked_keypair_with_algorithm(Algorithm::Ed25519);
             let payload = b"world-isi-ed25519-signature-admission";
             let signature = checked_signature(key_pair.private_key(), payload);
-            let signature = signature_with_malformed_ed25519_r(&signature);
 
-            assert!(
-                verify_signature_for_signer(&signature, key_pair.public_key(), payload).is_err(),
-                "Ed25519 signature admission must reject malformed R before backend verification"
-            );
+            for (label, replacement_r) in [
+                ("small-order", SMALL_ORDER_ED25519_R),
+                ("noncanonical", NONCANONICAL_ED25519_R),
+            ] {
+                let malformed_signature =
+                    signature_with_malformed_ed25519_r(&signature, &replacement_r);
+
+                assert!(
+                    verify_signature_for_signer(
+                        &malformed_signature,
+                        key_pair.public_key(),
+                        payload
+                    )
+                    .is_err(),
+                    "{label} Ed25519 signature admission must reject malformed R before backend verification"
+                );
+            }
+        }
+
+        #[test]
+        fn verify_signature_for_signer_rejects_malformed_mldsa_signature_lengths() {
+            let key_pair = checked_keypair_with_algorithm(Algorithm::MlDsa);
+            let payload = b"world-isi-mldsa-signature-admission";
+            let signature = checked_signature(key_pair.private_key(), payload);
+            verify_signature_for_signer(&signature, key_pair.public_key(), payload)
+                .expect("valid runtime upgrade ML-DSA signature should verify");
+            let valid_signature = signature.payload().to_vec();
+
+            for (label, replacement_signature) in [
+                (
+                    "short",
+                    valid_signature[..valid_signature.len() - 1].to_vec(),
+                ),
+                ("overlong", {
+                    let mut payload = valid_signature.clone();
+                    payload.push(0x67);
+                    payload
+                }),
+            ] {
+                let malformed_signature = Signature::from_bytes(&replacement_signature);
+
+                assert_eq!(
+                    verify_signature_for_signer(
+                        &malformed_signature,
+                        key_pair.public_key(),
+                        payload
+                    )
+                    .expect_err(
+                        "malformed runtime upgrade ML-DSA signature length must fail admission"
+                    ),
+                    iroha_crypto::Error::BadSignature,
+                    "{label} runtime upgrade ML-DSA signature length was not rejected"
+                );
+            }
         }
 
         fn bridge_proof_fixture(seed: u8) -> BridgeProof {
@@ -16936,6 +17211,22 @@ pub mod isi {
             }
         }
 
+        fn eth_to_sora_bridge_proof_for_submit_test(nonce: u64) -> BridgeProof {
+            let material =
+                test_sccp_source_verifier_material_for_domain(iroha_sccp::SCCP_DOMAIN_ETH, 0x20);
+            let deployment = test_sccp_source_adapter_deployment_for_domain(
+                iroha_sccp::SCCP_DOMAIN_ETH,
+                &material,
+                0x20,
+            );
+            let artifact = iroha_sccp::test_fixtures::sample_eth_mainnet_to_sora_local_admission_transparent_proof_with_material_and_deployment(
+                nonce,
+                &material,
+                &deployment,
+            );
+            sccp_bridge_proof_for_receipt_test(&artifact)
+        }
+
         fn insert_bridge_proof_record_for_receipt_test(
             stx: &mut StateTransaction<'_, '_>,
             proof: BridgeProof,
@@ -17081,12 +17372,12 @@ pub mod isi {
                 iroha_sccp::SCCP_DOMAIN_ETH => {
                     iroha_sccp::sccp_evm_family_mainnet_source_verifier_material_with_hashes_and_emitter_v1(
                         domain,
-                        [seed; 32],
+                        iroha_sccp::test_fixtures::sample_eth_mainnet_sync_committee_root(),
                         [seed + 1; 32],
                         [seed + 2; 32],
                         [seed + 3; 32],
-                        [seed + 4; 20],
-                        [seed + 5; 32],
+                        [0x41; 20],
+                        [0x51; 32],
                     )
                     .expect("Ethereum SCCP source verifier material")
                 }
@@ -17157,6 +17448,13 @@ pub mod isi {
             material: &iroha_sccp::SccpSourceVerifierMaterialV1,
             seed: u8,
         ) -> iroha_sccp::SccpSourceAdapterEngineDeploymentV1 {
+            if domain == iroha_sccp::SCCP_DOMAIN_ETH {
+                return iroha_sccp::build_sccp_eth_mainnet_source_adapter_deployment(
+                    material,
+                    [seed + 9; 32],
+                )
+                .expect("Ethereum SCCP source adapter deployment");
+            }
             let mut deployment =
                 iroha_sccp::sccp_source_adapter_engine_deployment_from_material_v1(
                     material,
@@ -18375,7 +18673,7 @@ pub mod isi {
                 nonce,
                 asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
                 asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                asset_id: b"xor#universal".to_vec(),
+                asset_id: b"xor".to_vec(),
                 amount: 7,
                 sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
                 sender: b"sora:bridge".to_vec(),
@@ -18393,7 +18691,7 @@ pub mod isi {
                 target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
                 nonce,
                 asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                asset_id: b"xor#universal".to_vec(),
+                asset_id: b"xor".to_vec(),
                 route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
                 route_id: b"nexus:eth:xor".to_vec(),
             })
@@ -18565,6 +18863,81 @@ pub mod isi {
             );
             assert!(
                 format!("{err:?}").contains("does not match active Nexus lane"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_recreated_lane_stale_dataspace_context() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+
+            let recreated_lane = LaneId::new(4);
+            let retired_dataspace = DataSpaceId::new(20);
+            let recreated_dataspace = DataSpaceId::new(21);
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata::default(),
+                DataSpaceMetadata {
+                    id: retired_dataspace,
+                    alias: "retired-sccp".to_owned(),
+                    ..DataSpaceMetadata::default()
+                },
+                DataSpaceMetadata {
+                    id: recreated_dataspace,
+                    alias: "recreated-sccp".to_owned(),
+                    ..DataSpaceMetadata::default()
+                },
+            ])
+            .expect("recreated lane dataspace catalog");
+            let lane_catalog = LaneCatalog::new(
+                NonZeroU32::new(recreated_lane.as_u32().saturating_add(1))
+                    .expect("nonzero lane count"),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: recreated_lane,
+                        dataspace_id: recreated_dataspace,
+                        alias: "recreated-sccp-lane".to_owned(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("recreated SCCP lane catalog");
+            stx.nexus.enabled = true;
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+            stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+            stx.nexus.lane_catalog = lane_catalog;
+            stx.sccp_recording_proof_verified = true;
+            stx.current_lane_id = Some(recreated_lane);
+            stx.current_dataspace_id = Some(retired_dataspace);
+            stx.world.current_dataspace_id = Some(retired_dataspace);
+
+            let payload = sora_outbound_sccp_payload(68);
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction.execute(&ALICE_ID, &mut stx).expect_err(
+                "SCCP outbox recording must reject a recreated lane with stale dataspace context",
+            );
+            assert!(
+                format!("{err:?}").contains(
+                    "transaction dataspace 20 does not match active Nexus lane 4 dataspace 21"
+                ),
                 "unexpected error: {err:?}"
             );
             assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
@@ -18774,7 +19147,7 @@ pub mod isi {
             let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
                 unreachable!("test payload is a transfer");
             };
-            transfer.asset_id = b"rose#universal".to_vec();
+            transfer.asset_id = b"rose".to_vec();
             let key = crate::bridge::sccp_outbound_message_key(&payload);
             let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
                 iroha_sccp::canonical_sccp_payload_bytes(&payload),
@@ -18898,6 +19271,44 @@ pub mod isi {
                 .expect_err("outbound SCCP asset_id aliases with empty scope must reject");
             assert!(
                 format!("{err:?}").contains("asset scope must not be empty"),
+                "unexpected error: {err:?}"
+            );
+            assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_outbound_scoped_asset_alias() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+
+            let mut payload = sora_outbound_sccp_payload(67);
+            let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload else {
+                unreachable!("test payload is a transfer");
+            };
+            transfer.asset_id = b"xor#universal".to_vec();
+            transfer.route_id = b"nexus:eth:xor".to_vec();
+            let key = crate::bridge::sccp_outbound_message_key(&payload);
+            let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            );
+
+            let err = instruction
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("outbound SCCP scoped asset aliases must reject");
+            assert!(
+                format!("{err:?}").contains("asset_id must be canonical route-local key"),
                 "unexpected error: {err:?}"
             );
             assert!(stx.world.sccp_outbound_messages.get(&key).is_none());
@@ -19030,7 +19441,7 @@ pub mod isi {
                 unreachable!("test payload is a transfer");
             };
             transfer.asset_home_domain = iroha_sccp::SCCP_DOMAIN_ETH;
-            transfer.asset_id = b"weth#eth".to_vec();
+            transfer.asset_id = b"weth".to_vec();
             transfer.route_id = b"eth:sora:weth".to_vec();
             let key = crate::bridge::sccp_outbound_message_key(&payload);
             let instruction = iroha_data_model::isi::bridge::RecordSccpMessage::new(
@@ -19425,15 +19836,27 @@ pub mod isi {
                 .provenance
                 .as_mut()
                 .expect("manifest has provenance");
-            provenance.signature = signature_with_malformed_ed25519_r(&provenance.signature);
+            let valid_signature = provenance.signature.clone();
 
-            let err = ensure_manifest_signature(&manifest)
-                .expect_err("malformed manifest signature R must be rejected");
-            let message = format!("{err:?}");
-            assert!(
-                message.contains("manifest signature verification failed"),
-                "unexpected manifest signature error: {message}"
-            );
+            for (label, replacement_r) in [
+                ("small-order", SMALL_ORDER_ED25519_R),
+                ("noncanonical", NONCANONICAL_ED25519_R),
+            ] {
+                manifest
+                    .provenance
+                    .as_mut()
+                    .expect("manifest has provenance")
+                    .signature =
+                    signature_with_malformed_ed25519_r(&valid_signature, &replacement_r);
+
+                let err = ensure_manifest_signature(&manifest)
+                    .expect_err("malformed manifest signature R must be rejected");
+                let message = format!("{err:?}");
+                assert!(
+                    message.contains("manifest signature verification failed"),
+                    "{label} manifest signature R produced unexpected error: {message}"
+                );
+            }
         }
 
         fn new_dummy_block_non_genesis() -> crate::block::CommittedBlock {
@@ -25613,6 +26036,173 @@ pub mod isi {
             assert!(
                 stx.bridge_receipt_proofs_available_in_tx
                     .contains(&proof_hash)
+            );
+        }
+
+        #[test]
+        fn submit_bridge_proof_rejects_alternate_sccp_wrapper_replay_before_side_effects() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.zk = test_configured_sccp_all_lanes_zk_config();
+            stx.zk.max_proof_size_bytes = 4 * 1024 * 1024;
+
+            let original_proof = eth_to_sora_bridge_proof_for_submit_test(111);
+            let original_hash = bridge_proof_hash_for_test(&original_proof);
+            SubmitBridgeProof::new(original_proof.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("first SCCP proof should submit");
+            assert!(
+                stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&original_hash),
+                "first proof must become available for same-transaction settlement"
+            );
+
+            let mut replay_proof = original_proof;
+            let BridgeProofPayload::TransparentZk(transparent) = &mut replay_proof.payload else {
+                panic!("SCCP proof must use transparent payload");
+            };
+            transparent.recursion_depth = Some(
+                transparent
+                    .recursion_depth
+                    .expect("SCCP fixture sets recursion depth")
+                    + 1,
+            );
+            let replay_hash = bridge_proof_hash_for_test(&replay_proof);
+            assert_ne!(
+                original_hash, replay_hash,
+                "fixture must model an alternate proof wrapper for the same SCCP message"
+            );
+
+            let proof_count_before = stx.world.proofs.iter().count();
+            let receipt_markers_before = stx.bridge_receipt_proofs_available_in_tx.clone();
+            let events_before = stx.world.internal_event_buf.len();
+            let err = SubmitBridgeProof::new(replay_proof)
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("alternate wrapper for the same SCCP message must reject");
+            assert!(
+                format!("{err:?}").contains("SCCP message proof replays existing message proof"),
+                "unexpected replay rejection: {err:?}"
+            );
+            assert_eq!(
+                stx.world.proofs.iter().count(),
+                proof_count_before,
+                "replayed SCCP proof must not insert a proof record"
+            );
+            assert_eq!(
+                stx.bridge_receipt_proofs_available_in_tx, receipt_markers_before,
+                "replayed SCCP proof must not add or consume receipt markers"
+            );
+            assert!(
+                !stx.bridge_receipt_proofs_available_in_tx
+                    .contains(&replay_hash),
+                "replayed SCCP proof hash must never become settlement-available"
+            );
+            assert_eq!(
+                stx.world.internal_event_buf.len(),
+                events_before,
+                "replayed SCCP proof must not emit verification events"
+            );
+        }
+
+        #[test]
+        fn submit_bridge_proof_rejects_committed_alternate_sccp_wrapper_replay_before_side_effects()
+        {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let original_proof = eth_to_sora_bridge_proof_for_submit_test(112);
+            let original_hash = bridge_proof_hash_for_test(&original_proof);
+            let first_header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            {
+                let mut first_block = state.block(first_header);
+                let mut first_stx = first_block.transaction();
+                first_stx.zk = test_configured_sccp_all_lanes_zk_config();
+                first_stx.zk.max_proof_size_bytes = 4 * 1024 * 1024;
+                SubmitBridgeProof::new(original_proof.clone())
+                    .execute(&ALICE_ID, &mut first_stx)
+                    .expect("first SCCP proof should submit");
+                assert!(
+                    first_stx
+                        .bridge_receipt_proofs_available_in_tx
+                        .contains(&original_hash),
+                    "first proof must become available before commit"
+                );
+                first_stx.apply();
+                first_block
+                    .commit()
+                    .expect("first SCCP proof should commit");
+            }
+
+            let mut replay_proof = original_proof;
+            let BridgeProofPayload::TransparentZk(transparent) = &mut replay_proof.payload else {
+                panic!("SCCP proof must use transparent payload");
+            };
+            transparent.recursion_depth = Some(
+                transparent
+                    .recursion_depth
+                    .expect("SCCP fixture sets recursion depth")
+                    + 1,
+            );
+            let replay_hash = bridge_proof_hash_for_test(&replay_proof);
+            assert_ne!(
+                original_hash, replay_hash,
+                "fixture must model a committed proof replay with a distinct wrapper hash"
+            );
+
+            let replay_header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(2).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut replay_block = state.block(replay_header);
+            let mut replay_stx = replay_block.transaction();
+            replay_stx.zk = test_configured_sccp_all_lanes_zk_config();
+            replay_stx.zk.max_proof_size_bytes = 4 * 1024 * 1024;
+            let proof_count_before = replay_stx.world.proofs.iter().count();
+            let receipt_markers_before = replay_stx.bridge_receipt_proofs_available_in_tx.clone();
+            let events_before = replay_stx.world.internal_event_buf.len();
+            let err = SubmitBridgeProof::new(replay_proof)
+                .execute(&ALICE_ID, &mut replay_stx)
+                .expect_err("alternate wrapper for a committed SCCP message must reject");
+            assert!(
+                format!("{err:?}").contains("SCCP message proof replays existing message proof"),
+                "unexpected committed replay rejection: {err:?}"
+            );
+            assert_eq!(
+                replay_stx.world.proofs.iter().count(),
+                proof_count_before,
+                "committed SCCP replay must not insert a proof record"
+            );
+            assert_eq!(
+                replay_stx.bridge_receipt_proofs_available_in_tx, receipt_markers_before,
+                "committed SCCP replay must not add or consume receipt markers"
+            );
+            assert!(
+                !replay_stx
+                    .bridge_receipt_proofs_available_in_tx
+                    .contains(&replay_hash),
+                "committed SCCP replay hash must never become settlement-available"
+            );
+            assert_eq!(
+                replay_stx.world.internal_event_buf.len(),
+                events_before,
+                "committed SCCP replay must not emit verification events"
             );
         }
 

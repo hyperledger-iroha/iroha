@@ -157,15 +157,7 @@ impl GuardDirectorySnapshotV2 {
             }
             return Ok(());
         }
-        let expected = MlDsaSuite::MlDsa65.public_key_len();
-        if mldsa65_public.len() != expected {
-            return Err(norito::Error::Message(format!(
-                "guard directory issuer ML-DSA-65 public key must be {expected} bytes, got {}",
-                mldsa65_public.len()
-            )));
-        }
-        validate_issuer_mldsa_public_key_not_all_zero(mldsa65_public)?;
-        Ok(())
+        validate_issuer_mldsa65_public_key_shape(mldsa65_public)
     }
 
     fn validate_relays(
@@ -264,8 +256,9 @@ pub struct GuardDirectoryRelayEntryV2 {
 /// Compute the canonical issuer fingerprint used by SRC v2.
 ///
 /// # Errors
-/// Returns an error if the ML-DSA public-key length cannot be represented in
-/// the fingerprint's fixed `u32` length field.
+/// Returns an error if the Ed25519 public key is malformed, the non-empty
+/// ML-DSA material is not an ML-DSA-65 public key, or the ML-DSA public-key
+/// length cannot be represented in the fingerprint's fixed `u32` length field.
 pub fn compute_issuer_fingerprint(
     ed25519: &[u8; 32],
     mldsa_public: &[u8],
@@ -276,8 +269,9 @@ pub fn compute_issuer_fingerprint(
 /// Compute the canonical issuer fingerprint used by SRC v2.
 ///
 /// # Errors
-/// Returns an error if the ML-DSA public-key length cannot be represented in
-/// the fingerprint's fixed `u32` length field.
+/// Returns an error if the Ed25519 public key is malformed, the non-empty
+/// ML-DSA material is not an ML-DSA-65 public key, or the ML-DSA public-key
+/// length cannot be represented in the fingerprint's fixed `u32` length field.
 pub fn try_compute_issuer_fingerprint(
     ed25519: &[u8; 32],
     mldsa_public: &[u8],
@@ -289,7 +283,8 @@ fn compute_issuer_fingerprint_inner(
     ed25519: &[u8; 32],
     mldsa_public: &[u8],
 ) -> Result<[u8; 32], norito::Error> {
-    validate_issuer_mldsa_public_key_not_all_zero(mldsa_public)?;
+    validate_issuer_ed25519_public_key(ed25519)?;
+    validate_issuer_mldsa65_public_key_shape(mldsa_public)?;
     let mut hasher = Blake3Hasher::new();
     hasher.update(SRC_V2_ISSUER_FINGERPRINT_DOMAIN);
     hasher.update(ed25519);
@@ -307,8 +302,28 @@ fn issuer_fingerprint_len_bytes(len: usize) -> Result<[u8; 4], norito::Error> {
     Ok(len.to_be_bytes())
 }
 
-fn validate_issuer_mldsa_public_key_not_all_zero(mldsa_public: &[u8]) -> Result<(), norito::Error> {
-    if !mldsa_public.is_empty() && mldsa_public.iter().all(|&byte| byte == 0) {
+fn validate_issuer_ed25519_public_key(ed25519: &[u8; 32]) -> Result<(), norito::Error> {
+    Ed25519Sha512::parse_public_key(ed25519)
+        .map(drop)
+        .map_err(|err| {
+            norito::Error::Message(format!(
+                "guard directory issuer Ed25519 public key is invalid: {err}"
+            ))
+        })
+}
+
+fn validate_issuer_mldsa65_public_key_shape(mldsa_public: &[u8]) -> Result<(), norito::Error> {
+    if mldsa_public.is_empty() {
+        return Ok(());
+    }
+    let expected = MlDsaSuite::MlDsa65.public_key_len();
+    if mldsa_public.len() != expected {
+        return Err(norito::Error::Message(format!(
+            "guard directory issuer ML-DSA-65 public key must be {expected} bytes, got {}",
+            mldsa_public.len()
+        )));
+    }
+    if mldsa_public.iter().all(|&byte| byte == 0) {
         return Err(norito::Error::Message(
             "guard directory issuer ML-DSA public key must not be all zero".to_string(),
         ));
@@ -534,10 +549,12 @@ mod tests {
 
     #[test]
     fn compute_fingerprint_changes_with_keys() {
-        let ed_a = [0x11; 32];
-        let ed_b = [0x22; 32];
-        let ml_a = vec![0xAA; 1952];
-        let ml_b = vec![0xBB; 1952];
+        let ed_a = sample_issuer_signing_key().verifying_key().to_bytes();
+        let ed_b = SigningKey::from_bytes(&[0x12; SECRET_KEY_LENGTH])
+            .verifying_key()
+            .to_bytes();
+        let ml_a = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len()];
+        let ml_b = vec![0xBB; MlDsaSuite::MlDsa65.public_key_len()];
 
         let fingerprint_a =
             compute_issuer_fingerprint(&ed_a, &ml_a).expect("fingerprint A should compute");
@@ -553,8 +570,8 @@ mod tests {
 
     #[test]
     fn compute_fingerprint_matches_try_helper() {
-        let ed25519 = [0x11; 32];
-        let mldsa_public = vec![0xAA; 1952];
+        let ed25519 = sample_issuer_signing_key().verifying_key().to_bytes();
+        let mldsa_public = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len()];
 
         let via_try = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
             .expect("canonical issuer fingerprint should compute");
@@ -565,8 +582,34 @@ mod tests {
     }
 
     #[test]
+    fn issuer_fingerprint_rejects_invalid_ed25519_public_key() {
+        let ed25519 = [0u8; 32];
+        let mldsa_public = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len()];
+
+        let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
+            .expect_err("weak issuer Ed25519 public key must fail closed");
+        assert!(
+            err.to_string().contains("Ed25519 public key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn issuer_fingerprint_rejects_invalid_mldsa_public_key_length() {
+        let ed25519 = sample_issuer_signing_key().verifying_key().to_bytes();
+        let mldsa_public = vec![0xAA; MlDsaSuite::MlDsa65.public_key_len() - 1];
+
+        let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
+            .expect_err("invalid issuer ML-DSA public-key length must fail closed");
+        assert!(
+            err.to_string().contains("ML-DSA-65 public key"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn issuer_fingerprint_rejects_all_zero_mldsa_public_key() {
-        let ed25519 = [0x11; 32];
+        let ed25519 = sample_issuer_signing_key().verifying_key().to_bytes();
         let mldsa_public = vec![0u8; MlDsaSuite::MlDsa65.public_key_len()];
 
         let err = try_compute_issuer_fingerprint(&ed25519, &mldsa_public)
@@ -676,11 +719,7 @@ mod tests {
     fn snapshot_rejects_invalid_mldsa65_public_key_length() {
         let mut snapshot = sample_snapshot();
         snapshot.issuers[0].mldsa65_public.pop();
-        snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
-            &snapshot.issuers[0].ed25519_public,
-            &snapshot.issuers[0].mldsa65_public,
-        )
-        .expect("sample issuer fingerprint should compute");
+        snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
         let err = GuardDirectorySnapshotV2::from_bytes(&bytes)
             .expect_err("invalid ML-DSA-65 public key length should fail");
@@ -765,11 +804,7 @@ mod tests {
     fn snapshot_rejects_invalid_issuer_ed25519_public_key() {
         let mut snapshot = sample_snapshot();
         snapshot.issuers[0].ed25519_public = [0xFF; 32];
-        snapshot.issuers[0].fingerprint = compute_issuer_fingerprint(
-            &snapshot.issuers[0].ed25519_public,
-            &snapshot.issuers[0].mldsa65_public,
-        )
-        .expect("sample issuer fingerprint should compute");
+        snapshot.issuers[0].fingerprint = [0xEE; 32];
         let bytes = snapshot.to_bytes().expect("serialize");
 
         let err = GuardDirectorySnapshotV2::from_bytes(&bytes)

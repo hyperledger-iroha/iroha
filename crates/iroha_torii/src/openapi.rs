@@ -13732,9 +13732,7 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}"));
         assert!(
-            paths.contains_key(
-                "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan"
-            )
+            paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan")
         );
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/commits"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/challenges"));

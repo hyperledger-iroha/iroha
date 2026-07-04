@@ -2807,7 +2807,8 @@ mod tests {
                 proof: None,
                 sig_wallet: proto::WalletSignatureV1::new(
                     Algorithm::Ed25519,
-                    Signature::from_bytes(&[0u8; 64]),
+                    Signature::try_from_bytes(&[0x42u8; 64])
+                        .expect("nonzero Connect wallet signature fixture"),
                 ),
             }),
         };

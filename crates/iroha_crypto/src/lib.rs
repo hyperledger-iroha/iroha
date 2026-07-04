@@ -742,6 +742,24 @@ pub fn ed25519_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
     Ok(signature)
 }
 
+/// Parse raw ML-DSA-65 signature bytes for admission before storing them as an opaque signature.
+///
+/// # Errors
+/// Returns [`Error::BadSignature`] if the payload length is invalid or the
+/// detached signature encoding is malformed. Returns [`Error::Parse`] if the
+/// payload is empty or all zero.
+pub fn mldsa65_parse_signature(payload: &[u8]) -> Result<Signature, Error> {
+    use pqcrypto_mldsa::mldsa65;
+    use pqcrypto_traits::sign::DetachedSignature as _;
+
+    let signature = Signature::try_from_bytes(payload).map_err(Error::from)?;
+    if payload.len() != mldsa65::signature_bytes() {
+        return Err(Error::BadSignature);
+    }
+    mldsa65::DetachedSignature::from_bytes(payload).map_err(|_| Error::BadSignature)?;
+    Ok(signature)
+}
+
 /// Deterministic Ed25519 batch verification wrapper (per-signature).
 /// The `seed32` parameter is reserved for API compatibility and is ignored.
 /// # Errors
@@ -3111,6 +3129,35 @@ mod tests {
                 err,
                 Error::BadSignature,
                 "{label} R should fail as a bad Ed25519 signature"
+            );
+        }
+    }
+
+    #[test]
+    fn mldsa65_parse_signature_rejects_inert_or_malformed_lengths() {
+        let key_pair = checked_seed_keypair(&[0x32; 32], Algorithm::MlDsa);
+        let signature = checked_signature(key_pair.private_key(), b"mldsa65 parse signature");
+        mldsa65_parse_signature(signature.payload()).expect("valid ML-DSA-65 signature parses");
+
+        let err = mldsa65_parse_signature(&[0u8; 64])
+            .expect_err("all-zero ML-DSA signature material must fail admission");
+        assert!(
+            matches!(err, Error::Parse(ref parse) if parse.to_string().contains("all zero")),
+            "unexpected all-zero signature error: {err:?}"
+        );
+
+        let mut short = signature.payload().to_vec();
+        short.pop().expect("ML-DSA signature fixture is non-empty");
+        let mut overlong = signature.payload().to_vec();
+        overlong.push(0xA5);
+
+        for (label, malformed) in [("short", short), ("overlong", overlong)] {
+            let err = mldsa65_parse_signature(&malformed)
+                .expect_err("malformed ML-DSA-65 signature length must fail admission");
+            assert_eq!(
+                err,
+                Error::BadSignature,
+                "{label} ML-DSA-65 signature should fail as a bad signature"
             );
         }
     }

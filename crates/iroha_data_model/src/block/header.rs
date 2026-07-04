@@ -506,12 +506,12 @@ impl TryFrom<wire::BlockSignatureWire> for BlockSignature {
     type Error = ncore::Error;
 
     fn try_from(value: wire::BlockSignatureWire) -> Result<Self, Self::Error> {
-        checked_block_signature_from_wire(value)
+        checked_block_signature_from_wire(&value)
     }
 }
 
 fn checked_block_signature_from_wire(
-    value: wire::BlockSignatureWire,
+    value: &wire::BlockSignatureWire,
 ) -> Result<BlockSignature, ncore::Error> {
     let signature = Signature::try_from_bytes(&value.1)
         .map_err(|err| ncore::Error::Message(format!("invalid block signature payload: {err}")))?;
@@ -737,7 +737,7 @@ impl<'de> ncore::NoritoDeserialize<'de> for BlockSignature {
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let wire_repr = wire::BlockSignatureWire::try_deserialize(archived.cast())?;
-        checked_block_signature_from_wire(wire_repr)
+        checked_block_signature_from_wire(&wire_repr)
     }
 }
 
@@ -763,7 +763,8 @@ mod tests {
         let mut set = std::collections::BTreeSet::new();
         for (idx, fill) in [0x11_u8, 0x7f_u8, 0xe3_u8].into_iter().enumerate() {
             let payload = [fill; 64];
-            let signature = Signature::from_bytes(&payload);
+            let signature =
+                Signature::try_from_bytes(&payload).expect("nonzero block-signature codec fixture");
             let block_signature =
                 BlockSignature::new(idx as u64, SignatureOf::from_signature(signature));
             set.insert(block_signature);

@@ -1,6 +1,6 @@
 //! Deterministic per-lane proposal scheduling helpers.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque, btree_map::Entry};
 
 use iroha_config::parameters::actual::Nexus;
 use iroha_data_model::{
@@ -162,6 +162,8 @@ pub(super) struct LaneConsensusDomain {
     pub(super) dataspace_id: DataSpaceId,
     /// Accepted proposal candidates assigned to this lane in the scheduled batch.
     pub(super) accepted_candidates: usize,
+    /// Fetched-batch candidate indices assigned to this lane, in scheduler order.
+    pub(super) accepted_candidate_indices: Vec<usize>,
     /// Canonical validator order used by signer bitmaps.
     pub(super) validator_set: Vec<PeerId>,
     /// Quorum context for validating lane relay QCs.
@@ -381,7 +383,7 @@ pub(super) fn schedule_proposal_batch(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LaneAcceptedWork {
     dataspace_id: DataSpaceId,
-    accepted_candidates: usize,
+    candidate_indices: Vec<usize>,
 }
 
 /// Derive lane-local vote/QC domains for accepted work in a scheduled batch.
@@ -436,7 +438,8 @@ pub(super) fn plan_lane_consensus_domains(
         domains.push(LaneConsensusDomain {
             lane_id,
             dataspace_id: work.dataspace_id,
-            accepted_candidates: work.accepted_candidates,
+            accepted_candidates: work.candidate_indices.len(),
+            accepted_candidate_indices: work.candidate_indices,
             validator_set,
             quorum,
             qc_mode_tag: LaneRelayEnvelope::lane_qc_mode_tag_for(
@@ -489,23 +492,24 @@ fn accepted_work_by_lane(
                 routing_decisions: routing_decisions.len(),
             },
         )?;
-        accepted_work
-            .entry(routing.lane_id)
-            .and_modify(|work: &mut LaneAcceptedWork| {
-                work.accepted_candidates = work.accepted_candidates.saturating_add(1);
-            })
-            .or_insert(LaneAcceptedWork {
-                dataspace_id: routing.dataspace_id,
-                accepted_candidates: 1,
-            });
-        if let Some(work) = accepted_work.get(&routing.lane_id)
-            && work.dataspace_id != routing.dataspace_id
-        {
-            return Err(LaneConsensusDomainError::AcceptedLaneDataspaceMismatch {
-                lane_id: routing.lane_id,
-                expected: work.dataspace_id,
-                actual: routing.dataspace_id,
-            });
+        match accepted_work.entry(routing.lane_id) {
+            Entry::Occupied(mut entry) => {
+                let work = entry.get_mut();
+                if work.dataspace_id != routing.dataspace_id {
+                    return Err(LaneConsensusDomainError::AcceptedLaneDataspaceMismatch {
+                        lane_id: routing.lane_id,
+                        expected: work.dataspace_id,
+                        actual: routing.dataspace_id,
+                    });
+                }
+                work.candidate_indices.push(index);
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(LaneAcceptedWork {
+                    dataspace_id: routing.dataspace_id,
+                    candidate_indices: vec![index],
+                });
+            }
         }
     }
     Ok(accepted_work)
@@ -1278,6 +1282,7 @@ mod tests {
         assert_eq!(domain.lane_id, LaneId::new(1));
         assert_eq!(domain.dataspace_id, DataSpaceId::new(11));
         assert_eq!(domain.accepted_candidates, 2);
+        assert_eq!(domain.accepted_candidate_indices, vec![0, 2]);
         assert_eq!(domain.validator_set, expected_validators);
         assert_eq!(domain.quorum.validator_count, 4);
         assert_eq!(domain.quorum.min_quorum, 3);
@@ -1289,6 +1294,30 @@ mod tests {
                 "permissioned"
             )
         );
+    }
+
+    #[test]
+    fn lane_consensus_domains_preserve_scheduler_candidate_order_per_lane() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22), (1, 11), (2, 22)]);
+        let schedule = accepted_schedule(&[2, 1, 0, 3]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &schedule,
+            &[
+                committee(1, 11, validators.clone(), None),
+                committee(2, 22, validators, None),
+            ],
+            "permissioned",
+        )
+        .expect("lane consensus domains");
+
+        assert_eq!(domains.len(), 2);
+        assert_eq!(domains[0].lane_id, LaneId::new(1));
+        assert_eq!(domains[0].accepted_candidate_indices, vec![2, 0]);
+        assert_eq!(domains[1].lane_id, LaneId::new(2));
+        assert_eq!(domains[1].accepted_candidate_indices, vec![1, 3]);
     }
 
     #[test]

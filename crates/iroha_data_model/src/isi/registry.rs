@@ -283,6 +283,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::ProposeRuntimeUpgradeProposal>,
     #[cfg(feature = "governance")]
+    InstructionRegistry::register_slice::<governance::ProposeSccpRouteManifest>,
+    #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::CastZkBallot>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register_slice::<governance::CastPlainBallot>,

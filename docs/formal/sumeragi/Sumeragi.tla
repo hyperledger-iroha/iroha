@@ -165,6 +165,18 @@ Init ==
   /\ committed = FALSE
   /\ gst = FALSE
 
+TlcDirectCommitNoFaultCorridor ==
+  /\ view = 0
+  /\ commitView = 0
+  /\ phase \in {"Propose", "Prepare", "CommitVote", "Committed"}
+  /\ ~(rbcState \in {"Corrupted", "Withheld"})
+  /\ gst = FALSE
+
+TlcByzantineDirectCommitCorridor ==
+  /\ TlcDirectCommitNoFaultCorridor
+  /\ newViewVotes = 0
+  /\ viewEvidenceVotes = 0
+
 HonestProposeEnabled ==
   phase = "Propose"
 
@@ -607,6 +619,74 @@ Next ==
   \/ ByzantineFault
   \/ GstElapsed
 
+DirectCommitNext ==
+  \/ HonestPropose
+  \/ HonestPrepareVote
+  \/ HonestCommitVote
+  \/ RbcInit
+  \/ RbcChunkGood
+  \/ RbcReadyGood
+  \/ RbcDeliverGood
+
+ByzantineDirectCommitNext ==
+  \/ DirectCommitNext
+  \/ ByzantineEquivocateCommit
+
+DirectDeliveredFirstCommitNext ==
+  \/ /\ phase = "Propose"
+     /\ rbcState = "Idle"
+     /\ HonestPropose
+  \/ /\ phase = "Prepare"
+     /\ prepareVotes = 0
+     /\ rbcState \in {"Init", "Chunking"}
+     /\ RbcChunkGood
+  \/ /\ phase = "Prepare"
+     /\ prepareVotes = 0
+     /\ rbcState \in {"ChunksComplete", "ReadyPartial"}
+     /\ RbcReadyGood
+  \/ /\ phase = "Prepare"
+     /\ prepareVotes = 0
+     /\ rbcState = "ReadyQuorum"
+     /\ RbcDeliverGood
+  \/ /\ phase = "Prepare"
+     /\ rbcState = "Delivered"
+     /\ HonestPrepareVote
+  \/ /\ phase = "CommitVote"
+     /\ rbcState = "Delivered"
+     /\ HonestCommitVote
+
+ByzantineDeliveredFirstCommitNext ==
+  \/ DirectDeliveredFirstCommitNext
+  \/ /\ phase = "CommitVote"
+     /\ rbcState = "Delivered"
+     /\ ByzantineEquivocateCommit
+
+DirectVoteFirstCommitNext ==
+  \/ /\ phase = "Propose"
+     /\ rbcState = "Idle"
+     /\ HonestPropose
+  \/ /\ phase = "Prepare"
+     /\ rbcState = "Init"
+     /\ HonestPrepareVote
+  \/ /\ phase = "CommitVote"
+     /\ rbcState # "Delivered"
+     /\ HonestCommitVote
+  \/ /\ phase = "CommitVote"
+     /\ rbcState \in {"Init", "Chunking"}
+     /\ RbcChunkGood
+  \/ /\ phase = "CommitVote"
+     /\ rbcState \in {"ChunksComplete", "ReadyPartial"}
+     /\ RbcReadyGood
+  \/ /\ phase = "CommitVote"
+     /\ rbcState = "ReadyQuorum"
+     /\ RbcDeliverGood
+
+ByzantineVoteFirstCommitNext ==
+  \/ DirectVoteFirstCommitNext
+  \/ /\ phase = "CommitVote"
+     /\ rbcState # "Delivered"
+     /\ ByzantineEquivocateCommit
+
 Fairness ==
   /\ WF_vars(HonestPropose)
   /\ WF_vars(HonestPrepareVote)
@@ -617,10 +697,60 @@ Fairness ==
   /\ WF_vars(RbcReadyGood)
   /\ WF_vars(RbcDeliverGood)
 
+DirectCommitFairness ==
+  /\ WF_vars(HonestPropose)
+  /\ WF_vars(HonestPrepareVote)
+  /\ WF_vars(HonestCommitVote)
+  /\ WF_vars(RbcInit)
+  /\ WF_vars(RbcChunkGood)
+  /\ WF_vars(RbcReadyGood)
+  /\ WF_vars(RbcDeliverGood)
+
+DirectDeliveredFirstCommitFairness ==
+  /\ WF_vars(HonestPropose)
+  /\ WF_vars(HonestPrepareVote)
+  /\ WF_vars(HonestCommitVote)
+  /\ WF_vars(RbcChunkGood)
+  /\ WF_vars(RbcReadyGood)
+  /\ WF_vars(RbcDeliverGood)
+
+DirectVoteFirstCommitFairness ==
+  /\ WF_vars(HonestPropose)
+  /\ WF_vars(HonestPrepareVote)
+  /\ WF_vars(HonestCommitVote)
+  /\ WF_vars(RbcChunkGood)
+  /\ WF_vars(RbcReadyGood)
+  /\ WF_vars(RbcDeliverGood)
+
 Spec ==
   /\ Init
   /\ [][Next]_vars
   /\ Fairness
+
+DirectCommitSpec ==
+  /\ Init
+  /\ [][DirectCommitNext]_vars
+  /\ DirectCommitFairness
+
+ByzantineDirectCommitSpec ==
+  /\ Init
+  /\ [][ByzantineDirectCommitNext]_vars
+  /\ DirectCommitFairness
+
+ByzantineDeliveredFirstCommitSpec ==
+  /\ Init
+  /\ [][ByzantineDeliveredFirstCommitNext]_vars
+  /\ DirectDeliveredFirstCommitFairness
+
+DirectDeliveredFirstCommitSpec ==
+  /\ Init
+  /\ [][DirectDeliveredFirstCommitNext]_vars
+  /\ DirectDeliveredFirstCommitFairness
+
+ByzantineVoteFirstCommitSpec ==
+  /\ Init
+  /\ [][ByzantineVoteFirstCommitNext]_vars
+  /\ DirectVoteFirstCommitFairness
 
 CommitImpliesQuorum ==
   committed => commitEvidenceVotes >= CommitQuorum
@@ -12833,11 +12963,6 @@ RbcProgressEvidenceNeverDiverges ==
 RbcPartialProgressEvidenceNeverDiverges ==
   [] RbcPartialProgressEvidenceMatchesState
 
-RbcProgressStateEvidenceAlwaysMatchesEnvelope ==
-  /\ RbcProgressEvidenceNeverDiverges
-  /\ RbcPartialProgressEvidenceNeverDiverges
-  /\ RbcLiveEvidenceCausalityAlwaysMatchesEnvelope
-
 RbcCorruptedDigestNeverValid ==
   [] RbcCorruptedNeverHasValidDigest
 
@@ -12939,6 +13064,11 @@ RbcLiveEvidenceCausalityAlwaysMatchesEnvelope ==
   /\ RbcZeroReadyEvidenceNeverLeavesPreReadyOrCorruptedHandoff
   /\ RbcCounterEvidenceNeverOutrunsValidDigestOrCorruption
   /\ RbcInvalidDigestNeverLeavesIdleOrCorruption
+
+RbcProgressStateEvidenceAlwaysMatchesEnvelope ==
+  /\ RbcProgressEvidenceNeverDiverges
+  /\ RbcPartialProgressEvidenceNeverDiverges
+  /\ RbcLiveEvidenceCausalityAlwaysMatchesEnvelope
 
 RbcWithheldNeverReached ==
   [] (rbcState # "Withheld")
@@ -13282,5 +13412,71 @@ SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==
 SumeragiConsensusCoreFastCorrectnessEnvelope ==
   /\ TypeInvariant
   /\ SumeragiConsensusCoreAlwaysMatchesExactness
+
+ByzantineDirectTopExactness ==
+  /\ TlcByzantineDirectCommitCorridor
+  /\ CommitImpliesHonestSupport
+  /\ FinalityCertificateStackComplete
+  /\ CommitDisablesByzantineCommitVote
+  /\ ByzantineCommitVoteGateMatchesPrepareEvidence
+  /\ ByzantineCommitVoteFinalityGateMatchesNextEvidence
+  /\ ByzantineCommitVotePendingGateMatchesMissingNextEvidence
+  /\ RbcDeliverFinalityGateMatchesBufferedCommitEvidence
+  /\ RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence
+  /\ CommitEvidenceMatchesVoteCounters
+  /\ VoteCountersRespectRosterBudgets
+  /\ StakeSignedMatchesVoteCounters
+  /\ NoCommitEvidenceBeforeCommit
+  /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate
+  /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence
+
+ByzantineDirectTopCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ByzantineDirectTopExactness
+
+ByzantineDeliveredFirstTopExactness ==
+  /\ TlcByzantineDirectCommitCorridor
+  /\ CommitImpliesHonestSupport
+  /\ FinalityCertificateStackComplete
+  /\ CommitDisablesByzantineCommitVote
+  /\ ByzantineCommitVoteGateMatchesPrepareEvidence
+  /\ ByzantineCommitVoteFinalityGateMatchesNextEvidence
+  /\ ByzantineCommitVotePendingGateMatchesMissingNextEvidence
+  /\ RbcDeliverFinalityGateMatchesBufferedCommitEvidence
+  /\ RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence
+  /\ CommitEvidenceMatchesVoteCounters
+  /\ VoteCountersRespectRosterBudgets
+  /\ StakeSignedMatchesVoteCounters
+  /\ NoCommitEvidenceBeforeCommit
+
+ByzantineDeliveredFirstTopCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ByzantineDeliveredFirstTopExactness
+
+ByzantineVoteFirstTopExactness ==
+  /\ TlcByzantineDirectCommitCorridor
+  /\ CommitImpliesHonestSupport
+  /\ FinalityCertificateStackComplete
+  /\ CommitDisablesByzantineCommitVote
+  /\ ByzantineCommitVoteGateMatchesPrepareEvidence
+  /\ ByzantineCommitVoteFinalityGateMatchesNextEvidence
+  /\ ByzantineCommitVotePendingGateMatchesMissingNextEvidence
+  /\ RbcDeliverFinalityGateMatchesBufferedCommitEvidence
+  /\ RbcDeliverPendingGateMatchesMissingBufferedCommitEvidence
+  /\ CommitEvidenceMatchesVoteCounters
+  /\ VoteCountersRespectRosterBudgets
+  /\ StakeSignedMatchesVoteCounters
+  /\ NoCommitEvidenceBeforeCommit
+  /\ RbcDeliveredWithoutFinalityHasNoCommitCertificate
+  /\ RbcDeliveredWithoutFinalityWaitsForCommitEvidence
+
+ByzantineVoteFirstTopCorrectnessEnvelope ==
+  /\ TypeInvariant
+  /\ ByzantineVoteFirstTopExactness
+
+ByzantineDirectTopCoversOrderedTopCorridors ==
+  ByzantineDirectTopExactness =>
+    /\ ByzantineDeliveredFirstTopExactness
+    /\ ByzantineVoteFirstTopExactness
 
 ====

@@ -4,8 +4,8 @@ direction: ltr
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 06ca10b4cd6631331ed5c1319c392c6d978f733412466855510925b1c787e816
-source_last_modified: "2026-07-04T14:48:09.235665+00:00"
+source_hash: 9c2a51e7f8bbb2aad60248af4013e91bc9f935e35d37580567dcc5c22a371fbe
+source_last_modified: "2026-07-04T15:05:52.499061+00:00"
 translation_last_reviewed: 2026-07-04
 source_mtime: "2026-07-04T06:07:00.822592+00:00"
 ---
@@ -73,9 +73,10 @@ described in the original plan.
   deterministic local lifecycle store for ballot announcement, eligible-juror
   commit acceptance, challenge-buffered reveal acceptance, quorum tallying,
   contested tie detection, and replayable/broadcast local events.
-- Torii exposes local moderation ballot announcement, list/get, commit, reveal,
-  tally, and event backlog endpoints under
-  `/v1/sorafs/moderation/ballots*`. The list endpoint reports full local
+- Torii exposes local moderation ballot announcement, list/get, no-show plan
+  readback, commit, challenge submission/resolution, reveal, tally, and event
+  backlog endpoints under `/v1/sorafs/moderation/ballots*`. The list endpoint
+  reports full local
   ballot totals while bounding returned ballot records with `limit` (default
   50, max 500). Mutating requests require canonical app authentication, and
   commit/reveal requests bind the signer to the canonical juror id.
@@ -130,8 +131,8 @@ bind:
 - moderation vote choices;
 
 The local runtime and Torii API now bind panel-size/quorum policy,
-commit/reveal windows, eligible jurors, and payload-free no-show penalty plans
-for deterministic node-local tests.
+commit/reveal windows, eligible jurors, and the payload-free no-show penalty
+plan readback route for deterministic node-local tests.
 The production service still needs durable state that binds:
 
 - evidence access attestation;
@@ -361,6 +362,7 @@ cargo test -p sorafs_node moderation_ballot
 cargo test -p sorafs_manifest moderation_ballot_event
 cargo test -p iroha_torii moderation_ballot --features app_api
 cargo test -p iroha_torii moderation_ballot_list_limit --features app_api
+cargo test -p iroha_torii moderation_ballot_no_show --features app_api -- --nocapture
 cargo test -p iroha_torii generated_spec_includes_documented_paths --features app_api
 ```
 

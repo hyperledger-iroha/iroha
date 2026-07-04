@@ -232,7 +232,8 @@ fn manifest_signature_matches_fixture_manifest() {
         if let Some(multihash) = entry.get("signer_multihash").and_then(Value::as_str) {
             assert_eq!(multihash, public_key.to_string());
         }
-        let signature = Signature::from_bytes(&signature_bytes);
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .expect("fixture manifest signature must pass checked admission");
         signature
             .verify(&public_key, manifest_digest.as_bytes())
             .expect("signature verifies");

@@ -4401,21 +4401,18 @@ pub struct SccpRouteBrowserProverManifestRef {
 impl SccpRouteBrowserProverManifestRef {
     fn is_public_dns_domain(domain: &str) -> bool {
         let lower = domain.to_ascii_lowercase();
+        let top_level_label = lower.rsplit('.').next();
         !lower.is_empty()
             && lower != "localhost"
-            && !lower.ends_with(".local")
+            && top_level_label != Some("local")
             && lower.contains('.')
             && lower.parse::<IpAddr>().is_err()
             && lower.split('.').all(|label| {
                 let bytes = label.as_bytes();
                 !label.is_empty()
                     && label.len() <= 63
-                    && bytes
-                        .first()
-                        .is_some_and(|byte| byte.is_ascii_alphanumeric())
-                    && bytes
-                        .last()
-                        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+                    && matches!(bytes.first(), Some(byte) if byte.is_ascii_alphanumeric())
+                    && matches!(bytes.last(), Some(byte) if byte.is_ascii_alphanumeric())
                     && bytes
                         .iter()
                         .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-')
@@ -4703,18 +4700,23 @@ pub struct SccpRouteManifest {
     pub post_deploy_offline_full_toml_sha256: Option<String>,
     /// Remaining post-deploy blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub production_blockers: Vec<String>,
     /// Remaining post-deploy blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub post_deploy_production_blockers: Vec<String>,
     /// Remaining full-TOML blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub full_toml_production_blockers: Vec<String>,
     /// Remaining source-event blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub source_event_transaction_production_blockers: Vec<String>,
     /// Remaining route-canary blocker aliases from route-config live evidence.
     #[config(default = "Vec::new()")]
+    #[norito(default)]
     pub route_canary_production_blockers: Vec<String>,
 }
 
@@ -5641,13 +5643,13 @@ impl SccpRouteManifest {
     pub fn parse(self) -> actual::SccpRouteManifest {
         let is_bsc_route = self.counterparty_domain == Self::BSC_COUNTERPARTY_DOMAIN;
         let is_ton_route = self.counterparty_domain == Self::TON_COUNTERPARTY_DOMAIN;
-        let is_tron_route = self.counterparty_domain == Self::TRON_COUNTERPARTY_DOMAIN;
-        let strict_route_hashes = is_bsc_route || is_ton_route || is_tron_route;
+        let uses_tron_counterparty = self.counterparty_domain == Self::TRON_COUNTERPARTY_DOMAIN;
+        let strict_route_hashes = is_bsc_route || is_ton_route || uses_tron_counterparty;
         let chain_id_hex = if is_bsc_route {
             Self::normalize_bsc_chain_id_hex(&self.chain_id_hex)
         } else if is_ton_route {
             Self::normalize_ton_chain_id_hex(&self.chain_id_hex)
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_chain_id_hex(&self.chain_id_hex)
         } else {
             self.chain_id_hex.trim().to_owned()
@@ -5725,7 +5727,7 @@ impl SccpRouteManifest {
                 "taira_xor_token_address",
                 &self.taira_xor_token_address,
             )
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_base58_address(
                 "taira_xor_token_address",
                 &self.taira_xor_token_address,
@@ -5740,7 +5742,7 @@ impl SccpRouteManifest {
                 "taira_xor_bridge_address",
                 &self.taira_xor_bridge_address,
             )
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_base58_address(
                 "taira_xor_bridge_address",
                 &self.taira_xor_bridge_address,
@@ -6193,14 +6195,14 @@ impl SccpRouteManifest {
             !(self.production_ready && is_ton_route && deployment_evidence_sha256.is_none()),
             "SCCP TON route manifest production_ready requires deployment_evidence_sha256"
         );
-        let trim_address_aliases = !(is_bsc_route || is_ton_route || is_tron_route);
+        let trim_address_aliases = !(is_bsc_route || is_ton_route || uses_tron_counterparty);
         let source_bridge_address = self.source_bridge_address(trim_address_aliases);
         let destination_verifier_address = self.destination_verifier_address(trim_address_aliases);
         let source_bridge_address = if is_bsc_route {
             Self::normalize_evm_address("source bridge address", &source_bridge_address)
         } else if is_ton_route {
             Self::normalize_ton_raw_address("source bridge address", &source_bridge_address)
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_base58_address("source bridge address", &source_bridge_address)
         } else {
             source_bridge_address
@@ -6215,7 +6217,7 @@ impl SccpRouteManifest {
                 "destination verifier address",
                 &destination_verifier_address,
             )
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             Self::normalize_tron_base58_address(
                 "destination verifier address",
                 &destination_verifier_address,
@@ -6223,7 +6225,7 @@ impl SccpRouteManifest {
         } else {
             destination_verifier_address
         };
-        if is_bsc_route || is_ton_route || is_tron_route {
+        if is_bsc_route || is_ton_route || uses_tron_counterparty {
             let route_family = if is_bsc_route {
                 "BSC"
             } else if is_ton_route {
@@ -6247,7 +6249,7 @@ impl SccpRouteManifest {
             "BSC"
         } else if is_ton_route {
             "TON"
-        } else if is_tron_route {
+        } else if uses_tron_counterparty {
             "TRON"
         } else {
             "generic"
@@ -6347,11 +6349,11 @@ impl SccpRouteManifest {
         assert!(
             !(self.production_ready
                 && self.route_id == Self::TRON_TAIRA_XOR_ROUTE_ID
-                && !is_tron_route),
+                && !uses_tron_counterparty),
             "SCCP TRON route manifest production_ready requires counterparty_domain = {}",
             Self::TRON_COUNTERPARTY_DOMAIN
         );
-        if self.production_ready && is_tron_route {
+        if self.production_ready && uses_tron_counterparty {
             self.validate_tron_production_metadata(
                 &chain_id_hex,
                 &network_id_hex,
@@ -8311,9 +8313,6 @@ pub struct Zk {
         default = "defaults::zk::proof::BRIDGE_MAX_FUTURE_DRIFT_BLOCKS"
     )]
     pub bridge_proof_max_future_drift_blocks: u64,
-    /// Allow SCCP transparent proof consumption for lanes whose destination verifiers are not production-ready.
-    #[config(default = "false")]
-    pub sccp_allow_unready_transparent_proofs: bool,
     /// SCCP source-chain verifier material that can enable non-SORA source lanes.
     #[config(default = "Vec::new()")]
     pub sccp_source_verifier_materials: Vec<SccpSourceVerifierMaterial>,
@@ -8361,7 +8360,6 @@ impl Zk {
             bridge_proof_max_range_len: self.bridge_proof_max_range_len,
             bridge_proof_max_past_age_blocks: self.bridge_proof_max_past_age_blocks,
             bridge_proof_max_future_drift_blocks: self.bridge_proof_max_future_drift_blocks,
-            sccp_allow_unready_transparent_proofs: self.sccp_allow_unready_transparent_proofs,
             sccp_source_verifier_materials: self
                 .sccp_source_verifier_materials
                 .into_iter()

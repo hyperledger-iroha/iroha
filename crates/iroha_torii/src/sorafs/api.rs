@@ -130,13 +130,13 @@ use sorafs_node::{
     ModerationBallotChallengeResolution, ModerationBallotCommitOutcome, ModerationBallotEvent,
     ModerationBallotEventKind, ModerationBallotNoShowPlan, ModerationBallotRecord,
     ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
-    ModerationCorpusRegistryRecord,
-    ModerationEvidenceViewerAccessEventRecord, ModerationEvidenceViewerAccessInput,
-    ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerAuditKindCount,
-    ModerationEvidenceViewerAuditReport, ModerationEvidenceViewerAuditReportInput,
-    ModerationEvidenceViewerAuditScheduleOutcome, ModerationEvidenceViewerError,
-    ModerationEvidenceViewerSessionInput, ModerationEvidenceViewerSessionRecord,
-    ModerationModelRegistryError, ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
+    ModerationCorpusRegistryRecord, ModerationEvidenceViewerAccessEventRecord,
+    ModerationEvidenceViewerAccessInput, ModerationEvidenceViewerAccessKind,
+    ModerationEvidenceViewerAuditKindCount, ModerationEvidenceViewerAuditReport,
+    ModerationEvidenceViewerAuditReportInput, ModerationEvidenceViewerAuditScheduleOutcome,
+    ModerationEvidenceViewerError, ModerationEvidenceViewerSessionInput,
+    ModerationEvidenceViewerSessionRecord, ModerationModelRegistryError,
+    ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
     ModerationQuarantineObjectInput, ModerationQuarantineObjectPayload,
     ModerationQuarantineObjectRecord, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
     ModerationQuarantineReviewInput, ModerationQuarantineState, ModerationReproRegistryRecord,
@@ -24853,6 +24853,28 @@ mod gateway_policy_violation_tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
+        for (label, signer_bytes) in [
+            ("all-zero", [0_u8; 32]),
+            ("small-order", SMALL_ORDER_R),
+            ("noncanonical", NONCANONICAL_R),
+        ] {
+            let mut malformed_envelope = envelope.clone();
+            let signatures = malformed_envelope
+                .get_mut("signatures")
+                .and_then(Value::as_array_mut)
+                .expect("signature list");
+            let signature_entry = signatures
+                .first_mut()
+                .and_then(Value::as_object_mut)
+                .expect("signature entry");
+            signature_entry.insert("signer".into(), Value::from(hex::encode(signer_bytes)));
+            let malformed_encoded =
+                norito::json::to_vec(&Value::Object(malformed_envelope)).expect("json");
+            assert!(
+                !validate_manifest_envelope_bytes(&record, &malformed_encoded),
+                "{label} envelope signer key must fail before backend verification"
+            );
+        }
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -40328,15 +40350,17 @@ mod advert_tests {
                 "payload-free no-show plan leaked {forbidden}: {body_text}"
             );
         }
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode no-show plan body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode no-show plan body");
         assert_eq!(
             value.get("schema").and_then(Value::as_str),
             Some("sorafs.moderation.ballot.no_show_plan.v1")
         );
         assert_eq!(value.get("source").and_then(Value::as_str), Some("local"));
         assert_eq!(value.get("case_id").and_then(Value::as_str), Some(case_id));
-        assert_eq!(value.get("round_id").and_then(Value::as_str), Some(round_id));
+        assert_eq!(
+            value.get("round_id").and_then(Value::as_str),
+            Some(round_id)
+        );
         assert_eq!(value.get("quorum").and_then(Value::as_u64), Some(2));
         assert_eq!(value.get("roster_size").and_then(Value::as_u64), Some(2));
         assert_eq!(
@@ -40345,7 +40369,10 @@ mod advert_tests {
         );
         assert_eq!(value.get("revealed_count").and_then(Value::as_u64), Some(0));
         assert_eq!(value.get("no_show_count").and_then(Value::as_u64), Some(2));
-        assert_eq!(value.get("quorum_met").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            value.get("quorum_met").and_then(Value::as_bool),
+            Some(false)
+        );
         assert_eq!(
             value.get("tally_finalized").and_then(Value::as_bool),
             Some(false)

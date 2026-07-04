@@ -39,6 +39,23 @@ class HostileImportedScalar:
         raise AssertionError("secret-token imported Solana metadata was stringified")
 
 
+class HostileCommitmentScalar:
+    def __str__(self):
+        raise AssertionError("secret-token Solana commitment was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana commitment was repr'd")
+
+    def __hash__(self):
+        raise AssertionError("secret-token Solana commitment was hashed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana commitment was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana commitment was compared")
+
+
 def load_live_module():
     script_path = (
         Path(__file__).resolve().parents[2] / "scripts" / "sccp_solana_live_evidence.py"
@@ -925,6 +942,127 @@ def test_live_solana_evidence_rejects_non_string_imported_metadata_without_strin
             assert exc.__suppress_context__ is True
         else:
             raise AssertionError(f"non-string Solana live {field} metadata was accepted")
+
+
+def test_live_solana_evidence_rejects_hostile_commitment_before_rpc():
+    module = load_live_module()
+
+    def opener(_request, timeout):
+        del timeout
+        raise AssertionError("hostile Solana commitment reached RPC")
+
+    try:
+        module.collect_live_evidence(
+            "https://solana.example.invalid",
+            verifier_program_id=_default_program_id(module),
+            commitment=HostileCommitmentScalar(),
+            opener=opener,
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "Solana JSON-RPC commitment must be finalized or confirmed"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("hostile Solana commitment was accepted")
+
+
+def test_live_solana_evidence_rejects_hostile_imported_commitment_without_hooks():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = b"\x7fELFsol"
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    live["rpc_commitment"] = HostileCommitmentScalar()
+
+    try:
+        module._summary(args, live)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "Solana live RPC commitment metadata must be finalized or confirmed"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("hostile imported Solana commitment was accepted")
+
+
+def test_live_solana_summary_rejects_hostile_expected_pins_without_hooks():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = b"\x7fELFsol"
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    live = _live_record(
+        module,
+        program_id=program_id,
+        programdata_address=programdata_address,
+        program_bytes=program_bytes,
+    )
+    cases = (
+        (
+            "expected_destination_binding_hash",
+            HostileCommitmentScalar(),
+            "--expected-destination-binding-hash must be bytes",
+        ),
+        (
+            "expected_destination_binding_hash",
+            b"\x00" * 32,
+            "--expected-destination-binding-hash must not be zero",
+        ),
+        (
+            "expected_destination_binding_hash",
+            b"\x11" * 31,
+            "--expected-destination-binding-hash must be 32 bytes",
+        ),
+        (
+            "expected_verifier_code_hash",
+            HostileCommitmentScalar(),
+            "--expected-verifier-code-hash must be bytes",
+        ),
+        (
+            "expected_verifier_code_hash",
+            b"\x00" * 32,
+            "--expected-verifier-code-hash must not be zero",
+        ),
+        (
+            "expected_verifier_code_hash",
+            b"\x11" * 31,
+            "--expected-verifier-code-hash must be 32 bytes",
+        ),
+        (
+            "expected_programdata_address",
+            HostileCommitmentScalar(),
+            "--expected-programdata-address must be a Solana public key",
+        ),
+        (
+            "expected_programdata_address",
+            program_id + "0",
+            "--expected-programdata-address must be a Solana public key",
+        ),
+    )
+    for field, forged_value, expected_message in cases:
+        args = _live_args(
+            module,
+            code_hash=code_hash,
+            programdata_address=programdata_address,
+        )
+        setattr(args, field, forged_value)
+        try:
+            module._summary(args, live)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(f"hostile Solana expected pin {field} was accepted")
 
 
 def test_live_solana_evidence_redacts_imported_parser_failures(monkeypatch):

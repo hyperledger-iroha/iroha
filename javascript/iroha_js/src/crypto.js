@@ -1710,9 +1710,6 @@ export function canAppendKagemushaRecursiveSpendWitnesslessLineage(previousHopCo
 }
 
 export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
-  if (outputProofCircuitId === undefined || outputProofCircuitId === null || outputProofCircuitId === "") {
-    return "";
-  }
   return outputProofCircuitId;
 }
 
@@ -3386,6 +3383,9 @@ function kagemushaNormalizeAppendRequest(request) {
     "outputProofCircuitId",
     "output_proof_circuit_id",
   ]);
+  if (typeof outputProofCircuitId !== "string" || outputProofCircuitId.length === 0) {
+    throw kagemushaFieldCodecError("outputProofCircuitId");
+  }
   const normalizedOutput = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(
     outputProofCircuitId,
   );

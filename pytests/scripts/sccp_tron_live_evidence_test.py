@@ -343,6 +343,12 @@ def tron_high_s_signature_hex(module, signature_hex):
     return (raw[:32] + high_s.to_bytes(32, "big") + raw[64:65]).hex()
 
 
+def tron_signature_with_recovery_id(signature_hex, recovery_id):
+    raw = bytearray(bytes.fromhex(signature_hex.removeprefix("0x")))
+    raw[64] = recovery_id
+    return bytes(raw).hex()
+
+
 def tron_header_signature_hex(module, raw_data_hex, nonce_start=2):
     return tron_signature_hex(
         module,
@@ -963,6 +969,115 @@ def test_tron_runtime_input_parsers_redact_exception_causes(tmp_path):
             raise AssertionError("secret-bearing runtime input was accepted")
 
 
+def test_tron_runtime_witness_schedule_payload_rejects_non_string_without_stringifying():
+    module = load_live_module()
+
+    try:
+        module._runtime_witness_schedule_payload(
+            SimpleNamespace(
+                witness_schedule_payload_hex=HostileImportedScalar(),
+                witness_schedule_payload_file=None,
+            )
+        )
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert rendered == "witness schedule payload must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("non-string TRON witness schedule payload was accepted")
+
+
+def test_tron_runtime_hex32_list_arg_rejects_scalar_without_stringifying():
+    module = load_live_module()
+
+    for value in ("aa" * 32, HostileImportedScalar()):
+        try:
+            module._runtime_hex32_list_arg(
+                SimpleNamespace(source_inclusion_branch_hex=value),
+                "source_inclusion_branch_hex",
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == (
+                "--source-inclusion-branch-hex must be a list of hex32 values"
+            )
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("scalar TRON hex32 list argument was accepted")
+
+    try:
+        module._runtime_hex32_list_arg(
+            SimpleNamespace(source_inclusion_branch_hex=[HostileImportedScalar()]),
+            "source_inclusion_branch_hex",
+        )
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert rendered == "source inclusion branch hex 0 must be hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("non-string TRON hex32 list item was accepted")
+
+
+def test_tron_runtime_repeated_args_reject_scalar_without_stringifying():
+    module = load_live_module()
+
+    cases = (
+        (
+            lambda value: module._runtime_witness_seal_signatures(
+                SimpleNamespace(witness_seal_signature_hex=value)
+            ),
+            "--witness-seal-signature-hex must be a list of hex values",
+        ),
+        (
+            lambda value: module._runtime_witness_schedule_transitions(
+                SimpleNamespace(witness_schedule_transition_json=value)
+            ),
+            "--witness-schedule-transition-json must be a list of JSON values",
+        ),
+    )
+    for action, expected_message in cases:
+        for value in ("[]", HostileImportedScalar()):
+            try:
+                action(value)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError("scalar TRON repeated runtime argument was accepted")
+
+    item_cases = (
+        (
+            lambda value: module._runtime_witness_seal_signatures(
+                SimpleNamespace(witness_seal_signature_hex=[value])
+            ),
+            RuntimeError,
+            "witness seal signature 0 must be hex",
+        ),
+        (
+            lambda value: module._runtime_witness_schedule_transitions(
+                SimpleNamespace(witness_schedule_transition_json=[value])
+            ),
+            ValueError,
+            "--witness-schedule-transition-json 0 must be JSON text",
+        ),
+    )
+    for action, error_type, expected_message in item_cases:
+        try:
+            action(HostileImportedScalar())
+        except error_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("non-string TRON repeated runtime item was accepted")
+
+
 def test_tron_live_runtime_files_reject_unreadable_file_shapes(tmp_path):
     module = load_live_module()
 
@@ -1085,6 +1200,36 @@ def test_tron_live_hex_nonzero_controls_reject_non_booleans():
                 assert str(exc) == expected_message
             else:
                 raise AssertionError(failure_message)
+
+
+def test_tron_live_optional_hex_args_reject_non_string_without_stringifying():
+    module = load_live_module()
+
+    for action, expected_message in (
+        (
+            lambda hostile: module._optional_hex32_arg(
+                SimpleNamespace(route_allowlist_hash=hostile),
+                "route_allowlist_hash",
+            ),
+            "route allowlist hash must be hex",
+        ),
+        (
+            lambda hostile: module._optional_hex_blob_arg(
+                SimpleNamespace(witness_seal_signers_bitmap=hostile),
+                "witness_seal_signers_bitmap",
+            ),
+            "witness seal signers bitmap must be hex",
+        ),
+    ):
+        try:
+            action(HostileImportedScalar())
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("non-string TRON optional hex argument was accepted")
 
 
 def test_tron_live_boolean_controls_reject_non_booleans():
@@ -2486,6 +2631,51 @@ def test_live_evidence_source_event_replay_args_revalidate_call_binding():
     assert replay_args is not None
     assert "poisoned" not in replay_args
     assert fake.bridge in replay_args
+
+
+def test_live_evidence_source_event_replay_args_reject_non_string_copied_metadata_without_stringifying():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+
+    summary = module.collect_live_evidence(
+        SimpleNamespace(
+            tron_node_url="https://tron.example",
+            source_bridge_address=fake.bridge,
+            destination_verifier_address=None,
+            caller_address=None,
+            no_getcontract=False,
+            source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+            full_toml=False,
+            timeout=1.0,
+        ),
+        opener=fake.opener,
+    )
+
+    call_cases = (
+        ("source_bridge", "address"),
+        ("source_bridge", "source_bridge_owner_base58"),
+        ("source_bridge", "source_bridge_owner_address"),
+        ("source_event_call", "source_bridge_address"),
+        ("source_event_call", "source_bridge_owner_address"),
+        ("source_event_call", "source_bridge_owner_base58"),
+        ("source_event_call", "source_event_digest"),
+    )
+    for section, field in call_cases:
+        tampered = json.loads(json.dumps(summary))
+        tampered[section][field] = HostileImportedScalar()
+        assert module._offline_source_event_args(tampered) is None, (section, field)
+
+    for field in ("owner_address", "contract_address"):
+        tampered = json.loads(json.dumps(summary))
+        tampered["source_event_call"]["trigger_request"][field] = (
+            HostileImportedScalar()
+        )
+        assert module._offline_source_event_args(tampered) is None, field
+
+    transaction_result = collect_complete_source_event_transaction_summary(module)
+    tampered = json.loads(json.dumps(transaction_result.summary))
+    tampered["source_event_transaction"]["transaction_id"] = HostileImportedScalar()
+    assert module._offline_source_event_args(tampered) is None
 
 
 def test_live_evidence_rejects_already_submitted_source_event_digest():
@@ -4497,6 +4687,7 @@ def collect_complete_source_event_transaction_summary(
     module,
     *,
     include_expected_witness_schedule_hash=True,
+    include_expected_witness_seal_hash=True,
     include_source_record_trust_anchor=False,
     source_trust_anchor_hash_override=None,
     witness_payload_hex=None,
@@ -4642,8 +4833,10 @@ def collect_complete_source_event_transaction_summary(
             receipt_proof_hash=seal.receipt_proof_hash,
             witness_seal_signers_bitmap_hex="01",
             witness_seal_signature_hex=[seal.signature],
-            expected_witness_seal_hash=bytes.fromhex(
-                seal.seal_hash.removeprefix("0x")
+            expected_witness_seal_hash=(
+                bytes.fromhex(seal.seal_hash.removeprefix("0x"))
+                if include_expected_witness_seal_hash
+                else None
             ),
             witness_schedule_transition_json=transition_json,
             source_inclusion_branch_hex=["aa" * 32],
@@ -4704,6 +4897,29 @@ def test_live_evidence_marks_source_event_transaction_production_ready():
     assert solid_block["solid_block_header_proof_ready"] is True
     assert solid_block["solid_block_ancestor_headers_ready"] is True
     assert solid_block["solid_block_confirmation_headers_ready"] is True
+
+
+def test_live_evidence_requires_expected_witness_seal_hash_for_production_ready():
+    module = load_live_module()
+    result = collect_complete_source_event_transaction_summary(
+        module,
+        include_expected_witness_seal_hash=False,
+    )
+
+    transaction = result.summary["source_event_transaction"]
+    solid_block = transaction["solid_block"]
+    assert solid_block["transaction_source_proof_ready"] is True
+    assert solid_block["solid_block_header_proof_ready"] is True
+    assert solid_block["witness_schedule_proof_ready"] is True
+    assert solid_block["witness_schedule_expected_hash_matches"] is True
+    assert solid_block["witness_seal_proof_ready"] is True
+    assert solid_block["witness_seal_expected_hash_matches"] is False
+    assert solid_block["solid_block_ancestor_headers_ready"] is True
+    assert solid_block["solid_block_confirmation_headers_ready"] is True
+    assert transaction["source_event_transaction_production_ready"] is False
+    assert transaction["source_event_transaction_production_blockers"] == [
+        "witness seal hash must match expected governed witness seal hash"
+    ]
 
 
 def test_live_evidence_requires_expected_witness_schedule_hash_for_production_ready():
@@ -6320,39 +6536,73 @@ def test_live_evidence_source_event_transaction_readback_uses_solid_endpoint():
     assert summary["source_event_transaction"]["trigger_contract"]["call_matches"] is True
 
 
-def test_live_evidence_source_event_transaction_accepts_legacy_recovery_id():
+def test_tron_recoverable_signature_rejects_legacy_recovery_id_aliases():
     module = load_live_module()
-    legacy_signature = TRON_SOURCE_EVENT_SIGNATURE_VECTOR[:-2] + "1b"
-    fake = fake_opener_for(
-        module,
-        submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
-        source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
-        source_event_transaction_signatures=[legacy_signature],
+    raw_signature = bytes.fromhex(TRON_SOURCE_EVENT_SIGNATURE_VECTOR)
+    assert module._tron_recoverable_signature_is_canonical(raw_signature)
+    assert (
+        module._tron_recovered_signature_address20(
+            bytes.fromhex(TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR),
+            raw_signature,
+        )
+        is not None
     )
 
-    summary = module.collect_live_evidence(
-        SimpleNamespace(
-            tron_node_url="https://tron.example",
-            source_bridge_address=fake.bridge,
-            destination_verifier_address=None,
-            caller_address=None,
-            no_getcontract=False,
-            source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
-            source_event_transaction_id=bytes.fromhex(
-                TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
-            ),
-            full_toml=False,
-            timeout=1.0,
-        ),
-        opener=fake.opener,
-    )
+    for recovery_id in range(27, 31):
+        legacy_signature = bytes.fromhex(
+            tron_signature_with_recovery_id(TRON_SOURCE_EVENT_SIGNATURE_VECTOR, recovery_id)
+        )
+        assert not module._tron_recoverable_signature_is_canonical(legacy_signature)
+        assert (
+            module._tron_recovered_signature_address20(
+                bytes.fromhex(TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR),
+                legacy_signature,
+            )
+            is None
+        )
 
-    trigger_contract = summary["source_event_transaction"]["trigger_contract"]
-    assert trigger_contract["signature_recovery_id"] == 27
-    assert trigger_contract["signature_recovers_to_owner"] is True
-    assert trigger_contract["signature_recovered_address"] == (
-        "0x41" + fake.owner20.hex()
-    )
+
+def test_live_evidence_rejects_source_event_transaction_legacy_recovery_id_aliases():
+    module = load_live_module()
+
+    for recovery_id in range(27, 31):
+        fake = fake_opener_for(
+            module,
+            submitted_source_event_digests=[TRON_SOURCE_EVENT_DIGEST_VECTOR],
+            source_event_transaction_id=TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR,
+            source_event_transaction_signatures=[
+                tron_signature_with_recovery_id(
+                    TRON_SOURCE_EVENT_SIGNATURE_VECTOR,
+                    recovery_id,
+                )
+            ],
+        )
+
+        try:
+            module.collect_live_evidence(
+                SimpleNamespace(
+                    tron_node_url="https://tron.example",
+                    source_bridge_address=fake.bridge,
+                    destination_verifier_address=None,
+                    caller_address=None,
+                    no_getcontract=False,
+                    source_event_digest=bytes.fromhex(TRON_SOURCE_EVENT_DIGEST_VECTOR),
+                    source_event_transaction_id=bytes.fromhex(
+                        TRON_SOURCE_EVENT_TRANSACTION_ID_VECTOR
+                    ),
+                    full_toml=False,
+                    timeout=1.0,
+                ),
+                opener=fake.opener,
+            )
+        except RuntimeError as exc:
+            assert "source-event transaction signature must be a canonical 65-byte" in str(
+                exc
+            )
+        else:
+            raise AssertionError(
+                f"source-event transaction accepted legacy recovery id {recovery_id}"
+            )
 
 
 def test_live_evidence_rejects_source_event_transaction_raw_data_hash_mismatch():
@@ -8514,9 +8764,176 @@ def test_live_evidence_preflights_source_records_and_full_rollout_args(monkeypat
                 assert exc.__suppress_context__ is True
             else:
                 raise AssertionError(
-                    "TRON full TOML annotation leaked destination parser "
-                    f"{exception_type.__name__}"
-                )
+                "TRON full TOML annotation leaked destination parser "
+                f"{exception_type.__name__}"
+            )
+
+
+def test_live_evidence_source_record_preflight_rejects_non_string_metadata_without_stringifying():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(module)
+    source_record_args = live_full_rollout_args(
+        setup.fake,
+        setup.expected,
+        source_code_hash=setup.source_code_hash,
+    )
+    summary = module.collect_live_evidence(
+        source_record_args,
+        opener=setup.fake.opener,
+    )
+
+    for field in (
+        "address",
+        "source_bridge_owner_base58",
+        "source_bridge_network_id",
+        "source_bridge_config_hash",
+        "source_domain",
+        "target_domain",
+    ):
+        tampered_source = json.loads(json.dumps(summary["source_bridge"]))
+        tampered_source[field] = HostileImportedScalar()
+        try:
+            module._collect_source_record_hashes(tampered_source, source_record_args)
+        except (
+            module.argparse.ArgumentTypeError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
+            pass
+        else:
+            raise AssertionError(
+                f"TRON source-record preflight accepted hostile {field} metadata"
+            )
+
+
+def test_live_evidence_torii_destination_query_rejects_non_string_metadata_without_stringifying():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+
+    for field in (
+        "address",
+        "network_id",
+        "destination_verifier_code_hash",
+        "destination_verifier_key_hash",
+        "destination_binding_hash",
+        "destination_source_domain",
+        "destination_target_domain",
+        "tron_getcontract_bytecode_hash",
+    ):
+        tampered_summary = json.loads(json.dumps(summary))
+        tampered_summary["destination_verifier"][field] = HostileImportedScalar()
+        assert module._torii_destination_query_params(tampered_summary) is None, field
+
+
+def test_live_evidence_route_canary_collection_rejects_non_string_destination_metadata_without_stringifying():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+    transaction_id = bytes.fromhex(TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR)
+    transaction_info_response = {
+        "id": TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+        "receipt": {"result": "SUCCESS"},
+    }
+    trigger_response = {"txID": TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR}
+
+    transaction_summary_fields = (
+        "address",
+        "destination_source_domain",
+        "destination_binding_hash",
+        "verifier_backend_hash",
+        "proof_family_hash",
+        "network_id",
+    )
+    for field in transaction_summary_fields:
+        destination = json.loads(json.dumps(summary["destination_verifier"]))
+        destination[field] = HostileImportedScalar()
+        try:
+            module._route_canary_transaction_summary(
+                transaction_info_response,
+                transaction_id=transaction_id,
+                route_allowlist_hash=setup.expected.route_hash,
+                destination_verifier=destination,
+            )
+        except (
+            module.argparse.ArgumentTypeError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
+            pass
+        else:
+            raise AssertionError(
+                f"route-canary transaction summary accepted hostile {field}"
+            )
+
+    for field in ("address", "destination_source_domain", "destination_target_domain"):
+        destination = json.loads(json.dumps(summary["destination_verifier"]))
+        destination[field] = HostileImportedScalar()
+        try:
+            module._route_canary_trigger_contract_summary(
+                trigger_response,
+                transaction_id=transaction_id,
+                destination_verifier=destination,
+                event_summary=summary["route_canary_transaction"],
+            )
+        except (
+            module.argparse.ArgumentTypeError,
+            RuntimeError,
+            TypeError,
+            ValueError,
+        ):
+            pass
+        else:
+            raise AssertionError(
+                f"route-canary trigger summary accepted hostile {field}"
+            )
+
+    destination = json.loads(json.dumps(summary["destination_verifier"]))
+    destination["address"] = HostileImportedScalar()
+    try:
+        module._route_canary_used_message_proof_summary(
+            "https://tron.example",
+            constant_endpoint="wallet/triggerconstantcontract",
+            destination_verifier=destination,
+            message_id=bytes.fromhex("dd" * 32),
+            caller_address=None,
+            tron_pro_api_key=None,
+            opener=setup.fake.opener,
+            timeout=1.0,
+        )
+    except (module.argparse.ArgumentTypeError, RuntimeError, TypeError, ValueError):
+        pass
+    else:
+        raise AssertionError("route-canary used-message proof accepted hostile address")
 
 
 def test_live_evidence_derives_route_canary_from_verifier_transaction():
@@ -8645,6 +9062,378 @@ def test_live_evidence_full_toml_replay_requires_route_canary_block_metadata():
             raise AssertionError(
                 "TRON full TOML rendered without route-canary block metadata"
             )
+
+
+def test_live_evidence_full_toml_rejects_non_string_route_canary_metadata_without_stringifying():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+
+    cases = (
+        ("root", ("route_allowlist_hash",)),
+        ("destination", ("destination_verifier", "address")),
+        ("destination", ("destination_verifier", "destination_binding_hash")),
+        ("destination", ("destination_verifier", "verifier_backend_hash")),
+        ("destination", ("destination_verifier", "proof_family_hash")),
+        ("destination", ("destination_verifier", "network_id")),
+        ("transaction", ("route_canary_transaction", "transaction_id")),
+        ("transaction", ("route_canary_transaction", "destination_binding_hash")),
+        ("transaction", ("route_canary_transaction", "verifier_backend_hash")),
+        ("transaction", ("route_canary_transaction", "proof_family_hash")),
+        ("transaction", ("route_canary_transaction", "network_id")),
+        ("transaction", ("route_canary_transaction", "message_id")),
+        ("transaction", ("route_canary_transaction", "commitment_root")),
+        ("transaction", ("route_canary_transaction", "statement_hash")),
+        ("trigger", ("route_canary_transaction", "trigger_contract", "owner_address")),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "raw_data_owner_address"),
+        ),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "call_data_sha256"),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "public_inputs_payload_hash",
+            ),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "public_inputs_target_domain",
+            ),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "public_inputs_finality_height",
+            ),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "public_inputs_finality_block_hash",
+            ),
+        ),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "proof_version"),
+        ),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "proof_source_domain"),
+        ),
+        ("transaction", ("route_canary_transaction", "message_proof_used")),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "raw_data_owner_matches_transaction",
+            ),
+        ),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "signature_sha256"),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "signature_recovered_address",
+            ),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "signature_recovers_to_owner",
+            ),
+        ),
+    )
+    for case_id, path in cases:
+        tampered_summary = json.loads(json.dumps(summary))
+        target = tampered_summary
+        for segment in path[:-1]:
+            target = target[segment]
+        target[path[-1]] = HostileImportedScalar()
+
+        assert module._route_canary_transaction_verified(tampered_summary) is False
+        assert module._offline_full_toml_args(tampered_summary) is None, case_id
+
+
+def test_live_evidence_full_toml_rejects_non_string_base_metadata_without_stringifying():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+
+    cases = (
+        ("source", ("source_bridge", "address"), "--bridge-address"),
+        (
+            "source",
+            ("source_bridge", "source_bridge_owner_base58"),
+            "--owner-address",
+        ),
+        ("source", ("source_bridge", "source_bridge_network_id"), "--network-id"),
+        (
+            "source",
+            ("source_bridge", "source_bridge_config_hash"),
+            "--expected-config-hash",
+        ),
+        (
+            "source",
+            ("source_bridge", "source_bridge_emitter_code_hash"),
+            "--source-bridge-emitter-code-hash",
+        ),
+        (
+            "source",
+            ("source_bridge", "source_bridge_runtime_bytecode_hex"),
+            "--source-bridge-runtime-bytecode-hex",
+        ),
+        (
+            "input",
+            ("source_record_inputs", "source_trust_anchor_hash"),
+            "--source-trust-anchor-hash",
+        ),
+        (
+            "input",
+            ("source_record_inputs", "consensus_verifier_hash"),
+            "--consensus-verifier-hash",
+        ),
+        (
+            "input",
+            ("source_record_inputs", "message_inclusion_verifier_hash"),
+            "--message-inclusion-verifier-hash",
+        ),
+        (
+            "input",
+            ("source_record_inputs", "finality_policy_hash"),
+            "--finality-policy-hash",
+        ),
+        (
+            "input",
+            ("source_record_inputs", "deployment_receipt_hash"),
+            "--deployment-receipt-hash",
+        ),
+        (
+            "input",
+            ("source_record_inputs", "adapter_verifier_vk_hash"),
+            "--adapter-verifier-vk-hash",
+        ),
+        (
+            "destination",
+            ("destination_verifier", "address"),
+            "--destination-verifier-address",
+        ),
+        (
+            "destination",
+            ("destination_verifier", "destination_verifier_code_hash"),
+            "--destination-verifier-code-hash",
+        ),
+        (
+            "destination",
+            ("destination_verifier", "destination_verifier_key_hash"),
+            "--destination-verifier-key-hash",
+        ),
+        (
+            "destination",
+            ("destination_verifier", "destination_verifier_runtime_bytecode_hex"),
+            "--destination-verifier-runtime-bytecode-hex",
+        ),
+        (
+            "canary",
+            ("route_canary", "evidence_hash"),
+            "--route-canary-evidence-hash",
+        ),
+    )
+    for case_id, path, flag in cases:
+        tampered_summary = json.loads(json.dumps(summary))
+        target = tampered_summary
+        for segment in path[:-1]:
+            target = target[segment]
+        target[path[-1]] = HostileImportedScalar()
+
+        assert flag not in module._offline_args(tampered_summary), case_id
+        assert module._offline_full_toml_args(tampered_summary) is None, case_id
+        try:
+            module.render_offline_full_toml(tampered_summary)
+        except ValueError as exc:
+            assert "full TOML" in str(exc)
+        else:
+            raise AssertionError(f"TRON full TOML rendered hostile {case_id} metadata")
+
+
+def test_live_evidence_full_toml_annotation_rejects_non_string_metadata_without_stringifying():
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(
+        module,
+        route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+    )
+    summary = module.collect_live_evidence(
+        live_full_rollout_args(
+            setup.fake,
+            setup.expected,
+            source_code_hash=setup.source_code_hash,
+            route_canary_transaction_id=bytes.fromhex(
+                TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+            ),
+        ),
+        opener=setup.fake.opener,
+    )
+    full_toml = module.render_offline_full_toml(summary)
+
+    cases = (
+        ("source", ("source_bridge", "address")),
+        ("source", ("source_bridge", "source_bridge_emitter_code_hash")),
+        ("source", ("source_bridge", "source_bridge_runtime_bytecode_hex")),
+        ("source", ("source_bridge", "source_bridge_config_hash")),
+        ("destination", ("destination_verifier", "address")),
+        ("destination", ("destination_verifier", "tron_getcontract_bytecode_hash")),
+        (
+            "destination",
+            ("destination_verifier", "destination_verifier_runtime_bytecode_hex"),
+        ),
+        ("destination", ("destination_verifier", "destination_verifier_key_hash")),
+        ("destination", ("destination_verifier", "verifier_backend_hash")),
+        ("destination", ("destination_verifier", "proof_family_hash")),
+        ("transaction", ("route_canary_transaction", "transaction_id")),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "owner_address"),
+        ),
+        ("transaction", ("route_canary_transaction", "block_number")),
+        ("transaction", ("route_canary_transaction", "block_timestamp")),
+        ("transaction", ("route_canary_transaction", "log_index")),
+        ("transaction", ("route_canary_transaction", "message_id")),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "call_data_sha256"),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "public_inputs_payload_hash",
+            ),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "public_inputs_target_domain",
+            ),
+        ),
+        ("transaction", ("route_canary_transaction", "statement_hash")),
+        ("transaction", ("route_canary_transaction", "commitment_root")),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "public_inputs_finality_height",
+            ),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "public_inputs_finality_block_hash",
+            ),
+        ),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "proof_version"),
+        ),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "proof_source_domain"),
+        ),
+        ("transaction", ("route_canary_transaction", "message_proof_used")),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "raw_data_owner_matches_transaction",
+            ),
+        ),
+        (
+            "trigger",
+            ("route_canary_transaction", "trigger_contract", "signature_sha256"),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "signature_recovered_address",
+            ),
+        ),
+        (
+            "trigger",
+            (
+                "route_canary_transaction",
+                "trigger_contract",
+                "signature_recovers_to_owner",
+            ),
+        ),
+    )
+    for case_id, path in cases:
+        tampered_summary = json.loads(json.dumps(summary))
+        target = tampered_summary
+        for segment in path[:-1]:
+            target = target[segment]
+        target[path[-1]] = HostileImportedScalar()
+
+        try:
+            module._annotate_full_toml_with_live_metadata(full_toml, tampered_summary)
+        except (ValueError, RuntimeError) as exc:
+            assert "secret-token" not in str(exc), case_id
+        else:
+            raise AssertionError(f"TRON full TOML annotated hostile {case_id} metadata")
 
 
 def test_live_evidence_full_toml_requires_expected_tron_dpos_source_gate_hash():
@@ -9682,6 +10471,43 @@ def test_live_evidence_rejects_route_canary_high_s_signature():
         )
     else:
         raise AssertionError("route canary with high-S signature was accepted")
+
+
+def test_live_evidence_rejects_route_canary_legacy_recovery_id_aliases():
+    module = load_live_module()
+    route_canary_signature = tron_signature_hex(
+        module,
+        hashlib.sha256(bytes.fromhex(TRON_ROUTE_CANARY_RAW_DATA_HEX_VECTOR)).digest(),
+        nonce_start=17,
+    )
+
+    for recovery_id in range(27, 31):
+        setup = route_canary_full_rollout_setup(
+            module,
+            route_canary_transaction_id=TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR,
+            route_canary_transaction_signatures=[
+                tron_signature_with_recovery_id(route_canary_signature, recovery_id)
+            ],
+        )
+
+        try:
+            module.collect_live_evidence(
+                live_full_rollout_args(
+                    setup.fake,
+                    setup.expected,
+                    source_code_hash=setup.source_code_hash,
+                    route_canary_transaction_id=bytes.fromhex(
+                        TRON_ROUTE_CANARY_TRANSACTION_ID_VECTOR
+                    ),
+                ),
+                opener=setup.fake.opener,
+            )
+        except RuntimeError as exc:
+            assert "route-canary transaction signature must be a canonical 65-byte" in str(
+                exc
+            )
+        else:
+            raise AssertionError(f"route canary accepted legacy recovery id {recovery_id}")
 
 
 def test_live_evidence_rejects_route_canary_wrong_signature_signer():

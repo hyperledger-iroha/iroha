@@ -1133,7 +1133,8 @@ mod tests {
             stripe_layout: DaStripeLayout::default(),
             queued_at_unix: 0,
             rent_quote: DaRentQuote::default(),
-            operator_signature: Signature::from_bytes(&[0x11; 64]),
+            operator_signature: Signature::try_from_bytes(&[0x11; 64])
+                .expect("checked core DA receipt operator signature fixture"),
         }
     }
 
@@ -1150,7 +1151,8 @@ mod tests {
             None,
             RetentionClass::default(),
             receipt.storage_ticket,
-            Signature::from_bytes(&[0x33; 64]),
+            Signature::try_from_bytes(&[0x33; 64])
+                .expect("checked core DA receipt commitment acknowledgement signature fixture"),
         )
     }
 
