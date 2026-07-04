@@ -712,7 +712,7 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
     metadata_slot = int.from_bytes(programdata_metadata[4:12], "little")
     if metadata_slot != programdata_slot:
         raise ValueError("Solana ProgramData metadata slot must match ProgramData slot")
-    if programdata_metadata[12] != 0 or any(programdata_metadata[13:45]):
+    if programdata_metadata[12] != 0:
         raise ValueError("Solana ProgramData metadata must encode no upgrade authority")
 
     normalized = {

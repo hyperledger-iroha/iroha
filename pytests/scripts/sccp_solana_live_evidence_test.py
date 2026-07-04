@@ -127,13 +127,20 @@ def _program_account_data(module, programdata_raw):
     return module.UPGRADEABLE_LOADER_PROGRAM_TAG.to_bytes(4, "little") + programdata_raw
 
 
-def _programdata_account_data(module, *, slot, program_bytes, authority=None):
+def _programdata_account_data(
+    module,
+    *,
+    slot,
+    program_bytes,
+    authority=None,
+    stale_authority=None,
+):
     data = bytearray()
     data.extend(module.UPGRADEABLE_LOADER_PROGRAMDATA_TAG.to_bytes(4, "little"))
     data.extend(slot.to_bytes(8, "little"))
     if authority is None:
         data.append(0)
-        data.extend(bytes(32))
+        data.extend(stale_authority or bytes(32))
     else:
         data.append(1)
         data.extend(authority)
@@ -805,6 +812,41 @@ def test_live_solana_evidence_collects_immutable_program_hash_and_toml():
     assert rendered.count("# sccp_solana_programdata_metadata_base64") == 1
     assert rendered.count("# sccp_solana_programdata_executable_blake2b256") == 1
     assert rendered.count("# sccp_solana_programdata_executable_base64") == 1
+
+
+def test_live_solana_evidence_accepts_immutable_programdata_with_retained_authority_bytes():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = bytes.fromhex("7f454c460102030405")
+    stale_authority = bytes.fromhex("c4f2feefb3ccdacce6859d6302876c2ea14084081193d57133ba6b6cef08d5aa")
+    programdata_data = _programdata_account_data(
+        module,
+        slot=4321,
+        program_bytes=program_bytes,
+        stale_authority=stale_authority,
+    )
+    programdata_metadata = programdata_data[: module.PROGRAMDATA_METADATA_LEN]
+
+    live = module.collect_live_evidence(
+        "https://solana.example.invalid",
+        verifier_program_id=program_id,
+        opener=_fake_solana_rpc(
+            module,
+            program_id=program_id,
+            programdata_address=programdata_address,
+            programdata_data=programdata_data,
+        ),
+        timeout=3.0,
+    )
+
+    assert live["program_immutable"] is True
+    assert live["programdata_metadata_base64"] == base64.b64encode(
+        programdata_metadata
+    ).decode("ascii")
+    assert live["programdata_metadata_blake2b256"] == (
+        "0x" + hashlib.blake2b(programdata_metadata, digest_size=32).hexdigest()
+    )
     assert "[[zk.sccp_destination_rollouts]]" in rendered
     assert "[[zk.sccp_route_allowlists]]" in rendered
     assert f'verifier_identity = "{program_id}"' in rendered
