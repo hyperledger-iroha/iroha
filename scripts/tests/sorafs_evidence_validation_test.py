@@ -151,9 +151,31 @@ def test_archive_artifact_path_rejects_nonportable_labels() -> None:
     assert is_archive_portable_artifact_path("bad\nname.json") is False
     assert is_archive_portable_artifact_path("nested/%2e%2e/rollout.json") is False
     assert is_archive_portable_artifact_path("nested/bad%2Fname.json") is False
+    assert is_archive_portable_artifact_path("nested/bad&#47;name.json") is False
     assert is_archive_portable_artifact_path("nested/C%3A/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/C&#58;/rollout.json") is False
     assert is_archive_portable_artifact_path("nested/http%3A/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/http&#58;/rollout.json") is False
     assert is_archive_portable_artifact_path("nested/%252e%252e/rollout.json") is False
+    assert is_archive_portable_artifact_path("nested/private_key.json") is False
+    assert is_archive_portable_artifact_path("nested/private%5Fkey.json") is False
+    assert is_archive_portable_artifact_path("nested/private&#95;key.json") is False
+    assert is_archive_portable_artifact_path("nested/private%26%2395%3Bkey.json") is False
+    assert is_archive_portable_artifact_path("nested/secret.json") is False
+    assert is_archive_portable_artifact_path("nested/api-token.json") is False
+    assert is_archive_portable_artifact_path("nested/auth%2Dtoken.json") is False
+    assert is_archive_portable_artifact_path("nested/auth&#45;token.json") is False
+    assert is_archive_portable_artifact_path("nested/id-token.json") is False
+    assert is_archive_portable_artifact_path("nested/jwt.json") is False
+    assert is_archive_portable_artifact_path("nested/oauth-token.json") is False
+    assert is_archive_portable_artifact_path("nested/refresh%2Dtoken.json") is False
+    assert is_archive_portable_artifact_path("nested/session%255Ftoken.json") is False
+    assert is_archive_portable_artifact_path("nested/set-cookie.txt") is False
+    assert is_archive_portable_artifact_path("nested/password.txt") is False
+    assert is_archive_portable_artifact_path("nested/bearer-token.txt") is False
+    assert is_archive_portable_artifact_path("nested/bearer%252Dtoken.txt") is False
+    assert is_archive_portable_artifact_path("nested/proof-token-report.json") is True
+    assert is_archive_portable_artifact_path("nested/proof&#45;token-report.json") is True
 
 
 def test_build_evidence_artifact_records_payload_free_fingerprint() -> None:

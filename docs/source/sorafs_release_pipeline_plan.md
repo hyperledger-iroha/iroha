@@ -48,7 +48,8 @@ summary: Current SF-6 release automation and QA surfaces.
 ## Tooling
 
 - `ci/check_sorafs_cli_release.sh` is the committed local release gate for
-  formatting, Clippy, shell syntax, and focused SoraFS crate tests.
+  formatting, Clippy, shell syntax, adversarial release-helper tests, and
+  focused SoraFS crate tests.
 - `docs/examples/sorafs_ci.md` carries the GitHub Actions release workflow
   template. Commit `.github/workflows/sorafs-cli-release.yml` from that
   template during release cutover if GitHub-hosted packaging is required.
@@ -72,13 +73,26 @@ summary: Current SF-6 release automation and QA surfaces.
 - `scripts/release_sorafs_cli.sh` wraps `sorafs_cli manifest sign` and
   `manifest verify-signature`, producing signing/verification summaries so the
   release job fails fast if bundle metadata drifts before artefacts publish.
+  The wrapper rejects symlinked or non-regular bundle, signature, sign-summary,
+  and verify-summary targets, plus symlinked output-parent components, before
+  invoking the signing CLI so release evidence cannot be written through
+  ambiguous filesystem aliases. Wrapper options must also provide explicit
+  non-option-shaped values, and manifest, chunk-plan, chunk-summary, identity
+  token file, and prebuilt CLI inputs are rejected when they are symlinks,
+  missing, non-regular, or reached through symlinked parent components.
 - `scripts/package_sorafs_validate_release.sh` builds or packages
   `sorafs-validate` into `dist/sorafs-validate-release/`, stages the checked
   `include/sorafs_reference.h` C FFI header for downstream SDK bindings,
   records binary/header/archive SHA256 digests, records manifest and staged-file
   digests, can emit a detached manifest signature with
   `--manifest-signing-key`, and runs fixture smoke checks before archive
-  creation. Archive creation uses a metadata-normalized tar/gzip writer
+  creation. Packager options must provide explicit non-option-shaped values,
+  prebuilt binaries, manifest signing keys, manifest public keys, and the
+  checked FFI header are rejected when they are symlinks, missing, non-regular,
+  non-executable where required, or reached through symlinked parent components,
+  and `--out-dir` is rejected when it is a symlink or parent-aliased before any
+  cleanup can remove staged artifacts. Archive creation uses a
+  metadata-normalized tar/gzip writer
   (sorted entries, zero mtime, fixed uid/gid, deterministic file modes) so
   identical staged inputs reproduce the same archive hash. Generated `dist/*`
   artifacts remain untracked; keep only `dist/.gitkeep` committed.
@@ -119,7 +133,8 @@ summary: Current SF-6 release automation and QA surfaces.
   evidence schemas, reject extra required-row fields outside the schema-closed
   payload-free required-row contract, require canonical unique artifact paths
   whose raw or repeatedly percent-decoded components do not contain traversal,
-  hidden separators, drive prefixes, or URI-scheme-like path tokens, require
+  hidden separators, drive prefixes, URI-scheme-like path tokens, or
+  secret-looking labels, require
   lowercase SHA-256 digests, reject explicit artifact `status` labels
   outside successful states such as `passed` or `verified`, reject
   extra artifact-row fields
@@ -172,7 +187,7 @@ summary: Current SF-6 release automation and QA surfaces.
   rejects reviewed summary, verifier, output, URL, and passthrough argument
   strings whose raw or repeatedly percent-decoded components contain
   secret-looking material, traversal, path separators, drive prefixes, or
-  URI-scheme-like path tokens before they can enter dry-run plans,
+  URI-scheme-like host/path tokens before they can enter dry-run plans,
   rejects non-object or non-strict-JSON collection-plan renderings before
   stdout or verifier launch,
   and emits that dry-run collection plan so release operators can inspect the

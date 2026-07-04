@@ -38,3 +38,5 @@ case_status
 deposit_quote
 --intake-route
 deposit_confirm
+--route-body-blake3-hex
+9999999999999999999999999999999999999999999999999999999999999999

@@ -1036,12 +1036,18 @@ mod tests {
         0, 0,
     ];
 
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn signature_with_malformed_ed25519_r(
         signature: &SignatureOf<ModerationReproBodyV1>,
+        replacement_r: &[u8; 32],
     ) -> SignatureOf<ModerationReproBodyV1> {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
-            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
 
@@ -1084,17 +1090,30 @@ mod tests {
 
     #[test]
     fn validate_rejects_malformed_ed25519_signature_r() {
-        let mut manifest = sign_manifest(sample_body(), &["council"]);
-        manifest.signatures[0].signature =
-            signature_with_malformed_ed25519_r(&manifest.signatures[0].signature);
+        let manifest = sign_manifest(sample_body(), &["council"]);
 
-        let err = manifest
-            .validate()
-            .expect_err("malformed moderation signature R must fail admission");
-        let ModerationReproValidationError::BadSignature { source, .. } = err else {
-            panic!("expected bad moderation signature error: {err:?}");
-        };
-        assert_eq!(source, iroha_crypto::Error::BadSignature);
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let mut invalid_manifest = manifest.clone();
+            invalid_manifest.signatures[0].signature = signature_with_malformed_ed25519_r(
+                &manifest.signatures[0].signature,
+                &replacement_r,
+            );
+
+            let err = invalid_manifest
+                .validate()
+                .expect_err("malformed moderation signature R must fail admission");
+            let ModerationReproValidationError::BadSignature { source, .. } = err else {
+                panic!("expected bad moderation signature error: {err:?}");
+            };
+            assert_eq!(
+                source,
+                iroha_crypto::Error::BadSignature,
+                "{label} moderation signature R produced unexpected error"
+            );
+        }
     }
 
     #[test]

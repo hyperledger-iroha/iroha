@@ -352,6 +352,10 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked identifier fixture keypair")
@@ -370,9 +374,9 @@ mod tests {
             .expect("sign checked identifier fixture payload")
     }
 
-    fn with_noncanonical_ed25519_r(signature: &Signature) -> Signature {
+    fn with_malformed_ed25519_r(signature: &Signature, replacement_r: &[u8; 32]) -> Signature {
         let mut bytes = signature.payload().to_vec();
-        bytes[..NONCANONICAL_ED25519_R.len()].copy_from_slice(&NONCANONICAL_ED25519_R);
+        bytes[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&bytes)
     }
 
@@ -668,21 +672,42 @@ mod tests {
     }
 
     #[test]
-    fn identifier_resolution_receipt_rejects_noncanonical_ed25519_signature_r() {
+    fn identifier_resolution_receipt_rejects_all_zero_signature_material() {
+        let receipt = IdentifierResolutionReceipt {
+            payload: live_identifier_resolution_payload_fixture(),
+            attestation: RamLfeReceiptAttestation::Signed(Signature::from_bytes(&[0u8; 64])),
+        };
+        let signer = checked_seed_keypair(0x41);
+
+        assert_eq!(
+            receipt.verify(signer.public_key()).unwrap_err(),
+            iroha_crypto::Error::BadSignature
+        );
+    }
+
+    #[test]
+    fn identifier_resolution_receipt_rejects_malformed_ed25519_signature_r() {
         let payload = live_identifier_resolution_payload_fixture();
         let signer = checked_seed_keypair(0x42);
         let signature = Signature::from_bytes(checked_signature(&signer, &payload).payload());
-        let receipt = IdentifierResolutionReceipt {
-            payload,
-            attestation: RamLfeReceiptAttestation::Signed(with_noncanonical_ed25519_r(&signature)),
-        };
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let receipt = IdentifierResolutionReceipt {
+                payload: payload.clone(),
+                attestation: RamLfeReceiptAttestation::Signed(with_malformed_ed25519_r(
+                    &signature,
+                    &replacement_r,
+                )),
+            };
 
-        assert_eq!(
-            receipt
-                .verify(signer.public_key())
-                .expect_err("noncanonical identifier receipt Ed25519 R must fail admission"),
-            iroha_crypto::Error::BadSignature
-        );
+            assert_eq!(
+                receipt.verify(signer.public_key()).unwrap_err(),
+                iroha_crypto::Error::BadSignature,
+                "{label} identifier receipt Ed25519 R must fail admission"
+            );
+        }
     }
 
     #[test]

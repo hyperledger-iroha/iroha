@@ -8,6 +8,7 @@ import {
   generateKeyPair,
   isKagemushaRecursiveSpendNativeAvailable,
   kagemushaRecursiveSpendInit,
+  kagemushaRecursiveSpendTopUp,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   normalizeCryptoAlgorithm,
   preferredKagemushaOfflineSpendMode,
@@ -246,6 +247,11 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       `${label} Kagemusha native bridge must be unavailable`,
     );
     assert.equal(
+      crypto.isKagemushaRecursiveSpendTopUpNativeAvailable(),
+      false,
+      `${label} Kagemusha top-up bridge must be unavailable`,
+    );
+    assert.equal(
       crypto.preferredKagemushaOfflineSpendMode(),
       null,
       `${label} browser build must expose no preferred Kagemusha mode without recursive native support`,
@@ -354,6 +360,11 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       () => crypto.kagemushaRecursiveSpendCompactPaymentTokenFromBundle(),
       /unavailable in browser-only crypto builds/,
       `${label} recursive spend compact projection must be native-only`,
+    );
+    assert.throws(
+      () => crypto.kagemushaRecursiveSpendTopUp(),
+      /unavailable in browser-only crypto builds/,
+      `${label} recursive spend top-up must be native-only`,
     );
     assert.throws(
       () => crypto.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(),
@@ -525,6 +536,10 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     assert.throws(
       () => crypto.kagemushaRecursiveSpendInit(Buffer.from([1])),
       /kagemushaRecursiveSpendInit is unavailable in browser-only crypto builds/,
+    );
+    assert.throws(
+      () => crypto.kagemushaRecursiveSpendTopUp(Buffer.from([1])),
+      /kagemushaRecursiveSpendTopUp is unavailable in browser-only crypto builds/,
     );
     assert.throws(
       () => crypto.encodeKagemushaRecursiveSpendInitRequest({}),

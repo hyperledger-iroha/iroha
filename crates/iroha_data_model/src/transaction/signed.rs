@@ -1594,10 +1594,18 @@ mod tests {
         0, 0,
     ];
 
-    fn signature_of_with_malformed_ed25519_r<T>(signature: &SignatureOf<T>) -> SignatureOf<T> {
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_of_with_malformed_ed25519_r<T>(
+        signature: &SignatureOf<T>,
+        replacement_r: &[u8; 32],
+    ) -> SignatureOf<T> {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
-            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         SignatureOf::from_signature(iroha_crypto::Signature::from_bytes(&payload))
     }
 
@@ -1852,19 +1860,28 @@ mod tests {
 
     #[test]
     fn signed_transaction_rejects_malformed_ed25519_signature_r() {
-        let mut invalid_tx = sample_signed_transaction();
-        invalid_tx.signature = TransactionSignature(signature_of_with_malformed_ed25519_r(
-            &invalid_tx.signature.0,
-        ));
+        let tx = sample_signed_transaction();
 
-        let err = invalid_tx
-            .verify_signature()
-            .expect_err("malformed Ed25519 transaction signature R must fail admission");
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let mut invalid_tx = tx.clone();
+            invalid_tx.signature = TransactionSignature(signature_of_with_malformed_ed25519_r(
+                &tx.signature.0,
+                &replacement_r,
+            ));
 
-        assert_eq!(
-            err,
-            TransactionSignatureError::CryptoError("Signature verification failed".to_owned())
-        );
+            let err = invalid_tx
+                .verify_signature()
+                .expect_err("malformed Ed25519 transaction signature R must fail admission");
+
+            assert_eq!(
+                err,
+                TransactionSignatureError::CryptoError("Signature verification failed".to_owned()),
+                "{label} transaction signature R was not rejected"
+            );
+        }
     }
 
     #[test]

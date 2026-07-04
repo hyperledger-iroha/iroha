@@ -55,7 +55,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     require_object_array,
@@ -90,7 +90,11 @@ DEFAULT_MIN_PROVIDERS = 3
 DEFAULT_MIN_CHALLENGES = 3
 HEX64_LEN = 64
 PROVIDER_LABEL_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-name`"
+PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-*`"
+CHALLENGE_LABEL_PATTERN = re.compile(r"^por-challenge-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+CHALLENGE_LABEL_ERROR = (
+    "challenges[].name must match canonical lowercase `por-challenge-*`"
+)
 FORBIDDEN_PROVIDER_LABEL_MARKERS = frozenset(
     (
         "debug",
@@ -107,6 +111,7 @@ FORBIDDEN_PROVIDER_LABEL_MARKERS = frozenset(
         "todo",
     )
 )
+FORBIDDEN_CHALLENGE_LABEL_MARKERS = FORBIDDEN_PROVIDER_LABEL_MARKERS
 
 REQUIRED_RUNTIME_ROUTES = (
     "por_status",
@@ -221,6 +226,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "provider_count",
         "providers",
         "challenge_count",
+        "challenges",
         "seed_replay_digest_hex",
         "policy_digest_hex",
         "raw_randomness_included",
@@ -364,7 +370,14 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_maximum_number(
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -407,6 +420,28 @@ def require_provider_label(record: dict[str, Any], errors: list[str]) -> str:
     return provider
 
 
+def require_challenge_label(record: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed lowercase production challenge inventory label."""
+
+    challenge = require_string(record, "name", errors)
+    if not challenge:
+        return ""
+    if CHALLENGE_LABEL_PATTERN.fullmatch(challenge) is None:
+        errors.append(CHALLENGE_LABEL_ERROR)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_CHALLENGE_LABEL_MARKERS
+        if marker in challenge.split("-")
+    )
+    if forbidden:
+        errors.append(
+            f"challenges[].name must not contain non-production markers {forbidden}"
+        )
+        return ""
+    return challenge
+
+
 def validate_randomness(
     payload: dict[str, Any],
     errors: list[str],
@@ -431,6 +466,16 @@ def validate_randomness(
     for _index, record in require_object_array(payload, "providers", errors):
         require_provider_label(record, errors)
     require_minimum_int(payload, "challenge_count", options.min_challenges, errors)
+    require_string_inventory_count_match(
+        payload,
+        "challenges",
+        "challenge_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for _index, record in require_object_array(payload, "challenges", errors):
+        require_challenge_label(record, errors)
     require_hex(payload, "seed_replay_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_false(payload, "raw_randomness_included", errors)
@@ -462,7 +507,7 @@ def validate_scheduler_runtime(
     require_bool_true(payload, "ingestion_backlog_bounded", errors)
     require_bool_true(payload, "duplicate_samples_within_budget", errors)
     require_hex(payload, "seed_replay_digest_hex", HEX64_LEN, errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_scheduler_lag_seconds",
         options.max_scheduler_lag_secs,
@@ -519,7 +564,7 @@ def validate_reporting_archive(
         REQUIRED_MANUAL_TRIGGER_STATE,
         errors,
     )
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "report_latency_ms",
         options.max_report_latency_ms,

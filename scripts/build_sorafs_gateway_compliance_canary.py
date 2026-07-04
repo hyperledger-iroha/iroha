@@ -26,7 +26,14 @@ from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
     DEFAULT_MIN_DENYLIST_ENTRIES,
     DEFAULT_MIN_GATEWAYS,
     DEFAULT_MIN_HONEY_PROBES,
+    DENYLIST_ENTRY_LABEL_ERROR,
+    DENYLIST_ENTRY_LABEL_PATTERN,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     FORBIDDEN_CONTROLLER_INSTANCE_ID_MARKERS,
+    GATEWAY_LABEL_ERROR,
+    GATEWAY_LABEL_PATTERN,
+    HONEY_PROBE_LABEL_ERROR,
+    HONEY_PROBE_LABEL_PATTERN,
     KIND_BY_NAME,
     REQUIRED_CONTROLLER_FEEDS,
     REQUIRED_DENIAL_REASONS,
@@ -55,17 +62,21 @@ from sorafs_runner_preflight import runner_url_arg_is_plan_safe  # noqa: E402
 
 CANARY_KINDS = tuple(KIND_BY_NAME)
 HEX64_LEN = 64
-DEFAULT_GATEWAYS = ("gateway-a", "gateway-b", "gateway-c")
+DEFAULT_GATEWAYS = (
+    "gateway-compliance-gateway-a",
+    "gateway-compliance-gateway-b",
+    "gateway-compliance-gateway-c",
+)
 DEFAULT_DENYLIST_ENTRIES = (
-    "ofac",
-    "eu-sanctions",
-    "malware",
-    "csam-hash",
-    "legal-hold",
+    "gateway-denylist-entry-ofac",
+    "gateway-denylist-entry-eu-sanctions",
+    "gateway-denylist-entry-malware",
+    "gateway-denylist-entry-csam-hash",
+    "gateway-denylist-entry-legal-hold",
 )
 DEFAULT_ENFORCEMENT_ROUTES = REQUIRED_ENFORCEMENT_ROUTES
 DEFAULT_HONEY_PROBES = tuple(
-    f"honey-probe-{index}" for index in range(DEFAULT_MIN_HONEY_PROBES)
+    f"gateway-honey-probe-{index:02d}" for index in range(DEFAULT_MIN_HONEY_PROBES)
 )
 CONTROLLER_TRUE_CLAIMS = (
     "iroha_config_bound",
@@ -114,7 +125,7 @@ FORBIDDEN_PAYLOAD_CLAIMS = {
 CANARY_URL_ARG_ERROR = (
     "SoraFS gateway compliance canary URL arguments must not contain userinfo, "
     "query strings, fragments, control characters, encoded traversal, separators, "
-    "drive prefixes, URI-scheme-like path tokens, or secret-looking host/path "
+    "drive prefixes, URI-scheme-like host/path tokens, or secret-looking host/path "
     "components"
 )
 
@@ -235,6 +246,68 @@ def validate_controller_instance_id_arg(
         )
 
 
+def render_inventory_label_error(label_error: str, option: str) -> str:
+    """Render checker inventory-label diagnostics against builder constants."""
+
+    return (
+        label_error.replace("gateways[].name", option)
+        .replace("denylist_entries[].name", option)
+        .replace("probes[].name", option)
+    )
+
+
+def validate_static_inventory_labels(
+    values: Iterable[str],
+    *,
+    option: str,
+    pattern,
+    label_error: str,
+    errors: list[str],
+) -> None:
+    """Validate fixed builder inventory labels before generating evidence."""
+
+    for value in values:
+        validate_canonical_string(value, option=option, errors=errors)
+        if not isinstance(value, str):
+            continue
+        if pattern.fullmatch(value) is None:
+            errors.append(render_inventory_label_error(label_error, option))
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in value.split("-")
+        )
+        if forbidden:
+            errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def validate_default_inventories(errors: list[str]) -> None:
+    """Validate fixed inventories that are not operator-provided CLI args."""
+
+    validate_static_inventory_labels(
+        DEFAULT_GATEWAYS,
+        option="DEFAULT_GATEWAYS",
+        pattern=GATEWAY_LABEL_PATTERN,
+        label_error=GATEWAY_LABEL_ERROR,
+        errors=errors,
+    )
+    validate_static_inventory_labels(
+        DEFAULT_DENYLIST_ENTRIES,
+        option="DEFAULT_DENYLIST_ENTRIES",
+        pattern=DENYLIST_ENTRY_LABEL_PATTERN,
+        label_error=DENYLIST_ENTRY_LABEL_ERROR,
+        errors=errors,
+    )
+    validate_static_inventory_labels(
+        DEFAULT_HONEY_PROBES,
+        option="DEFAULT_HONEY_PROBES",
+        pattern=HONEY_PROBE_LABEL_PATTERN,
+        label_error=HONEY_PROBE_LABEL_ERROR,
+        errors=errors,
+    )
+
+
 def validate_feed_names(args: argparse.Namespace, errors: list[str]) -> None:
     """Validate reviewed feed names and bind the optional count cross-check."""
 
@@ -309,6 +382,7 @@ def route_records(args: argparse.Namespace) -> list[dict[str, Any]]:
             "name": name,
             "passed": True,
             "status_code": 200,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "latency_ms": args.route_latency_ms,
             "authz_enforced": True,
         }
@@ -514,6 +588,11 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         return
 
     if args.kind == "enforcement_probe":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         validate_denial_reasons(args, errors)
         return
 
@@ -545,6 +624,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     validate_canonical_string(args.deployment_id, option="--deployment-id", errors=errors)
     validate_canonical_string(args.environment, option="--environment", errors=errors)
     validate_hex64(args.bundle_digest_hex, option="--bundle-digest-hex", errors=errors)
+    validate_default_inventories(errors)
     validate_kind_inputs(args, errors)
     return errors
 
@@ -650,6 +730,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=positive_int_arg,
         default=120,
     )
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--denial-reason", action="append", default=[])
     parser.add_argument("--audit-digest-hex")
     parser.add_argument("--override-digest-hex")

@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_pdp_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5927c163d62714dfb922b1c80b843e321005bd240dc3cf6723553758e7754f77
-source_last_modified: "2026-07-03T13:09:01.361553+00:00"
+source_hash: 6e51d985414b72d41d21f816a127834baede9f49e91df1e80adda6749ed60b62
+source_last_modified: "2026-07-04T05:33:55.835244+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T13:09:01.361553+00:00
+source_mtime: 2026-07-04T05:33:55.835244+00:00
 ---
 
 # Sora-PDP Hot Storage Proofs
@@ -49,7 +49,10 @@ Implemented locally:
   its `policy_digest_hex` and `provider_roster_digest_hex` to the matching
   valid proof-generation digests. Provider-transport artifacts also bind
   `route_count` to the unique canonical `routes[].name` inventory and reject
-  duplicate or unknown route entries before promotion can report ready.
+  duplicate or unknown route entries before promotion can report ready. Route
+  `latency_ms` evidence must be non-negative integer milliseconds before
+  satisfying the route-latency ceiling, and every provider route response must
+  include a `body_blake3_hex` digest.
   Proof-generation artifacts also bind `provider_count`, `challenge_count`, and
   `proof_count` to the unique canonical `providers[].name`, `challenges[].name`,
   and `proofs[].name` inventories and reject duplicate provider, challenge, or
@@ -58,9 +61,15 @@ Implemented locally:
   challenge inventory labels must use reviewed lowercase `pdp-challenge-*`
   labels without non-production markers, and proof inventory labels must use
   reviewed lowercase `pdp-proof-*` labels without non-production markers.
+  Proof-generation `max_proof_latency_ms` evidence must be positive integer
+  milliseconds before satisfying the proof-latency ceiling.
   Observability artifacts also bind `metric_count` to the unique canonical
   `metrics` inventory, require the reviewed PDP metric set, and reject duplicate
   or unknown metric labels before promotion can report ready.
+  PDP payload-safety artifacts must explicitly set `response_bodies_included`,
+  `raw_challenge_bytes_included`, `raw_proof_bytes_included`,
+  `raw_export_included`, `raw_report_included`, and
+  `critical_alerts_firing` to `false` before promotion can report ready.
   The summary exports the sorted reviewed `metrics` inventory plus
   `metric_count_values`, and the aggregate production-readiness gate requires
   those fields to match the observability artifact fingerprint before final
@@ -86,7 +95,8 @@ Implemented locally:
   proof minimum counts, reviewed `provider-*` provider names plus reviewed
   `pdp-challenge-*` challenge names and `pdp-proof-*` proof names whose unique
   inventories match their scalar counts, rejects duplicate or non-production
-  provider/challenge/proof names before writing, route/proof latency thresholds,
+  provider/challenge/proof names before writing, integer route/proof latency thresholds,
+  explicit `--route-body-blake3-hex` evidence for provider transport routes,
   config-backed governance metadata, and reviewed policy and provider-roster
   digest input for proof-generation and governance-approval canaries, then
   validates every generated artifact through
@@ -287,6 +297,9 @@ Completed local foundations:
 - Keep the fail-closed PDP rollout evidence gate and collection planner covered
   with proof-summary digest binding and rejection of evidence supplied for
   excluded `--require-kind` values.
+- Require provider-transport route latency evidence to be non-negative and
+  proof-generation max-latency evidence to be positive before either value can
+  satisfy the SF-13 rollout threshold.
 
 Remaining production gates:
 
@@ -297,6 +310,8 @@ Remaining production gates:
   governance/repair, observability, and governed-approval evidence that passes
   the SF-13 rollout gate with replay/governance/observability evidence bound to
   the same proof-generation summary digest and any binding failure marked on the
-  offending artifact in the emitted summary.
+  offending artifact in the emitted summary. Provider-transport latency values
+  must be non-negative and proof-generation max-latency values must be positive,
+  so impossible negative timings cannot satisfy rollout thresholds.
 - Ship operator CLI commands and SDK validators.
 - Update OpenAPI/portal docs and remove the Torii PDP fail-closed guard.

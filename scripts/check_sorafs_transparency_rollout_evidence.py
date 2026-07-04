@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,6 +77,32 @@ from sorafs_response_args import (  # noqa: E402
 SUMMARY_SCHEMA = "sorafs.transparency.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 HEX64_LEN = 64
+CYCLE_DETAIL_PROBE_LABEL_PATTERN = re.compile(
+    r"^transparency-cycle-detail-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+CYCLE_DETAIL_PROBE_LABEL_ERROR = (
+    "cycle_detail_probes[].name must match canonical lowercase "
+    "`transparency-cycle-detail-name`"
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "local",
+        "mock",
+        "placeholder",
+        "private",
+        "sample",
+        "sandbox",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -198,7 +225,7 @@ DEFAULT_REQUIRED_SOURCE_KINDS = (
     "evidence-access-summary",
 )
 REQUIRED_PUBLICATION_ROUTES = ("cycles_list", "cycle_publication")
-REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES = ("cycle_detail_readback",)
+REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES = ("transparency-cycle-detail-readback",)
 REQUIRED_EXPLORER_ROUTES = (
     "explorer_snapshot",
     "browser_ui",
@@ -258,6 +285,37 @@ def require_only_required_values(
         if not isinstance(value, str) or value.strip() not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
+
+
+def require_inventory_label(
+    record: dict[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    path: str,
+) -> str:
+    """Require a reviewed production inventory label with the expected family."""
+
+    label = require_string(record, field, errors)
+    if not label:
+        return ""
+    if pattern.fullmatch(label) is None:
+        errors.append(label_error)
+        return ""
+    label_tokens = frozenset(
+        token for token in re.split(r"[^a-z0-9]+", label) if token
+    )
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in label_tokens
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return label
 
 
 
@@ -486,7 +544,14 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             "cycle_detail_probes",
             errors,
         ):
-            require_string(record, "name", errors)
+            require_inventory_label(
+                record,
+                "name",
+                errors,
+                pattern=CYCLE_DETAIL_PROBE_LABEL_PATTERN,
+                label_error=CYCLE_DETAIL_PROBE_LABEL_ERROR,
+                path=f"cycle_detail_probes[{index}].name",
+            )
             require_2xx_status(
                 record,
                 "status_code",

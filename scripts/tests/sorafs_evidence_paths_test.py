@@ -14,6 +14,7 @@ from sorafs_evidence_paths import (  # noqa: E402
     EVIDENCE_DIRECTORY_INSPECTION_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_MISSING_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_PARENT_INSPECTION_DIAGNOSTIC,
+    EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_PATH_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_SCAN_DIAGNOSTIC,
     EVIDENCE_DIRECTORY_SYMLINK_DIAGNOSTIC,
@@ -22,6 +23,7 @@ from sorafs_evidence_paths import (  # noqa: E402
     EVIDENCE_FILE_INSPECTION_DIAGNOSTIC,
     EVIDENCE_FILE_MISSING_DIAGNOSTIC,
     EVIDENCE_FILE_PARENT_INSPECTION_DIAGNOSTIC,
+    EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC,
     EVIDENCE_FILE_PATH_DIAGNOSTIC,
     EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC,
     EVIDENCE_FILE_SOURCE_OVERLAP_DIAGNOSTIC,
@@ -188,7 +190,7 @@ def test_explicit_evidence_symlink_fails_closed(tmp_path: Path) -> None:
     assert str(symlink) not in errors[0]
 
 
-def test_explicit_evidence_parent_symlink_directory_is_accepted(
+def test_explicit_evidence_parent_symlink_directory_fails_closed(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "target"
@@ -201,8 +203,24 @@ def test_explicit_evidence_parent_symlink_directory_is_accepted(
     errors: list[str] = []
     files = discover_evidence_files([], [evidence], errors)
 
-    assert files == [evidence]
-    assert errors == []
+    assert files == []
+    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
+
+
+def test_explicit_evidence_broken_parent_symlink_fails_closed(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "evidence-root"
+    parent.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    evidence = parent / "evidence.json"
+
+    errors: list[str] = []
+    files = discover_evidence_files([], [evidence], errors)
+
+    assert files == []
+    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
 
 
 def test_discovered_json_directory_fails_closed_without_hiding_files(
@@ -279,7 +297,7 @@ def test_evidence_directory_symlink_fails_closed(tmp_path: Path) -> None:
     assert str(symlink) not in errors[0]
 
 
-def test_evidence_directory_parent_symlink_directory_is_accepted(
+def test_evidence_directory_parent_symlink_directory_fails_closed(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "target"
@@ -293,8 +311,9 @@ def test_evidence_directory_parent_symlink_directory_is_accepted(
     errors: list[str] = []
     files = discover_evidence_files([evidence_dir], [], errors)
 
-    assert files == [evidence_dir / "evidence.json"]
-    assert errors == []
+    assert files == []
+    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
 
 
 def test_non_path_evidence_directory_fails_closed_without_traceback() -> None:
@@ -741,7 +760,7 @@ def test_scan_evidence_directory_json_rejects_symlink_directory(
     assert str(symlink) not in errors[0]
 
 
-def test_scan_evidence_directory_json_accepts_parent_symlink_directory(
+def test_scan_evidence_directory_json_rejects_parent_symlink_directory(
     tmp_path: Path,
 ) -> None:
     target_root = tmp_path / "target-root"
@@ -753,11 +772,10 @@ def test_scan_evidence_directory_json_accepts_parent_symlink_directory(
 
     evidence_dir = symlink_root / "evidence"
     errors: list[str] = []
-    assert scan_evidence_directory_json(evidence_dir, errors) == [
-        evidence_dir / "evidence.json"
-    ]
+    assert scan_evidence_directory_json(evidence_dir, errors) == []
 
-    assert errors == []
+    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(symlink_root) not in errors[0]
 
 
 def test_reserved_output_conflict_scan_inspection_failure_fails_closed(
@@ -829,7 +847,7 @@ def test_reserved_output_conflict_evidence_directory_symlink_fails_closed(
     assert str(symlink) not in errors[0]
 
 
-def test_reserved_output_conflict_evidence_directory_parent_symlink_is_accepted(
+def test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "target"
@@ -849,7 +867,8 @@ def test_reserved_output_conflict_evidence_directory_parent_symlink_is_accepted(
         reserved_label="--summary-out",
     )
 
-    assert errors == []
+    assert errors == [EVIDENCE_DIRECTORY_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
 
 
 def test_reserved_output_conflict_explicit_evidence_directory_fails_closed(
@@ -892,7 +911,7 @@ def test_reserved_output_conflict_explicit_evidence_symlink_fails_closed(
     assert str(symlink) not in errors[0]
 
 
-def test_reserved_output_conflict_explicit_evidence_parent_symlink_is_accepted(
+def test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "target"
@@ -911,7 +930,8 @@ def test_reserved_output_conflict_explicit_evidence_parent_symlink_is_accepted(
         reserved_label="--summary-out",
     )
 
-    assert errors == []
+    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(parent) not in errors[0]
 
 
 def test_reserved_output_conflict_discovered_json_directory_fails_closed(
@@ -1012,7 +1032,7 @@ def test_reserved_output_path_identities_rejects_symlink(tmp_path: Path) -> None
     assert errors == [f"--summary-out `{reserved}` must not be a symlink"]
 
 
-def test_reserved_output_path_identities_accepts_parent_symlink_directory(
+def test_reserved_output_path_identities_rejects_parent_symlink_directory(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "target"
@@ -1028,8 +1048,26 @@ def test_reserved_output_path_identities_accepts_parent_symlink_directory(
         label="--summary-out",
     )
 
-    assert identities == {reserved.resolve(): reserved}
-    assert errors == []
+    assert identities == {}
+    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
+
+
+def test_reserved_output_path_identities_rejects_broken_parent_symlink(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "summary-root"
+    parent.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    reserved = parent / "summary.json"
+
+    errors: list[str] = []
+    identities = reserved_output_path_identities(
+        [reserved],
+        errors,
+        label="--summary-out",
+    )
+
+    assert identities == {}
+    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
 
 
 def test_reserved_output_path_identities_symlink_inspection_failure(
@@ -1104,7 +1142,7 @@ def test_reserved_output_conflict_scan_stops_after_duplicate_reserved_outputs(
     ]
 
 
-def test_reserved_output_conflict_scan_accepts_reserved_output_parent_symlink(
+def test_reserved_output_conflict_scan_rejects_reserved_output_parent_symlink(
     tmp_path: Path,
 ) -> None:
     target = tmp_path / "target"
@@ -1124,7 +1162,7 @@ def test_reserved_output_conflict_scan_accepts_reserved_output_parent_symlink(
         reserved_label="--summary-out",
     )
 
-    assert errors == [EVIDENCE_FILE_RESERVED_CONFLICT_DIAGNOSTIC]
+    assert errors == [f"--summary-out parent `{parent}` must not be a symlink"]
 
 
 def test_reserved_output_helpers_reject_malformed_error_container(
@@ -1255,7 +1293,7 @@ def test_is_explicit_evidence_path_rejects_symlink_candidate(
     assert str(symlink) not in errors[0]
 
 
-def test_is_explicit_evidence_path_accepts_parent_symlink_candidate(
+def test_is_explicit_evidence_path_rejects_parent_symlink_candidate(
     tmp_path: Path,
 ) -> None:
     target_root = tmp_path / "target-root"
@@ -1267,9 +1305,10 @@ def test_is_explicit_evidence_path_accepts_parent_symlink_candidate(
 
     candidate = symlink_root / "evidence.json"
     errors: list[str] = []
-    assert is_explicit_evidence_path(candidate, {target.resolve()}, errors) is True
+    assert is_explicit_evidence_path(candidate, {target.resolve()}, errors) is False
 
-    assert errors == []
+    assert errors == [EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC]
+    assert str(symlink_root) not in errors[0]
 
 
 def test_is_explicit_evidence_path_skips_empty_identity_set_without_resolving(

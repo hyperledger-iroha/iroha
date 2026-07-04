@@ -13,6 +13,14 @@ from typing import Any
 from sorafs_evidence_paths import record_reserved_output_evidence_conflicts
 from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label
 from sorafs_path_identity import resolve_path_identity
+from sorafs_runner_preflight import plan_rendered_path_is_safe
+
+
+CHECKER_RENDERED_PATH_ERROR = (
+    "SoraFS checker-rendered paths must not contain secret-looking, "
+    "control-character, parent, current, drive-prefix, or platform-specific "
+    "components"
+)
 
 
 def _require_error_list(errors: Any) -> list[str]:
@@ -170,6 +178,31 @@ def _checker_path_sequence(
     return paths
 
 
+def _checker_evidence_rendered_paths(paths: Sequence[Any]) -> tuple[Path, ...]:
+    """Return evidence paths that may be rendered by checker diagnostics."""
+
+    rendered_paths: list[Path] = []
+    for path in paths:
+        if isinstance(path, Path):
+            rendered_paths.append(path)
+            continue
+        if isinstance(path, str) and path.strip() and path == path.strip():
+            _kind, separator, spec_path = path.partition("=")
+            rendered_paths.append(Path(spec_path.strip() if separator else path))
+    return tuple(rendered_paths)
+
+
+def validate_checker_rendered_paths(paths: Iterable[Any], errors: list[str]) -> None:
+    """Reject unsafe checker-rendered paths before diagnostics can print them."""
+
+    error_list = _require_error_list(errors)
+    if any(
+        isinstance(path, Path) and not plan_rendered_path_is_safe(path)
+        for path in paths
+    ):
+        error_list.append(CHECKER_RENDERED_PATH_ERROR)
+
+
 def resolve_checker_preflight_path(
     path: Path,
     errors: list[str],
@@ -322,6 +355,9 @@ def validate_checker_summary_output(summary_out: Path, errors: list[str]) -> boo
             f"--summary-out `{path_diagnostic_label(summary_out)}` must be a path"
         )
         return False
+    validate_checker_rendered_paths((summary_out,), error_list)
+    if error_list:
+        return False
     summary_out_is_symlink = inspect_checker_preflight_path_is_symlink(
         summary_out,
         error_list,
@@ -442,6 +478,15 @@ def validate_checker_evidence_inputs(args: argparse.Namespace) -> list[str]:
         return errors
     assert evidence_dir_items is not None
     assert evidence_file_items is not None
+    validate_checker_rendered_paths(
+        (
+            *_checker_evidence_rendered_paths(evidence_dir_items),
+            *_checker_evidence_rendered_paths(evidence_file_items),
+        ),
+        errors,
+    )
+    if errors:
+        return errors
     for evidence_dir in evidence_dir_items:
         if not isinstance(evidence_dir, Path):
             errors.append(

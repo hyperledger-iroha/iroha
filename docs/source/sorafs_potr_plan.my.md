@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_potr_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2c43ed316009c58499e9d0c8e28641e6dc1c47247eb0cc7b03a4edc82a297cbb
-source_last_modified: "2026-07-03T13:15:09.482285+00:00"
+source_hash: 25e6479e904f6e4969a0f20a8a887a3d2d2653e19c12093aa98cea78973b87cd
+source_last_modified: "2026-07-04T05:42:00.646783+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T13:15:09.482285+00:00
+source_mtime: 2026-07-04T05:42:00.646783+00:00
 ---
 
 # PoTR-Lite Deadline Proofs Status
@@ -37,6 +37,10 @@ source_mtime: 2026-07-03T13:15:09.482285+00:00
 > The shared runner plan guard also rejects non-canonical nested required-kind,
 > threshold, external-evidence, evidence-contract, and command-step shapes before
 > dry-run output or verifier execution.
+> PoTR payload-safety artifacts must explicitly set `raw_receipts_included`,
+> `fetch_transcripts_included`, `raw_receipt_bytes_included`,
+> `response_bodies_included`, `raw_reputation_inputs_included`, and
+> `critical_alerts_firing` to `false` before promotion can report ready.
 > `scripts/build_sorafs_potr_canary.py` builds individual payload-free SF-14
 > canary artifacts for multi-provider probes, receipt validation, proof-stream
 > replay, reputation integration, observability, and governance approval
@@ -47,7 +51,8 @@ source_mtime: 2026-07-03T13:15:09.482285+00:00
 > proof-stream `route_count` binding to the unique canonical `routes[].name`
 > inventory, duplicate or unknown route rejection, receipt-summary digest bindings,
 > provider and receipt minimum counts, reviewed lowercase `provider-*` provider
-> labels without non-production markers,
+> labels without non-production markers, per-route `body_blake3_hex` response
+> digest evidence for proof-stream routes,
 > route and hot/warm latency threshold facts, governed PQ key-roster and
 > reputation-weight policy digest bindings, config-backed governance metadata,
 > reviewed governance policy digests surfaced as `valid_policy_digests`,
@@ -174,7 +179,9 @@ validation and governance approval, reputation-weight policy digest drift
 between reputation integration and governance approval, and governance packets
 not bound to `iroha_config`. Valid governance approval artifacts publish their
 reviewed `policy_digest_hex` values as `valid_policy_digests` for the aggregate
-production-readiness gate. Receipt summary, PQ key-roster, and reputation-weight
+production-readiness gate. Route latency and hot/warm deadline latency evidence
+must be non-negative integer-unit values before satisfying rollout ceilings.
+Receipt summary, PQ key-roster, and reputation-weight
 policy binding failures are recorded on the offending artifact before
 required-kind validity is computed, so the JSON summary matches the fail-closed
 process result. Multi-provider probes require `tier_count`, bind it to the
@@ -189,7 +196,9 @@ without non-production markers. The
 proof-stream gate applies the same proof-stream `route_count` binding to the
 unique canonical `routes[].name` inventory, duplicate or unknown route
 rejection, and per-route
-status/latency/Norito checks. Observability artifacts also bind `metric_count`
+status/latency/Norito checks; every route response must include a
+`body_blake3_hex` digest before proof-stream readiness can report ready.
+Observability artifacts also bind `metric_count`
 to the unique canonical `metrics` inventory, require the reviewed PoTR metric
 set, and reject duplicate or unknown metric labels before promotion can report
 ready. The summary exports the sorted reviewed `metrics` inventory plus

@@ -38,6 +38,7 @@ REVOCATION_DIGEST = "b" * 64
 BUNDLE_DIGEST = "c" * 64
 POLICY_DIGEST = "d" * 64
 SNAPSHOT_DIGEST = "e" * 64
+ROUTE_BODY_DIGEST = "f" * 64
 GENERATED_AT = 1_800_100_000
 
 
@@ -80,7 +81,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(
             [
                 "--issuer-id",
-                "issuer-prod-a",
+                "pop-issuer-prod-a",
                 "--bundle-id-hex",
                 BUNDLE_DIGEST,
                 "--credential-count",
@@ -88,7 +89,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             ]
         )
         for index in range(3):
-            args.extend(["--credential", f"credential-{index:02d}"])
+            args.extend(["--credential", f"pop-credential-{index:02d}"])
     elif kind == "commitment_root":
         args.extend(
             [
@@ -107,12 +108,18 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 str(GENERATED_AT),
                 "--revoked-nonce-count",
                 "2",
+                "--revoked-nonce-ref",
+                "pop-revoked-nonce-00",
+                "--revoked-nonce-ref",
+                "pop-revoked-nonce-01",
             ]
         )
     elif kind == "enrollment_portal":
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
         for route in MODULE.REQUIRED_ENROLLMENT_ROUTES:
             args.extend(["--route", route])
     elif kind == "verifier_service":
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
         for route in MODULE.REQUIRED_VERIFIER_ROUTES:
             args.extend(["--route", route])
         args.extend(
@@ -124,13 +131,13 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "--rejected-invalid-proof-count",
                 "3",
                 "--accepted-proof-probe",
-                "valid-proof-00",
+                "pop-valid-proof-00",
                 "--rejected-proof-probe",
-                "invalid-proof-00",
+                "pop-invalid-proof-00",
                 "--rejected-proof-probe",
-                "invalid-proof-01",
+                "pop-invalid-proof-01",
                 "--rejected-proof-probe",
-                "invalid-proof-02",
+                "pop-invalid-proof-02",
                 "--max-verify-latency-ms",
                 "250",
                 "--max-service-lag-seconds",
@@ -145,15 +152,15 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "--sortition-probe-count",
                 "2",
                 "--sortition-probe",
-                "sortition-probe-00",
+                "pop-sortition-probe-00",
                 "--sortition-probe",
-                "sortition-probe-01",
+                "pop-sortition-probe-01",
                 "--commit-reveal-probe-count",
                 "2",
                 "--commit-reveal-probe",
-                "commit-reveal-probe-00",
+                "pop-commit-reveal-probe-00",
                 "--commit-reveal-probe",
-                "commit-reveal-probe-01",
+                "pop-commit-reveal-probe-01",
             ]
         )
     elif kind == "metrics_alerts":
@@ -199,13 +206,16 @@ def test_builds_payload_free_verifier_service_canary(tmp_path: Path) -> None:
     assert payload["accepted_valid_proof_count"] == 1
     assert payload["rejected_invalid_proof_count"] == 3
     assert payload["probes"] == [
-        {"name": "valid-proof-00", "accepted": True},
-        {"name": "invalid-proof-00", "accepted": False},
-        {"name": "invalid-proof-01", "accepted": False},
-        {"name": "invalid-proof-02", "accepted": False},
+        {"name": "pop-valid-proof-00", "accepted": True},
+        {"name": "pop-invalid-proof-00", "accepted": False},
+        {"name": "pop-invalid-proof-01", "accepted": False},
+        {"name": "pop-invalid-proof-02", "accepted": False},
     ]
     assert payload["route_count"] == len(MODULE.REQUIRED_VERIFIER_ROUTES)
     assert payload["passed_route_count"] == len(MODULE.REQUIRED_VERIFIER_ROUTES)
+    assert all(
+        route["body_blake3_hex"] == ROUTE_BODY_DIGEST for route in payload["routes"]
+    )
     assert [route["name"] for route in payload["routes"]] == list(
         MODULE.REQUIRED_VERIFIER_ROUTES
     )
@@ -228,13 +238,13 @@ def test_builds_payload_free_moderation_integration_canary(tmp_path: Path) -> No
     assert payload["schema"] == "sorafs.pop.moderation_integration_canary.v1"
     assert payload["sortition_probe_count"] == 2
     assert payload["sortition_probes"] == [
-        {"name": "sortition-probe-00"},
-        {"name": "sortition-probe-01"},
+        {"name": "pop-sortition-probe-00"},
+        {"name": "pop-sortition-probe-01"},
     ]
     assert payload["commit_reveal_probe_count"] == 2
     assert payload["commit_reveal_probes"] == [
-        {"name": "commit-reveal-probe-00"},
-        {"name": "commit-reveal-probe-01"},
+        {"name": "pop-commit-reveal-probe-00"},
+        {"name": "pop-commit-reveal-probe-01"},
     ]
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "moderation_integration"
@@ -279,19 +289,34 @@ def test_response_file_can_build_issuer_bundle_canary(tmp_path: Path) -> None:
     assert MODULE.main([f"@{args_file}"]) == 0
 
     payload = json.loads(canary_path(tmp_path, "issuer_bundle").read_text("utf-8"))
-    assert payload["issuer_id"] == "issuer-prod-a"
+    assert payload["issuer_id"] == "pop-issuer-prod-a"
     assert payload["credential_count"] == payload["signed_credential_count"] == 3
     assert [credential["name"] for credential in payload["credentials"]] == [
-        "credential-00",
-        "credential-01",
-        "credential-02",
+        "pop-credential-00",
+        "pop-credential-01",
+        "pop-credential-02",
     ]
 
 
 def test_issuer_id_rejects_malformed_value_before_write(tmp_path: Path, capsys) -> None:
     args = args_for("issuer_bundle", tmp_path)
     issuer_index = args.index("--issuer-id")
-    args[issuer_index + 1] = "pop-issuer-prod-a"
+    args[issuer_index + 1] = "pop-issuer--prod"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert CHECKER.ISSUER_ID_ERROR.replace("issuer_id", "--issuer-id") in captured.err
+    assert not canary_path(tmp_path, "issuer_bundle").exists()
+
+
+def test_issuer_id_rejects_generic_issuer_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("issuer_bundle", tmp_path)
+    issuer_index = args.index("--issuer-id")
+    args[issuer_index + 1] = "issuer-prod-a"
 
     assert MODULE.main(args) == 2
 
@@ -306,7 +331,7 @@ def test_issuer_id_rejects_non_production_marker_before_write(
 ) -> None:
     args = args_for("issuer_bundle", tmp_path)
     issuer_index = args.index("--issuer-id")
-    args[issuer_index + 1] = "issuer-dev-a"
+    args[issuer_index + 1] = "pop-issuer-dev-a"
 
     assert MODULE.main(args) == 2
 
@@ -318,12 +343,12 @@ def test_issuer_id_rejects_non_production_marker_before_write(
 def test_issuer_id_accepts_reviewed_future_label(tmp_path: Path) -> None:
     args = args_for("issuer_bundle", tmp_path)
     issuer_index = args.index("--issuer-id")
-    args[issuer_index + 1] = "issuer-governance-12"
+    args[issuer_index + 1] = "pop-issuer-governance-12"
 
     assert MODULE.main(args) == 0
 
     payload = json.loads(canary_path(tmp_path, "issuer_bundle").read_text("utf-8"))
-    assert payload["issuer_id"] == "issuer-governance-12"
+    assert payload["issuer_id"] == "pop-issuer-governance-12"
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "issuer_bundle"
     assert errors == []
@@ -371,7 +396,7 @@ def test_issuer_credential_inventory_must_use_reviewed_labels_before_write(
         kind="issuer_bundle",
         tmp_path=tmp_path,
         capsys=capsys,
-        expected_error="--credential must match canonical lowercase `credential-name`",
+        expected_error="--credential must match canonical lowercase `pop-credential-*`",
     )
 
 
@@ -381,7 +406,7 @@ def test_issuer_credential_inventory_rejects_non_production_markers_before_write
 ) -> None:
     args = args_for("issuer_bundle", tmp_path)
     credential_index = args.index("--credential") + 1
-    args[credential_index] = "credential-placeholder"
+    args[credential_index] = "pop-credential-placeholder"
 
     assert_rejected_without_artifact(
         args,
@@ -390,6 +415,116 @@ def test_issuer_credential_inventory_rejects_non_production_markers_before_write
         capsys=capsys,
         expected_error=(
             "--credential must not contain non-production markers ['placeholder']"
+        ),
+    )
+
+
+def test_issuer_credential_inventory_requires_pop_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("issuer_bundle", tmp_path)
+    credential_index = args.index("--credential") + 1
+    args[credential_index] = "credential-00"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="issuer_bundle",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--credential must match canonical lowercase `pop-credential-*`",
+    )
+
+
+def test_revocation_registry_builds_payload_free_nonce_refs(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("revocation_registry", tmp_path)) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "revocation_registry").read_text("utf-8")
+    )
+
+    assert payload["revoked_nonce_count"] == 2
+    assert payload["revoked_nonce_refs"] == [
+        {"name": "pop-revoked-nonce-00"},
+        {"name": "pop-revoked-nonce-01"},
+    ]
+    assert payload["revoked_nonces_included"] is False
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "revocation_registry"
+    assert errors == []
+
+
+def test_revocation_registry_nonce_ref_inventory_must_match_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("revocation_registry", tmp_path)
+    args[args.index("--revoked-nonce-count") + 1] = "3"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="revocation_registry",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--revoked-nonce-ref unique values must match --revoked-nonce-count"
+        ),
+    )
+
+
+def test_revocation_registry_nonce_ref_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("revocation_registry", tmp_path)
+    first_ref = args.index("--revoked-nonce-ref") + 1
+    args.extend(["--revoked-nonce-ref", args[first_ref]])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="revocation_registry",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--revoked-nonce-ref must not contain duplicates",
+    )
+
+
+def test_revocation_registry_nonce_ref_inventory_must_use_reviewed_labels_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("revocation_registry", tmp_path)
+    ref_index = args.index("--revoked-nonce-ref") + 1
+    args[ref_index] = "revoked-nonce-00"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="revocation_registry",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--revoked-nonce-ref must match canonical lowercase "
+            "`pop-revoked-nonce-*`"
+        ),
+    )
+
+
+def test_revocation_registry_nonce_ref_inventory_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("revocation_registry", tmp_path)
+    ref_index = args.index("--revoked-nonce-ref") + 1
+    args[ref_index] = "pop-revoked-nonce-placeholder"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="revocation_registry",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--revoked-nonce-ref must not contain non-production markers "
+            "['placeholder']"
         ),
     )
 
@@ -504,6 +639,26 @@ def test_verifier_route_inventory_must_not_duplicate(
     assert not canary_path(tmp_path, "verifier_service").exists()
 
 
+@pytest.mark.parametrize(
+    "kind",
+    ("enrollment_portal", "verifier_service"),
+)
+def test_route_canaries_require_route_body_digest(
+    kind: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for(kind, tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, kind).exists()
+
+
 def test_verifier_accepted_probe_inventory_must_match_count(
     tmp_path: Path,
     capsys,
@@ -544,18 +699,18 @@ def test_verifier_probe_inventory_must_use_partitioned_labels_before_write(
     args = args_for("verifier_service", tmp_path)
     accepted_index = args.index("--accepted-proof-probe") + 1
     rejected_index = args.index("--rejected-proof-probe") + 1
-    args[accepted_index] = "invalid-proof-on-accepted-side"
-    args[rejected_index] = "valid-proof-on-rejected-side"
+    args[accepted_index] = "pop-invalid-proof-on-accepted-side"
+    args[rejected_index] = "pop-valid-proof-on-rejected-side"
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
     assert (
-        "--accepted-proof-probe must match canonical lowercase `valid-proof-name`"
+        "--accepted-proof-probe must match canonical lowercase `pop-valid-proof-*`"
         in captured.err
     )
     assert (
-        "--rejected-proof-probe must match canonical lowercase `invalid-proof-name`"
+        "--rejected-proof-probe must match canonical lowercase `pop-invalid-proof-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "verifier_service").exists()
@@ -568,8 +723,8 @@ def test_verifier_probe_inventory_rejects_non_production_markers_before_write(
     args = args_for("verifier_service", tmp_path)
     accepted_index = args.index("--accepted-proof-probe") + 1
     rejected_index = args.index("--rejected-proof-probe") + 1
-    args[accepted_index] = "valid-proof-placeholder"
-    args[rejected_index] = "invalid-proof-placeholder"
+    args[accepted_index] = "pop-valid-proof-placeholder"
+    args[rejected_index] = "pop-invalid-proof-placeholder"
 
     assert MODULE.main(args) == 2
 
@@ -585,12 +740,36 @@ def test_verifier_probe_inventory_rejects_non_production_markers_before_write(
     assert not canary_path(tmp_path, "verifier_service").exists()
 
 
+def test_verifier_probe_inventory_requires_pop_families_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("verifier_service", tmp_path)
+    accepted_index = args.index("--accepted-proof-probe") + 1
+    rejected_index = args.index("--rejected-proof-probe") + 1
+    args[accepted_index] = "valid-proof-00"
+    args[rejected_index] = "invalid-proof-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--accepted-proof-probe must match canonical lowercase `pop-valid-proof-*`"
+        in captured.err
+    )
+    assert (
+        "--rejected-proof-probe must match canonical lowercase `pop-invalid-proof-*`"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "verifier_service").exists()
+
+
 def test_verifier_probe_inventories_must_not_overlap(
     tmp_path: Path,
     capsys,
 ) -> None:
     args = args_for("verifier_service", tmp_path)
-    args.extend(["--accepted-proof-probe", "invalid-proof-00"])
+    args.extend(["--accepted-proof-probe", "pop-invalid-proof-00"])
     args[args.index("--accepted-valid-proof-count") + 1] = "2"
 
     assert MODULE.main(args) == 2
@@ -635,7 +814,7 @@ def test_moderation_sortition_probe_must_use_reviewed_label_before_write(
         capsys=capsys,
         expected_error=(
             "--sortition-probe must match canonical lowercase "
-            "`sortition-probe-name`"
+            "`pop-sortition-probe-name`"
         ),
     )
 
@@ -646,7 +825,7 @@ def test_moderation_sortition_probe_rejects_non_production_markers_before_write(
 ) -> None:
     args = args_for("moderation_integration", tmp_path)
     probe_index = args.index("--sortition-probe") + 1
-    args[probe_index] = "sortition-probe-placeholder"
+    args[probe_index] = "pop-sortition-probe-placeholder"
 
     assert_rejected_without_artifact(
         args,
@@ -689,7 +868,7 @@ def test_moderation_commit_reveal_probe_must_use_reviewed_label_before_write(
         capsys=capsys,
         expected_error=(
             "--commit-reveal-probe must match canonical lowercase "
-            "`commit-reveal-probe-name`"
+            "`pop-commit-reveal-probe-name`"
         ),
     )
 
@@ -700,7 +879,7 @@ def test_moderation_commit_reveal_probe_rejects_non_production_markers_before_wr
 ) -> None:
     args = args_for("moderation_integration", tmp_path)
     probe_index = args.index("--commit-reveal-probe") + 1
-    args[probe_index] = "commit-reveal-probe-placeholder"
+    args[probe_index] = "pop-commit-reveal-probe-placeholder"
 
     assert_rejected_without_artifact(
         args,
@@ -712,6 +891,30 @@ def test_moderation_commit_reveal_probe_rejects_non_production_markers_before_wr
             "['placeholder']"
         ),
     )
+
+
+def test_moderation_probe_inputs_require_pop_families_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_integration", tmp_path)
+    sortition_index = args.index("--sortition-probe") + 1
+    commit_index = args.index("--commit-reveal-probe") + 1
+    args[sortition_index] = "sortition-probe-00"
+    args[commit_index] = "commit-reveal-probe-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--sortition-probe must match canonical lowercase "
+        "`pop-sortition-probe-name`"
+    ) in captured.err
+    assert (
+        "--commit-reveal-probe must match canonical lowercase "
+        "`pop-commit-reveal-probe-name`"
+    ) in captured.err
+    assert not canary_path(tmp_path, "moderation_integration").exists()
 
 
 def test_transcript_digest_privacy_backend_fails_before_write(

@@ -54,13 +54,12 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_count_equal,
     require_count_length_match,
     require_false,
-    require_false_or_absent,
     require_false_or_governed,
     require_hex,
     require_config_backed_governance_approval,
     require_hex_string_array,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_minimum_value,
     require_non_negative_int,
@@ -95,22 +94,36 @@ SUMMARY_SCHEMA = "sorafs.hedging_billing.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_FEED_LAG_SECS = 15 * 60
 DEFAULT_MAX_CYCLE_AGE_SECS = 45 * 24 * 60 * 60
+MAX_DIVERGENCE_BPS = 10_000
 DEFAULT_MAX_DIVERGENCE_BPS = 500
 DEFAULT_MIN_BILLING_CYCLES = 2
+DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS = 2
 HEX64_LEN = 64
-CYCLE_ID_PATTERN = re.compile(r"^cycle-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-CYCLE_ID_ERROR = "cycle_id must match canonical lowercase `cycle-name`"
+CYCLE_ID_PATTERN = re.compile(r"^billing-cycle-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+CYCLE_ID_ERROR = "cycle_id must match canonical lowercase `billing-cycle-*`"
 STATEMENT_LABEL_PATTERN = re.compile(
     r"^billing-statement-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 STATEMENT_LABEL_ERROR = (
-    "statements[].name must match canonical lowercase `billing-statement-name`"
+    "statements[].name must match canonical lowercase `billing-statement-*`"
 )
 LINE_ITEM_LABEL_PATTERN = re.compile(
     r"^billing-line-item-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 LINE_ITEM_LABEL_ERROR = (
-    "line_items[].name must match canonical lowercase `billing-line-item-name`"
+    "line_items[].name must match canonical lowercase `billing-line-item-*`"
+)
+ACKNOWLEDGEMENT_PROBE_LABEL_PATTERN = re.compile(
+    r"^billing-ack-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+ACKNOWLEDGEMENT_PROBE_LABEL_ERROR = (
+    "acknowledgement_probes[] must match canonical lowercase `billing-ack-probe-*`"
+)
+NATIVE_BRIDGE_ARTIFACT_ID_PATTERN = re.compile(
+    r"^hedging-native-artifact-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+NATIVE_BRIDGE_ARTIFACT_ID_ERROR = (
+    "artifacts[].id must match canonical lowercase `hedging-native-artifact-*`"
 )
 FORBIDDEN_CYCLE_ID_MARKERS = frozenset(
     (
@@ -277,6 +290,29 @@ def require_inventory_label(
     return value
 
 
+def require_scalar_inventory_labels(
+    payload: dict[str, Any],
+    field: str,
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> None:
+    """Require reviewed labels for scalar string inventory entries."""
+
+    values = payload.get(field)
+    if not isinstance(values, list):
+        return
+    for index, value in enumerate(values):
+        require_inventory_label(
+            value,
+            path=f"{field}[{index}]",
+            pattern=pattern,
+            label_error=label_error,
+            errors=errors,
+        )
+
+
 @dataclass(frozen=True)
 class EvidenceKind:
     """One SFM-5 rollout evidence class."""
@@ -429,6 +465,15 @@ class ValidationOptions:
     min_billing_cycles: int
 
 
+def validate_threshold_options(args: argparse.Namespace) -> list[str]:
+    """Validate checker threshold options before evidence evaluation."""
+
+    errors: list[str] = []
+    if args.max_divergence_bps > MAX_DIVERGENCE_BPS:
+        errors.append(f"--max-divergence-bps must be <= {MAX_DIVERGENCE_BPS}")
+    return errors
+
+
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_id",
@@ -469,6 +514,13 @@ def validate_routes(payload: dict[str, Any], errors: list[str]) -> None:
             errors,
             path=f"routes[{index}].status_code",
         )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
         for field in ("publisher_identity_present", "signature_verified"):
             require_bool_true(record, field, errors, path=f"routes[{index}].{field}")
 
@@ -503,7 +555,7 @@ def validate_feed_collector(
     require_bool_true(payload, "secondary_feed_present", errors)
     require_zero_count(payload, "rejected_feed_count", errors)
     require_zero_count(payload, "stale_feed_count", errors)
-    require_maximum_number(payload, "feed_lag_seconds", options.max_feed_lag_secs, errors)
+    require_maximum_int(payload, "feed_lag_seconds", options.max_feed_lag_secs, errors)
     require_false(payload, "payload_bytes_included", errors)
     require_false(payload, "response_bodies_included", errors)
 
@@ -545,14 +597,21 @@ def validate_reference_price(
         require_string(record, "name", errors)
     require_zero_count(payload, "rejected_feed_count", errors)
     require_zero_count(payload, "stale_feed_count", errors)
-    require_maximum_number(payload, "divergence_bps", options.max_divergence_bps, errors)
-    require_maximum_number(
+    require_maximum_int(payload, "divergence_bps", MAX_DIVERGENCE_BPS, errors)
+    if options.max_divergence_bps < MAX_DIVERGENCE_BPS:
+        require_maximum_int(
+            payload,
+            "divergence_bps",
+            options.max_divergence_bps,
+            errors,
+        )
+    require_maximum_int(
         payload,
         "decision_lag_seconds",
         options.max_feed_lag_secs,
         errors,
     )
-    require_false_or_absent(payload, "degraded", errors)
+    require_false(payload, "degraded", errors)
     require_false(payload, "payload_bytes_included", errors)
 
 
@@ -652,6 +711,13 @@ def validate_statement_publication(payload: dict[str, Any], errors: list[str]) -
         "acknowledgement_probe_count",
         errors,
     )
+    require_scalar_inventory_labels(
+        payload,
+        "acknowledgement_probes",
+        pattern=ACKNOWLEDGEMENT_PROBE_LABEL_PATTERN,
+        label_error=ACKNOWLEDGEMENT_PROBE_LABEL_ERROR,
+        errors=errors,
+    )
     require_string_coverage(
         payload,
         "routes",
@@ -730,9 +796,15 @@ def validate_metrics_alerts(payload: dict[str, Any], errors: list[str]) -> None:
 def validate_native_bridge_release(payload: dict[str, Any], errors: list[str]) -> None:
     require_minimum_int(payload, "bridge_abi_version", 12, errors)
     artifact_count = require_positive_int(payload, "artifact_count", errors)
+    require_minimum_value(
+        artifact_count,
+        "artifact_count",
+        DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS,
+        errors,
+    )
     require_bool_true(payload, "artifact_hashes_verified", errors)
     require_bool_true(payload, "sdk_wrappers_verified", errors)
-    require_false_or_absent(payload, "debug_artifacts", errors)
+    require_false(payload, "debug_artifacts", errors)
     artifact_records = require_object_array(payload, "artifacts", errors)
     if not artifact_records:
         return
@@ -751,8 +823,15 @@ def validate_native_bridge_release(payload: dict[str, Any], errors: list[str]) -
         field="id",
         allow_scalar_items=False,
     )
-    for _index, record in artifact_records:
-        require_string(record, "id", errors)
+    for index, record in artifact_records:
+        artifact_id = require_string(record, "id", errors)
+        require_inventory_label(
+            artifact_id,
+            path=f"artifacts[{index}].id",
+            pattern=NATIVE_BRIDGE_ARTIFACT_ID_PATTERN,
+            label_error=NATIVE_BRIDGE_ARTIFACT_ID_ERROR,
+            errors=errors,
+        )
         require_hex(record, "sha256", HEX64_LEN, errors)
 
 
@@ -1077,6 +1156,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as error:
         emit_checker_exception(error)
+        return 2
+
+    threshold_errors = validate_threshold_options(args)
+    if threshold_errors:
+        emit_checker_error_lines(threshold_errors)
         return 2
 
     options = ValidationOptions(

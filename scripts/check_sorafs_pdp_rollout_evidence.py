@@ -54,7 +54,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     require_object_array,
@@ -89,13 +89,13 @@ DEFAULT_MIN_CHALLENGES = 3
 DEFAULT_MIN_PROOFS = 3
 HEX64_LEN = 64
 PROVIDER_LABEL_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-name`"
+PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-*`"
 CHALLENGE_LABEL_PATTERN = re.compile(r"^pdp-challenge-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 CHALLENGE_LABEL_ERROR = (
-    "challenges[].name must match canonical lowercase `pdp-challenge-name`"
+    "challenges[].name must match canonical lowercase `pdp-challenge-*`"
 )
 PROOF_LABEL_PATTERN = re.compile(r"^pdp-proof-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-PROOF_LABEL_ERROR = "proofs[].name must match canonical lowercase `pdp-proof-name`"
+PROOF_LABEL_ERROR = "proofs[].name must match canonical lowercase `pdp-proof-*`"
 FORBIDDEN_PROVIDER_LABEL_MARKERS = frozenset(
     (
         "debug",
@@ -381,7 +381,14 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_maximum_number(
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -536,11 +543,12 @@ def validate_proof_generation(
     require_bool_true(payload, "hot_leaf_merkle_paths_verified", errors)
     require_bool_true(payload, "deadline_policy_verified", errors)
     require_bool_true(payload, "hardware_determinism_reviewed", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_proof_latency_ms",
         options.max_proof_latency_ms,
         errors,
+        minimum=1,
     )
     require_hex(payload, "proof_summary_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)

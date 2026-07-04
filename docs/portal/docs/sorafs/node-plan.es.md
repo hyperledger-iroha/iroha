@@ -50,12 +50,13 @@ SF-3 entrega el primer crate ejecutable `sorafs-node` que convierte un proceso I
 
 ### C. Endpoints de gateway
 
-| Endpoint | Comportamiento | Tareas |
-|----------|----------------|--------|
-| `POST /sorafs/pin` | Acepta `PinProposalV1`, valida manifests, encola la ingestión, responde con el CID del manifest. | Valida el perfil de chunker, impone cuotas, streamea datos vía chunk store. |
-| `GET /sorafs/chunks/{cid}` + consulta por rango | Sirve bytes de chunk con headers `Content-Chunker`; respeta la especificación de capacidad de rango. | Usa scheduler + presupuestos de stream (vincular a capacidad de rango SF-2d). |
-| `POST /sorafs/por/sample` | Ejecuta muestreo PoR para un manifest y devuelve bundle de pruebas. | Reusa el muestreo del chunk store, responde con payloads Norito JSON. |
-| `GET /sorafs/telemetry` | Resúmenes: capacidad, éxito de PoR, conteos de errores de fetch. | Proporciona datos para dashboards/operadores. |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 La plomería en runtime enlaza las interacciones PoR a través de `sorafs_node::por`: el tracker registra cada `PorChallengeV1`, `PorProofV1` y `AuditVerdictV1` para que las métricas de `CapacityMeter` reflejen los veredictos de gobernanza sin lógica Torii personalizada.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ Logs / eventos:
 ## Criterios de salida del hito
 
 - `cargo run -p sorafs_node --example pin_fetch` funciona contra fixtures locales.
-- Torii compila con `--features sorafs-storage` y pasa pruebas de integración.
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - Documentación ([guía de almacenamiento del nodo](node-storage.md)) actualizada con defaults de configuración + ejemplos de CLI; runbook de operador disponible.
 - Telemetría visible en dashboards de staging; alertas configuradas para saturación de capacidad y fallos PoR.
 
@@ -116,4 +117,4 @@ Logs / eventos:
 
 - Actualizar la [referencia de almacenamiento del nodo](node-storage.md) con defaults de configuración, uso de CLI y pasos de troubleshooting.
 - Mantener el [runbook de operaciones de nodo](node-operations.md) alineado con la implementación conforme evoluciona SF-3.
-- Publicar referencias de API para endpoints `/sorafs/*` dentro del portal de desarrolladores y conectarlas al manifiesto OpenAPI una vez que los handlers de Torii estén listos.
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

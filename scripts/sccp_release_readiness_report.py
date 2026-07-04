@@ -11251,10 +11251,61 @@ def _public_input_artifact_errors(value: Any) -> list[str]:
     return errors
 
 
-def _public_corridor_evidence_artifact_duplicate_path_errors(value: Any) -> list[str]:
+def _corridor_uses_shared_full_run_artifact(
+    evidence_artifacts: Any,
+    phases: Any,
+    known_phases: list[str],
+) -> bool:
+    """Return whether every passed phase is bound to one shared transcript."""
+
+    if not isinstance(evidence_artifacts, dict) or not isinstance(phases, dict):
+        return False
+    passed_phases = [
+        phase for phase in known_phases if phases.get(phase) == "passed"
+    ]
+    if not passed_phases:
+        return False
+    if set(evidence_artifacts) != set(passed_phases):
+        return False
+
+    shared_artifact: tuple[str, int, str] | None = None
+    for phase in passed_phases:
+        artifact = evidence_artifacts.get(phase)
+        if not isinstance(artifact, dict):
+            return False
+        artifact_path = artifact.get("path")
+        artifact_bytes = artifact.get("bytes")
+        artifact_sha256 = artifact.get("sha256")
+        if (
+            not _native_evm_markdown_path_is_safe(artifact_path)
+            or type(artifact_bytes) is not int
+            or artifact_bytes <= 0
+            or _sha256_text_errors("evidence_artifact", artifact_sha256)
+        ):
+            return False
+        artifact_tuple = (artifact_path, artifact_bytes, artifact_sha256)
+        if shared_artifact is None:
+            shared_artifact = artifact_tuple
+        elif artifact_tuple != shared_artifact:
+            return False
+    return True
+
+
+def _public_corridor_evidence_artifact_duplicate_path_errors(
+    value: Any,
+    *,
+    phases: Any = None,
+    known_phases: list[str] | None = None,
+) -> list[str]:
     """Return duplicate-path blockers from inspectable corridor artifacts."""
 
     if not isinstance(value, dict):
+        return []
+    if known_phases is not None and _corridor_uses_shared_full_run_artifact(
+        value,
+        phases,
+        known_phases,
+    ):
         return []
     seen_paths: set[str] = set()
     duplicate_path_count = 0
@@ -11420,7 +11471,9 @@ def _public_corridor_errors(value: Any) -> list[str]:
                 )
         errors.extend(
             _public_corridor_evidence_artifact_duplicate_path_errors(
-                evidence_artifacts
+                evidence_artifacts,
+                phases=phases,
+                known_phases=known_phases,
             )
         )
 

@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_ai_prescreen_rollout_evidence.py"
 SPEC = importlib.util.spec_from_file_location(
@@ -77,9 +79,9 @@ def committee(*, status: str = "verified", subject: str = SUBJECT_REFERENCE) -> 
         "aggregation": "median_score_bps",
         "result_count": 3,
         "results": [
-            {"name": "runner-result-a"},
-            {"name": "runner-result-b"},
-            {"name": "runner-result-c"},
+            {"name": "ai-prescreen-committee-result-a"},
+            {"name": "ai-prescreen-committee-result-b"},
+            {"name": "ai-prescreen-committee-result-c"},
         ],
         "subject": subject,
         "subject_digest_hex": DIGEST,
@@ -99,12 +101,17 @@ def operator_route(name: str) -> dict:
         "juror_notifications": "sorafs.moderation.quarantine.juror_notifications.v1",
         "commit_reveal_status": "sorafs.moderation.quarantine.commit_reveal_status.v1",
     }
+    route_path = MODULE.operator_route_paths(QUARANTINE_ID).get(name, f"/{name}")
     return {
         "name": name,
         "method": "GET",
-        "path": f"/{name}",
-        "url": f"https://operator.example/{name}",
+        "path": route_path,
+        "url": f"https://operator.example{route_path}",
         "status_code": 200,
+        "content_type": MODULE.REQUIRED_OPERATOR_CONTENT_TYPES.get(
+            name,
+            "application/json",
+        ),
         "schema": schemas.get(name),
         "body_blake3_hex": DIGEST,
         "body_bytes": 128,
@@ -147,8 +154,11 @@ def operator_workflow(*, omit_route: str | None = None) -> dict:
 def notification_transport(*, accepted_count: int | None = None) -> dict:
     probes = [
         {
-            "delivery_id": "notify-1",
-            "dedup_key": "sorafs-moderation-juror:notify-1",
+            "delivery_id": "ai-prescreen-notification-delivery-01",
+            "dedup_key": (
+                "sorafs-moderation-juror:"
+                "ai-prescreen-notification-delivery-01"
+            ),
             "action": "commit",
             "case_id": "case-1",
             "round_id": "round-1",
@@ -300,7 +310,10 @@ def governance_dag(*, config_source: str = "iroha_config") -> dict:
         for name in producer_names
     ]
     edges = [
-        {"producer": producer, "name": f"{producer}-edge"}
+        {
+            "producer": producer,
+            "name": f"ai-prescreen-governance-edge-{producer.replace('_', '-')}",
+        }
         for producer in producer_names
     ]
     return with_context({
@@ -403,6 +416,205 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     ] == DEPLOYMENT_ID
 
 
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        (
+            "operator-top-payload-bytes",
+            "operator_workflow",
+            "operator-workflow.json",
+            operator_workflow,
+            ("payload_bytes_included",),
+        ),
+        (
+            "operator-top-private-payloads",
+            "operator_workflow",
+            "operator-workflow.json",
+            operator_workflow,
+            ("private_payloads_included",),
+        ),
+        (
+            "operator-route-payload-bytes",
+            "operator_workflow",
+            "operator-workflow.json",
+            operator_workflow,
+            ("routes", 0, "payload_bytes_included"),
+        ),
+        (
+            "operator-route-private-payloads",
+            "operator_workflow",
+            "operator-workflow.json",
+            operator_workflow,
+            ("routes", 0, "private_payloads_included"),
+        ),
+        (
+            "notification-top-payload-bytes",
+            "notification_transport",
+            "notification-transport.json",
+            notification_transport,
+            ("payload_bytes_included",),
+        ),
+        (
+            "notification-top-private-payloads",
+            "notification_transport",
+            "notification-transport.json",
+            notification_transport,
+            ("private_payloads_included",),
+        ),
+        (
+            "notification-probe-payload-bytes",
+            "notification_transport",
+            "notification-transport.json",
+            notification_transport,
+            ("probes", 0, "payload_bytes_included"),
+        ),
+        (
+            "notification-probe-private-payloads",
+            "notification_transport",
+            "notification-transport.json",
+            notification_transport,
+            ("probes", 0, "private_payloads_included"),
+        ),
+        (
+            "executor-top-payload-bytes",
+            "commit_reveal_executor",
+            "commit-reveal-executor.json",
+            commit_reveal_executor,
+            ("payload_bytes_included",),
+        ),
+        (
+            "executor-top-private-payloads",
+            "commit_reveal_executor",
+            "commit-reveal-executor.json",
+            commit_reveal_executor,
+            ("private_payloads_included",),
+        ),
+        (
+            "executor-private-files",
+            "commit_reveal_executor",
+            "commit-reveal-executor.json",
+            commit_reveal_executor,
+            ("private_payload_files_copied",),
+        ),
+        (
+            "executor-artifact-payload-bytes",
+            "commit_reveal_executor",
+            "commit-reveal-executor.json",
+            commit_reveal_executor,
+            ("artifacts", 0, "payload_bytes_included"),
+        ),
+        (
+            "executor-artifact-private-payloads",
+            "commit_reveal_executor",
+            "commit-reveal-executor.json",
+            commit_reveal_executor,
+            ("artifacts", 0, "private_payloads_included"),
+        ),
+        (
+            "executor-summary-payload-bytes",
+            "commit_reveal_executor",
+            "commit-reveal-executor.json",
+            commit_reveal_executor,
+            ("execution_summary", "payload_bytes_included"),
+        ),
+        (
+            "executor-summary-private-payloads",
+            "commit_reveal_executor",
+            "commit-reveal-executor.json",
+            commit_reveal_executor,
+            ("execution_summary", "private_payloads_included"),
+        ),
+        (
+            "transparency-top-payload-bytes",
+            "transparency_publication",
+            "transparency-publication.json",
+            transparency_publication,
+            ("payload_bytes_included",),
+        ),
+        (
+            "transparency-top-private-payloads",
+            "transparency_publication",
+            "transparency-publication.json",
+            transparency_publication,
+            ("private_payloads_included",),
+        ),
+        (
+            "transparency-response-bodies",
+            "transparency_publication",
+            "transparency-publication.json",
+            transparency_publication,
+            ("response_bodies_included",),
+        ),
+        (
+            "transparency-probe-payload-bytes",
+            "transparency_publication",
+            "transparency-publication.json",
+            transparency_publication,
+            ("probes", 0, "payload_bytes_included"),
+        ),
+        (
+            "transparency-probe-private-payloads",
+            "transparency_publication",
+            "transparency-publication.json",
+            transparency_publication,
+            ("probes", 0, "private_payloads_included"),
+        ),
+        (
+            "transparency-probe-response-body",
+            "transparency_publication",
+            "transparency-publication.json",
+            transparency_publication,
+            ("probes", 0, "response_body_included"),
+        ),
+        (
+            "governance-payload-bytes",
+            "governance_dag",
+            "governance-dag.json",
+            governance_dag,
+            ("payload_bytes_included",),
+        ),
+        (
+            "governance-private-payloads",
+            "governance_dag",
+            "governance-dag.json",
+            governance_dag,
+            ("private_payloads_included",),
+        ),
+        (
+            "e2e-payload-bytes",
+            "end_to_end_workflow",
+            "end-to-end-workflow.json",
+            end_to_end_workflow,
+            ("payload_bytes_included",),
+        ),
+        (
+            "e2e-private-payloads",
+            "end_to_end_workflow",
+            "end-to-end-workflow.json",
+            end_to_end_workflow,
+            ("private_payloads_included",),
+        ),
+    )
+    for label, kind, filename, factory, field_path in cases:
+        root = tmp_path / label
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        target = payload
+        for item in field_path[:-1]:
+            target = target[item]
+        field = field_path[-1]
+        del target[field]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be false" in artifact["errors"]
+
+
 def test_url_evidence_fields_must_be_safe_without_leaking(
     tmp_path: Path,
     capsys,
@@ -428,6 +640,20 @@ def test_url_evidence_fields_must_be_safe_without_leaking(
             committee(),
             "aggregate_url",
             "https://committee.example/C%3A/aggregate",
+        ),
+        (
+            "committee.json",
+            "committee",
+            committee(),
+            "aggregate_url",
+            "https://C%3A.committee.example/aggregate",
+        ),
+        (
+            "committee.json",
+            "committee",
+            committee(),
+            "aggregate_url",
+            "https://http%3A.committee.example/aggregate",
         ),
         (
             "operator-workflow.json",
@@ -584,6 +810,69 @@ def test_runner_status_must_be_verified(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_runner_evidence_digest_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = runner()
+    del payload["evidence_digest_hex"]
+    write_json(tmp_path / "runner.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["runner"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "evidence_digest_hex must be a non-empty string" in artifact["errors"]
+
+
+def test_operator_route_body_bytes_must_be_positive(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    payload["routes"][0]["body_bytes"] = 0
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "body_bytes must be a positive integer" in artifact["errors"]
+
+
+def test_operator_route_body_hash_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    del payload["routes"][0]["body_blake3_hex"]
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "routes[0].body_blake3_hex must be a non-empty string"
+        in artifact["errors"]
+    )
+
+
+def test_operator_route_url_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    del payload["routes"][0]["url"]
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "url must be a non-empty canonical string" in artifact["errors"]
+
+
 def test_runner_subject_must_be_canonical(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = runner(subject="CID:prod-canary")
@@ -671,6 +960,65 @@ def test_runner_and_committee_accept_only_shipped_verdicts() -> None:
         assert "validation value must be a non-empty canonical string" in errors
 
 
+@pytest.mark.parametrize(
+    ("filename", "kind", "factory", "field", "value", "expected_error"),
+    (
+        (
+            "runner.json",
+            "runner",
+            runner,
+            "combined_score_bps",
+            12.5,
+            "combined_score_bps must be a non-negative integer",
+        ),
+        (
+            "runner.json",
+            "runner",
+            runner,
+            "combined_score_bps",
+            10_001,
+            "combined_score_bps must be <= 10000",
+        ),
+        (
+            "committee.json",
+            "committee",
+            committee,
+            "aggregated_score_bps",
+            12.5,
+            "aggregated_score_bps must be a non-negative integer",
+        ),
+        (
+            "committee.json",
+            "committee",
+            committee,
+            "aggregated_score_bps",
+            10_001,
+            "aggregated_score_bps must be <= 10000",
+        ),
+    ),
+)
+def test_runner_and_committee_score_bps_must_be_basis_points(
+    filename: str,
+    kind: str,
+    factory,
+    field: str,
+    value,
+    expected_error: str,
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = factory()
+    payload[field] = value
+    write_json(tmp_path / filename, payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"][kind]["artifacts"][0]
+    assert expected_error in artifact["errors"]
+
+
 def test_committee_must_match_runner_subject_binding(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = committee()
@@ -719,6 +1067,39 @@ def test_committee_results_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["committee"]["artifacts"][0]
     assert "results must not contain duplicate values" in artifact["errors"]
     assert "result_count must match unique results count" in artifact["errors"]
+
+
+def test_committee_results_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = committee()
+    payload["results"][0]["name"] = "runner-result-a"
+    write_json(tmp_path / "committee.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["committee"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert MODULE.COMMITTEE_RESULT_LABEL_ERROR in artifact["errors"]
+
+
+def test_committee_results_reject_placeholder_marker(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = committee()
+    payload["results"][0]["name"] = "ai-prescreen-committee-result-placeholder"
+    write_json(tmp_path / "committee.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["committee"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "results[0].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_operator_canary_must_cover_juror_notifications(tmp_path: Path) -> None:
@@ -821,6 +1202,79 @@ def test_operator_route_schema_must_match_expected_route(tmp_path: Path) -> None
     ) in artifact["errors"]
 
 
+def test_operator_route_method_must_be_get(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    payload["routes"][0]["method"] = "POST"
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "routes[0].method must be `GET`" in artifact["errors"]
+
+
+def test_operator_route_path_must_match_reviewed_route(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    payload["routes"][6]["path"] = MODULE.operator_route_paths(QUARANTINE_ID)[
+        "juror_plan"
+    ]
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    expected = MODULE.operator_route_paths(QUARANTINE_ID)["juror_notifications"]
+    assert f"routes[6].path must be `{expected}`" in artifact["errors"]
+
+
+def test_operator_route_url_must_match_reviewed_route(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    route_paths = MODULE.operator_route_paths(QUARANTINE_ID)
+    payload["routes"][6]["url"] = MODULE.expected_operator_route_url(
+        payload["operator_url"],
+        route_paths["juror_plan"],
+    )
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "routes[6].url must match operator_url and reviewed route path"
+        in artifact["errors"]
+    )
+
+
+def test_operator_route_content_type_must_match_reviewed_route(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_workflow()
+    payload["routes"][2]["content_type"] = "application/json"
+    write_json(tmp_path / "operator-workflow.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["operator_workflow"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "routes[2].content_type must be `text/html; charset=utf-8`"
+        in artifact["errors"]
+    )
+
+
 def test_operator_workflow_requires_workflow_binding(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = operator_workflow()
@@ -909,6 +1363,109 @@ def test_notification_probes_must_not_duplicate_delivery_id(tmp_path: Path) -> N
     assert "accepted_count must match unique probes count" in artifact["errors"]
 
 
+def test_notification_delivery_ids_must_use_production_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = notification_transport()
+    payload["probes"][0]["delivery_id"] = "notify-1"
+    write_json(tmp_path / "notification-transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["notification_transport"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert MODULE.NOTIFICATION_DELIVERY_LABEL_ERROR in artifact["errors"]
+
+
+def test_notification_delivery_ids_reject_placeholder_marker(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = notification_transport()
+    payload["probes"][0]["delivery_id"] = (
+        "ai-prescreen-notification-delivery-placeholder"
+    )
+    write_json(tmp_path / "notification-transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["notification_transport"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "probes[0].delivery_id must not contain non-production markers "
+        "['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_notification_probe_identity_fields_are_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = notification_transport()
+    del payload["probes"][0]["dedup_key"]
+    payload["probes"][0]["action"] = "notify"
+    payload["probes"][0]["case_id"] = ""
+    payload["probes"][0]["round_id"] = 17
+    payload["probes"][0]["juror_id"] = None
+    write_json(tmp_path / "notification-transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["notification_transport"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "probes[0].dedup_key must be a string" in artifact["errors"]
+    assert "probes[0].action must be `commit` or `reveal`" in artifact["errors"]
+    assert (
+        "probes[0].case_id must be a non-empty canonical string"
+        in artifact["errors"]
+    )
+    assert "probes[0].round_id must be a string" in artifact["errors"]
+    assert "probes[0].juror_id must be a string" in artifact["errors"]
+
+
+def test_notification_dedup_key_must_bind_delivery_id(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = notification_transport()
+    payload["probes"][0]["dedup_key"] = (
+        "sorafs-moderation-juror:ai-prescreen-notification-delivery-02"
+    )
+    write_json(tmp_path / "notification-transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["notification_transport"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "probes[0].dedup_key must equal "
+        "`sorafs-moderation-juror:<delivery_id>`"
+    ) in artifact["errors"]
+
+
+def test_notification_transport_byte_counts_are_validated(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = notification_transport()
+    payload["probes"][0]["notification_bytes"] = 0
+    payload["probes"][0]["response_bytes"] = -1
+    write_json(tmp_path / "notification-transport.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["notification_transport"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "notification_bytes must be a positive integer" in artifact["errors"]
+    assert "response_bytes must be a non-negative integer" in artifact["errors"]
+
+
 def test_executor_requires_execution_summary(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(
@@ -990,6 +1547,36 @@ def test_executor_artifacts_must_not_include_unknown_values(tmp_path: Path) -> N
     assert "artifacts must not include unknown values" in artifact["errors"]
 
 
+def test_executor_artifact_kind_must_match_reviewed_name(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal_executor()
+    payload["artifacts"][1]["kind"] = "env"
+    write_json(tmp_path / "commit-reveal-executor.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["commit_reveal_executor"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "artifacts[1].kind must be `script`" in artifact["errors"]
+
+
+def test_executor_artifact_path_must_match_reviewed_name(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal_executor()
+    payload["artifacts"][0]["path"] = "run.sh"
+    write_json(tmp_path / "commit-reveal-executor.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["commit_reveal_executor"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "artifacts[0].path must be `executor.env`" in artifact["errors"]
+
+
 def test_executor_artifacts_must_cover_required_bundle_files(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = commit_reveal_executor()
@@ -1025,6 +1612,38 @@ def test_executor_summary_digest_must_match_summary_body(tmp_path: Path) -> None
     assert payload["valid_executor_summary_digests"] == []
     assert (
         "execution_summary.body_blake3 must match execution_summary_digest_hex"
+        in artifact["errors"]
+    )
+
+
+def test_executor_bundle_and_summary_byte_counts_are_validated(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal_executor()
+    payload["bundle_metadata_bytes"] = 0
+    payload["bundle_metadata_blake3"] = "not-hex"
+    payload["interval_secs"] = 0
+    payload["artifacts"][0]["bytes"] = 0
+    payload["execution_summary"]["bytes"] = 0
+    payload["execution_summary"]["commit_action_count"] = -1
+    payload["execution_summary"]["reveal_action_count"] = 0
+    payload["execution_summary"]["tally_action_count"] = 0
+    write_json(tmp_path / "commit-reveal-executor.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["commit_reveal_executor"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "bundle_metadata_bytes must be a positive integer" in artifact["errors"]
+    assert "bundle_metadata_blake3 must be 64 hex characters" in artifact["errors"]
+    assert "interval_secs must be a positive integer" in artifact["errors"]
+    assert "bytes must be a positive integer" in artifact["errors"]
+    assert "commit_action_count must be a non-negative integer" in artifact["errors"]
+    assert (
+        "execution_summary commit/reveal/tally counts must sum to action_count"
         in artifact["errors"]
     )
 
@@ -1142,6 +1761,47 @@ def test_transparency_source_entry_probe_count_must_match_probe_count(
     artifact = payload["required"]["transparency_publication"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "source_entry_probe_count must equal probe_count" in artifact["errors"]
+
+
+def test_transparency_publication_payload_free_flags_are_required(
+    tmp_path: Path,
+) -> None:
+    for field in (
+        "payload_bytes_included",
+        "private_payloads_included",
+        "response_bodies_included",
+    ):
+        root = tmp_path / field
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = transparency_publication()
+        del payload[field]
+        write_json(root / "transparency-publication.json", payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["transparency_publication"]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be false" in artifact["errors"]
+
+
+def test_transparency_probe_byte_counts_are_validated(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = transparency_publication()
+    payload["probes"][0]["request_bytes"] = 0
+    payload["probes"][0]["response_bytes"] = -1
+    write_json(tmp_path / "transparency-publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["transparency_publication"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "request_bytes must be a positive integer" in artifact["errors"]
+    assert "response_bytes must be a non-negative integer" in artifact["errors"]
 
 
 def test_governance_dag_must_be_config_bound(tmp_path: Path) -> None:
@@ -1263,7 +1923,7 @@ def test_governance_edge_count_must_match_required_producer_inventory(
     payload["edges"].append(
         {
             "producer": "screening_ingest",
-            "name": "screening-ingest-extra-edge",
+            "name": "ai-prescreen-governance-edge-screening-ingest-extra",
         }
     )
     payload["edge_count"] = len(payload["edges"])
@@ -1296,6 +1956,39 @@ def test_governance_edges_must_not_duplicate(tmp_path: Path) -> None:
     assert artifact["valid"] is False
     assert "edges must not contain duplicate values" in artifact["errors"]
     assert "edge_count must match unique edges count" in artifact["errors"]
+
+
+def test_governance_edges_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag()
+    payload["edges"][0]["name"] = "screening-ingest-edge"
+    write_json(tmp_path / "governance-dag.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["governance_dag"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert MODULE.GOVERNANCE_EDGE_LABEL_ERROR in artifact["errors"]
+
+
+def test_governance_edges_reject_placeholder_marker(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_dag()
+    payload["edges"][0]["name"] = "ai-prescreen-governance-edge-placeholder"
+    write_json(tmp_path / "governance-dag.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["governance_dag"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "edges[0].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_governance_edges_must_cover_required_producers(tmp_path: Path) -> None:

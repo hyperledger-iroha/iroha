@@ -41,6 +41,7 @@ POLICY_DIGEST = "e" * 64
 STATEMENT_DIGEST_A = "1" * 64
 STATEMENT_DIGEST_B = "2" * 64
 ARTIFACT_DIGEST = "f" * 64
+ROUTE_BODY_DIGEST = "9" * 64
 GENERATED_AT = 1_800_100_000
 
 
@@ -113,7 +114,7 @@ def args_for(kind: str, tmp_path: Path, suffix: str = "") -> list[str]:
         args.extend(
             [
                 "--cycle-id",
-                f"cycle-{cycle_index}",
+                f"billing-cycle-{cycle_index}",
                 "--cycle-index",
                 str(cycle_index),
                 "--line-item-count",
@@ -140,7 +141,8 @@ def args_for(kind: str, tmp_path: Path, suffix: str = "") -> list[str]:
             args.extend(["--line-item", f"billing-line-item-{index:02d}"])
     elif kind == "statement_publication":
         args.extend(["--acknowledgement-probe-count", "1"])
-        args.extend(["--acknowledgement-probe", "statement-ack-probe-00"])
+        args.extend(["--acknowledgement-probe", "billing-ack-probe-00"])
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
         for route in MODULE.REQUIRED_PUBLICATION_ROUTES:
             args.extend(["--route", route])
     elif kind == "reconciliation":
@@ -154,8 +156,12 @@ def args_for(kind: str, tmp_path: Path, suffix: str = "") -> list[str]:
             args.extend(["--metric", metric])
     elif kind == "native_bridge_release":
         args.extend(["--bridge-abi-version", "12"])
-        args.extend(["--artifact", f"NoritoBridge.xcframework:{ARTIFACT_DIGEST}"])
-        args.extend(["--artifact", f"connect-norito-jni-macos-arm64:{ARTIFACT_DIGEST}"])
+        args.extend(
+            ["--artifact", f"hedging-native-artifact-swift-xcframework:{ARTIFACT_DIGEST}"]
+        )
+        args.extend(
+            ["--artifact", f"hedging-native-artifact-jni-macos-arm64:{ARTIFACT_DIGEST}"]
+        )
     elif kind == "governance_approval":
         args.extend(["--policy-digest-hex", POLICY_DIGEST])
     return args
@@ -207,6 +213,25 @@ def test_builds_payload_free_billing_cycle_canary(tmp_path: Path) -> None:
     assert errors == []
 
 
+def test_builds_payload_free_statement_publication_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("statement_publication", tmp_path)) == 0
+
+    payload = json.loads(canary_path(tmp_path, "statement_publication").read_text("utf-8"))
+
+    assert payload["schema"] == "sorafs.billing.statement_publication_canary.v1"
+    assert payload["route_count"] == len(MODULE.REQUIRED_PUBLICATION_ROUTES)
+    assert payload["passed_route_count"] == len(MODULE.REQUIRED_PUBLICATION_ROUTES)
+    assert [route["name"] for route in payload["routes"]] == list(
+        MODULE.REQUIRED_PUBLICATION_ROUTES
+    )
+    assert all(
+        route["body_blake3_hex"] == ROUTE_BODY_DIGEST for route in payload["routes"]
+    )
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "statement_publication"
+    assert errors == []
+
+
 def test_billing_cycle_id_must_be_canonical(tmp_path: Path, capsys) -> None:
     args = args_for("billing_cycle", tmp_path)
     args[args.index("--cycle-id") + 1] = "cycle_1"
@@ -214,7 +239,27 @@ def test_billing_cycle_id_must_be_canonical(tmp_path: Path, capsys) -> None:
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--cycle-id must match canonical lowercase `cycle-name`" in captured.err
+    assert (
+        "--cycle-id must match canonical lowercase `billing-cycle-*`"
+        in captured.err
+    )
+
+
+def test_billing_cycle_id_rejects_generic_cycle_family(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("billing_cycle", tmp_path)
+    args[args.index("--cycle-id") + 1] = "cycle-1"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--cycle-id must match canonical lowercase `billing-cycle-*`"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "billing_cycle").exists()
     assert not canary_path(tmp_path, "billing_cycle").exists()
 
 
@@ -223,7 +268,7 @@ def test_billing_cycle_id_rejects_non_production_markers(
     capsys,
 ) -> None:
     args = args_for("billing_cycle", tmp_path)
-    args[args.index("--cycle-id") + 1] = "cycle-prod-placeholder"
+    args[args.index("--cycle-id") + 1] = "billing-cycle-prod-placeholder"
 
     assert MODULE.main(args) == 2
 
@@ -237,12 +282,12 @@ def test_billing_cycle_id_rejects_non_production_markers(
 
 def test_billing_cycle_id_accepts_future_production_label(tmp_path: Path) -> None:
     args = args_for("billing_cycle", tmp_path)
-    args[args.index("--cycle-id") + 1] = "cycle-prod-a-202607"
+    args[args.index("--cycle-id") + 1] = "billing-cycle-prod-a-202607"
 
     assert MODULE.main(args) == 0
 
     payload = json.loads(canary_path(tmp_path, "billing_cycle").read_text("utf-8"))
-    assert payload["cycle_id"] == "cycle-prod-a-202607"
+    assert payload["cycle_id"] == "billing-cycle-prod-a-202607"
 
 
 def test_builds_payload_free_metrics_alerts_canary(tmp_path: Path) -> None:
@@ -323,6 +368,59 @@ def test_duplicate_native_bridge_artifact_id_fails_closed_without_leaking(
     assert not canary_path(tmp_path, "native_bridge_release").exists()
 
 
+def test_native_bridge_artifact_id_requires_reviewed_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("native_bridge_release", tmp_path)
+    first_artifact = args.index("--artifact") + 1
+    args[first_artifact] = f"NoritoBridge.xcframework:{ARTIFACT_DIGEST}"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        CHECKER.NATIVE_BRIDGE_ARTIFACT_ID_ERROR.replace(
+            "artifacts[].id", "--artifact[0].id"
+        )
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "native_bridge_release").exists()
+
+
+def test_native_bridge_artifact_id_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("native_bridge_release", tmp_path)
+    first_artifact = args.index("--artifact") + 1
+    args[first_artifact] = f"hedging-native-artifact-placeholder:{ARTIFACT_DIGEST}"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--artifact[0].id must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "native_bridge_release").exists()
+
+
+def test_native_bridge_release_requires_minimum_artifacts_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("native_bridge_release", tmp_path)
+    first_artifact = args.index("--artifact")
+    del args[first_artifact + 2:first_artifact + 4]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--artifact must include at least 2 distinct artifacts" in captured.err
+    assert not canary_path(tmp_path, "native_bridge_release").exists()
+
+
 def test_billing_cycle_statement_inventory_must_match_statement_digests(
     tmp_path: Path,
     capsys,
@@ -348,7 +446,7 @@ def test_billing_cycle_statement_inventory_must_use_billing_statement_family(
 
     captured = capsys.readouterr()
     assert (
-        "--statement must match canonical lowercase `billing-statement-name`"
+        "--statement must match canonical lowercase `billing-statement-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "billing_cycle").exists()
@@ -426,7 +524,7 @@ def test_billing_cycle_line_item_inventory_must_use_billing_line_item_family(
 
     captured = capsys.readouterr()
     assert (
-        "--line-item must match canonical lowercase `billing-line-item-name`"
+        "--line-item must match canonical lowercase `billing-line-item-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "billing_cycle").exists()
@@ -489,7 +587,7 @@ def test_reconciliation_line_item_inventory_must_use_billing_line_item_family(
 
     captured = capsys.readouterr()
     assert (
-        "--line-item must match canonical lowercase `billing-line-item-name`"
+        "--line-item must match canonical lowercase `billing-line-item-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "reconciliation").exists()
@@ -541,6 +639,57 @@ def test_statement_publication_ack_probe_inventory_must_not_duplicate(
 
     captured = capsys.readouterr()
     assert "--acknowledgement-probe must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "statement_publication").exists()
+
+
+def test_statement_publication_ack_probe_inventory_must_use_billing_ack_family(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("statement_publication", tmp_path)
+    args[args.index("--acknowledgement-probe") + 1] = "statement-ack-probe-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--acknowledgement-probe must match canonical lowercase "
+        "`billing-ack-probe-*`"
+    ) in captured.err
+    assert not canary_path(tmp_path, "statement_publication").exists()
+
+
+def test_statement_publication_ack_probe_inventory_rejects_non_production_markers(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("statement_publication", tmp_path)
+    args[args.index("--acknowledgement-probe") + 1] = (
+        "billing-ack-probe-placeholder"
+    )
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--acknowledgement-probe[0] must not contain non-production markers "
+        "['placeholder']"
+    ) in captured.err
+    assert not canary_path(tmp_path, "statement_publication").exists()
+
+
+def test_statement_publication_requires_route_body_digest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("statement_publication", tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
     assert not canary_path(tmp_path, "statement_publication").exists()
 
 

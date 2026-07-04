@@ -24,12 +24,15 @@ from check_sorafs_moderation_panel_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_VIEWER_URL_TTL_SECS,
     DEFAULT_MIN_PANEL_SIZE,
     DEFAULT_MIN_PEERS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
     REQUIRED_VIEWER_EVENT_KINDS,
     REQUIRED_VIEWER_EXPORT_TARGETS,
     REQUIRED_VIEWER_ROLES,
     REQUIRED_VIEWER_SECURITY_CONTROLS,
     ValidationOptions,
+    VIEWER_SESSION_LABEL_ERROR,
+    VIEWER_SESSION_LABEL_PATTERN,
     validate_evidence_payload,
 )
 from sorafs_checker_preflight import (  # noqa: E402
@@ -173,6 +176,8 @@ def validate_reviewed_inventory(
     option: str,
     count_option: str,
     errors: list[str],
+    pattern=None,
+    label_error: str | None = None,
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
 
@@ -181,6 +186,25 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if pattern is None or not isinstance(item, str):
+            continue
+        if pattern.fullmatch(item) is None:
+            errors.append(
+                (label_error or f"{option} uses an invalid label").replace(
+                    "sessions[].name",
+                    option,
+                )
+            )
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in item.split("-")
+        )
+        if forbidden:
+            errors.append(
+                f"{option}[{index}] must not contain non-production markers {forbidden}"
+            )
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
@@ -282,6 +306,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         expected_count=args.session_count,
         option="--viewer-session",
         count_option="--session-count",
+        pattern=VIEWER_SESSION_LABEL_PATTERN,
+        label_error=VIEWER_SESSION_LABEL_ERROR,
         errors=errors,
     )
     if args.max_url_ttl_secs > DEFAULT_MAX_VIEWER_URL_TTL_SECS:

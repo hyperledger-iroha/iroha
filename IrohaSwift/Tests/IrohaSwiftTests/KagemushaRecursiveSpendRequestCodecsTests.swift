@@ -924,6 +924,23 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         XCTAssertEqual(lineageProvingKeyArchive, try Self.readBytesVecPayload(Self.optionSomePayload(initFields[4])))
         XCTAssertEqual(UInt64(7), try Self.readUInt64Payload(Self.optionSomePayload(initFields[5])))
 
+        let initWithoutLineageArchive = try KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(
+            KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: note,
+                lineageVerifierKey: nil,
+                lineageProvingKeyArchive: nil
+            )
+        )
+        let initWithoutLineageFields = try Self.requestFields(
+            initWithoutLineageArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName
+        )
+        try Self.assertOptionNone(initWithoutLineageFields[3])
+        try Self.assertOptionNone(initWithoutLineageFields[4])
+        try Self.assertOptionNone(initWithoutLineageFields[5])
+
         try Self.assertArchiveSchema(
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
                 KagemushaRecursiveSpendAppendRequest(
@@ -1390,13 +1407,36 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         )
         let pallasOpenEnvelopes = Self.syntheticPallasOpenEnvelopesArchive()
         let (lineageVerifierKey, lineageProvingKeyArchive) = try Self.sharedInitLineageKeyMaterial()
-        XCTAssertThrowsError(
+        XCTAssertNoThrow(
             try KagemushaRecursiveSpendInitRequest(
                 recordBundle: recordBundle,
                 pallasOpenEnvelopes: pallasOpenEnvelopes,
                 currentNote: Self.sampleNote(),
                 lineageVerifierKey: nil,
                 lineageProvingKeyArchive: nil
+            )
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote(),
+                lineageVerifierKey: lineageVerifierKey,
+                lineageProvingKeyArchive: nil
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendRequestCodecError,
+                .invalidField("lineageProvingKeyArchive")
+            )
+        }
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpendInitRequest(
+                recordBundle: recordBundle,
+                pallasOpenEnvelopes: pallasOpenEnvelopes,
+                currentNote: Self.sampleNote(),
+                lineageVerifierKey: nil,
+                lineageProvingKeyArchive: lineageProvingKeyArchive
             )
         ) { error in
             XCTAssertEqual(

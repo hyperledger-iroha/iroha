@@ -89,9 +89,9 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     elif kind == "committee":
         args.extend(["--committee-url", "https://committee.example"])
         for result in (
-            "runner-result-a",
-            "runner-result-b",
-            "runner-result-c",
+            "ai-prescreen-committee-result-a",
+            "ai-prescreen-committee-result-b",
+            "ai-prescreen-committee-result-c",
         ):
             args.extend(["--committee-result", result])
     elif kind == "operator_workflow":
@@ -121,7 +121,15 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--policy-digest-hex", POLICY_DIGEST])
         for producer in MODULE.REQUIRED_GOVERNANCE_PRODUCERS:
             args.extend(["--governance-producer", producer])
-            args.extend(["--governance-edge", f"{producer}:{producer}-edge"])
+            args.extend(
+                [
+                    "--governance-edge",
+                    (
+                        f"{producer}:ai-prescreen-governance-edge-"
+                        f"{producer.replace('_', '-')}"
+                    ),
+                ]
+            )
         args.extend(["--edge-count", str(len(MODULE.REQUIRED_GOVERNANCE_PRODUCERS))])
     elif kind == "end_to_end_workflow":
         args.extend(["--workflow-id", "sfm-4a-prod-canary-20260701"])
@@ -158,6 +166,12 @@ def test_builds_payload_free_notification_transport_canary(tmp_path: Path) -> No
     assert payload["workflow_digest_hex"] == DIGEST
     assert payload["probe_count"] == 2
     assert payload["accepted_count"] == 2
+    assert [
+        probe["delivery_id"] for probe in payload["probes"]
+    ] == [
+        "ai-prescreen-notification-delivery-01",
+        "ai-prescreen-notification-delivery-02",
+    ]
     assert payload["payload_bytes_included"] is False
     assert payload["private_payloads_included"] is False
     kind, errors = CHECKER.validate_evidence_payload(payload)
@@ -195,9 +209,9 @@ def test_generated_canaries_pass_full_ai_prescreen_gate(tmp_path: Path) -> None:
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
     committee_payload = json.loads(canary_path(tmp_path, "committee").read_text("utf-8"))
     assert committee_payload["results"] == [
-        {"name": "runner-result-a"},
-        {"name": "runner-result-b"},
-        {"name": "runner-result-c"},
+        {"name": "ai-prescreen-committee-result-a"},
+        {"name": "ai-prescreen-committee-result-b"},
+        {"name": "ai-prescreen-committee-result-c"},
     ]
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
@@ -227,7 +241,7 @@ def test_workflow_id_must_be_canonical(tmp_path: Path, capsys) -> None:
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--workflow-id must match canonical lowercase `sfm-4a-name`" in captured.err
+    assert "--workflow-id must match canonical lowercase `sfm-4a-*`" in captured.err
     assert not canary_path(tmp_path, "end_to_end_workflow").exists()
 
 
@@ -297,6 +311,50 @@ def test_subject_accepts_future_production_reference(tmp_path: Path) -> None:
     assert payload["subject"] == subject
 
 
+@pytest.mark.parametrize(
+    ("option", "expected_error"),
+    (
+        ("--evidence-digest-hex", "--evidence-digest-hex is required for runner"),
+        ("--policy-digest-hex", "--policy-digest-hex is required for runner"),
+    ),
+)
+def test_runner_canary_requires_digest_options(
+    option: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("runner", tmp_path)
+    index = args.index(option)
+    del args[index : index + 2]
+
+    assert_rejected_without_artifact(
+        args,
+        kind="runner",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=expected_error,
+    )
+
+
+@pytest.mark.parametrize("kind", ("runner", "committee"))
+def test_score_bps_rejects_out_of_range_before_write(
+    kind: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for(kind, tmp_path)
+    args.extend(["--score-bps", "10001"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--score-bps must be <= 10000",
+    )
+
+
 def test_missing_operator_route_coverage_fails_closed(
     tmp_path: Path,
     capsys,
@@ -320,6 +378,18 @@ def test_operator_workflow_canary_records_passed_route_count(tmp_path: Path) -> 
     )
     assert payload["route_count"] == len(MODULE.REQUIRED_OPERATOR_ROUTES)
     assert payload["passed_route_count"] == payload["route_count"]
+    assert {
+        route["name"]: route["path"] for route in payload["routes"]
+    } == CHECKER.operator_route_paths(QUARANTINE_ID)
+    assert {
+        route["name"]: route["url"] for route in payload["routes"]
+    } == {
+        name: CHECKER.expected_operator_route_url(payload["operator_url"], path)
+        for name, path in CHECKER.operator_route_paths(QUARANTINE_ID).items()
+    }
+    assert {
+        route["name"]: route["content_type"] for route in payload["routes"]
+    } == CHECKER.REQUIRED_OPERATOR_CONTENT_TYPES
 
 
 def test_committee_result_count_must_cover_quorum(
@@ -365,12 +435,49 @@ def test_committee_result_inventory_must_not_duplicate(
     assert not canary_path(tmp_path, "committee").exists()
 
 
+def test_committee_result_inventory_requires_production_family(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("committee", tmp_path)
+    first_result = args.index("--committee-result") + 1
+    args[first_result] = "runner-result-a"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert MODULE.COMMITTEE_RESULT_LABEL_ERROR in captured.err
+    assert not canary_path(tmp_path, "committee").exists()
+
+
+def test_committee_result_inventory_rejects_placeholder_marker(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("committee", tmp_path)
+    first_result = args.index("--committee-result") + 1
+    args[first_result] = "ai-prescreen-committee-result-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--committee-result[0] must not contain non-production markers "
+        "['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "committee").exists()
+
+
 def test_governance_dag_canary_records_edge_inventory(tmp_path: Path) -> None:
     assert MODULE.main(args_for("governance_dag", tmp_path)) == 0
 
     payload = json.loads(canary_path(tmp_path, "governance_dag").read_text("utf-8"))
     expected_edges = [
-        {"producer": producer, "name": f"{producer}-edge"}
+        {
+            "producer": producer,
+            "name": f"ai-prescreen-governance-edge-{producer.replace('_', '-')}",
+        }
         for producer in MODULE.REQUIRED_GOVERNANCE_PRODUCERS
     ]
     assert payload["edge_count"] == len(MODULE.REQUIRED_GOVERNANCE_PRODUCERS)
@@ -403,7 +510,7 @@ def test_governance_edge_count_must_match_required_producer_inventory(
     args.extend(
         [
             "--governance-edge",
-            "screening_ingest:screening-ingest-extra-edge",
+            "screening_ingest:ai-prescreen-governance-edge-screening-ingest-extra",
             "--edge-count",
             str(extra_edge_count),
         ]
@@ -456,12 +563,46 @@ def test_governance_edge_inventory_rejects_unknown_producer(
 ) -> None:
     args = args_for("governance_dag", tmp_path)
     first_edge = args.index("--governance-edge") + 1
-    args[first_edge] = "unknown:screening-edge"
+    args[first_edge] = "unknown:ai-prescreen-governance-edge-screening-ingest"
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
     assert "--governance-edge producer must be a required producer" in captured.err
+    assert not canary_path(tmp_path, "governance_dag").exists()
+
+
+def test_governance_edge_inventory_requires_production_family(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_dag", tmp_path)
+    first_edge = args.index("--governance-edge") + 1
+    args[first_edge] = "screening_ingest:screening-ingest-edge"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert MODULE.GOVERNANCE_EDGE_LABEL_ERROR in captured.err
+    assert not canary_path(tmp_path, "governance_dag").exists()
+
+
+def test_governance_edge_inventory_rejects_placeholder_marker(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_dag", tmp_path)
+    first_edge = args.index("--governance-edge") + 1
+    args[first_edge] = "screening_ingest:ai-prescreen-governance-edge-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--governance-edge[0].name must not contain non-production markers "
+        "['placeholder']"
+        in captured.err
+    )
     assert not canary_path(tmp_path, "governance_dag").exists()
 
 
@@ -608,6 +749,18 @@ def test_url_arguments_reject_encoded_or_secret_bearing_values_without_leaking(
             "--committee-aggregate-url",
             "https://committee.example/C%3A/aggregate",
             ("C%3A",),
+        ),
+        (
+            "committee",
+            "--committee-aggregate-url",
+            "https://C%3A.committee.example/aggregate",
+            ("C%3A",),
+        ),
+        (
+            "committee",
+            "--committee-aggregate-url",
+            "https://http%3A.committee.example/aggregate",
+            ("http%3A",),
         ),
         (
             "operator_workflow",

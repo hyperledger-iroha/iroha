@@ -94,6 +94,8 @@ ballot_reveal
 ballot_tally
 --ballot-route
 ballot_events
+--route-body-blake3-hex
+9999999999999999999999999999999999999999999999999999999999999999
 --scenario
 happy_path
 --scenario

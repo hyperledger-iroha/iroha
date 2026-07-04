@@ -65,6 +65,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     if kind in MODULE.PROVIDER_ROSTER_DIGEST_KINDS:
         args.extend(["--provider-roster-digest-hex", ROSTER_DIGEST])
     if kind == "provider_transport":
+        args.extend(["--route-body-blake3-hex", DIGEST])
         for route in MODULE.REQUIRED_ROUTES:
             args.extend(["--route", route])
     elif kind == "proof_generation":
@@ -228,7 +229,7 @@ def test_proof_generation_provider_inventory_must_use_reviewed_labels_before_wri
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--provider must match canonical lowercase `provider-name`" in captured.err
+    assert "--provider must match canonical lowercase `provider-*`" in captured.err
     assert not canary_path(tmp_path, "proof_generation").exists()
 
 
@@ -278,7 +279,7 @@ def test_proof_generation_challenge_inventory_must_use_reviewed_labels_before_wr
 
     captured = capsys.readouterr()
     assert (
-        "--challenge must match canonical lowercase `pdp-challenge-name`"
+        "--challenge must match canonical lowercase `pdp-challenge-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "proof_generation").exists()
@@ -329,7 +330,7 @@ def test_proof_generation_proof_inventory_must_use_reviewed_labels_before_write(
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--proof must match canonical lowercase `pdp-proof-name`" in captured.err
+    assert "--proof must match canonical lowercase `pdp-proof-*`" in captured.err
     assert not canary_path(tmp_path, "proof_generation").exists()
 
 
@@ -393,6 +394,21 @@ def test_provider_transport_routes_must_not_include_unknown_values_before_write(
         capsys=capsys,
         expected_error="--route contains an unknown value",
     )
+
+
+def test_provider_transport_requires_route_body_digest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("provider_transport", tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "provider_transport").exists()
 
 
 def test_observability_metrics_must_not_duplicate_before_write(

@@ -37311,7 +37311,7 @@ fn signer_indices_from_bitmap(bitmap: &[u8], roster_len: usize) -> Option<Vec<us
 
 #[cfg(any(test, feature = "test-fixtures"))]
 #[cfg_attr(feature = "test-fixtures", allow(dead_code))]
-mod tests {
+pub mod tests {
     use super::*;
     use norito::{decode_from_bytes, to_bytes};
 
@@ -39860,7 +39860,7 @@ mod tests {
             .expect("TON validator set hash")
     }
 
-    fn sample_ton_validator_set_hash() -> H256 {
+    pub fn sample_ton_validator_set_hash() -> H256 {
         let signers = sample_ton_validator_keypairs();
         sample_ton_validator_set_hash_for(&signers)
     }
@@ -40030,6 +40030,45 @@ mod tests {
         proof.transition_signature_hash =
             sccp_ton_validator_set_transition_signature_hash(&proof).unwrap_or([0u8; 32]);
         proof
+    }
+
+    fn sample_ton_audit_precondition_diagnostics(
+        adapter: &SccpTonMasterchainSourceProofV1,
+        material: &SccpSourceVerifierMaterialV1,
+        deployment: &SccpSourceAdapterEngineDeploymentV1,
+        role: SccpTonFullLightClientAuditRoleV1,
+    ) -> String {
+        let active_set_matches_anchor =
+            adapter.validator_set_hash == material.source_trust_anchor_hash;
+        format!(
+            "adapter_domain={} material_domain={} deployment_domain={} deployment_target={} \
+             deployment_matches_material={} source_state_ready={} full_gate={} role_hashes_separated={} \
+             shard_state_opening={} masterchain_config_proof={} shard_state_capsule={} \
+             active_set_matches_anchor={} transition_chain={} transition_count={} role_statement={} \
+             role_columns={}",
+            adapter.source_domain == SCCP_DOMAIN_TON,
+            material.source_domain == SCCP_DOMAIN_TON,
+            deployment.source_domain == SCCP_DOMAIN_TON,
+            deployment.target_domain == SCCP_DOMAIN_SORA,
+            sccp_source_adapter_engine_deployment_matches_material(material, deployment),
+            sccp_source_state_verifier_is_production_ready(material),
+            sccp_ton_full_light_client_gate_hash_from_deployment_v1(material, deployment).is_some(),
+            sccp_ton_full_light_client_audit_role_request_hashes_are_separated(
+                adapter, material, deployment, role,
+            ),
+            verify_sccp_ton_shard_state_opening(adapter),
+            verify_sccp_ton_masterchain_config_proof(adapter),
+            verify_sccp_ton_shard_state_verification_proof(adapter, material),
+            active_set_matches_anchor,
+            active_set_matches_anchor
+                || verify_sccp_ton_validator_set_transition_chain(
+                    adapter,
+                    material.source_trust_anchor_hash,
+                ),
+            adapter.validator_set_transition_proofs.len(),
+            sccp_ton_full_light_client_audit_statement_hash(adapter, role).is_some(),
+            sccp_ton_full_light_client_audit_role_columns(adapter, material, role).is_some(),
+        )
     }
 
     fn sample_tron_witness_keypairs() -> [KeyPair; 4] {
@@ -42514,7 +42553,7 @@ mod tests {
         )
     }
 
-    fn sample_source_chain_proof_envelope_with_material_and_deployment(
+    pub fn sample_source_chain_proof_envelope_with_material_and_deployment(
         payload: &SccpPayloadV1,
         commitment: &SccpHubCommitmentV1,
         commitment_root: H256,
@@ -43074,7 +43113,17 @@ mod tests {
                     build_sccp_ton_masterchain_config_verification_proof(
                         adapter, material, deployment,
                     )
-                    .expect("build TON masterchain config verification proof");
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "build TON masterchain config verification proof: {}",
+                            sample_ton_audit_precondition_diagnostics(
+                                adapter,
+                                material,
+                                deployment,
+                                SccpTonFullLightClientAuditRoleV1::MasterchainConfig,
+                            )
+                        )
+                    });
                 adapter.validator_set_transition_verification_proof =
                     build_sccp_ton_validator_set_transition_verification_proof(
                         adapter, material, deployment,
@@ -62630,7 +62679,7 @@ mod tests {
         assert_eq!(
             route_canary_hash,
             decode_fixed_hex_bytes::<32>(
-                "0xf2855793ffe735426c58635db37ec648119e931bfc3f1a4ad09974d3ffa605ae",
+                "0xd9fad9fb36aff755e4c6b5a322b0ef8b55d6c3bbb031b6b930605c4117ae6bcd",
             )
             .expect("TON route canary vector")
         );
@@ -70791,12 +70840,12 @@ mod tests {
                 "TON {label} replay remains a well-shaped audited deployment"
             );
             assert!(
-                sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                !sccp_source_adapter_ready_with_material_and_deployment_for_domain(
                     SCCP_DOMAIN_TON,
                     &material,
                     &replayed_audit_deployment,
                 ),
-                "TON {label} replay remains generally source-adapter ready"
+                "TON {label} replay must not satisfy governed source-adapter readiness"
             );
             assert!(
                 !sccp_source_chain_proof_matches_adapter_deployment(

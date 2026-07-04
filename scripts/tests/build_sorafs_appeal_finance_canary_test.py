@@ -35,6 +35,7 @@ CHECKER_SPEC.loader.exec_module(CHECKER)
 
 CONFIG_DIGEST = "a" * 64
 POLICY_DIGEST = "b" * 64
+ROUTE_BODY_DIGEST = "c" * 64
 GENERATED_AT = 1_800_200_000
 
 
@@ -72,11 +73,13 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     ]
     for claim in MODULE.TRUE_CLAIMS[kind]:
         args.extend(["--verified-claim", claim])
+    if kind in ("quote_api", "deposit_lifecycle", "settlement_execution"):
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
     if kind == "pricing_config":
         args.extend(
             [
                 "--config-version",
-                "baseline-v1",
+                "appeal-finance-config-baseline-v1",
                 "--class-count",
                 str(len(MODULE.REQUIRED_APPEAL_CLASSES)),
             ]
@@ -97,9 +100,9 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "--deposit-probe-count",
                 "2",
                 "--confirmed-deposit-probe",
-                "deposit-probe-00",
+                "appeal-finance-deposit-probe-00",
                 "--confirmed-deposit-probe",
-                "deposit-probe-01",
+                "appeal-finance-deposit-probe-01",
                 "--confirmed-deposit-count",
                 "2",
                 "--max-route-latency-ms",
@@ -124,15 +127,15 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "--configured-signer-count",
                 "2",
                 "--signer",
-                "submitter-signer-00",
+                "appeal-finance-submitter-signer-00",
                 "--signer",
-                "submitter-signer-01",
+                "appeal-finance-submitter-signer-01",
                 "--queued-step-count",
                 "2",
                 "--submitted-step",
-                "settlement-step-00",
+                "appeal-finance-submitter-step-00",
                 "--submitted-step",
-                "settlement-step-01",
+                "appeal-finance-submitter-step-01",
                 "--submitted-step-count",
                 "2",
                 "--max-settlement-lag-seconds",
@@ -144,6 +147,12 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             [
                 "--ballot-replay-count",
                 "3",
+                "--replayed-ballot",
+                "appeal-finance-worker-ballot-00",
+                "--replayed-ballot",
+                "appeal-finance-worker-ballot-01",
+                "--replayed-ballot",
+                "appeal-finance-worker-ballot-02",
                 "--max-settlement-lag-seconds",
                 "60",
             ]
@@ -221,6 +230,12 @@ def assert_rejected_without_artifact(
     assert not canary_path(tmp_path, kind).exists()
 
 
+def replace_first_option_value(args: list[str], option: str, value: str) -> None:
+    """Replace the first value for a repeated CLI option."""
+
+    args[args.index(option) + 1] = value
+
+
 def test_builds_payload_free_dashboard_metrics_canary(tmp_path: Path) -> None:
     assert MODULE.main(args_for("dashboard_metrics", tmp_path)) == 0
 
@@ -251,11 +266,30 @@ def test_builds_payload_free_deposit_lifecycle_canary(tmp_path: Path) -> None:
     assert payload["deposit_probe_count"] == 2
     assert payload["confirmed_deposit_count"] == 2
     assert payload["deposit_probes"] == [
-        {"name": "deposit-probe-00", "confirmed": True},
-        {"name": "deposit-probe-01", "confirmed": True},
+        {"name": "appeal-finance-deposit-probe-00", "confirmed": True},
+        {"name": "appeal-finance-deposit-probe-01", "confirmed": True},
     ]
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "deposit_lifecycle"
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ("quote_api", "deposit_lifecycle", "settlement_execution"),
+)
+def test_route_canaries_record_route_body_digest(kind: str, tmp_path: Path) -> None:
+    assert MODULE.main(args_for(kind, tmp_path)) == 0
+
+    payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
+
+    assert all(
+        route["body_blake3_hex"] == ROUTE_BODY_DIGEST for route in payload["routes"]
+    )
+    validated_kind, errors = CHECKER.validate_evidence_payload(
+        payload, checker_options()
+    )
+    assert validated_kind == kind
     assert errors == []
 
 
@@ -269,17 +303,36 @@ def test_builds_payload_free_settlement_submitter_canary(tmp_path: Path) -> None
     assert payload["schema"] == "sorafs.appeal_finance.settlement_submitter_canary.v1"
     assert payload["configured_signer_count"] == 2
     assert payload["signers"] == [
-        {"name": "submitter-signer-00"},
-        {"name": "submitter-signer-01"},
+        {"name": "appeal-finance-submitter-signer-00"},
+        {"name": "appeal-finance-submitter-signer-01"},
     ]
     assert payload["queued_step_count"] == 2
     assert payload["submitted_step_count"] == 2
     assert payload["steps"] == [
-        {"name": "settlement-step-00", "submitted": True},
-        {"name": "settlement-step-01", "submitted": True},
+        {"name": "appeal-finance-submitter-step-00", "submitted": True},
+        {"name": "appeal-finance-submitter-step-01", "submitted": True},
     ]
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "settlement_submitter"
+    assert errors == []
+
+
+def test_builds_payload_free_moderation_worker_canary(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("moderation_worker", tmp_path)) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "moderation_worker").read_text("utf-8")
+    )
+
+    assert payload["schema"] == "sorafs.appeal_finance.moderation_worker_canary.v1"
+    assert payload["ballot_replay_count"] == 3
+    assert payload["ballots"] == [
+        {"name": "appeal-finance-worker-ballot-00"},
+        {"name": "appeal-finance-worker-ballot-01"},
+        {"name": "appeal-finance-worker-ballot-02"},
+    ]
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "moderation_worker"
     assert errors == []
 
 
@@ -375,7 +428,7 @@ def test_response_file_can_build_pricing_config_canary(tmp_path: Path) -> None:
     assert MODULE.main([f"@{args_file}"]) == 0
 
     payload = json.loads(canary_path(tmp_path, "pricing_config").read_text("utf-8"))
-    assert payload["config_version"] == "baseline-v1"
+    assert payload["config_version"] == "appeal-finance-config-baseline-v1"
     assert payload["policy_digest_hex"] == POLICY_DIGEST
     assert payload["class_count"] == len(MODULE.REQUIRED_APPEAL_CLASSES)
     assert payload["classes"] == list(MODULE.REQUIRED_APPEAL_CLASSES)
@@ -405,7 +458,7 @@ def test_config_version_rejects_non_production_marker_before_write(
 ) -> None:
     args = args_for("pricing_config", tmp_path)
     version_index = args.index("--config-version")
-    args[version_index + 1] = "dev-baseline-v1"
+    args[version_index + 1] = "appeal-finance-config-dev-baseline-v1"
 
     assert MODULE.main(args) == 2
 
@@ -417,15 +470,33 @@ def test_config_version_rejects_non_production_marker_before_write(
     assert not canary_path(tmp_path, "pricing_config").exists()
 
 
+def test_config_version_rejects_generic_name_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("pricing_config", tmp_path)
+    version_index = args.index("--config-version")
+    args[version_index + 1] = "baseline-v1"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        CHECKER.CONFIG_VERSION_ERROR.replace("config_version", "--config-version")
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "pricing_config").exists()
+
+
 def test_config_version_accepts_reviewed_future_label(tmp_path: Path) -> None:
     args = args_for("pricing_config", tmp_path)
     version_index = args.index("--config-version")
-    args[version_index + 1] = "governance-baseline-v12"
+    args[version_index + 1] = "appeal-finance-config-governance-baseline-v12"
 
     assert MODULE.main(args) == 0
 
     payload = json.loads(canary_path(tmp_path, "pricing_config").read_text("utf-8"))
-    assert payload["config_version"] == "governance-baseline-v12"
+    assert payload["config_version"] == "appeal-finance-config-governance-baseline-v12"
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "pricing_config"
     assert errors == []
@@ -453,6 +524,26 @@ def test_missing_quote_route_coverage_fails_closed(tmp_path: Path, capsys) -> No
     captured = capsys.readouterr()
     assert "--quote-route must include every required value" in captured.err
     assert not canary_path(tmp_path, "quote_api").exists()
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ("quote_api", "deposit_lifecycle", "settlement_execution"),
+)
+def test_route_canaries_require_route_body_digest(
+    kind: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for(kind, tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, kind).exists()
 
 
 def test_missing_pricing_class_coverage_fails_closed(
@@ -569,6 +660,166 @@ def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
         tmp_path=unknown_dir,
         capsys=capsys,
         expected_error=f"{option} contains an unknown value",
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "option", "legacy_label", "expected_error"),
+    (
+        (
+            "deposit_lifecycle",
+            "--confirmed-deposit-probe",
+            "deposit-probe-00",
+            "--confirmed-deposit-probe must match canonical lowercase "
+            "`appeal-finance-deposit-probe-name`",
+        ),
+        (
+            "settlement_submitter",
+            "--signer",
+            "submitter-signer-00",
+            "--signer must match canonical lowercase "
+            "`appeal-finance-submitter-signer-name`",
+        ),
+        (
+            "settlement_submitter",
+            "--submitted-step",
+            "settlement-step-00",
+            "--submitted-step must match canonical lowercase "
+            "`appeal-finance-submitter-step-name`",
+        ),
+        (
+            "governance_dag_publication",
+            "--report",
+            "report-00",
+            "--report must match canonical lowercase `appeal-finance-report-*`",
+        ),
+        (
+            "governance_dag_publication",
+            "--weekly-rollup",
+            "weekly-rollup-00",
+            "--weekly-rollup must match canonical lowercase "
+            "`appeal-finance-weekly-rollup-name`",
+        ),
+        (
+            "governance_dag_publication",
+            "--settlement-receipt",
+            "settlement-receipt-00",
+            "--settlement-receipt must match canonical lowercase "
+            "`appeal-finance-settlement-receipt-name`",
+        ),
+    ),
+)
+def test_reviewed_inventory_labels_reject_legacy_families_before_write(
+    kind: str,
+    option: str,
+    legacy_label: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for(kind, tmp_path)
+    replace_first_option_value(args, option, legacy_label)
+
+    assert_rejected_without_artifact(
+        args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=expected_error,
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "option", "placeholder_label"),
+    (
+        (
+            "deposit_lifecycle",
+            "--confirmed-deposit-probe",
+            "appeal-finance-deposit-probe-placeholder",
+        ),
+        (
+            "settlement_submitter",
+            "--signer",
+            "appeal-finance-submitter-signer-placeholder",
+        ),
+        (
+            "settlement_submitter",
+            "--submitted-step",
+            "appeal-finance-submitter-step-placeholder",
+        ),
+        (
+            "governance_dag_publication",
+            "--report",
+            "appeal-finance-report-placeholder",
+        ),
+        (
+            "governance_dag_publication",
+            "--weekly-rollup",
+            "appeal-finance-weekly-rollup-placeholder",
+        ),
+        (
+            "governance_dag_publication",
+            "--settlement-receipt",
+            "appeal-finance-settlement-receipt-placeholder",
+        ),
+    ),
+)
+def test_reviewed_inventory_labels_reject_placeholder_markers_before_write(
+    kind: str,
+    option: str,
+    placeholder_label: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for(kind, tmp_path)
+    replace_first_option_value(args, option, placeholder_label)
+
+    assert_rejected_without_artifact(
+        args,
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=f"{option} must not contain non-production markers ['placeholder']",
+    )
+
+
+def test_unconfirmed_deposit_probe_label_family_is_validated_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("deposit_lifecycle", tmp_path)
+    replace_first_option_value(args, "--deposit-probe-count", "3")
+    args.extend(["--unconfirmed-deposit-probe", "deposit-probe-02"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="deposit_lifecycle",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--unconfirmed-deposit-probe must match canonical lowercase "
+            "`appeal-finance-deposit-probe-name`"
+        ),
+    )
+
+
+def test_queued_only_submitter_step_label_family_is_validated_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_submitter", tmp_path)
+    replace_first_option_value(args, "--queued-step-count", "3")
+    args.extend(["--queued-only-step", "settlement-step-02"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="settlement_submitter",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--queued-only-step must match canonical lowercase "
+            "`appeal-finance-submitter-step-name`"
+        ),
     )
 
 
@@ -699,7 +950,7 @@ def test_multi_peer_peer_inventory_must_use_production_family(
 
     captured = capsys.readouterr()
     assert (
-        "--peer must match canonical lowercase `appeal-finance-peer-name`"
+        "--peer must match canonical lowercase `appeal-finance-peer-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
@@ -813,7 +1064,7 @@ def test_multi_peer_case_inventory_must_be_canonical(
     captured = capsys.readouterr()
     assert (
         "--reconciliation-case must match canonical lowercase "
-        "`appeal-finance-case-name`"
+        "`appeal-finance-case-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "multi_peer_reconciliation").exists()
@@ -857,7 +1108,7 @@ def test_deposit_probe_inventories_must_not_overlap(
 ) -> None:
     args = args_for("deposit_lifecycle", tmp_path)
     args[args.index("--deposit-probe-count") + 1] = "3"
-    args.extend(["--unconfirmed-deposit-probe", "deposit-probe-00"])
+    args.extend(["--unconfirmed-deposit-probe", "appeal-finance-deposit-probe-00"])
 
     assert MODULE.main(args) == 2
 
@@ -920,7 +1171,7 @@ def test_submitter_step_inventories_must_not_overlap(
 ) -> None:
     args = args_for("settlement_submitter", tmp_path)
     args[args.index("--queued-step-count") + 1] = "3"
-    args.extend(["--queued-only-step", "settlement-step-00"])
+    args.extend(["--queued-only-step", "appeal-finance-submitter-step-00"])
 
     assert MODULE.main(args) == 2
 
@@ -971,6 +1222,69 @@ def test_governance_dag_settlement_receipt_inventory_must_not_duplicate(
     captured = capsys.readouterr()
     assert "--settlement-receipt must not contain duplicates" in captured.err
     assert not canary_path(tmp_path, "governance_dag_publication").exists()
+
+
+def test_moderation_worker_ballot_inventory_must_match_replay_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_worker", tmp_path)
+    first_ballot = args.index("--replayed-ballot")
+    del args[first_ballot : first_ballot + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--replayed-ballot unique values must match --ballot-replay-count"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "moderation_worker").exists()
+
+
+def test_moderation_worker_ballot_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_worker", tmp_path)
+    first_ballot_value = args[args.index("--replayed-ballot") + 1]
+    args.extend(["--replayed-ballot", first_ballot_value])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--replayed-ballot must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "moderation_worker").exists()
+
+
+@pytest.mark.parametrize(
+    ("label", "expected_error"),
+    (
+        (
+            "worker-ballot-00",
+            "--replayed-ballot must match canonical lowercase "
+            "`appeal-finance-worker-ballot-name`",
+        ),
+        (
+            "appeal-finance-worker-ballot-placeholder",
+            "--replayed-ballot must not contain non-production markers ['placeholder']",
+        ),
+    ),
+)
+def test_moderation_worker_ballot_inventory_must_use_reviewed_labels_before_write(
+    label: str,
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("moderation_worker", tmp_path)
+    args[args.index("--replayed-ballot") + 1] = label
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert expected_error in captured.err
+    assert not canary_path(tmp_path, "moderation_worker").exists()
 
 
 def test_excessive_settlement_lag_fails_before_write(tmp_path: Path, capsys) -> None:

@@ -19,17 +19,22 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_hedging_rollout_evidence import (  # noqa: E402
+    ACKNOWLEDGEMENT_PROBE_LABEL_ERROR,
+    ACKNOWLEDGEMENT_PROBE_LABEL_PATTERN,
     CYCLE_ID_ERROR,
     CYCLE_ID_PATTERN,
     DEFAULT_MAX_CYCLE_AGE_SECS,
     DEFAULT_MAX_DIVERGENCE_BPS,
     DEFAULT_MAX_FEED_LAG_SECS,
     DEFAULT_MIN_BILLING_CYCLES,
+    DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS,
     FORBIDDEN_CYCLE_ID_MARKERS,
     FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
     LINE_ITEM_LABEL_ERROR,
     LINE_ITEM_LABEL_PATTERN,
+    NATIVE_BRIDGE_ARTIFACT_ID_ERROR,
+    NATIVE_BRIDGE_ARTIFACT_ID_PATTERN,
     REQUIRED_METRICS,
     REQUIRED_PRICE_FEEDS,
     REQUIRED_PUBLICATION_ROUTES,
@@ -151,6 +156,8 @@ def render_inventory_label_error(label_error: str, *, option: str) -> str:
     return (
         label_error.replace("statements[].name", option)
         .replace("line_items[].name", option)
+        .replace("acknowledgement_probes[]", option)
+        .replace("artifacts[].id", option)
     )
 
 
@@ -285,14 +292,35 @@ def parse_artifacts(values: Sequence[str], errors: list[str]) -> list[dict[str, 
             continue
         artifact_id, sha256 = value.split(":", 1)
         validate_canonical_string(artifact_id, label=f"--artifact[{index}].id", errors=errors)
+        if artifact_id and NATIVE_BRIDGE_ARTIFACT_ID_PATTERN.fullmatch(artifact_id) is None:
+            errors.append(
+                render_inventory_label_error(
+                    NATIVE_BRIDGE_ARTIFACT_ID_ERROR,
+                    option=f"--artifact[{index}].id",
+                )
+            )
+        else:
+            forbidden = sorted(
+                marker
+                for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+                if marker in artifact_id.split("-")
+            )
+            if forbidden:
+                errors.append(
+                    f"--artifact[{index}].id must not contain non-production markers "
+                    f"{forbidden}"
+                )
         validate_hex64(sha256, option=f"--artifact[{index}].sha256", errors=errors)
         if artifact_id in seen_artifact_ids:
             errors.append("duplicate --artifact id")
             continue
         seen_artifact_ids.add(artifact_id)
         artifacts.append({"id": artifact_id, "sha256": sha256})
-    if not artifacts:
-        errors.append("--artifact must include at least one artifact")
+    if len(artifacts) < DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS:
+        errors.append(
+            "--artifact must include at least "
+            f"{DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS} distinct artifacts"
+        )
     return artifacts
 
 
@@ -342,6 +370,7 @@ def build_route_records(args: argparse.Namespace) -> list[dict[str, Any]]:
             "name": route,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "publisher_identity_present": True,
             "signature_verified": True,
         }
@@ -564,11 +593,18 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="statement_publication",
             count_option="--acknowledgement-probe-count",
             errors=errors,
+            pattern=ACKNOWLEDGEMENT_PROBE_LABEL_PATTERN,
+            label_error=ACKNOWLEDGEMENT_PROBE_LABEL_ERROR,
         )
         args.routes = validate_name_set(
             split_csv_values(args.route),
             allowed=REQUIRED_PUBLICATION_ROUTES,
             option="--route",
+            errors=errors,
+        )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
             errors=errors,
         )
     elif args.kind == "reconciliation":
@@ -733,6 +769,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--acknowledgement-probe", action="append", default=[])
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--source", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--bridge-abi-version", type=positive_int_arg)

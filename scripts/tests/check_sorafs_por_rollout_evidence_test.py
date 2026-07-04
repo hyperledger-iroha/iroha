@@ -41,6 +41,10 @@ def base(schema: str) -> dict:
 def randomness(*, provider_count: int = 3, challenge_count: int = 3) -> dict:
     payload = base("sorafs.por.randomness_canary.v1")
     providers = [{"name": f"provider-{index:02d}"} for index in range(provider_count)]
+    challenges = [
+        {"name": f"por-challenge-{index:02d}"}
+        for index in range(challenge_count)
+    ]
     payload.update(
         {
             "drand_round_verified": True,
@@ -53,6 +57,7 @@ def randomness(*, provider_count: int = 3, challenge_count: int = 3) -> dict:
             "provider_count": provider_count,
             "providers": providers,
             "challenge_count": challenge_count,
+            "challenges": challenges,
             "seed_replay_digest_hex": DIGEST,
             "policy_digest_hex": DIGEST,
             "raw_randomness_included": False,
@@ -67,6 +72,7 @@ def route(name: str, *, latency_ms: int = 200, authz: bool = True) -> dict:
         "name": name,
         "passed": True,
         "status_code": 200,
+        "body_blake3_hex": DIGEST,
         "latency_ms": latency_ms,
         "authz_enforced": authz,
         "norito_verified": True,
@@ -239,6 +245,58 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     )
 
 
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        (
+            "randomness.json",
+            "randomness",
+            randomness,
+            ("raw_randomness_included", "raw_vrf_included"),
+        ),
+        (
+            "scheduler-runtime.json",
+            "scheduler_runtime",
+            scheduler_runtime,
+            ("response_bodies_included",),
+        ),
+        (
+            "validator-replay.json",
+            "validator_replay",
+            validator_replay,
+            ("raw_challenge_bytes_included", "raw_proof_bytes_included"),
+        ),
+        (
+            "reporting-archive.json",
+            "reporting_archive",
+            reporting_archive,
+            ("raw_report_included", "raw_export_included"),
+        ),
+        (
+            "observability.json",
+            "observability",
+            observability,
+            ("critical_alerts_firing", "response_bodies_included"),
+        ),
+    )
+
+    for artifact_file, kind, make_payload, fields in cases:
+        for field in fields:
+            case_dir = tmp_path / kind / field
+            case_dir.mkdir(parents=True)
+            write_complete_evidence(case_dir)
+            payload = make_payload()
+            payload.pop(field)
+            write_json(case_dir / artifact_file, payload)
+            summary = case_dir / "summary.json"
+
+            assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            artifact = result["required"][kind]["artifacts"][0]
+            assert artifact["valid"] is False
+            assert f"{field} must be false" in artifact["errors"]
+
+
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     args = tmp_path / "por.args"
@@ -354,7 +412,7 @@ def test_randomness_provider_names_must_be_reviewed_labels(tmp_path: Path) -> No
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["randomness"]["artifacts"][0]
     assert (
-        "providers[].name must match canonical lowercase `provider-name`"
+        "providers[].name must match canonical lowercase `provider-*`"
         in artifact["errors"]
     )
 
@@ -383,6 +441,73 @@ def test_randomness_requires_minimum_challenge_count(tmp_path: Path) -> None:
     write_json(tmp_path / "randomness.json", randomness(challenge_count=2))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_randomness_challenge_count_must_match_unique_challenges(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    payload["challenge_count"] += 1
+    write_json(tmp_path / "randomness.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["randomness"]["artifacts"][0]
+    assert "challenge_count must match unique challenges count" in artifact["errors"]
+
+
+def test_randomness_challenges_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    payload["challenges"].append(dict(payload["challenges"][0]))
+    payload["challenge_count"] = len(payload["challenges"])
+    write_json(tmp_path / "randomness.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["randomness"]["artifacts"][0]
+    assert "challenges must not contain duplicate values" in artifact["errors"]
+    assert "challenge_count must match unique challenges count" in artifact["errors"]
+
+
+def test_randomness_challenge_names_must_be_reviewed_labels(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    payload["challenges"][0] = {"name": "challenge-00"}
+    write_json(tmp_path / "randomness.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["randomness"]["artifacts"][0]
+    assert MODULE.CHALLENGE_LABEL_ERROR in artifact["errors"]
+
+
+def test_randomness_challenge_names_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    payload["challenges"][0] = {"name": "por-challenge-placeholder"}
+    write_json(tmp_path / "randomness.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["randomness"]["artifacts"][0]
+    assert (
+        "challenges[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_scheduler_lag_above_threshold_fails(tmp_path: Path) -> None:
@@ -449,6 +574,24 @@ def test_scheduler_runtime_routes_must_not_include_unknown_values(
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["scheduler_runtime"]["artifacts"][0]
     assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_scheduler_runtime_route_body_hash_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = scheduler_runtime()
+    del payload["routes"][0]["body_blake3_hex"]
+    write_json(tmp_path / "scheduler-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["scheduler_runtime"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "routes[0].body_blake3_hex must be a non-empty string"
+        in artifact["errors"]
+    )
 
 
 def test_scheduler_runtime_requires_seed_replay_binding(tmp_path: Path) -> None:
@@ -537,6 +680,24 @@ def test_reporting_archive_routes_must_not_include_unknown_values(
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["reporting_archive"]["artifacts"][0]
     assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_reporting_archive_route_body_hash_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = reporting_archive()
+    del payload["routes"][0]["body_blake3_hex"]
+    write_json(tmp_path / "reporting-archive.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["reporting_archive"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "routes[0].body_blake3_hex must be a non-empty string"
+        in artifact["errors"]
+    )
 
 
 def test_governance_approval_policy_digest_must_match_randomness(
@@ -629,6 +790,34 @@ def test_report_latency_above_threshold_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "reporting-archive.json", reporting_archive(latency_ms=10_000))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_rollout_timing_evidence_must_be_integer_units(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    scheduler = scheduler_runtime()
+    scheduler["max_scheduler_lag_seconds"] = 12.5
+    scheduler["routes"][0]["latency_ms"] = 12.5
+    write_json(tmp_path / "scheduler-runtime.json", scheduler)
+    reporting = reporting_archive()
+    reporting["report_latency_ms"] = 12.5
+    write_json(tmp_path / "reporting-archive.json", reporting)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    scheduler_errors = payload["required"]["scheduler_runtime"]["artifacts"][0][
+        "errors"
+    ]
+    reporting_errors = payload["required"]["reporting_archive"]["artifacts"][0][
+        "errors"
+    ]
+    assert (
+        "max_scheduler_lag_seconds must be a non-negative integer"
+        in scheduler_errors
+    )
+    assert "routes[0].latency_ms must be a non-negative integer" in scheduler_errors
+    assert "report_latency_ms must be a non-negative integer" in reporting_errors
 
 
 def test_observability_critical_alert_fails(tmp_path: Path) -> None:

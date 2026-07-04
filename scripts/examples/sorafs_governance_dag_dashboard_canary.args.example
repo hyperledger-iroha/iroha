@@ -13,4 +13,5 @@
 --route digest_lookup
 --route checkpoint
 --route-latency-ms 200
+--route-body-blake3-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --verified-claim runtime_ipfs_backed

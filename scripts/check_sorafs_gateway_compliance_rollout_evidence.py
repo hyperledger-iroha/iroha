@@ -55,7 +55,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_config_backed_governance_approval,
     require_iroha_config_binding,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     require_object_array,
@@ -91,13 +91,48 @@ DEFAULT_MIN_DENYLIST_ENTRIES = 5
 DEFAULT_MIN_HONEY_PROBES = 4
 HEX64_LEN = 64
 CONTROLLER_INSTANCE_ID_PATTERN = re.compile(
-    r"^(?:gateway-)?compliance-controller-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+    r"^gateway-compliance-controller-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 CONTROLLER_INSTANCE_ID_ERROR = (
     "controller_instance_id must match canonical lowercase "
-    "`compliance-controller-name` or `gateway-compliance-controller-name`"
+    "`gateway-compliance-controller-name`"
+)
+GATEWAY_LABEL_PATTERN = re.compile(
+    r"^gateway-compliance-gateway-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+GATEWAY_LABEL_ERROR = (
+    "gateways[].name must match canonical lowercase "
+    "`gateway-compliance-gateway-name`"
+)
+DENYLIST_ENTRY_LABEL_PATTERN = re.compile(
+    r"^gateway-denylist-entry-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+DENYLIST_ENTRY_LABEL_ERROR = (
+    "denylist_entries[].name must match canonical lowercase "
+    "`gateway-denylist-entry-name`"
+)
+HONEY_PROBE_LABEL_PATTERN = re.compile(
+    r"^gateway-honey-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+HONEY_PROBE_LABEL_ERROR = (
+    "probes[].name must match canonical lowercase `gateway-honey-probe-*`"
 )
 FORBIDDEN_CONTROLLER_INSTANCE_ID_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
     (
         "debug",
         "dev",
@@ -468,13 +503,20 @@ def validate_routes(
             errors,
             path=f"routes[{index}].status_code",
         )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
         require_bool_true(
             record,
             "authz_enforced",
             errors,
             path=f"routes[{index}].authz_enforced",
         )
-        require_maximum_number(
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -511,7 +553,7 @@ def require_only_required_values(
 def require_controller_instance_id(
     payload: dict[str, Any], errors: list[str]
 ) -> str:
-    """Require a reviewed lowercase compliance controller instance identifier."""
+    """Require a reviewed lowercase gateway compliance controller identifier."""
 
     controller_instance_id = require_string(payload, "controller_instance_id", errors)
     if not controller_instance_id:
@@ -531,6 +573,33 @@ def require_controller_instance_id(
         )
         return ""
     return controller_instance_id
+
+
+def require_inventory_label(
+    record: dict[str, Any],
+    errors: list[str],
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    path: str,
+) -> str:
+    """Require a reviewed lowercase production inventory label."""
+
+    label = require_string(record, "name", errors)
+    if not label:
+        return ""
+    if pattern.fullmatch(label) is None:
+        errors.append(label_error)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in label.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return label
 
 
 def validate_feed_promotion(
@@ -554,7 +623,13 @@ def validate_feed_promotion(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "gateways", errors):
-        require_string(record, "name", errors)
+        require_inventory_label(
+            record,
+            errors,
+            pattern=GATEWAY_LABEL_PATTERN,
+            label_error=GATEWAY_LABEL_ERROR,
+            path="gateways[].name",
+        )
     require_minimum_int(
         payload,
         "denylist_entry_count",
@@ -570,7 +645,13 @@ def validate_feed_promotion(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "denylist_entries", errors):
-        require_string(record, "name", errors)
+        require_inventory_label(
+            record,
+            errors,
+            pattern=DENYLIST_ENTRY_LABEL_PATTERN,
+            label_error=DENYLIST_ENTRY_LABEL_ERROR,
+            path="denylist_entries[].name",
+        )
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_false(payload, "raw_feeds_included", errors)
@@ -687,8 +768,14 @@ def validate_gateway_reload(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "gateways", errors):
-        require_string(record, "name", errors)
-    require_maximum_number(
+        require_inventory_label(
+            record,
+            errors,
+            pattern=GATEWAY_LABEL_PATTERN,
+            label_error=GATEWAY_LABEL_ERROR,
+            path="gateways[].name",
+        )
+    require_maximum_int(
         payload,
         "max_reload_latency_ms",
         options.max_reload_latency_ms,
@@ -751,7 +838,13 @@ def validate_honey_audit(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "probes", errors):
-        require_string(record, "name", errors)
+        require_inventory_label(
+            record,
+            errors,
+            pattern=HONEY_PROBE_LABEL_PATTERN,
+            label_error=HONEY_PROBE_LABEL_ERROR,
+            path="probes[].name",
+        )
     require_bool_true(payload, "denied_response_verified", errors)
     require_bool_true(payload, "cache_version_binding_verified", errors)
     require_bool_true(payload, "proof_token_verified", errors)

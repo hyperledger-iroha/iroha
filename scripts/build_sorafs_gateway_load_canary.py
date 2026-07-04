@@ -27,18 +27,19 @@ from check_sorafs_gateway_load_rollout_evidence import (  # noqa: E402
     DEFAULT_MIN_STAGING_DURATION_SECS,
     DEFAULT_MIN_STREAMS,
     DEFAULT_MIN_SUCCESS_RATE_BPS,
+    MAX_SUCCESS_RATE_BPS,
     CACHE_STATE_ERROR,
     FORBIDDEN_STAGING_METADATA_MARKERS,
     GATEWAY_VERSION_ERROR,
     GATEWAY_VERSION_PATTERN,
     HARDWARE_PROFILE_ERROR,
+    HARDWARE_PROFILE_PATTERN,
     KIND_BY_NAME,
     PROVIDER_NAME_ERROR,
     PROVIDER_NAME_PATTERN,
     REQUIRED_METRICS,
     REQUIRED_SCENARIOS,
     REQUIRED_CACHE_STATES,
-    STAGING_METADATA_LABEL_PATTERN,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -209,7 +210,7 @@ def require_kind_options(
 def generated_stream_inventory(stream_count: int) -> list[dict[str, str]]:
     """Build stable per-stream labels for payload-free staging-load evidence."""
 
-    return [{"name": f"stream-{index:04d}"} for index in range(stream_count)]
+    return [{"name": f"gateway-load-stream-{index:04d}"} for index in range(stream_count)]
 
 
 def validate_provider_names(args: argparse.Namespace, errors: list[str]) -> None:
@@ -346,6 +347,8 @@ def validate_thresholds(args: argparse.Namespace, errors: list[str]) -> None:
         errors.append(f"--stream-count must be >= {DEFAULT_MIN_STREAMS}")
     if args.success_rate_bps < DEFAULT_MIN_SUCCESS_RATE_BPS:
         errors.append(f"--success-rate-bps must be >= {DEFAULT_MIN_SUCCESS_RATE_BPS}")
+    if args.success_rate_bps > MAX_SUCCESS_RATE_BPS:
+        errors.append(f"--success-rate-bps must be <= {MAX_SUCCESS_RATE_BPS}")
     if args.error_rate_bps > DEFAULT_MAX_ERROR_RATE_BPS:
         errors.append(f"--error-rate-bps must be <= {DEFAULT_MAX_ERROR_RATE_BPS}")
     if args.p95_latency_ms > DEFAULT_MAX_P95_LATENCY_MS:
@@ -417,7 +420,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         validate_staging_metadata_label(
             args.hardware_profile,
             option="--hardware-profile",
-            pattern=STAGING_METADATA_LABEL_PATTERN,
+            pattern=HARDWARE_PROFILE_PATTERN,
             pattern_error=HARDWARE_PROFILE_ERROR,
             errors=errors,
         )

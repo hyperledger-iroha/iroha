@@ -52,7 +52,6 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_count_length_match,
     require_count_value_equal,
     require_false,
-    require_false_or_absent,
     require_hex,
     require_iroha_config_binding,
     require_minimum_int,
@@ -62,7 +61,6 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_object,
     require_object_array,
     required_evidence_kind_names,
-    require_optional_hex,
     require_policy_digest,
     require_positive_int,
     require_archive_portable_path,
@@ -72,6 +70,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_status_in,
     require_string,
     require_string_in,
+    require_string_type,
     require_string_coverage,
     require_string_equal,
     require_string_inventory_count_match,
@@ -92,9 +91,32 @@ MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 HEX32_LEN = 32
 HEX64_LEN = 64
 WORKFLOW_ID_PATTERN = re.compile(r"^sfm-4a-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-WORKFLOW_ID_ERROR = "workflow_id must match canonical lowercase `sfm-4a-name`"
+WORKFLOW_ID_ERROR = "workflow_id must match canonical lowercase `sfm-4a-*`"
 SUBJECT_REFERENCE_PATTERN = re.compile(r"^cid:[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 SUBJECT_REFERENCE_ERROR = "subject must match canonical lowercase `cid:name`"
+COMMITTEE_RESULT_LABEL_PATTERN = re.compile(
+    r"^ai-prescreen-committee-result-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+COMMITTEE_RESULT_LABEL_ERROR = (
+    "results[].name must match canonical lowercase "
+    "`ai-prescreen-committee-result-name`"
+)
+NOTIFICATION_DELIVERY_LABEL_PATTERN = re.compile(
+    r"^ai-prescreen-notification-delivery-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+NOTIFICATION_DELIVERY_LABEL_ERROR = (
+    "probes[].delivery_id must match canonical lowercase "
+    "`ai-prescreen-notification-delivery-name`"
+)
+NOTIFICATION_DEDUP_PREFIX = "sorafs-moderation-juror:"
+ALLOWED_NOTIFICATION_ACTIONS = ("commit", "reveal")
+GOVERNANCE_EDGE_LABEL_PATTERN = re.compile(
+    r"^ai-prescreen-governance-edge-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+GOVERNANCE_EDGE_LABEL_ERROR = (
+    "edges[].name must match canonical lowercase "
+    "`ai-prescreen-governance-edge-name`"
+)
 FORBIDDEN_WORKFLOW_ID_MARKERS = frozenset(
     (
         "debug",
@@ -104,6 +126,22 @@ FORBIDDEN_WORKFLOW_ID_MARKERS = frozenset(
         "fake",
         "latest",
         "placeholder",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
         "sample",
         "secret",
         "test",
@@ -146,6 +184,42 @@ REQUIRED_OPERATOR_SCHEMAS = {
     "juror_notifications": "sorafs.moderation.quarantine.juror_notifications.v1",
     "commit_reveal_status": "sorafs.moderation.quarantine.commit_reveal_status.v1",
 }
+REQUIRED_OPERATOR_CONTENT_TYPES = {
+    "healthz": "application/json",
+    "status": "application/json",
+    "browser_ui": "text/html; charset=utf-8",
+    "operator_panel": "application/json",
+    "bridge_plan": "application/json",
+    "juror_plan": "application/json",
+    "juror_notifications": "application/json",
+    "commit_reveal_status": "application/json",
+}
+
+
+def operator_route_paths(quarantine_id_hex: str) -> dict[str, str]:
+    """Return reviewed operator workflow route paths for a quarantine id."""
+
+    workflow = (
+        lambda suffix: f"/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/{suffix}"
+    )
+    return {
+        "healthz": "/healthz",
+        "status": "/v1/sorafs/moderation/operator-panel/status",
+        "browser_ui": "/v1/sorafs/moderation/operator-panel/ui",
+        "operator_panel": workflow("operator-panel"),
+        "bridge_plan": workflow("bridge-plan"),
+        "juror_plan": workflow("juror-plan"),
+        "juror_notifications": workflow("juror-notifications"),
+        "commit_reveal_status": workflow("commit-reveal-status"),
+    }
+
+
+def expected_operator_route_url(operator_url: str, route_path: str) -> str:
+    """Return the reviewed operator route URL for a base URL and route path."""
+
+    return f"{operator_url.rstrip('/')}{route_path}"
+
+
 REQUIRED_TRANSPARENCY_SOURCE_KINDS = (
     "moderation-reviewed-quarantine",
     "moderation-appeal-handoff",
@@ -160,6 +234,10 @@ REQUIRED_EXECUTOR_ARTIFACTS = (
     "executor.env",
     "run.sh",
 )
+REQUIRED_EXECUTOR_ARTIFACT_KINDS = {
+    "executor.env": "env",
+    "run.sh": "script",
+}
 REQUIRED_GOVERNANCE_PRODUCERS = (
     "screening_ingest",
     "quarantine_escalation",
@@ -289,6 +367,37 @@ def require_subject_reference(
     return subject
 
 
+def require_inventory_label(
+    record: dict[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    path: str,
+) -> str:
+    """Require a reviewed production inventory label without placeholder markers."""
+
+    label = require_string(record, field, errors)
+    if not label:
+        return ""
+    if pattern.fullmatch(label) is None:
+        errors.append(label_error)
+        return ""
+    label_tokens = frozenset(
+        token for token in re.split(r"[^a-z0-9]+", label) if token
+    )
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in label_tokens
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return label
+
+
 @dataclass(frozen=True)
 class EvidenceKind:
     """One SFM-4a AI pre-screening rollout evidence class."""
@@ -399,6 +508,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "notification_transport": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "workflow_digest_hex",
+        "manifest_path",
         "webhook_url",
         "manifest_body_blake3",
         "probe_count",
@@ -410,6 +520,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "commit_reveal_executor": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "workflow_digest_hex",
+        "bundle_dir",
+        "bundle_metadata_bytes",
+        "bundle_metadata_blake3",
+        "service_name",
+        "interval_secs",
         "artifact_count",
         "passed_artifact_count",
         "execution_summary_present",
@@ -501,7 +616,7 @@ def validate_runner(payload: dict[str, Any], errors: list[str]) -> None:
     require_positive_int(payload, "checked_at_unix", errors)
     require_score_bps(payload, "combined_score_bps", errors)
     require_string_in(payload, "verdict", ALLOWED_PRESCREEN_VERDICTS, errors)
-    require_optional_hex(payload, "evidence_digest_hex", HEX64_LEN, errors)
+    require_hex(payload, "evidence_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
 
 
@@ -528,8 +643,15 @@ def validate_committee(payload: dict[str, Any], errors: list[str]) -> None:
         field="name",
         allow_scalar_items=False,
     )
-    for _, record in require_object_array(payload, "results", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "results", errors):
+        require_inventory_label(
+            record,
+            "name",
+            errors,
+            pattern=COMMITTEE_RESULT_LABEL_PATTERN,
+            label_error=COMMITTEE_RESULT_LABEL_ERROR,
+            path=f"results[{index}].name",
+        )
     require_string_equal(payload, "aggregation", "median_score_bps", errors)
     require_subject_reference(payload, errors)
     require_hex(payload, "subject_digest_hex", HEX64_LEN, errors)
@@ -542,6 +664,10 @@ def validate_routes(
     payload: dict[str, Any],
     errors: list[str],
     required_routes: tuple[str, ...],
+    *,
+    operator_url: str = "",
+    expected_paths: dict[str, str] | None = None,
+    expected_content_types: dict[str, str] | None = None,
 ) -> None:
     route_records = require_object_array(payload, "routes", errors)
     if not route_records:
@@ -562,20 +688,66 @@ def validate_routes(
     require_only_required_values(payload, "routes", "name", required_routes, errors)
     for index, record in route_records:
         name = require_string(record, "name", errors)
-        require_safe_url(
+        require_string_equal(
+            record,
+            "method",
+            "GET",
+            errors,
+            path=f"routes[{index}].method",
+        )
+        expected_path = (expected_paths or {}).get(name)
+        if expected_path is not None:
+            require_string_equal(
+                record,
+                "path",
+                expected_path,
+                errors,
+                path=f"routes[{index}].path",
+            )
+        else:
+            require_string_type(record, "path", errors, path=f"routes[{index}].path")
+        route_url = require_safe_url(
             record,
             "url",
             errors,
             path=f"routes[{index}].url",
-            required=False,
         )
+        if operator_url and route_url and expected_path is not None:
+            expected_url = expected_operator_route_url(operator_url, expected_path)
+            if route_url != expected_url:
+                errors.append(
+                    f"routes[{index}].url must match operator_url and reviewed route path"
+                )
         require_2xx_status(
             record,
             "status_code",
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_optional_hex(record, "body_blake3_hex", HEX64_LEN, errors)
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_positive_int(record, "body_bytes", errors)
+        expected_content_type = (expected_content_types or {}).get(name)
+        if expected_content_type is not None:
+            require_string_equal(
+                record,
+                "content_type",
+                expected_content_type,
+                errors,
+                path=f"routes[{index}].content_type",
+            )
+        else:
+            require_string_type(
+                record,
+                "content_type",
+                errors,
+                path=f"routes[{index}].content_type",
+            )
         require_false(record, "payload_bytes_included", errors)
         require_false(record, "private_payloads_included", errors)
         expected_schema = REQUIRED_OPERATOR_SCHEMAS.get(name)
@@ -592,12 +764,21 @@ def validate_routes(
 
 def validate_operator_workflow(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "workflow_digest_hex", HEX64_LEN, errors)
-    require_safe_url(payload, "operator_url", errors)
-    require_hex(payload, "quarantine_id_hex", HEX32_LEN, errors)
+    operator_url = require_safe_url(payload, "operator_url", errors)
+    quarantine_id_hex = require_hex(payload, "quarantine_id_hex", HEX32_LEN, errors)
     require_positive_int(payload, "generated_at_unix", errors)
     require_false(payload, "payload_bytes_included", errors)
     require_false(payload, "private_payloads_included", errors)
-    validate_routes(payload, errors, REQUIRED_OPERATOR_ROUTES)
+    validate_routes(
+        payload,
+        errors,
+        REQUIRED_OPERATOR_ROUTES,
+        operator_url=operator_url,
+        expected_paths=operator_route_paths(quarantine_id_hex)
+        if quarantine_id_hex
+        else None,
+        expected_content_types=REQUIRED_OPERATOR_CONTENT_TYPES,
+    )
 
 
 def validate_probe_array(
@@ -655,6 +836,14 @@ def validate_notification_transport(payload: dict[str, Any], errors: list[str]) 
         field="delivery_id",
         allow_scalar_items=False,
     )
+    require_string_inventory_count_match(
+        payload,
+        "probes",
+        "probe_count",
+        errors,
+        field="dedup_key",
+        allow_scalar_items=False,
+    )
     require_false(payload, "payload_bytes_included", errors)
     require_false(payload, "private_payloads_included", errors)
     validate_probe_array(
@@ -667,8 +856,57 @@ def validate_notification_transport(payload: dict[str, Any], errors: list[str]) 
     )
     for index, probe in enumerate(payload.get("probes", [])):
         record = require_object(probe, f"probes[{index}]", errors)
+        delivery_id = require_inventory_label(
+            record,
+            "delivery_id",
+            errors,
+            pattern=NOTIFICATION_DELIVERY_LABEL_PATTERN,
+            label_error=NOTIFICATION_DELIVERY_LABEL_ERROR,
+            path=f"probes[{index}].delivery_id",
+        )
+        dedup_key = require_string_type(
+            record,
+            "dedup_key",
+            errors,
+            path=f"probes[{index}].dedup_key",
+        )
+        if (
+            delivery_id
+            and dedup_key
+            and dedup_key != f"{NOTIFICATION_DEDUP_PREFIX}{delivery_id}"
+        ):
+            errors.append(
+                "probes[{}].dedup_key must equal "
+                "`{}<delivery_id>`".format(index, NOTIFICATION_DEDUP_PREFIX)
+            )
+        require_string_in(
+            record,
+            "action",
+            ALLOWED_NOTIFICATION_ACTIONS,
+            errors,
+            path=f"probes[{index}].action",
+        )
+        require_string_type(
+            record,
+            "case_id",
+            errors,
+            path=f"probes[{index}].case_id",
+        )
+        require_string_type(
+            record,
+            "round_id",
+            errors,
+            path=f"probes[{index}].round_id",
+        )
+        require_string_type(
+            record,
+            "juror_id",
+            errors,
+            path=f"probes[{index}].juror_id",
+        )
         require_positive_int(record, "notification_bytes", errors)
         require_hex(record, "notification_body_blake3", HEX64_LEN, errors)
+        require_non_negative_int(record, "response_bytes", errors)
         require_hex(record, "response_body_blake3", HEX64_LEN, errors)
         require_false(record, "payload_bytes_included", errors)
         require_false(record, "private_payloads_included", errors)
@@ -676,6 +914,11 @@ def validate_notification_transport(payload: dict[str, Any], errors: list[str]) 
 
 def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "workflow_digest_hex", HEX64_LEN, errors)
+    require_string(payload, "bundle_dir", errors)
+    require_positive_int(payload, "bundle_metadata_bytes", errors)
+    require_hex(payload, "bundle_metadata_blake3", HEX64_LEN, errors)
+    require_string(payload, "service_name", errors)
+    require_positive_int(payload, "interval_secs", errors)
     artifact_count = require_count_equal(
         payload, "artifact_count", "passed_artifact_count", errors
     )
@@ -725,16 +968,33 @@ def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) 
             allow_scalar_items=False,
         )
         for index, record in artifact_records:
-            require_string(record, "name", errors)
-            require_string(record, "kind", errors)
-            require_archive_portable_path(
+            name = require_string(record, "name", errors)
+            expected_kind = REQUIRED_EXECUTOR_ARTIFACT_KINDS.get(name)
+            if expected_kind is None:
+                require_string(record, "kind", errors)
+            else:
+                require_string_equal(
+                    record,
+                    "kind",
+                    expected_kind,
+                    errors,
+                    path=f"artifacts[{index}].kind",
+                )
+            artifact_path = require_archive_portable_path(
                 record,
                 "path",
                 errors,
                 path=f"artifacts[{index}].path",
             )
+            if (
+                name in REQUIRED_EXECUTOR_ARTIFACT_KINDS
+                and artifact_path
+                and artifact_path != name
+            ):
+                errors.append(f"artifacts[{index}].path must be `{name}`")
             require_bool_true(record, "exists", errors)
             require_bool_true(record, "passed", errors)
+            require_positive_int(record, "bytes", errors)
             require_hex(record, "body_blake3", HEX64_LEN, errors)
             require_false(record, "payload_bytes_included", errors)
             require_false(record, "private_payloads_included", errors)
@@ -744,6 +1004,7 @@ def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) 
         return
     require_bool_true(summary, "passed", errors)
     require_archive_portable_path(summary, "path", errors, path="execution_summary.path")
+    require_positive_int(summary, "bytes", errors)
     summary_digest = require_hex(summary, "body_blake3", HEX64_LEN, errors)
     if (
         execution_summary_digest
@@ -760,6 +1021,21 @@ def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) 
         1,
         errors,
     )
+    commit_action_count = require_non_negative_int(
+        summary, "commit_action_count", errors
+    )
+    reveal_action_count = require_non_negative_int(
+        summary, "reveal_action_count", errors
+    )
+    tally_action_count = require_non_negative_int(summary, "tally_action_count", errors)
+    if (
+        action_count
+        and action_count
+        != commit_action_count + reveal_action_count + tally_action_count
+    ):
+        errors.append(
+            "execution_summary commit/reveal/tally counts must sum to action_count"
+        )
     require_false(summary, "payload_bytes_included", errors)
     require_false(summary, "private_payloads_included", errors)
 
@@ -815,7 +1091,9 @@ def validate_transparency_publication(payload: dict[str, Any], errors: list[str]
             errors,
             path=f"probes[{index}].payload_path",
         )
+        require_positive_int(record, "request_bytes", errors)
         require_hex(record, "request_body_blake3", HEX64_LEN, errors)
+        require_non_negative_int(record, "response_bytes", errors)
         require_hex(record, "response_body_blake3", HEX64_LEN, errors)
         require_false(record, "payload_bytes_included", errors)
         require_false(record, "private_payloads_included", errors)
@@ -889,8 +1167,15 @@ def validate_governance_dag(payload: dict[str, Any], errors: list[str]) -> None:
             errors,
             allow_scalar_items=False,
         )
-        for _index, record in edge_records:
-            require_string(record, "name", errors)
+        for index, record in edge_records:
+            require_inventory_label(
+                record,
+                "name",
+                errors,
+                pattern=GOVERNANCE_EDGE_LABEL_PATTERN,
+                label_error=GOVERNANCE_EDGE_LABEL_ERROR,
+                path=f"edges[{index}].name",
+            )
             producer = require_string(record, "producer", errors)
             if producer and producer not in REQUIRED_GOVERNANCE_PRODUCERS:
                 errors.append("edges producer must be one of required producers")

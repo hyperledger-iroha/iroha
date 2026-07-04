@@ -36,6 +36,7 @@ ROSTER_DIGEST = "a" * 64
 FAILURE_DIGEST = "b" * 64
 HANDOFF_DIGEST = "c" * 64
 POLICY_DIGEST = "d" * 64
+ROUTE_BODY_DIGEST = "e" * 64
 
 
 def canary_path(tmp_path: Path, kind: str) -> Path:
@@ -72,16 +73,24 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         for source in MODULE.REQUIRED_FAILURE_SOURCES:
             args.extend(["--failure-source", source])
         for source in MODULE.REQUIRED_FAILURE_SOURCES:
-            args.extend(["--failure-event", f"{source}:{source}-failure-00"])
+            args.extend(
+                [
+                    "--failure-event",
+                    f"{source}:repair-failure-event-{source}-00",
+                ]
+            )
     elif kind == "auditor_api":
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
         for route in MODULE.REQUIRED_AUDITOR_ROUTES:
             args.extend(["--auditor-route", route])
     elif kind == "worker_lifecycle":
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
         for route in MODULE.REQUIRED_WORKER_ROUTES:
             args.extend(["--worker-route", route])
         for status in MODULE.REQUIRED_LIFECYCLE_STATUSES:
             args.extend(["--lifecycle-status", status])
     elif kind == "event_streams":
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
         for route in MODULE.REQUIRED_EVENT_ROUTES:
             args.extend(["--event-route", route])
     elif kind == "governance_handoff":
@@ -135,6 +144,9 @@ def test_builds_payload_free_worker_lifecycle_canary(tmp_path: Path) -> None:
     assert payload["schema"] == "sorafs.repair.worker_lifecycle_canary.v1"
     assert payload["route_count"] == len(MODULE.REQUIRED_WORKER_ROUTES)
     assert payload["passed_route_count"] == len(MODULE.REQUIRED_WORKER_ROUTES)
+    assert all(
+        route["body_blake3_hex"] == ROUTE_BODY_DIGEST for route in payload["routes"]
+    )
     assert payload["status_count"] == len(MODULE.REQUIRED_LIFECYCLE_STATUSES)
     assert payload["statuses_observed"] == list(MODULE.REQUIRED_LIFECYCLE_STATUSES)
     assert payload["raw_repair_payloads_included"] is False
@@ -212,7 +224,7 @@ def test_builds_payload_free_failure_capture_canary(tmp_path: Path) -> None:
     assert payload["failure_source_count"] == len(MODULE.REQUIRED_FAILURE_SOURCES)
     assert payload["failure_event_count"] == len(MODULE.REQUIRED_FAILURE_SOURCES)
     assert payload["failure_events"] == [
-        {"name": f"{source}-failure-00", "source": source}
+        {"name": f"repair-failure-event-{source}-00", "source": source}
         for source in MODULE.REQUIRED_FAILURE_SOURCES
     ]
     assert payload["raw_evidence_included"] is False
@@ -263,7 +275,7 @@ def test_auditor_roster_inventory_must_use_production_family(
 
     captured = capsys.readouterr()
     assert (
-        "--auditor must match canonical lowercase `repair-auditor-name`"
+        "--auditor must match canonical lowercase `repair-auditor-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "auditor_roster").exists()
@@ -341,12 +353,48 @@ def test_failure_event_inventory_rejects_unknown_source(
 ) -> None:
     args = args_for("failure_capture", tmp_path)
     first_event = args.index("--failure-event") + 1
-    args[first_event] = "unknown:por-failure-00"
+    args[first_event] = "unknown:repair-failure-event-por-00"
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
     assert "--failure-event source must be a reviewed failure source" in captured.err
+    assert not canary_path(tmp_path, "failure_capture").exists()
+
+
+def test_failure_event_inventory_must_use_production_family(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("failure_capture", tmp_path)
+    first_event = args.index("--failure-event") + 1
+    args[first_event] = "por:por-failure-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--failure-event must match canonical lowercase "
+        "`repair-failure-event-name`"
+    ) in captured.err
+    assert not canary_path(tmp_path, "failure_capture").exists()
+
+
+def test_failure_event_inventory_rejects_placeholder_marker(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("failure_capture", tmp_path)
+    first_event = args.index("--failure-event") + 1
+    args[first_event] = "por:repair-failure-event-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--failure-event must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
     assert not canary_path(tmp_path, "failure_capture").exists()
 
 
@@ -424,6 +472,26 @@ def test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write(
         capsys=capsys,
         expected_error=f"{option} contains an unknown value",
     )
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ("auditor_api", "worker_lifecycle", "event_streams"),
+)
+def test_route_canaries_require_route_body_digest(
+    kind: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for(kind, tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, kind).exists()
 
 
 def test_missing_worker_route_coverage_fails_closed(tmp_path: Path, capsys) -> None:

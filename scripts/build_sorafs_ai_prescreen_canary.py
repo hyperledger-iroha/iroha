@@ -20,12 +20,19 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     ALLOWED_PRESCREEN_VERDICTS,
+    COMMITTEE_RESULT_LABEL_ERROR,
+    COMMITTEE_RESULT_LABEL_PATTERN,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     FORBIDDEN_SUBJECT_REFERENCE_MARKERS,
     FORBIDDEN_WORKFLOW_ID_MARKERS,
+    GOVERNANCE_EDGE_LABEL_ERROR,
+    GOVERNANCE_EDGE_LABEL_PATTERN,
     KIND_BY_NAME,
+    NOTIFICATION_DELIVERY_LABEL_PATTERN,
     REQUIRED_E2E_STEPS,
     REQUIRED_GOVERNANCE_EDGE_COUNT,
     REQUIRED_GOVERNANCE_PRODUCERS,
+    REQUIRED_OPERATOR_CONTENT_TYPES,
     REQUIRED_OPERATOR_ROUTES,
     REQUIRED_OPERATOR_SCHEMAS,
     REQUIRED_TRANSPARENCY_SOURCE_KINDS,
@@ -33,6 +40,8 @@ from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     SUBJECT_REFERENCE_PATTERN,
     WORKFLOW_ID_ERROR,
     WORKFLOW_ID_PATTERN,
+    expected_operator_route_url,
+    operator_route_paths,
     validate_evidence_payload,
 )
 from sorafs_checker_preflight import (  # noqa: E402
@@ -66,11 +75,12 @@ WORKFLOW_DIGEST_KINDS = (
 )
 HEX32_LEN = 32
 HEX64_LEN = 64
+MAX_SCORE_BPS = 10_000
 RUNNER_STATUS_KINDS = {"runner", "committee"}
 CANARY_URL_ARG_ERROR = (
     "SoraFS AI pre-screen canary URL arguments must not contain userinfo, "
     "query strings, fragments, control characters, encoded traversal, "
-    "separators, drive prefixes, URI-scheme-like path tokens, or "
+    "separators, drive prefixes, URI-scheme-like host/path tokens, or "
     "secret-looking host/path components"
 )
 CANARY_PATH_ARG_ERROR = (
@@ -131,6 +141,8 @@ def validate_reviewed_inventory(
     option: str,
     kind: str,
     count_option: str,
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
     errors: list[str],
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
@@ -140,6 +152,19 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for {kind}")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if pattern is not None and isinstance(item, str):
+            if pattern.fullmatch(item) is None:
+                errors.append(label_error or f"{option} uses an invalid label")
+            forbidden = sorted(
+                marker
+                for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+                if marker in re.split(r"[^a-z0-9]+", item)
+            )
+            if forbidden:
+                errors.append(
+                    f"{option}[{index}] must not contain non-production markers "
+                    f"{forbidden}"
+                )
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
@@ -179,6 +204,18 @@ def validate_governance_edges(
             label=f"--governance-edge[{index}].name",
             errors=errors,
         )
+        if name and GOVERNANCE_EDGE_LABEL_PATTERN.fullmatch(name) is None:
+            errors.append(GOVERNANCE_EDGE_LABEL_ERROR)
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in re.split(r"[^a-z0-9]+", name)
+        )
+        if forbidden:
+            errors.append(
+                f"--governance-edge[{index}].name must not contain "
+                f"non-production markers {forbidden}"
+            )
         if producer and producer not in REQUIRED_GOVERNANCE_PRODUCERS:
             errors.append("--governance-edge producer must be a required producer")
         if producer and name:
@@ -362,13 +399,15 @@ def common_payload(args: argparse.Namespace) -> dict[str, Any]:
 def build_operator_route_records(args: argparse.Namespace) -> list[dict[str, Any]]:
     """Build payload-free operator workflow route probe records."""
 
+    route_paths = operator_route_paths(args.quarantine_id_hex)
     return [
         {
             "name": route,
             "method": "GET",
-            "path": f"/{route}",
-            "url": f"{args.operator_url.rstrip('/')}/{route}",
+            "path": route_paths[route],
+            "url": expected_operator_route_url(args.operator_url, route_paths[route]),
             "status_code": args.route_status_code,
+            "content_type": REQUIRED_OPERATOR_CONTENT_TYPES[route],
             "schema": REQUIRED_OPERATOR_SCHEMAS.get(route),
             "body_blake3_hex": args.body_digest_hex,
             "body_bytes": args.body_bytes,
@@ -379,13 +418,25 @@ def build_operator_route_records(args: argparse.Namespace) -> list[dict[str, Any
     ]
 
 
+def notification_delivery_id(index: int) -> str:
+    """Build a reviewed notification delivery label for generated probes."""
+
+    label = f"ai-prescreen-notification-delivery-{index:02d}"
+    if NOTIFICATION_DELIVERY_LABEL_PATTERN.fullmatch(label) is None:
+        raise ValueError("generated notification delivery label is invalid")
+    return label
+
+
 def build_notification_probes(args: argparse.Namespace) -> list[dict[str, Any]]:
     """Build payload-free notification transport probes."""
 
     return [
         {
-            "delivery_id": f"notify-{index}",
-            "dedup_key": f"sorafs-moderation-juror:notify-{index}",
+            "delivery_id": notification_delivery_id(index),
+            "dedup_key": (
+                "sorafs-moderation-juror:"
+                f"{notification_delivery_id(index)}"
+            ),
             "action": "commit" if index % 2 else "reveal",
             "case_id": args.case_id,
             "round_id": args.round_id,
@@ -482,12 +533,10 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "checked_at_unix": args.checked_at_unix or args.generated_at_unix,
                 "combined_score_bps": args.score_bps,
                 "verdict": args.verdict,
+                "evidence_digest_hex": args.evidence_digest_hex,
+                "policy_digest_hex": args.policy_digest_hex,
             }
         )
-        if args.evidence_digest_hex is not None:
-            payload["evidence_digest_hex"] = args.evidence_digest_hex
-        if args.policy_digest_hex is not None:
-            payload["policy_digest_hex"] = args.policy_digest_hex
     elif args.kind == "committee":
         payload.update(
             {
@@ -695,6 +744,8 @@ def validate_runner_binding_inputs(args: argparse.Namespace, errors: list[str]) 
     )
     validate_subject_arg(args.subject, errors=errors)
     validate_verdict(args.verdict, option="--verdict", errors=errors)
+    if args.score_bps > MAX_SCORE_BPS:
+        errors.append(f"--score-bps must be <= {MAX_SCORE_BPS}")
     if args.evidence_digest_hex is not None:
         validate_hex(
             args.evidence_digest_hex,
@@ -708,7 +759,15 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
     """Validate kind-specific reviewed operator inputs."""
 
     if args.kind == "runner":
-        require_kind_options(args, errors, (("--runner-url", args.runner_url),))
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--runner-url", args.runner_url),
+                ("--evidence-digest-hex", args.evidence_digest_hex),
+                ("--policy-digest-hex", args.policy_digest_hex),
+            ),
+        )
         validate_canary_url(
             args.runner_url,
             label="--runner-url",
@@ -757,6 +816,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--committee-result",
             kind="committee",
             count_option="--result-count",
+            pattern=COMMITTEE_RESULT_LABEL_PATTERN,
+            label_error=COMMITTEE_RESULT_LABEL_ERROR,
             errors=errors,
         )
     elif args.kind == "operator_workflow":

@@ -51,7 +51,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_config_backed_governance_approval,
     require_false,
     require_hex,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     require_object_array,
@@ -85,6 +85,9 @@ DEFAULT_MAX_EVIDENCE_AGE_SECS = 7 * 24 * 60 * 60
 DEFAULT_MIN_STAGING_DURATION_SECS = 3_600
 DEFAULT_MIN_STREAMS = 1_000
 DEFAULT_MIN_SUCCESS_RATE_BPS = 9_900
+MAX_BASIS_POINTS = 10_000
+MAX_SUCCESS_RATE_BPS = MAX_BASIS_POINTS
+MAX_ERROR_RATE_BPS = MAX_BASIS_POINTS
 DEFAULT_MAX_ERROR_RATE_BPS = 100
 DEFAULT_MAX_P95_LATENCY_MS = 1_500
 DEFAULT_MAX_P99_LATENCY_MS = 3_000
@@ -113,14 +116,22 @@ GATEWAY_VERSION_ERROR = (
     "gateway_version must match `iroha-gateway X.Y.Z` or "
     "`iroha-gateway X.Y.Z-rc.N`"
 )
-STAGING_METADATA_LABEL_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-STREAM_NAME_PATTERN = re.compile(r"^stream-[0-9]{4,}\Z")
-PROVIDER_NAME_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-HARDWARE_PROFILE_ERROR = (
-    "hardware_profile.name must match canonical lowercase hardware profile label"
+HARDWARE_PROFILE_PATTERN = re.compile(
+    r"^gateway-load-hardware-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
-STREAM_NAME_ERROR = "streams[].name must match generated stream label"
-PROVIDER_NAME_ERROR = "providers[].name must match canonical lowercase `provider-name`"
+STREAM_NAME_PATTERN = re.compile(r"^gateway-load-stream-[0-9]{4,}\Z")
+PROVIDER_NAME_PATTERN = re.compile(
+    r"^gateway-load-provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+HARDWARE_PROFILE_ERROR = (
+    "hardware_profile.name must match reviewed `gateway-load-hardware-*` label"
+)
+STREAM_NAME_ERROR = (
+    "streams[].name must match generated `gateway-load-stream-NNNN` label"
+)
+PROVIDER_NAME_ERROR = (
+    "providers[].name must match reviewed `gateway-load-provider-*` label"
+)
 CACHE_STATE_ERROR = "cache_state.mode must be a reviewed cache-state value"
 REQUIRED_CACHE_STATES = (
     "cold-cache",
@@ -317,6 +328,17 @@ class ValidationOptions:
     max_p99_latency_ms: int
 
 
+def validate_threshold_options(args: argparse.Namespace) -> list[str]:
+    """Validate checker threshold options before evidence evaluation."""
+
+    errors: list[str] = []
+    if args.min_success_rate_bps > MAX_SUCCESS_RATE_BPS:
+        errors.append(f"--min-success-rate-bps must be <= {MAX_SUCCESS_RATE_BPS}")
+    if args.max_error_rate_bps > MAX_ERROR_RATE_BPS:
+        errors.append(f"--max-error-rate-bps must be <= {MAX_ERROR_RATE_BPS}")
+    return errors
+
+
 def require_only_required_values(
     payload: dict[str, Any],
     array_field: str,
@@ -407,7 +429,7 @@ def require_hardware_profile(payload: dict[str, Any], errors: list[str]) -> str:
         "name",
         errors,
         path="hardware_profile.name",
-        pattern=STAGING_METADATA_LABEL_PATTERN,
+        pattern=HARDWARE_PROFILE_PATTERN,
         pattern_error=HARDWARE_PROFILE_ERROR,
     )
 
@@ -502,11 +524,14 @@ def validate_staging_load(
             path="providers[].name",
             pattern=PROVIDER_NAME_PATTERN,
             pattern_error=PROVIDER_NAME_ERROR,
-        )
+    )
     require_minimum_int(payload, "success_rate_bps", options.min_success_rate_bps, errors)
-    require_maximum_number(payload, "error_rate_bps", options.max_error_rate_bps, errors)
-    require_maximum_number(payload, "p95_latency_ms", options.max_p95_latency_ms, errors)
-    require_maximum_number(payload, "p99_latency_ms", options.max_p99_latency_ms, errors)
+    require_maximum_int(payload, "success_rate_bps", MAX_SUCCESS_RATE_BPS, errors)
+    require_maximum_int(payload, "error_rate_bps", MAX_ERROR_RATE_BPS, errors)
+    if options.max_error_rate_bps < MAX_ERROR_RATE_BPS:
+        require_maximum_int(payload, "error_rate_bps", options.max_error_rate_bps, errors)
+    require_maximum_int(payload, "p95_latency_ms", options.max_p95_latency_ms, errors)
+    require_maximum_int(payload, "p99_latency_ms", options.max_p99_latency_ms, errors)
     require_false(payload, "response_bodies_included", errors)
     require_false(payload, "raw_payloads_included", errors)
 
@@ -833,6 +858,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     except ValueError as error:
         emit_checker_exception(error)
+        return 2
+
+    threshold_errors = validate_threshold_options(args)
+    if threshold_errors:
+        emit_checker_error_lines(threshold_errors)
         return 2
 
     options = ValidationOptions(

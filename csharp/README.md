@@ -759,6 +759,11 @@ proof opening archive, and append lineage key artifacts. These request encoders
 validate the record-bundle hop count, Pallas envelope count/shape, previous
 lineage verifier-record selection, previous-proof opening selection, and
 lineage key artifact profile before any native bridge dispatch.
+The append output circuit selector is required: pass
+`RecursiveAggregationProofCircuitIdV1` for the semantic output path or
+`RecursiveSpendLineageAppendProofCircuitIdV1` for the Reserved-lineage append
+output path. Missing, empty, and unsupported selectors are rejected before
+native dispatch.
 Use `EncodeInitRequestWithGeneratedPallas(...)` or
 `EncodeAppendRequestWithGeneratedPallas(...)` when the SDK should derive the
 current-hop and, when required, previous-proof Pallas opening archives. These

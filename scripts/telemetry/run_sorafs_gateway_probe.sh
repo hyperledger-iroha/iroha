@@ -48,6 +48,272 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 LOG_SCRIPT="${SCRIPT_DIR}/log_sorafs_drill.sh"
 
+abs_output_path() {
+    local input="$1"
+    if [[ "$input" = /* ]]; then
+        printf '%s\n' "$input"
+    else
+        printf '%s/%s\n' "${WORKSPACE}" "$input"
+    fi
+}
+
+reject_symlinked_output_parent() {
+    local label="$1"
+    local target="$2"
+    local parent
+    parent="$(dirname "$target")"
+    local current="/"
+    local rest="${parent#/}"
+    local component
+    IFS='/' read -r -a components <<< "$rest"
+    for component in "${components[@]}"; do
+        [[ -z "$component" || "$component" == "." ]] && continue
+        if [[ "$component" == ".." ]]; then
+            echo "error: ${label} parent must not contain parent-directory segments" >&2
+            exit 1
+        fi
+        if [[ "$current" == "/" ]]; then
+            current="/${component}"
+        else
+            current="${current}/${component}"
+        fi
+        if [[ -L "$current" ]]; then
+            echo "error: ${label} parent must not be a symlink: ${current}" >&2
+            exit 1
+        fi
+        if [[ -e "$current" && ! -d "$current" ]]; then
+            echo "error: ${label} parent component must be a directory: ${current}" >&2
+            exit 1
+        fi
+        if [[ ! -e "$current" ]]; then
+            break
+        fi
+    done
+}
+
+validate_output_dir_path() {
+    local label="$1"
+    local target="$2"
+    if [[ -z "$target" ]]; then
+        echo "error: ${label} path must not be empty" >&2
+        exit 1
+    fi
+    if [[ -L "$target" ]]; then
+        echo "error: ${label} must not be a symlink: ${target}" >&2
+        exit 1
+    fi
+    if [[ -e "$target" && ! -d "$target" ]]; then
+        echo "error: ${label} must be a directory path: ${target}" >&2
+        exit 1
+    fi
+    reject_symlinked_output_parent "$label" "$target"
+}
+
+prepare_output_dir_path() {
+    local label="$1"
+    local target="$2"
+    validate_output_dir_path "$label" "$target"
+    mkdir -p "$target"
+    validate_output_dir_path "$label" "$target"
+}
+
+validate_output_file_path() {
+    local label="$1"
+    local target="$2"
+    if [[ -z "$target" ]]; then
+        echo "error: ${label} path must not be empty" >&2
+        exit 1
+    fi
+    if [[ -L "$target" ]]; then
+        echo "error: ${label} must not be a symlink: ${target}" >&2
+        exit 1
+    fi
+    if [[ -e "$target" && ! -f "$target" ]]; then
+        echo "error: ${label} must be a regular file path: ${target}" >&2
+        exit 1
+    fi
+    reject_symlinked_output_parent "$label" "$target"
+}
+
+validate_existing_executable_file_path() {
+    local label="$1"
+    local target="$2"
+    if [[ -z "$target" ]]; then
+        echo "error: ${label} path must not be empty" >&2
+        exit 1
+    fi
+    reject_symlinked_output_parent "$label" "$target"
+    if [[ -L "$target" ]]; then
+        echo "error: ${label} must not be a symlink: ${target}" >&2
+        exit 1
+    fi
+    if [[ ! -e "$target" ]]; then
+        echo "error: ${label} must exist: ${target}" >&2
+        exit 1
+    fi
+    if [[ ! -f "$target" ]]; then
+        echo "error: ${label} must be a regular file path: ${target}" >&2
+        exit 1
+    fi
+    if [[ ! -x "$target" ]]; then
+        echo "error: ${label} must be executable: ${target}" >&2
+        exit 1
+    fi
+}
+
+prepare_output_file_path() {
+    local label="$1"
+    local target="$2"
+    validate_output_file_path "$label" "$target"
+    mkdir -p "$(dirname "$target")"
+    validate_output_file_path "$label" "$target"
+}
+
+require_option_value() {
+    local option="$1"
+    local value="${2-}"
+    if [[ -z "${value}" || "${value}" == --* ]]; then
+        echo "error: ${option} requires a value" >&2
+        exit 1
+    fi
+}
+
+require_option_argument_value() {
+    local option="$1"
+    local value="${2-}"
+    if [[ -z "${value}" ]]; then
+        echo "error: ${option} requires a value" >&2
+        exit 1
+    fi
+}
+
+validate_drill_timestamp_options() {
+    local date_value="$1"
+    local start_value="$2"
+    local end_value="$3"
+    python3 - "$date_value" "$start_value" "$end_value" <<'PY'
+from __future__ import annotations
+from datetime import date as calendar_date
+import re
+import sys
+
+date_value, start_value, end_value = sys.argv[1:]
+date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+time_re = re.compile(r"^\d{2}:\d{2}Z$")
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"error: {message}")
+
+
+def validate_date(value: str) -> None:
+    if not value:
+        return
+    if not date_re.match(value):
+        fail(f"--date must use YYYY-MM-DD; got {value!r}")
+    try:
+        calendar_date.fromisoformat(value)
+    except ValueError:
+        fail(f"--date is not a valid calendar date: {value!r}")
+
+
+def validate_time(value: str, flag_name: str) -> None:
+    if not value:
+        return
+    if not time_re.match(value):
+        fail(f"{flag_name} must use HH:MMZ; got {value!r}")
+    hour, minute = map(int, value[:-1].split(":"))
+    if hour > 23 or minute > 59:
+        fail(f"{flag_name} is not a valid UTC time: {value!r}")
+
+
+validate_date(date_value)
+validate_time(start_value, "--start")
+validate_time(end_value, "--end")
+PY
+}
+
+validate_pagerduty_detail_options() {
+    python3 - -- "$@" <<'PY'
+from __future__ import annotations
+import re
+import sys
+
+details = sys.argv[1:]
+if details and details[0] == "--":
+    details = details[1:]
+
+key_re = re.compile(r"^[A-Za-z0-9_.-]+$")
+reserved_keys = {
+    "drill_link",
+    "host",
+    "manifest_cid",
+    "notes",
+    "probe_log",
+    "rollback_plan",
+    "scenario",
+    "status",
+}
+seen: set[str] = set()
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"error: {message}")
+
+
+for detail in details:
+    if "=" not in detail or detail.startswith("="):
+        fail("--pagerduty-detail must use key=value with a non-empty key.")
+    key, _value = detail.split("=", 1)
+    if not key_re.fullmatch(key):
+        fail(
+            "--pagerduty-detail key must use only ASCII letters, digits, "
+            f"'.', '_' or '-': {key!r}."
+        )
+    canonical_key = key.lower()
+    if canonical_key in reserved_keys:
+        fail(f"--pagerduty-detail key {key!r} is reserved by the probe wrapper.")
+    if canonical_key in seen:
+        fail(f"--pagerduty-detail key {key!r} is duplicated.")
+    seen.add(canonical_key)
+PY
+}
+
+validate_pagerduty_url_option() {
+    local page_url="$1"
+    python3 - "${page_url}" <<'PY'
+from __future__ import annotations
+from urllib.parse import urlsplit
+import sys
+
+raw = sys.argv[1]
+
+
+def fail(message: str) -> None:
+    raise SystemExit(f"error: {message}")
+
+
+if not raw:
+    fail("--pagerduty-url must not be empty.")
+
+try:
+    parsed = urlsplit(raw)
+except ValueError as exc:
+    fail(f"--pagerduty-url is malformed: {exc}.")
+
+if parsed.scheme != "https":
+    fail("--pagerduty-url must use https.")
+if not parsed.hostname:
+    fail("--pagerduty-url must include a host.")
+if parsed.username or parsed.password:
+    fail("--pagerduty-url must not include credentials.")
+if parsed.fragment:
+    fail("--pagerduty-url must not include a fragment.")
+if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in raw):
+    fail("--pagerduty-url must not include whitespace or control characters.")
+PY
+}
+
 WORKSPACE="${REPO_ROOT}"
 SCENARIO=""
 DATE_OVERRIDE=""
@@ -78,98 +344,122 @@ PD_EXTRA_DETAILS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --workspace)
-            WORKSPACE="$(cd "$2" && pwd)"
+            require_option_value "$1" "${2-}"
+            WORKSPACE="$2"
             shift 2
             ;;
         --scenario)
+            require_option_value "$1" "${2-}"
             SCENARIO="$2"
             shift 2
             ;;
         --drill-log)
+            require_option_value "$1" "${2-}"
             DRILL_LOG="$2"
             shift 2
             ;;
         --date)
+            require_option_value "$1" "${2-}"
             DATE_OVERRIDE="$2"
             shift 2
             ;;
         --start)
+            require_option_value "$1" "${2-}"
             START_OVERRIDE="$2"
             shift 2
             ;;
         --end)
+            require_option_value "$1" "${2-}"
             END_OVERRIDE="$2"
             shift 2
             ;;
         --ic)
+            require_option_value "$1" "${2-}"
             IC_NAME="$2"
             shift 2
             ;;
         --scribe)
+            require_option_value "$1" "${2-}"
             SCRIBE_NAME="$2"
             shift 2
             ;;
         --notes)
+            require_option_value "$1" "${2-}"
             NOTES_EXTRA="$2"
             shift 2
             ;;
         --link)
+            require_option_value "$1" "${2-}"
             LINK_VALUE="$2"
             shift 2
             ;;
         --artifact-dir)
+            require_option_value "$1" "${2-}"
             ARTIFACT_DIR="$2"
             shift 2
             ;;
         --rollback-plan)
+            require_option_value "$1" "${2-}"
             ROLLBACK_PLAN="$2"
             shift 2
             ;;
         --rollback-hook)
+            require_option_value "$1" "${2-}"
             ROLLBACK_HOOK="$2"
             shift 2
             ;;
         --rollback-hook-arg)
+            require_option_argument_value "$1" "${2-}"
             ROLLBACK_HOOK_ARGS+=("$2")
             shift 2
             ;;
         --pagerduty-routing-key)
+            require_option_value "$1" "${2-}"
             PAGE_ROUTING_KEY="$2"
             shift 2
             ;;
         --pagerduty-summary)
+            require_option_value "$1" "${2-}"
             PAGE_SUMMARY="$2"
             shift 2
             ;;
         --pagerduty-source)
+            require_option_value "$1" "${2-}"
             PAGE_SOURCE="$2"
             shift 2
             ;;
         --pagerduty-component)
+            require_option_value "$1" "${2-}"
             PAGE_COMPONENT="$2"
             shift 2
             ;;
         --pagerduty-group)
+            require_option_value "$1" "${2-}"
             PAGE_GROUP="$2"
             shift 2
             ;;
         --pagerduty-severity)
+            require_option_value "$1" "${2-}"
             PAGE_SEVERITY="$2"
             shift 2
             ;;
         --pagerduty-dedup-key)
+            require_option_value "$1" "${2-}"
             PAGE_DEDUP_KEY="$2"
             shift 2
             ;;
         --pagerduty-detail)
+            require_option_value "$1" "${2-}"
             PD_EXTRA_DETAILS+=("$2")
             shift 2
             ;;
         --pagerduty-output)
+            require_option_value "$1" "${2-}"
             PAGE_OUTPUT_PATH="$2"
             shift 2
             ;;
         --pagerduty-url)
+            require_option_value "$1" "${2-}"
             PAGE_URL="$2"
             shift 2
             ;;
@@ -200,15 +490,42 @@ if [[ $# -eq 0 ]]; then
 fi
 
 PROBE_ARGS=("$@")
+
+case "${PAGE_SEVERITY}" in
+    info|warning|error|critical)
+        ;;
+    *)
+        echo "error: --pagerduty-severity must be one of info, warning, error, critical." >&2
+        exit 1
+        ;;
+esac
+
+if (( ${#PD_EXTRA_DETAILS[@]} )); then
+    validate_pagerduty_detail_options "${PD_EXTRA_DETAILS[@]}"
+fi
+
+if [[ -n "${PAGE_ROUTING_KEY}" ]]; then
+    validate_pagerduty_url_option "${PAGE_URL}"
+fi
+
+validate_drill_timestamp_options "${DATE_OVERRIDE}" "${START_OVERRIDE}" "${END_OVERRIDE}"
+
 WORKSPACE="$(cd "$WORKSPACE" && pwd)"
+if [[ -n "${ROLLBACK_HOOK}" ]]; then
+    ROLLBACK_HOOK="$(abs_output_path "${ROLLBACK_HOOK}")"
+    validate_existing_executable_file_path "rollback hook" "${ROLLBACK_HOOK}"
+fi
 ARTIFACT_DIR="${ARTIFACT_DIR:-${WORKSPACE}/artifacts/sorafs_gateway_probe}"
-mkdir -p "${ARTIFACT_DIR}"
+ARTIFACT_DIR="$(abs_output_path "${ARTIFACT_DIR}")"
+prepare_output_dir_path "probe artifact directory" "${ARTIFACT_DIR}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 log_path="${ARTIFACT_DIR}/probe_${timestamp}.log"
 page_output_default="${ARTIFACT_DIR}/pagerduty_${timestamp}.json"
+prepare_output_file_path "probe log" "${log_path}"
 
 report_arg=""
+report_arg_index=-1
 for ((idx = 0; idx < ${#PROBE_ARGS[@]}; idx++)); do
     if [[ "${PROBE_ARGS[idx]}" == "--report-json" ]]; then
         if (( idx + 1 >= ${#PROBE_ARGS[@]} )); then
@@ -216,6 +533,7 @@ for ((idx = 0; idx < ${#PROBE_ARGS[@]}; idx++)); do
             exit 1
         fi
         report_arg="${PROBE_ARGS[idx + 1]}"
+        report_arg_index=$((idx + 1))
         break
     fi
 done
@@ -228,7 +546,16 @@ else
         echo "error: run_sorafs_gateway_probe.sh requires --report-json to target a file path" >&2
         exit 1
     fi
-    json_report="${report_arg}"
+    json_report="$(abs_output_path "${report_arg}")"
+    PROBE_ARGS[report_arg_index]="${json_report}"
+fi
+prepare_output_file_path "probe JSON report" "${json_report}"
+if [[ -n "${PAGE_OUTPUT_PATH}" ]]; then
+    PAGE_OUTPUT_PATH="$(abs_output_path "${PAGE_OUTPUT_PATH}")"
+    prepare_output_file_path "PagerDuty payload" "${PAGE_OUTPUT_PATH}"
+elif [[ -n "${PAGE_ROUTING_KEY}" ]]; then
+    PAGE_OUTPUT_PATH="${page_output_default}"
+    prepare_output_file_path "PagerDuty payload" "${PAGE_OUTPUT_PATH}"
 fi
 
 run_date="$(date -u +%F)"
@@ -431,6 +758,8 @@ for pair in extras:
     if not pair or "=" not in pair:
         continue
     key, value = pair.split("=", 1)
+    if key.lower() in {existing_key.lower() for existing_key in custom_details}:
+        raise SystemExit(f"reserved PagerDuty detail key: {key}")
     custom_details[key] = value
 
 payload = {
@@ -461,7 +790,8 @@ PY
     fi
 
     local target="${PAGE_OUTPUT_PATH:-${page_output_default}}"
-    mkdir -p "$(dirname "${target}")"
+    target="$(abs_output_path "${target}")"
+    prepare_output_file_path "PagerDuty payload" "${target}"
     printf '%s\n' "${payload}" > "${target}"
     echo "Stored PagerDuty payload at ${target}"
 

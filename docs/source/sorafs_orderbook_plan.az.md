@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_orderbook_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 43e0e54f8a6e616fc598a5105d64476efe63e843ea9c26a9bf78f6a99de0504f
-source_last_modified: "2026-07-03T12:23:28.119885+00:00"
+source_hash: 4ffa6a4b81488bc02525ab7a2dc35ea11a38e09c3a8bde0baa445b968116054d
+source_last_modified: "2026-07-04T06:25:40.858280+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T12:23:28.119885+00:00
+source_mtime: "2026-07-04T06:25:40.858280+00:00"
 ---
 
 # SoraFS XOR Orderbook & Streaming Settlement
@@ -92,9 +92,11 @@ for contract surface, matcher service, settlement service, API gateway, event
 streams, SDK release, observability, reconciliation, and governance approval
 evidence. It takes reviewed deployment facts, validates each generated artifact
 against the rollout gate, rejects duplicate `--artifact` ids for SDK release
-canaries, rejects duplicate or unknown closed-set `--verified-claim`, `--route`,
-`--stream`, `--language`, `--metric`, and `--source` inputs before writing any
-canary JSON, rejects malformed or non-production `--accepted-order`,
+canaries, rejects SDK release canaries with fewer than one distinct artifact
+per reviewed SDK language, rejects duplicate or unknown closed-set
+`--verified-claim`, `--route`, `--stream`, `--language`, `--metric`, and
+`--source` inputs before writing any canary JSON, rejects malformed or
+non-production `--accepted-order`,
 `--matched-order`, `--open-channel`, `--settled-receipt`, and `--peer`
 inventory labels before writing any canary JSON, and writes atomically without
 following output symlinks. The checker
@@ -473,32 +475,45 @@ reports `ready` only when every required kind is present, every recognized
 artifact is valid, raw order payloads, receipt payloads, raw snapshots, raw
 contract state, response bodies, signed transactions, secrets, and ledgers are
 absent, route latency, stream lag, and matcher lag stay under configured
-thresholds, reconciliation covers at least four peers, governance is bound to
+thresholds, every API route response carries a lowercase `body_blake3_hex`
+digest, and `routes[].latency_ms`, matcher `matcher_lag_ms`, and stream
+`lag_ms` are non-negative integer-unit evidence before those ceilings apply,
+reconciliation covers at least four peers, governance is bound to
 `iroha_config`, and matcher, settlement, API, stream, SDK, observability,
 reconciliation, and governance approval artifacts carry a
 `contract_digest_hex` that matches a valid contract-surface artifact in the
 same rollout bundle. Governance approval must also carry a `policy_digest_hex`
 that matches a valid contract-surface policy digest from the same rollout
-bundle. Matcher-service artifacts also bind `accepted_order_count` and
-`matched_order_count` to the unique canonical `accepted_orders` and
-`matched_orders` inventories, require matched orders to be present in the
-accepted-order inventory, require order IDs to use reviewed lowercase `order-*`
+bundle. Matcher-service artifacts also bind `accepted_order_count`,
+`matched_order_count`, and `rejected_invalid_order_count` to the unique
+canonical `accepted_orders`, `matched_orders`, and `rejected_invalid_orders`
+inventories, require matched orders to be present in the accepted-order
+inventory, require order IDs to use reviewed lowercase `orderbook-order-*`
 labels without non-production markers, and reject duplicate order entries
-before promotion can report ready. Settlement-service artifacts also bind
-`open_channel_count` and `settled_receipt_count` to the unique canonical
-`open_channels` and `settled_receipts` inventories, require channel and receipt
-IDs to use reviewed lowercase `channel-*` and `receipt-*` labels without
-non-production markers, and reject duplicate channel or receipt entries before
-promotion can report ready. API gateway artifacts also bind
+before promotion can report ready. Settlement-service artifacts also bind `open_channel_count`,
+`settled_receipt_count`, and `settlement_backlog_count` to the unique canonical
+`open_channels`, `settled_receipts`, and `settlement_backlog_channels`
+inventories, require channel and receipt IDs to use reviewed lowercase
+`orderbook-channel-*` and `orderbook-receipt-*` labels without non-production
+markers, and reject duplicate channel or receipt entries before promotion can
+report ready. API gateway artifacts also bind
 `route_count` to the unique canonical `routes[].name` inventory and reject
-duplicate or unknown route entries before promotion can report ready. Event-stream
+duplicate or unknown route entries before promotion can report ready, and require
+every route response to carry a lowercase `body_blake3_hex` digest. Event-stream
 artifacts also bind `stream_count` to the
 unique canonical `streams[].name` inventory and reject duplicate or unknown
 stream entries before promotion can report ready. SDK release artifacts also
 bind `language_count` to the unique canonical `languages[].name` inventory,
 reject missing, inflated, duplicate, or unknown language evidence, and bind
 `artifact_count` to the unique canonical `artifacts[].id` inventory, rejecting
-duplicate artifact entries before promotion can report ready. Observability
+duplicate artifact entries before promotion can report ready. They also require
+at least one distinct SDK release artifact per reviewed SDK language before
+promotion can report ready. Orderbook payload-safety artifacts must explicitly
+set `raw_contract_state_included`, `divergence_detected`,
+`raw_snapshot_included`, `raw_receipts_included`, `response_bodies_included`,
+`debug_artifacts`, `critical_alerts_firing`, `contract_mirror_divergence`, and
+`raw_ledger_included` to `false` before promotion can report ready.
+Observability
 artifacts also bind `metric_count` to the unique canonical `metrics` inventory,
 require the reviewed orderbook metrics set, and reject duplicate or unknown
 metric labels before promotion can report ready. The summary exports the sorted
@@ -507,16 +522,17 @@ production-readiness gate requires those fields to match the observability
 artifact fingerprint before final promotion can report ready. Reconciliation artifacts also
 bind `peer_count` and `source_count` to the unique canonical `peers[].name` and
 `sources[].name` inventories, require peer labels to use reviewed lowercase
-`peer-*` labels without non-production markers, and reject duplicate peer
+`orderbook-peer-*` labels without non-production markers, and reject duplicate peer
 entries plus duplicate or unknown source entries before promotion can report
 ready. The collection planner's
 dry-run JSON also includes the checker-backed `evidence_contract` map so operators can inspect
 the exact required fields for each requested evidence kind before collecting or
 submitting live orderbook artifacts. Use the payload-free SFM-2 orderbook
 canary builder for reviewed promotion evidence after those deployment facts
-exist; it does not replace the missing on-chain contract, durable matcher,
-daemonized settlement service, SDK release smoke, live dashboard wiring, or
-reconciliation evidence.
+exist; route-bearing API gateway canaries require explicit
+`--route-body-blake3-hex` evidence. The builder does not replace the missing
+on-chain contract, durable matcher, daemonized settlement service, SDK release
+smoke, live dashboard wiring, or reconciliation evidence.
 
 ## Rollout Status
 - Done: target architecture and requirements are documented; initial SoraFS orderbook Norito payloads, structural/accounting validators, canonical embedded Ed25519 payload signature digests/verification, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift encoded Ed25519 signing helpers for order/cancel/receipt payloads, Rust/JavaScript/Python/Kotlin/JVM/Java Android/Swift field-level signed order/cancel/receipt payload builders, deterministic pair and full-book snapshot matching/fee/settlement helpers, deterministic generated matcher invariant coverage, canonical Norito local runtime replay snapshots with storage-data-dir checkpoint reload, Rust reference validator, reference FFI selector surface, CLI parser surface, committed fixtures, bundle-validator coverage, JavaScript, Python, Kotlin/JVM, Java Android, and Swift orderbook validator bindings, JavaScript and Python Torii read helpers for local book/trades/channels/receipts/events, JavaScript and `iroha_python` local orderbook SSE/WebSocket stream helpers, JavaScript, `iroha_python`, and standalone `iroha_torii_client` local submit helpers for already signed Norito order/cancel/receipt bytes, target dashboard/alert fixtures, orderbook Prometheus metric handles/helper methods, local runtime mirror, local config-backed order admission policy, local settlement receipt application, local orderbook settlement receipt Governance DAG publication, local Torii order/cancel/receipt/book/trade/channel/event API with `limit`-bounded book/trades/channels/receipts readbacks and full total counts, local request-authenticated orderbook POST envelope/account/signer binding, local known-channel receipt provider-role authorization, local provider-advert capability authorization for asks and known-channel receipts, local SSE/WebSocket event streams with frame-shape coverage, local runtime metric emission including provider escrow runway and API error ratios, fail-closed rollout evidence gate with cross-artifact contract-digest binding, collection planner with dry-run evidence-contract export, payload-free canary builder for all SFM-2 evidence kinds, operator argfile templates, and focused unit tests are implemented; adjacent settlement, pricing, reserve, validation, and governance foundations exist.

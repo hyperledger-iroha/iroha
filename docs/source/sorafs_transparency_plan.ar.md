@@ -4,12 +4,11 @@ direction: rtl
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: eca9b2f171604b28e8e11f1d32d1a8207d0f7fc003cc6692e40eefdf01561ed7
-source_last_modified: "2026-07-03T06:57:04.080552+00:00"
+source_hash: 8049ff5a495f3884b43a6272e916e3c4a3e55c57f9040d034ccf40c3aec91dae
+source_last_modified: "2026-07-03T15:40:43.271371+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T06:57:04.080552+00:00
+source_mtime: 2026-07-03T15:40:43.271371+00:00
 ---
-
 # Transparency Dashboards & Enforcement Receipts
 
 ## Current Status
@@ -304,9 +303,11 @@ moderation ledger publication service described by the original plan.
   explorer snapshot/UI/proof-token index routes, binds publication and explorer
   `route_count` to the unique canonical `routes[].name` inventories with
   duplicate route rejection, binds publication `cycle_detail_probe_count` to
-  the unique canonical `cycle_detail_probes[].name` inventory with duplicate
-  cycle-detail probe rejection, keeps probe-based `probe_count` values equal to
-  the `probes[]` inventory length, requires source-entry, source-event,
+  the unique canonical `cycle_detail_probes[].name` inventory using reviewed
+  `transparency-cycle-detail-*` probe labels without non-production markers,
+  with duplicate cycle-detail probe rejection, keeps probe-based `probe_count`
+  values equal to the `probes[]` inventory length, requires source-entry,
+  source-event,
   publish-due, and proof-token issuance sub-counts to match the corresponding
   `probes[]` role inventory, binds privacy aggregate and proof-token issuance
   `probe_count` values to the unique canonical `probes[].action` inventory
@@ -332,7 +333,8 @@ moderation ledger publication service described by the original plan.
 	  artifacts. It requires complete source kind, publication route,
 	  publication cycle-detail probe, privacy action, and explorer route coverage
 	  where applicable, rejects duplicate or unknown operator inventory names
-	  before writing, enforces reviewed deployment/environment context,
+	  and non-production cycle-detail probe labels before writing, enforces
+	  reviewed deployment/environment context,
 	  source-batch and cycle digest bindings, and validates every generated
 	  artifact through the transparency rollout checker before atomically writing
 	  JSON without following output symlinks or output directories. The source

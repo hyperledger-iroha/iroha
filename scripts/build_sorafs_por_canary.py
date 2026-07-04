@@ -20,12 +20,15 @@ if str(SCRIPT_DIR) not in sys.path:
 from check_sorafs_por_rollout_evidence import (  # noqa: E402
     ALLOWED_MANUAL_TRIGGER_STATES,
     ALLOWED_ARCHIVE_BACKENDS,
+    CHALLENGE_LABEL_ERROR,
+    CHALLENGE_LABEL_PATTERN,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_REPORT_LATENCY_MS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
     DEFAULT_MAX_SCHEDULER_LAG_SECS,
     DEFAULT_MIN_CHALLENGES,
     DEFAULT_MIN_PROVIDERS,
+    FORBIDDEN_CHALLENGE_LABEL_MARKERS,
     FORBIDDEN_PROVIDER_LABEL_MARKERS,
     KIND_BY_NAME,
     PROVIDER_LABEL_ERROR,
@@ -101,6 +104,7 @@ def validate_reviewed_inventory(
     expected_count: int,
     option: str,
     count_option: str,
+    label_validator: Any | None = None,
     errors: list[str],
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
@@ -110,8 +114,8 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for randomness")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
-        if option == "--provider":
-            validate_provider_label_arg(item, option=option, errors=errors)
+        if label_validator is not None:
+            label_validator(item, option=option, errors=errors)
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
@@ -185,6 +189,28 @@ def validate_provider_label_arg(
         errors.append(f"{option} must not contain non-production markers {forbidden}")
 
 
+def validate_challenge_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production challenge inventory label."""
+
+    if not isinstance(value, str):
+        return
+    if CHALLENGE_LABEL_PATTERN.fullmatch(value) is None:
+        errors.append(CHALLENGE_LABEL_ERROR.replace("challenges[].name", option))
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_CHALLENGE_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
 def require_kind_options(
     args: argparse.Namespace,
     errors: list[str],
@@ -218,6 +244,7 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
             "name": name,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "latency_ms": args.route_latency_ms,
             "authz_enforced": True,
             "norito_verified": True,
@@ -249,6 +276,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "provider_count": args.provider_count,
                 "providers": build_inventory_records(args.providers),
                 "challenge_count": args.challenge_count,
+                "challenges": build_inventory_records(args.challenges),
                 "seed_replay_digest_hex": args.seed_replay_digest_hex,
                 "policy_digest_hex": args.policy_digest_hex,
                 "raw_randomness_included": False,
@@ -379,9 +407,23 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             expected_count=args.provider_count,
             option="--provider",
             count_option="--provider-count",
+            label_validator=validate_provider_label_arg,
+            errors=errors,
+        )
+        args.challenges = validate_reviewed_inventory(
+            split_csv_values(args.challenge),
+            expected_count=args.challenge_count,
+            option="--challenge",
+            count_option="--challenge-count",
+            label_validator=validate_challenge_label_arg,
             errors=errors,
         )
     elif args.kind == "scheduler_runtime":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.runtime_routes = validate_name_set(
             split_csv_values(args.runtime_route),
             allowed=REQUIRED_RUNTIME_ROUTES,
@@ -406,6 +448,11 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             args,
             errors,
             (("--report-digest-hex", args.report_digest_hex),),
+        )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
         )
         validate_hex64(
             args.report_digest_hex,
@@ -538,10 +585,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--report-digest-hex")
     parser.add_argument("--policy-digest-hex")
     parser.add_argument("--provider", action="append", default=[])
+    parser.add_argument("--challenge", action="append", default=[])
     parser.add_argument("--runtime-route", action="append", default=[])
     parser.add_argument("--reporting-route", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)
     parser.add_argument("--scheduler-lag-seconds", type=non_negative_int_arg, default=60)
     parser.add_argument("--report-latency-ms", type=non_negative_int_arg, default=300)

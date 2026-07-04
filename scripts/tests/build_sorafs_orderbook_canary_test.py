@@ -36,19 +36,20 @@ CHECKER_SPEC.loader.exec_module(CHECKER)
 CONTRACT_DIGEST = "a" * 64
 POLICY_DIGEST = "b" * 64
 ARTIFACT_DIGEST = "c" * 64
+ROUTE_BODY_DIGEST = "d" * 64
 GENERATED_AT = 1_800_100_000
 
 
 def order_refs(count: int) -> list[str]:
-    return [f"order-{index:02d}" for index in range(count)]
+    return [f"orderbook-order-{index:02d}" for index in range(count)]
 
 
 def channel_refs(count: int) -> list[str]:
-    return [f"channel-{index:02d}" for index in range(count)]
+    return [f"orderbook-channel-{index:02d}" for index in range(count)]
 
 
 def receipt_refs(count: int) -> list[str]:
-    return [f"receipt-{index:02d}" for index in range(count)]
+    return [f"orderbook-receipt-{index:02d}" for index in range(count)]
 
 
 def canary_path(tmp_path: Path, kind: str) -> Path:
@@ -104,6 +105,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             args.extend(["--accepted-order", order])
         for order in order_refs(8):
             args.extend(["--matched-order", order])
+        for order in ("orderbook-order-invalid-00", "orderbook-order-invalid-01"):
+            args.extend(["--rejected-invalid-order", order])
     elif kind == "settlement_service":
         args.extend(
             [
@@ -120,6 +123,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         for receipt in receipt_refs(9):
             args.extend(["--settled-receipt", receipt])
     elif kind == "api_gateway":
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
         for route in MODULE.REQUIRED_API_ROUTES:
             args.extend(["--route", route])
     elif kind == "event_streams":
@@ -135,7 +139,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     elif kind == "reconciliation":
         args.extend(["--peer-count", str(CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS)])
         for index in range(CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS):
-            args.extend(["--peer", f"peer-{index:02d}"])
+            args.extend(["--peer", f"orderbook-peer-{index:02d}"])
         for source in MODULE.REQUIRED_RECONCILIATION_SOURCES:
             args.extend(["--source", source])
     elif kind == "governance_approval":
@@ -169,6 +173,9 @@ def test_builds_payload_free_api_gateway_canary(tmp_path: Path) -> None:
     assert payload["passed_route_count"] == len(MODULE.REQUIRED_API_ROUTES)
     assert [route["name"] for route in payload["routes"]] == list(
         MODULE.REQUIRED_API_ROUTES
+    )
+    assert all(
+        route["body_blake3_hex"] == ROUTE_BODY_DIGEST for route in payload["routes"]
     )
     for claim in MODULE.TRUE_CLAIMS["api_gateway"]:
         assert payload[claim] is True
@@ -256,7 +263,8 @@ def test_response_file_can_build_reconciliation_canary(tmp_path: Path) -> None:
     payload = json.loads(canary_path(tmp_path, "reconciliation").read_text("utf-8"))
     assert payload["peer_count"] == CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS
     assert [peer["name"] for peer in payload["peers"]] == [
-        f"peer-{index:02d}" for index in range(CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS)
+        f"orderbook-peer-{index:02d}"
+        for index in range(CHECKER.DEFAULT_MIN_RECONCILIATION_PEERS)
     ]
     assert [source["name"] for source in payload["sources"]] == list(
         MODULE.REQUIRED_RECONCILIATION_SOURCES
@@ -335,7 +343,28 @@ def test_matcher_order_inventory_must_use_reviewed_labels_before_write(
         kind="matcher_service",
         tmp_path=tmp_path,
         capsys=capsys,
-        expected_error="--accepted-order must match canonical lowercase `order-name`",
+        expected_error=(
+            "--accepted-order must match canonical lowercase `orderbook-order-*`"
+        ),
+    )
+
+
+def test_matcher_order_inventory_rejects_non_orderbook_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("matcher_service", tmp_path)
+    accepted_order_index = args.index("--accepted-order") + 1
+    args[accepted_order_index] = "order-00"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="matcher_service",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--accepted-order must match canonical lowercase `orderbook-order-*`"
+        ),
     )
 
 
@@ -345,7 +374,7 @@ def test_matcher_order_inventory_rejects_non_production_markers_before_write(
 ) -> None:
     args = args_for("matcher_service", tmp_path)
     accepted_order_index = args.index("--accepted-order") + 1
-    args[accepted_order_index] = "order-placeholder"
+    args[accepted_order_index] = "orderbook-order-placeholder"
 
     assert_rejected_without_artifact(
         args,
@@ -356,6 +385,74 @@ def test_matcher_order_inventory_rejects_non_production_markers_before_write(
             "--accepted-order must not contain non-production markers ['placeholder']"
         ),
     )
+
+
+def test_matcher_rejected_invalid_order_inventory_must_match_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("matcher_service", tmp_path)
+    args[args.index("--rejected-invalid-order-count") + 1] = "3"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--rejected-invalid-order unique values must match "
+        "--rejected-invalid-order-count"
+    ) in captured.err
+    assert not canary_path(tmp_path, "matcher_service").exists()
+
+
+def test_matcher_rejected_invalid_order_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("matcher_service", tmp_path)
+    first_order = args.index("--rejected-invalid-order") + 1
+    args.extend(["--rejected-invalid-order", args[first_order]])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--rejected-invalid-order must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "matcher_service").exists()
+
+
+def test_matcher_rejected_invalid_order_inventory_must_use_reviewed_labels_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("matcher_service", tmp_path)
+    order_index = args.index("--rejected-invalid-order") + 1
+    args[order_index] = "order-invalid-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--rejected-invalid-order must match canonical lowercase "
+        "`orderbook-order-*`"
+    ) in captured.err
+    assert not canary_path(tmp_path, "matcher_service").exists()
+
+
+def test_matcher_rejected_invalid_order_inventory_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("matcher_service", tmp_path)
+    order_index = args.index("--rejected-invalid-order") + 1
+    args[order_index] = "orderbook-order-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--rejected-invalid-order must not contain non-production markers "
+        "['placeholder']"
+    ) in captured.err
+    assert not canary_path(tmp_path, "matcher_service").exists()
 
 
 def test_settlement_open_channel_inventory_must_match_count(
@@ -400,8 +497,38 @@ def test_settlement_inventory_must_use_reviewed_labels_before_write(
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--open-channel must match canonical lowercase `channel-name`" in captured.err
-    assert "--settled-receipt must match canonical lowercase `receipt-name`" in captured.err
+    assert (
+        "--open-channel must match canonical lowercase `orderbook-channel-*`"
+        in captured.err
+    )
+    assert (
+        "--settled-receipt must match canonical lowercase `orderbook-receipt-*`"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "settlement_service").exists()
+
+
+def test_settlement_inventory_rejects_non_orderbook_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_service", tmp_path)
+    channel_index = args.index("--open-channel") + 1
+    receipt_index = args.index("--settled-receipt") + 1
+    args[channel_index] = "channel-00"
+    args[receipt_index] = "receipt-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--open-channel must match canonical lowercase `orderbook-channel-*`"
+        in captured.err
+    )
+    assert (
+        "--settled-receipt must match canonical lowercase `orderbook-receipt-*`"
+        in captured.err
+    )
     assert not canary_path(tmp_path, "settlement_service").exists()
 
 
@@ -412,8 +539,8 @@ def test_settlement_inventory_rejects_non_production_markers_before_write(
     args = args_for("settlement_service", tmp_path)
     channel_index = args.index("--open-channel") + 1
     receipt_index = args.index("--settled-receipt") + 1
-    args[channel_index] = "channel-placeholder"
-    args[receipt_index] = "receipt-placeholder"
+    args[channel_index] = "orderbook-channel-placeholder"
+    args[receipt_index] = "orderbook-receipt-placeholder"
 
     assert MODULE.main(args) == 2
 
@@ -426,6 +553,85 @@ def test_settlement_inventory_rejects_non_production_markers_before_write(
         "--settled-receipt must not contain non-production markers ['placeholder']"
         in captured.err
     )
+    assert not canary_path(tmp_path, "settlement_service").exists()
+
+
+def test_settlement_backlog_channel_inventory_must_match_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_service", tmp_path)
+    args[args.index("--settlement-backlog-count") + 1] = "1"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--settlement-backlog-channel is required for settlement_service"
+        in captured.err
+    )
+    assert (
+        "--settlement-backlog-channel unique values must match "
+        "--settlement-backlog-count"
+    ) in captured.err
+    assert not canary_path(tmp_path, "settlement_service").exists()
+
+
+def test_settlement_backlog_channel_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_service", tmp_path)
+    args[args.index("--settlement-backlog-count") + 1] = "1"
+    args.extend(
+        [
+            "--settlement-backlog-channel",
+            "orderbook-channel-backlog-00",
+            "--settlement-backlog-channel",
+            "orderbook-channel-backlog-00",
+        ]
+    )
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--settlement-backlog-channel must not contain duplicates" in captured.err
+    assert not canary_path(tmp_path, "settlement_service").exists()
+
+
+def test_settlement_backlog_channel_inventory_must_use_reviewed_labels_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_service", tmp_path)
+    args[args.index("--settlement-backlog-count") + 1] = "1"
+    args.extend(["--settlement-backlog-channel", "channel-backlog-00"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--settlement-backlog-channel must match canonical lowercase "
+        "`orderbook-channel-*`"
+    ) in captured.err
+    assert not canary_path(tmp_path, "settlement_service").exists()
+
+
+def test_settlement_backlog_channel_inventory_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("settlement_service", tmp_path)
+    args[args.index("--settlement-backlog-count") + 1] = "1"
+    args.extend(["--settlement-backlog-channel", "orderbook-channel-placeholder"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--settlement-backlog-channel must not contain non-production markers "
+        "['placeholder']"
+    ) in captured.err
     assert not canary_path(tmp_path, "settlement_service").exists()
 
 
@@ -457,7 +663,24 @@ def test_reconciliation_peer_inventory_must_use_reviewed_labels_before_write(
         kind="reconciliation",
         tmp_path=tmp_path,
         capsys=capsys,
-        expected_error="--peer must match canonical lowercase `peer-name`",
+        expected_error="--peer must match canonical lowercase `orderbook-peer-*`",
+    )
+
+
+def test_reconciliation_peer_inventory_rejects_non_orderbook_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reconciliation", tmp_path)
+    peer_index = args.index("--peer") + 1
+    args[peer_index] = "peer-00"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="reconciliation",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--peer must match canonical lowercase `orderbook-peer-*`",
     )
 
 
@@ -467,7 +690,7 @@ def test_reconciliation_peer_inventory_rejects_non_production_markers_before_wri
 ) -> None:
     args = args_for("reconciliation", tmp_path)
     peer_index = args.index("--peer") + 1
-    args[peer_index] = "peer-placeholder"
+    args[peer_index] = "orderbook-peer-placeholder"
 
     assert_rejected_without_artifact(
         args,
@@ -492,6 +715,23 @@ def test_duplicate_sdk_artifact_id_fails_closed_without_leaking(
     captured = capsys.readouterr()
     assert "duplicate --artifact id" in captured.err
     assert artifact_id not in captured.err
+    assert not canary_path(tmp_path, "sdk_release").exists()
+
+
+def test_sdk_release_requires_artifact_per_language_before_write(
+    tmp_path: Path, capsys
+) -> None:
+    args = args_for("sdk_release", tmp_path)
+    first_artifact = args.index("--artifact")
+    del args[first_artifact : first_artifact + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--artifact must include at least one distinct SDK release artifact "
+        "per reviewed language"
+    ) in captured.err
     assert not canary_path(tmp_path, "sdk_release").exists()
 
 
@@ -574,6 +814,20 @@ def test_duplicate_api_route_fails_closed(tmp_path: Path, capsys) -> None:
         tmp_path=tmp_path,
         capsys=capsys,
         expected_error="--route must not contain duplicates",
+    )
+
+
+def test_api_gateway_requires_route_body_digest(tmp_path: Path, capsys) -> None:
+    args = args_for("api_gateway", tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert_rejected_without_artifact(
+        args,
+        kind="api_gateway",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--route-body-blake3-hex must be exact lowercase 32-byte hex",
     )
 
 

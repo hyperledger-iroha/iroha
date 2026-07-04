@@ -19,7 +19,9 @@ use iroha_data_model::prelude::Repeats;
 use mv::storage::StorageReadOnly;
 
 const PROPOSAL_STALE_WINDOW_TX_QUANTUM: usize = 128;
-const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 4;
+const PROPOSAL_STALE_WINDOW_PREP_TX_QUANTUM: usize = 32;
+const PROPOSAL_STALE_WINDOW_FULL_BATCH_PREP_GRACE: usize = 2;
+const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 8;
 
 pub(super) const fn should_seed_frontier_backup_transport(
     da_enabled: bool,
@@ -1383,8 +1385,16 @@ impl Actor {
         let batches = tx_count.saturating_add(PROPOSAL_STALE_WINDOW_TX_QUANTUM - 1)
             / PROPOSAL_STALE_WINDOW_TX_QUANTUM;
         let full_batch_grace = usize::from(tx_count >= PROPOSAL_STALE_WINDOW_TX_QUANTUM);
-        let multiplier = batches
-            .saturating_add(full_batch_grace)
+        let consensus_multiplier = batches.saturating_add(full_batch_grace);
+        let prep_multiplier = if tx_count >= PROPOSAL_STALE_WINDOW_TX_QUANTUM {
+            tx_count.saturating_add(PROPOSAL_STALE_WINDOW_PREP_TX_QUANTUM - 1)
+                / PROPOSAL_STALE_WINDOW_PREP_TX_QUANTUM
+                + PROPOSAL_STALE_WINDOW_FULL_BATCH_PREP_GRACE
+        } else {
+            1
+        };
+        let multiplier = consensus_multiplier
+            .max(prep_multiplier)
             .max(1)
             .min(PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER as usize);
         let multiplier = u32::try_from(multiplier).expect("proposal stale multiplier fits u32");
@@ -1426,14 +1436,6 @@ impl Actor {
         }
     }
 
-    pub(super) fn proposal_multilane_lookahead_enabled(
-        nexus: &iroha_config::parameters::actual::Nexus,
-        block_height: u64,
-    ) -> bool {
-        nexus.enabled
-            && crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
-    }
-
     pub(super) fn pull_transactions_for_proposal(
         &self,
         state: &State,
@@ -1459,8 +1461,13 @@ impl Actor {
         let mut ivm_transactions_deferred = 0usize;
         let scan_budget = scan_budget.max(1);
         let committed_nexus = state.nexus_snapshot();
-        let multilane_lookahead =
-            Self::proposal_multilane_lookahead_enabled(&committed_nexus, height);
+        let (lane_domain_consensus_mode, lane_domain_mode_tag, _) =
+            self.consensus_context_for_height(height);
+        let mut lane_domain_validators =
+            self.roster_for_live_vote_with_mode(height, lane_domain_consensus_mode);
+        if lane_domain_validators.is_empty() {
+            lane_domain_validators = self.effective_commit_topology();
+        }
         if self.queue.reconfigure_nexus_with_state_if_needed(
             &committed_nexus,
             state,
@@ -1498,11 +1505,12 @@ impl Actor {
                     break;
                 }
             }
-            let fetch_cap = if multilane_lookahead {
-                remaining_budget
-            } else {
-                remaining_budget.min(remaining_slots)
-            };
+            let fetch_cap = super::lane_scheduler::proposal_fetch_cap(
+                &committed_nexus,
+                height,
+                remaining_budget,
+                remaining_slots,
+            );
             let fetch_cap = NonZeroUsize::new(fetch_cap).expect("non-zero by construction");
             let mut fetched = Vec::new();
             self.queue
@@ -1525,7 +1533,80 @@ impl Actor {
                 .iter()
                 .map(crate::queue::TransactionGuard::routing)
                 .collect();
-            let order = interleave_lane_indices_for_slot(&fetched_routing, height, view);
+            let candidates: Vec<_> = fetched
+                .iter()
+                .map(|guard| super::lane_scheduler::ProposalAdmissionCandidate {
+                    gas_cost: guard.gas_cost(),
+                    is_ivm_heavy: Self::is_ivm_heavy_transaction(
+                        guard.as_accepted(),
+                        replay_ivm_proved,
+                    ),
+                })
+                .collect();
+            let schedule = super::lane_scheduler::schedule_proposal_batch(
+                &fetched_routing,
+                &candidates,
+                super::lane_scheduler::ProposalAdmissionContext {
+                    accepted_before_batch: tx_guards.len(),
+                    accepted_in_batch: 0,
+                    max_in_block: max_in_block.get(),
+                    gas_limit_per_block,
+                    gas_used_in_block,
+                    max_ivm_transactions,
+                    ivm_transactions_included,
+                },
+                height,
+                view,
+            )
+            .expect("fetched proposal candidates and routing decisions must align");
+            match super::lane_scheduler::plan_lane_consensus_domains_with_shared_committee(
+                &fetched_routing,
+                &schedule,
+                &lane_domain_validators,
+                lane_domain_mode_tag,
+            ) {
+                Ok(domains) => {
+                    if !domains.is_empty() {
+                        trace!(
+                            height,
+                            view,
+                            lane_domains = domains.len(),
+                            lane_ids = ?domains
+                                .iter()
+                                .map(|domain| domain.lane_id.as_u32())
+                                .collect::<Vec<_>>(),
+                            dataspace_ids = ?domains
+                                .iter()
+                                .map(|domain| domain.dataspace_id.as_u64())
+                                .collect::<Vec<_>>(),
+                            accepted_lane_candidates = domains
+                                .iter()
+                                .map(|domain| domain.accepted_candidates)
+                                .sum::<usize>(),
+                            validator_count = domains
+                                .iter()
+                                .map(|domain| domain.validator_set.len())
+                                .max()
+                                .unwrap_or_default(),
+                            first_quorum = domains
+                                .first()
+                                .map_or(0, |domain| domain.quorum.validator_count),
+                            first_qc_mode_tag = domains
+                                .first()
+                                .map_or("", |domain| domain.qc_mode_tag.as_str()),
+                            "planned lane-local consensus domains for proposal batch"
+                        );
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        height,
+                        view,
+                        ?error,
+                        "failed to plan lane-local consensus domains for proposal batch; retaining global proposal compatibility path"
+                    );
+                }
+            }
             let mut fetched_slots: Vec<Option<crate::queue::TransactionGuard>> =
                 fetched.into_iter().map(Some).collect();
             let mut accepted = Vec::with_capacity(remaining_slots.min(fetched_slots.len()));
@@ -1539,76 +1620,42 @@ impl Actor {
                     }
                 };
 
-            for (order_pos, idx) in order.iter().copied().enumerate() {
-                let Some(guard) = fetched_slots.get_mut(idx).and_then(Option::take) else {
-                    continue;
-                };
-
-                if tx_guards.len().saturating_add(accepted.len()) >= max_in_block.get() {
-                    release_lane_consumption(&guard, &mut lane_consumption);
-                    deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
-                    continue;
-                }
-
-                let is_ivm_heavy =
-                    Self::is_ivm_heavy_transaction(guard.as_accepted(), replay_ivm_proved);
-                if let Some(limit) = max_ivm_transactions
-                    && is_ivm_heavy
-                    && ivm_transactions_included >= limit
-                {
-                    release_lane_consumption(&guard, &mut lane_consumption);
-                    ivm_transactions_deferred = ivm_transactions_deferred.saturating_add(1);
-                    deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
-                    continue;
-                }
-
-                if let Some(limit) = gas_limit_per_block {
-                    let gas_cost = guard.gas_cost();
-                    let remaining_gas = limit.saturating_sub(gas_used_in_block);
-                    let would_exceed = gas_cost > remaining_gas && gas_cost > 0;
-                    let allow_oversized =
-                        gas_used_in_block == 0 && tx_guards.is_empty() && accepted.is_empty();
-
-                    let fitting_later_candidate = would_exceed
-                        && allow_oversized
-                        && order.iter().skip(order_pos + 1).any(|candidate_idx| {
-                            fetched_slots
-                                .get(*candidate_idx)
-                                .and_then(Option::as_ref)
-                                .is_some_and(|candidate| {
-                                    let candidate_is_ivm_heavy = Self::is_ivm_heavy_transaction(
-                                        candidate.as_accepted(),
-                                        replay_ivm_proved,
-                                    );
-                                    max_ivm_transactions.is_none_or(|max| {
-                                        !candidate_is_ivm_heavy || ivm_transactions_included < max
-                                    }) && candidate.gas_cost() <= remaining_gas
-                                })
-                        });
-
-                    if would_exceed && (!allow_oversized || fitting_later_candidate) {
+            for action in schedule.actions {
+                match action {
+                    super::lane_scheduler::ProposalBatchAction::Accept {
+                        index,
+                        exceeds_gas_limit,
+                    } => {
+                        let Some(guard) = fetched_slots.get_mut(index).and_then(Option::take)
+                        else {
+                            continue;
+                        };
+                        if exceeds_gas_limit {
+                            debug!(
+                                height,
+                                view,
+                                gas_cost = guard.gas_cost(),
+                                gas_limit = gas_limit_per_block,
+                                "proposal gas cap exceeded by single tx; admitting to avoid stall"
+                            );
+                        }
+                        accepted.push(guard);
+                    }
+                    super::lane_scheduler::ProposalBatchAction::Defer { index, reason: _ } => {
+                        let Some(guard) = fetched_slots.get_mut(index).and_then(Option::take)
+                        else {
+                            continue;
+                        };
                         release_lane_consumption(&guard, &mut lane_consumption);
                         deferred_accumulator.push((guard.clone_accepted(), guard.routing_plan()));
-                        continue;
                     }
-
-                    if would_exceed {
-                        debug!(
-                            height,
-                            view,
-                            gas_cost,
-                            gas_limit = limit,
-                            "proposal gas cap exceeded by single tx; admitting to avoid stall"
-                        );
-                    }
-                    gas_used_in_block = gas_used_in_block.saturating_add(gas_cost);
                 }
-
-                if is_ivm_heavy {
-                    ivm_transactions_included = ivm_transactions_included.saturating_add(1);
-                }
-                accepted.push(guard);
             }
+            gas_used_in_block = gas_used_in_block.saturating_add(schedule.gas_used_delta);
+            ivm_transactions_included =
+                ivm_transactions_included.saturating_add(schedule.ivm_transactions_included_delta);
+            ivm_transactions_deferred =
+                ivm_transactions_deferred.saturating_add(schedule.ivm_transactions_deferred);
             tx_guards.extend(accepted);
 
             if let Some(limit) = gas_limit_per_block {
@@ -2167,7 +2214,15 @@ impl Actor {
                 };
                 let stale_unprotected_owner = owner_age >= yield_age && !protected_owner;
                 let recovery_exhausted = owner_age >= hard_yield_age;
-                if (stale_unprotected_owner || recovery_exhausted)
+                let new_view_superseded_unrepairable_owner = new_view_qc_supersedes_owner
+                    && !owner_qc_observed
+                    && !frontier_commit_qc_observed
+                    && !owner_pending_commit_qc_observed
+                    && !local_vote_consensus_locked
+                    && !commit_inflight_live;
+                if (stale_unprotected_owner
+                    || recovery_exhausted
+                    || new_view_superseded_unrepairable_owner)
                     && !owner_qc_observed
                     && !owner_pending_commit_qc_observed
                     && !local_vote_consensus_locked
@@ -2193,6 +2248,7 @@ impl Actor {
                         owner_pending_commit_qc_observed,
                         competing_quorum_locked,
                         new_view_qc_supersedes_owner,
+                        new_view_superseded_unrepairable_owner,
                         "cleared no-pending stale frontier owner for fresh resilience proposal"
                     );
                     return true;
@@ -2267,12 +2323,17 @@ impl Actor {
                 && !matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && self.local_same_height_vote_blocks_fresh_proposal(height, view, vote, now, false)
         });
+        let local_commit_vote_matches_owner = local_vote.as_ref().is_some_and(|vote| {
+            matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
+                && vote.block_hash == owner_hash
+                && vote.view == owner_view
+                && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
+        });
         let local_commit_vote_present = local_vote.as_ref().is_some_and(|vote| {
             !local_vote_new_view_qc_supersedes
                 && matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && !self.local_same_height_vote_is_committed_parent_marker(height, view, vote)
         });
-        let local_commit_vote_blocks_yield = local_commit_vote_present && recovery_exhausted;
         let (frontier_commit_qc_observed, competing_quorum_locked) = self
             .frontier_slot
             .as_ref()
@@ -2297,6 +2358,17 @@ impl Actor {
         let frontier_commit_qc_blocks_yield = frontier_commit_qc_observed && !recovery_exhausted;
         let competing_quorum_blocks_yield =
             competing_quorum_locked && !new_view_qc_supersedes_owner && owner_age < yield_age;
+        let local_commit_vote_superseded_by_owner_new_view = local_commit_vote_matches_owner
+            && new_view_qc_supersedes_owner
+            && recovery_exhausted
+            && !owner_qc_observed
+            && !frontier_commit_qc_observed
+            && !owner_pending_commit_qc_observed
+            && !local_vote_consensus_locked
+            && !commit_inflight_live;
+        let local_commit_vote_blocks_yield = local_commit_vote_present
+            && recovery_exhausted
+            && !local_commit_vote_superseded_by_owner_new_view;
         if owner_qc_observed
             || frontier_commit_qc_blocks_yield
             || local_vote_consensus_locked
@@ -2335,6 +2407,7 @@ impl Actor {
                     competing_quorum_blocks_yield,
                     new_view_qc_supersedes_owner,
                     local_vote_new_view_qc_supersedes,
+                    local_commit_vote_superseded_by_owner_new_view,
                     suppressed_since_last,
                     "stale frontier owner yield blocked by consensus evidence"
                 );
@@ -6615,8 +6688,43 @@ impl Actor {
                     .max(quorum_timeout)
                     .max(self.rebroadcast_cooldown())
                     .max(PACEMAKER_QUEUE_NUDGE_MIN_INTERVAL);
-                let repair_window =
-                    self.cap_active_block_production_gap(base_repair_window, pending_queue_len > 0);
+                let cached_body_recovery_active = cached_hint.as_ref().is_some_and(|hint| {
+                    let session_key = Self::session_key(&hint.block_hash, height, view_idx);
+                    let exact_repair_active = self.frontier_slot.as_ref().is_some_and(|slot| {
+                        slot.height == height
+                            && slot.view == view_idx
+                            && slot.block_hash == hint.block_hash
+                            && slot.exact_fetch_armed
+                            && !slot.body_present()
+                    });
+                    let rbc_pending_active = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .pending
+                        .contains_key(&session_key);
+                    let rbc_session_active = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .get(&session_key)
+                        .is_some_and(|session| {
+                            !session.is_invalid()
+                                && (session.received_chunks() > 0
+                                    || !session.ready_signatures.is_empty()
+                                    || session.sent_ready
+                                    || session.delivered
+                                    || session.progress_stage()
+                                        > RbcProgressStage::CollectingChunks)
+                        });
+                    exact_repair_active || rbc_pending_active || rbc_session_active
+                });
+                let repair_window = if cached_body_recovery_active {
+                    base_repair_window
+                } else {
+                    self.cap_active_block_production_gap(base_repair_window, pending_queue_len > 0)
+                };
                 if repair_window < base_repair_window {
                     debug!(
                         height,
@@ -6626,6 +6734,14 @@ impl Actor {
                         repair_window_ms = base_repair_window.as_millis(),
                         capped_repair_window_ms = repair_window.as_millis(),
                         "capping cached proposal body repair window under active transaction backlog"
+                    );
+                } else if cached_body_recovery_active && pending_queue_len > 0 {
+                    debug!(
+                        height,
+                        view = view_idx,
+                        queue_len = pending_queue_len,
+                        repair_window_ms = repair_window.as_millis(),
+                        "using full cached proposal body repair window while recovery is active"
                     );
                 }
                 let cache_age = self
@@ -7732,14 +7848,12 @@ impl Actor {
         };
         if local_pos != leader_index {
             let leader_peer = topology.iter().next().cloned();
-            if self.frontier_missing_qc_liveness_active(height, view_idx)
-                && self.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
-                    height,
-                    view_idx,
-                    pending_queue_len,
-                    now,
-                )
-            {
+            if self.maybe_rotate_missing_qc_nonleader_after_proposal_timeout(
+                height,
+                view_idx,
+                pending_queue_len,
+                now,
+            ) {
                 self.warn_resilience_frontier_proposal_deferred(
                     height,
                     view_idx,
@@ -9183,7 +9297,11 @@ mod tests {
                 base,
                 super::PROPOSAL_STALE_WINDOW_TX_QUANTUM
             ),
-            base.saturating_mul(2)
+            base.saturating_mul(6)
+        );
+        assert_eq!(
+            super::Actor::proposal_assembly_stale_window(base, 140),
+            base.saturating_mul(7)
         );
         assert_eq!(
             super::Actor::proposal_assembly_stale_window(

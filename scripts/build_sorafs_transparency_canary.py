@@ -19,7 +19,10 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from check_sorafs_transparency_rollout_evidence import (  # noqa: E402
     CYCLE_BOUND_KINDS,
+    CYCLE_DETAIL_PROBE_LABEL_ERROR,
+    CYCLE_DETAIL_PROBE_LABEL_PATTERN,
     DEFAULT_REQUIRED_SOURCE_KINDS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
     REQUIRED_EXPLORER_ROUTES,
     REQUIRED_PRIVACY_AGGREGATE_ACTIONS,
@@ -86,6 +89,31 @@ def validate_name_set(
     if missing:
         errors.append(f"{option} must include every required value")
     return [name for name in allowed if name in value_set]
+
+
+def validate_inventory_labels(
+    values: Iterable[str],
+    *,
+    option: str,
+    pattern,
+    label_error: str,
+    errors: list[str],
+) -> None:
+    """Reject non-production inventory labels before building canary JSON."""
+
+    for index, value in enumerate(values):
+        if pattern.fullmatch(value) is None:
+            errors.append(label_error.replace("cycle_detail_probes[].name", option))
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in value.split("-")
+        )
+        if forbidden:
+            errors.append(
+                f"{option}[{index}] must not contain non-production markers {forbidden}"
+            )
 
 
 def validate_output_path(path: Path, errors: list[str]) -> None:
@@ -332,6 +360,14 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
     elif args.kind == "publication":
+        cycle_detail_probe_names = split_csv_values(args.cycle_detail_probe)
+        validate_inventory_labels(
+            cycle_detail_probe_names,
+            option="--cycle-detail-probe",
+            pattern=CYCLE_DETAIL_PROBE_LABEL_PATTERN,
+            label_error=CYCLE_DETAIL_PROBE_LABEL_ERROR,
+            errors=errors,
+        )
         args.publication_routes = validate_name_set(
             split_csv_values(args.publication_route),
             allowed=REQUIRED_PUBLICATION_ROUTES,
@@ -339,7 +375,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
         args.cycle_detail_probes = validate_name_set(
-            split_csv_values(args.cycle_detail_probe),
+            cycle_detail_probe_names,
             allowed=REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES,
             option="--cycle-detail-probe",
             errors=errors,

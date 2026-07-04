@@ -245,6 +245,7 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
             "name": name,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "latency_ms": args.route_latency_ms,
             "norito_verified": True,
         }
@@ -443,6 +444,11 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
     elif args.kind == "proof_stream":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.routes = validate_name_set(
             split_csv_values(args.route),
             allowed=REQUIRED_ROUTES,
@@ -602,6 +608,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)
     parser.add_argument("--hot-latency-ms", type=non_negative_int_arg, default=80_000)
     parser.add_argument("--warm-latency-ms", type=non_negative_int_arg, default=260_000)

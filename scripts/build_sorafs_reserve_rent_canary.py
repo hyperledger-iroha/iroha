@@ -18,17 +18,30 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_reserve_rent_rollout_evidence import (  # noqa: E402
+    APPEAL_CYCLE_LABEL_ERROR,
+    APPEAL_CYCLE_LABEL_PATTERN,
     BAKE_ID_ERROR,
     BAKE_ID_PATTERN,
     DEFAULT_MAX_BAKE_AGE_SECS,
     DEFAULT_MAX_LEDGER_AGE_SECS,
     DEFAULT_MAX_LIFECYCLE_LAG_SECS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
+    DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_ERROR,
+    DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_PATTERN,
     FORBIDDEN_BAKE_ID_MARKERS,
+    FORBIDDEN_CYCLE_LABEL_MARKERS,
     FORBIDDEN_PROVIDER_LABEL_MARKERS,
+    INSTRUCTION_REF_LABEL_ERROR,
+    INSTRUCTION_REF_LABEL_PATTERN,
     KIND_BY_NAME,
+    LEDGER_REF_LABEL_ERROR,
+    LEDGER_REF_LABEL_PATTERN,
+    PERSISTED_STAGE_LABEL_ERROR,
+    PERSISTED_STAGE_LABEL_PATTERN,
     PROVIDER_LABEL_ERROR,
     PROVIDER_LABEL_PATTERN,
+    RENT_CYCLE_LABEL_ERROR,
+    RENT_CYCLE_LABEL_PATTERN,
     REQUIRED_APPEAL_POLICY_PROBES,
     REQUIRED_CREDIT_LINE_ACCRUAL_CYCLES,
     REQUIRED_CREDIT_LINE_MUTATIONS,
@@ -40,6 +53,10 @@ from check_sorafs_reserve_rent_rollout_evidence import (  # noqa: E402
     REQUIRED_SIGNED_ROUTES,
     REQUIRED_STORAGE_CLASSES,
     REQUIRED_TIERS,
+    SCHEDULED_LIFECYCLE_TICK_LABEL_ERROR,
+    SCHEDULED_LIFECYCLE_TICK_LABEL_PATTERN,
+    TOP_UP_CYCLE_LABEL_ERROR,
+    TOP_UP_CYCLE_LABEL_PATTERN,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -318,6 +335,61 @@ def validate_provider_label_arg(
         errors.append(f"{option} must not contain non-production markers {forbidden}")
 
 
+def validate_cycle_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    pattern,
+    label_error: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production provider-bake cycle label."""
+
+    if not isinstance(value, str):
+        return
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error.replace(option_to_payload_path(option), option))
+        return
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_CYCLE_LABEL_MARKERS if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def validate_inventory_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    pattern,
+    label_error: str,
+    payload_path: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production inventory label."""
+
+    if not isinstance(value, str):
+        return
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error.replace(payload_path, option))
+        return
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_CYCLE_LABEL_MARKERS if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def option_to_payload_path(option: str) -> str:
+    """Map provider-bake cycle CLI options to payload diagnostic paths."""
+
+    return {
+        "--rent-cycle": "rent_cycles[].name",
+        "--top-up-cycle": "top_up_cycles[].name",
+        "--appeal-cycle": "appeal_cycles[].name",
+    }[option]
+
+
 def require_kind_options(
     args: argparse.Namespace,
     errors: list[str],
@@ -366,6 +438,7 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
             "name": route,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "authz_enforced": True,
             "signature_verified": True,
             "latency_ms": args.route_latency_ms,
@@ -444,6 +517,12 @@ def build_cycle_records(names: Sequence[str], proof_field: str) -> list[dict[str
     return [{"name": name, proof_field: True} for name in names]
 
 
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build payload-free named inventory records."""
+
+    return [{"name": name} for name in names]
+
+
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free reserve/rent rollout canary payload."""
 
@@ -473,7 +552,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "ledger_count": args.ledger_count,
+                "ledgers": build_inventory_records(args.ledgers),
                 "instruction_count": args.instruction_count,
+                "instructions": build_inventory_records(args.instructions),
             }
         )
     elif args.kind == "lifecycle_service":
@@ -485,6 +566,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "routes": routes,
                 "max_lifecycle_lag_seconds": args.max_lifecycle_lag_seconds,
                 "persisted_stage_count": args.persisted_stage_count,
+                "persisted_stages": build_inventory_records(args.persisted_stages),
             }
         )
     elif args.kind == "signed_routes":
@@ -567,6 +649,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "scheduled_lifecycle_canary_tick_count": (
                     args.scheduled_lifecycle_canary_tick_count
                 ),
+                "scheduled_lifecycle_canary_ticks": build_inventory_records(
+                    args.scheduled_lifecycle_canary_ticks
+                ),
                 "scheduled_lifecycle_canary_defaulted_provider_count": (
                     args.scheduled_lifecycle_canary_defaulted_provider_count
                 ),
@@ -577,6 +662,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "downstream_compliance_consumer_count": (
                     args.downstream_compliance_consumer_count
+                ),
+                "downstream_compliance_consumers": build_inventory_records(
+                    args.downstream_compliance_consumers
                 ),
                 "config_source": "iroha_config",
             }
@@ -642,6 +730,48 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--instruction-count", args.instruction_count),
             ),
         )
+        args.ledgers = validate_unique_values(
+            split_csv_values(args.ledger_ref),
+            option="--ledger-ref",
+            errors=errors,
+        )
+        for ledger in args.ledgers:
+            validate_inventory_label_arg(
+                ledger,
+                option="--ledger-ref",
+                pattern=LEDGER_REF_LABEL_PATTERN,
+                label_error=LEDGER_REF_LABEL_ERROR,
+                payload_path="ledgers[].name",
+                errors=errors,
+            )
+        args.instructions = validate_unique_values(
+            split_csv_values(args.instruction_ref),
+            option="--instruction-ref",
+            errors=errors,
+        )
+        for instruction in args.instructions:
+            validate_inventory_label_arg(
+                instruction,
+                option="--instruction-ref",
+                pattern=INSTRUCTION_REF_LABEL_PATTERN,
+                label_error=INSTRUCTION_REF_LABEL_ERROR,
+                payload_path="instructions[].name",
+                errors=errors,
+            )
+        if (
+            args.ledger_count is not None
+            and args.ledgers
+            and args.ledger_count != len(args.ledgers)
+        ):
+            errors.append("--ledger-count must match --ledger-ref inventory")
+        if (
+            args.instruction_count is not None
+            and args.instructions
+            and args.instruction_count != len(args.instructions)
+        ):
+            errors.append(
+                "--instruction-count must match --instruction-ref inventory"
+            )
     elif args.kind == "lifecycle_service":
         require_kind_options(
             args,
@@ -651,17 +781,49 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--persisted-stage-count", args.persisted_stage_count),
             ),
         )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.lifecycle_routes = validate_name_set(
             split_csv_values(args.lifecycle_route),
             allowed=REQUIRED_LIFECYCLE_ROUTES,
             option="--lifecycle-route",
             errors=errors,
         )
+        args.persisted_stages = validate_unique_values(
+            split_csv_values(args.persisted_stage),
+            option="--persisted-stage",
+            errors=errors,
+        )
+        for stage in args.persisted_stages:
+            validate_inventory_label_arg(
+                stage,
+                option="--persisted-stage",
+                pattern=PERSISTED_STAGE_LABEL_PATTERN,
+                label_error=PERSISTED_STAGE_LABEL_ERROR,
+                payload_path="persisted_stages[].name",
+                errors=errors,
+            )
+        if (
+            args.persisted_stage_count is not None
+            and args.persisted_stages
+            and args.persisted_stage_count != len(args.persisted_stages)
+        ):
+            errors.append(
+                "--persisted-stage-count must match --persisted-stage inventory"
+            )
     elif args.kind == "signed_routes":
         require_kind_options(
             args,
             errors,
             (("--max-route-latency-ms", args.max_route_latency_ms),),
+        )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
         )
         args.signed_routes = validate_name_set(
             split_csv_values(args.signed_route),
@@ -804,16 +966,54 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--rent-cycle",
             errors=errors,
         )
+        for cycle in args.rent_cycles:
+            validate_cycle_label_arg(
+                cycle,
+                option="--rent-cycle",
+                pattern=RENT_CYCLE_LABEL_PATTERN,
+                label_error=RENT_CYCLE_LABEL_ERROR,
+                errors=errors,
+            )
         args.top_up_cycles = validate_unique_values(
             split_csv_values(args.top_up_cycle),
             option="--top-up-cycle",
             errors=errors,
         )
+        for cycle in args.top_up_cycles:
+            validate_cycle_label_arg(
+                cycle,
+                option="--top-up-cycle",
+                pattern=TOP_UP_CYCLE_LABEL_PATTERN,
+                label_error=TOP_UP_CYCLE_LABEL_ERROR,
+                errors=errors,
+            )
         args.appeal_cycles = validate_unique_values(
             split_csv_values(args.appeal_cycle),
             option="--appeal-cycle",
             errors=errors,
         )
+        for cycle in args.appeal_cycles:
+            validate_cycle_label_arg(
+                cycle,
+                option="--appeal-cycle",
+                pattern=APPEAL_CYCLE_LABEL_PATTERN,
+                label_error=APPEAL_CYCLE_LABEL_ERROR,
+                errors=errors,
+            )
+        args.scheduled_lifecycle_canary_ticks = validate_unique_values(
+            split_csv_values(args.scheduled_lifecycle_canary_tick),
+            option="--scheduled-lifecycle-canary-tick",
+            errors=errors,
+        )
+        for tick in args.scheduled_lifecycle_canary_ticks:
+            validate_inventory_label_arg(
+                tick,
+                option="--scheduled-lifecycle-canary-tick",
+                pattern=SCHEDULED_LIFECYCLE_TICK_LABEL_PATTERN,
+                label_error=SCHEDULED_LIFECYCLE_TICK_LABEL_ERROR,
+                payload_path="scheduled_lifecycle_canary_ticks[].name",
+                errors=errors,
+            )
         if (
             args.provider_count is not None
             and args.providers
@@ -848,6 +1048,16 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             and args.appeal_cycle_count != len(args.appeal_cycles)
         ):
             errors.append("--appeal-cycle-count must match --appeal-cycle inventory")
+        if (
+            args.scheduled_lifecycle_canary_tick_count is not None
+            and args.scheduled_lifecycle_canary_ticks
+            and args.scheduled_lifecycle_canary_tick_count
+            != len(args.scheduled_lifecycle_canary_ticks)
+        ):
+            errors.append(
+                "--scheduled-lifecycle-canary-tick-count must match "
+                "--scheduled-lifecycle-canary-tick inventory"
+            )
     elif args.kind == "governance_approval":
         require_kind_options(
             args,
@@ -859,6 +1069,30 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ),
             ),
         )
+        args.downstream_compliance_consumers = validate_unique_values(
+            split_csv_values(args.downstream_compliance_consumer),
+            option="--downstream-compliance-consumer",
+            errors=errors,
+        )
+        for consumer in args.downstream_compliance_consumers:
+            validate_inventory_label_arg(
+                consumer,
+                option="--downstream-compliance-consumer",
+                pattern=DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_PATTERN,
+                label_error=DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_ERROR,
+                payload_path="downstream_compliance_consumers[].name",
+                errors=errors,
+            )
+        if (
+            args.downstream_compliance_consumer_count is not None
+            and args.downstream_compliance_consumers
+            and args.downstream_compliance_consumer_count
+            != len(args.downstream_compliance_consumers)
+        ):
+            errors.append(
+                "--downstream-compliance-consumer-count must match "
+                "--downstream-compliance-consumer inventory"
+            )
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
@@ -977,12 +1211,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tier", action="append", default=[])
     parser.add_argument("--duration", action="append", default=[])
     parser.add_argument("--ledger-count", type=positive_int_arg)
+    parser.add_argument("--ledger-ref", action="append", default=[])
     parser.add_argument("--instruction-count", type=positive_int_arg)
+    parser.add_argument("--instruction-ref", action="append", default=[])
     parser.add_argument("--lifecycle-route", action="append", default=[])
     parser.add_argument("--max-lifecycle-lag-seconds", type=non_negative_int_arg)
     parser.add_argument("--persisted-stage-count", type=positive_int_arg)
+    parser.add_argument("--persisted-stage", action="append", default=[])
     parser.add_argument("--signed-route", action="append", default=[])
     parser.add_argument("--max-route-latency-ms", type=positive_int_arg)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=25)
     parser.add_argument("--movement-count", type=positive_int_arg)
@@ -1014,11 +1252,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=positive_int_arg,
     )
     parser.add_argument("--scheduled-lifecycle-canary-tick-count", type=positive_int_arg)
+    parser.add_argument("--scheduled-lifecycle-canary-tick", action="append", default=[])
     parser.add_argument(
         "--scheduled-lifecycle-canary-defaulted-provider-count",
         type=positive_int_arg,
     )
     parser.add_argument("--downstream-compliance-consumer-count", type=positive_int_arg)
+    parser.add_argument("--downstream-compliance-consumer", action="append", default=[])
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

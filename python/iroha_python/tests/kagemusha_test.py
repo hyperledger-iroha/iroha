@@ -34,6 +34,7 @@ RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_METHOD = (
 RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_AT_HEIGHT_METHOD = (
     "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"
 )
+RECURSIVE_SPEND_TOPUP_METHOD = "kagemusha_recursive_spend_topup"
 RECURSIVE_SPEND_METHODS = (
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
@@ -1193,6 +1194,93 @@ def _instruction_archive_bytes(instruction: object) -> bytes:
     return archive
 
 
+class _FakeKagemushaInstruction:
+    def __init__(self, instruction_type: str, archive: bytes) -> None:
+        self.instruction_type = instruction_type
+        self.archive = archive
+
+    def to_json(self) -> str:
+        return json.dumps(base64.b64encode(self.archive).decode("ascii"))
+
+
+class _FakeSignedTransactionEnvelope:
+    def __init__(self, chain_id: str, authority: str, payload: bytes) -> None:
+        self.chain_id = chain_id
+        self.authority = authority
+        self.signed_transaction = payload
+        self.signed_transaction_versioned = b"v1:" + payload
+
+    def hash_hex(self) -> str:
+        return hashlib.blake2b(self.signed_transaction, digest_size=32).hexdigest()
+
+
+def _install_fake_kagemusha_transfer_instruction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = kagemusha.kagemusha_instruction_archive_instruction
+
+    def fake_instruction(instruction_type: str, instruction_archive: object) -> object:
+        normalized_type = kagemusha._normalize_kagemusha_instruction_archive_type(
+            instruction_type,
+        )
+        if normalized_type != kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER:
+            return original(instruction_type, instruction_archive)  # type: ignore[arg-type]
+        archive = kagemusha._norito_archive_bytes_named(
+            instruction_archive,
+            "instruction_archive",
+        )
+        kagemusha._assert_kagemusha_instruction_archive_schema(
+            archive,
+            normalized_type,
+            "instruction_archive",
+        )
+        return _FakeKagemushaInstruction(normalized_type, archive)
+
+    monkeypatch.setattr(
+        kagemusha,
+        "kagemusha_instruction_archive_instruction",
+        fake_instruction,
+    )
+
+
+def _install_fake_signed_transaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    import iroha_python.crypto as crypto
+
+    def fake_build_signed_transaction(
+        chain_id: str,
+        authority: str,
+        private_key: bytes,
+        *,
+        instructions: object = (),
+        creation_time_ms: int | None = None,
+        ttl_ms: int | None = None,
+        nonce: int | None = None,
+        metadata: object = None,
+        lane_privacy_attachments: object = None,
+    ) -> _FakeSignedTransactionEnvelope:
+        del lane_privacy_attachments
+        instruction_archives = [
+            _instruction_archive_bytes(instruction) for instruction in instructions  # type: ignore[union-attr]
+        ]
+        payload = b"\x1f".join(
+            (
+                chain_id.encode("utf-8"),
+                authority.encode("utf-8"),
+                bytes(private_key),
+                str(creation_time_ms).encode("ascii"),
+                str(ttl_ms).encode("ascii"),
+                str(nonce).encode("ascii"),
+                json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode(
+                    "utf-8",
+                ),
+                *instruction_archives,
+            )
+        )
+        return _FakeSignedTransactionEnvelope(chain_id, authority, payload)
+
+    monkeypatch.setattr(crypto, "build_signed_transaction", fake_build_signed_transaction)
+
+
 def _is_malformed_probe_archive(value: bytes) -> bool:
     return bytes(value) == MALFORMED_PROBE_ARCHIVE
 
@@ -1511,19 +1599,92 @@ def test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_befor
     assert len(draft) == 1
 
 
-def test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_building() -> None:
+def test_kagemusha_recursive_topup_transaction_helper_derives_transfer_before_signing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    init_request_archive = _shared_recursive_spend_archive("init_request")
+    transfer_instruction_archive = _synthetic_kagemusha_archive(
+        kagemusha.KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME,
+        0x5C,
+    )
+    calls: list[bytes] = []
+
+    def fake_topup(request_archive: object) -> bytes:
+        request = bytes(request_archive)  # type: ignore[arg-type]
+        calls.append(request)
+        return transfer_instruction_archive
+
+    _install_fake_kagemusha_transfer_instruction(monkeypatch)
+    _install_fake_signed_transaction(monkeypatch)
+    monkeypatch.setattr(kagemusha, "kagemusha_recursive_spend_topup", fake_topup)
+
+    instruction = kagemusha.kagemusha_recursive_topup_instruction(init_request_archive)
+    committed_instruction = kagemusha.kagemusha_instruction_archive_instruction(
+        kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,
+        transfer_instruction_archive,
+    )
+    assert _instruction_archive_bytes(instruction) == _instruction_archive_bytes(
+        committed_instruction
+    )
+
+    keypair = _kagemusha_test_keypair()
+    authority = keypair.default_account_id("wonderland")
+    envelope = kagemusha.build_kagemusha_recursive_topup_transaction(
+        "chain",
+        authority,
+        keypair.private_key,
+        init_request_archive,
+        creation_time_ms=5,
+        ttl_ms=10_000,
+        nonce=5,
+        metadata={"kagemusha": "recursive-topup"},
+    )
+    assert envelope.chain_id == "chain"
+    assert envelope.authority == authority
+    assert bytes(envelope.signed_transaction)
+    assert envelope.hash_hex()
+
+    draft = iroha_python.TransactionDraft(
+        iroha_python.TransactionConfig(chain_id="chain", authority=authority)
+    )
+    draft.kagemusha_recursive_topup(init_request_archive)
+    assert len(draft) == 1
+    assert calls == [init_request_archive, init_request_archive, init_request_archive]
+
+
+def test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_building(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     redeem_instruction_archive = bytearray(
         _shared_recursive_spend_abi7_archive("redeem_instruction")
     )
     redeem_request_archive = bytearray(
         _shared_recursive_spend_abi7_archive("redeem_request")
     )
+    top_up_instruction_archive = bytearray(
+        _synthetic_kagemusha_archive(
+            kagemusha.KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME,
+            0x5D,
+        )
+    )
+    init_request_archive = bytearray(_shared_recursive_spend_archive("init_request"))
     expected_instruction_archive = bytes(redeem_instruction_archive)
     expected_request_archive = bytes(redeem_request_archive)
+    expected_top_up_instruction_archive = bytes(top_up_instruction_archive)
+    expected_init_request_archive = bytes(init_request_archive)
     keypair = _kagemusha_test_keypair()
     authority = keypair.default_account_id("wonderland")
     private_key = bytearray(keypair.private_key)
     expected_private_key = bytes(private_key)
+    top_up_calls: list[bytes] = []
+
+    def fake_topup(request_archive: object) -> bytes:
+        top_up_calls.append(bytes(request_archive))  # type: ignore[arg-type]
+        return bytes(top_up_instruction_archive)
+
+    _install_fake_kagemusha_transfer_instruction(monkeypatch)
+    _install_fake_signed_transaction(monkeypatch)
+    monkeypatch.setattr(kagemusha, "kagemusha_recursive_spend_topup", fake_topup)
 
     instruction = kagemusha.kagemusha_instruction_archive_instruction(
         kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
@@ -1531,6 +1692,9 @@ def test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_
     )
     recursive_instruction = kagemusha.kagemusha_recursive_redeem_instruction(
         memoryview(redeem_request_archive),
+    )
+    top_up_instruction = kagemusha.kagemusha_recursive_topup_instruction(
+        memoryview(init_request_archive),
     )
     envelope = kagemusha.build_kagemusha_instruction_transaction(
         "chain",
@@ -1551,9 +1715,20 @@ def test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_
         ttl_ms=10_000,
         nonce=4,
     )
+    top_up_envelope = kagemusha.build_kagemusha_recursive_topup_transaction(
+        "chain",
+        authority,
+        memoryview(private_key),
+        memoryview(init_request_archive),
+        creation_time_ms=5,
+        ttl_ms=10_000,
+        nonce=5,
+    )
 
     redeem_instruction_archive[6] ^= 0x7F
     redeem_request_archive[6] ^= 0x7F
+    top_up_instruction_archive[6] ^= 0x7F
+    init_request_archive[6] ^= 0x7F
     private_key[0] ^= 0x7F
 
     expected_instruction = kagemusha.kagemusha_instruction_archive_instruction(
@@ -1562,6 +1737,10 @@ def test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_
     )
     expected_recursive_instruction = kagemusha.kagemusha_recursive_redeem_instruction(
         expected_request_archive,
+    )
+    expected_top_up_instruction = kagemusha.kagemusha_instruction_archive_instruction(
+        kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,
+        expected_top_up_instruction_archive,
     )
     expected_envelope = kagemusha.build_kagemusha_instruction_transaction(
         "chain",
@@ -1582,6 +1761,16 @@ def test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_
         ttl_ms=10_000,
         nonce=4,
     )
+    expected_top_up_envelope = kagemusha.build_kagemusha_instruction_transaction(
+        "chain",
+        authority,
+        expected_private_key,
+        kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,
+        expected_top_up_instruction_archive,
+        creation_time_ms=5,
+        ttl_ms=10_000,
+        nonce=5,
+    )
 
     assert _instruction_archive_bytes(instruction) == _instruction_archive_bytes(
         expected_instruction
@@ -1589,10 +1778,17 @@ def test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_
     assert _instruction_archive_bytes(recursive_instruction) == _instruction_archive_bytes(
         expected_recursive_instruction
     )
+    assert _instruction_archive_bytes(top_up_instruction) == _instruction_archive_bytes(
+        expected_top_up_instruction
+    )
     assert bytes(envelope.signed_transaction) == bytes(expected_envelope.signed_transaction)
     assert bytes(recursive_envelope.signed_transaction) == bytes(
         expected_recursive_envelope.signed_transaction
     )
+    assert bytes(top_up_envelope.signed_transaction) == bytes(
+        expected_top_up_envelope.signed_transaction
+    )
+    assert top_up_calls == [expected_init_request_archive, expected_init_request_archive]
     assert bytes(envelope.signed_transaction_versioned) == bytes(
         expected_envelope.signed_transaction_versioned
     )
@@ -1639,6 +1835,22 @@ def test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_autho
             f" {authority}",
             keypair.private_key,
             redeem_request_archive,
+        )
+
+    with pytest.raises(ValueError, match="chain_id must not contain surrounding whitespace"):
+        kagemusha.build_kagemusha_recursive_topup_transaction(
+            " chain",
+            authority,
+            keypair.private_key,
+            _shared_recursive_spend_archive("init_request"),
+        )
+
+    with pytest.raises(ValueError, match="authority must not contain surrounding whitespace"):
+        kagemusha.build_kagemusha_recursive_topup_transaction(
+            "chain",
+            f" {authority}",
+            keypair.private_key,
+            _shared_recursive_spend_archive("init_request"),
         )
 
 
@@ -1811,6 +2023,9 @@ def test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_in
             b"\x00",
         )
 
+    with pytest.raises(ValueError, match="request_archive must be a valid Norito archive"):
+        kagemusha.kagemusha_recursive_spend_topup(b"\x00")
+
     bad_request_flags = bytearray(_shared_recursive_spend_abi7_archive("redeem_request"))
     bad_request_flags[39] = 0x20
     with pytest.raises(ValueError, match="redeem_request_archive must be a valid Norito archive"):
@@ -1820,6 +2035,11 @@ def test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_in
             keypair.private_key,
             bad_request_flags,
         )
+
+    bad_init_flags = bytearray(_shared_recursive_spend_archive("init_request"))
+    bad_init_flags[39] = 0x20
+    with pytest.raises(ValueError, match="request_archive must be a valid Norito archive"):
+        kagemusha.kagemusha_recursive_spend_topup(bad_init_flags)
 
 
 class _Native:
@@ -1832,7 +2052,7 @@ class _Native:
             raise ValueError(f"invalid Kagemusha {context} probe archive")
 
     def kagemusha_recursive_spend_native_bridge_abi_version(self) -> int:
-        return kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION + 1
+        return kagemusha.KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
 
     def kagemusha_prove_verified_compact_payment_token_with_records(
         self,
@@ -1873,6 +2093,11 @@ class _Native:
         self._reject_probe("init", request)
         self.calls.append(("init", request))
         return _kagemusha_norito_frame_with_payload(0x33)
+
+    def kagemusha_recursive_spend_topup(self, request: bytes) -> bytes:
+        self._reject_probe("topup", request)
+        self.calls.append(("topup", request))
+        return _kagemusha_norito_frame_with_payload(0x3C)
 
     def kagemusha_recursive_spend_append(self, request: bytes) -> bytes:
         self._reject_probe("append", request)
@@ -1930,6 +2155,7 @@ def test_recursive_kagemusha_helpers_reject_empty_requests(monkeypatch: pytest.M
 
     for helper in (
         kagemusha.kagemusha_recursive_spend_init,
+        kagemusha.kagemusha_recursive_spend_topup,
         kagemusha.kagemusha_recursive_spend_append,
         kagemusha.kagemusha_recursive_spend_transition_profile_init,
         kagemusha.kagemusha_recursive_spend_transition_profile_append,
@@ -4542,6 +4768,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=_recursive_spend_verifier_record(),
             block_height=block_height,
         ),
@@ -5046,6 +5275,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
         )
     with pytest.raises(
         ValueError,
@@ -5084,6 +5316,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=_recursive_spend_verifier_record(),
         )
     with pytest.raises(
@@ -5095,6 +5330,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=_recursive_spend_verifier_record(),
             previous_proof_open_envelopes=_synthetic_pallas_open_envelopes_archive(),
         )
@@ -5104,6 +5342,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record={
                 "verifier_key_id": "malformedPreviousLineageRecordBeforeOpenings",
                 "record_bytes": b"\x00",
@@ -5224,6 +5465,9 @@ def test_recursive_kagemusha_typed_request_codecs_reject_malformed_inputs() -> N
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=_recursive_spend_verifier_record(),
             lineage_key_artifacts=append_artifacts,
         )
@@ -5429,12 +5673,30 @@ def test_recursive_kagemusha_typed_helpers_delegate_encoded_requests(
         kagemusha.KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
     )
 
+    topup_output = kagemusha.kagemusha_recursive_spend_topup_typed(
+        kagemusha.KagemushaRecursiveSpendInitRequest(
+            record_bundle=record_bundle,
+            pallas_open_envelopes=pallas,
+            current_note=note,
+            lineage_key_artifacts=init_artifacts,
+        )
+    )
+    assert topup_output.startswith(b"NRT0")
+    assert native.calls[-1][0] == "topup"
+    _assert_kagemusha_archive_schema(
+        native.calls[-1][1],
+        kagemusha.KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+    )
+
     append_output = kagemusha.kagemusha_recursive_spend_append_typed(
         kagemusha.KagemushaRecursiveSpendAppendRequest(
             previous_bundle=_shared_recursive_spend_archive("init_bundle"),
             record_bundle=record_bundle,
             pallas_open_envelopes=pallas,
             current_note=note,
+            output_proof_circuit_id=(
+                kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
+            ),
             previous_lineage_verifier_record=verifier_record,
         )
     )
@@ -5664,8 +5926,15 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         as root_is_recursive_spend_compact_projection_available,
         is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available
         as root_is_recursive_spend_compact_projection_verifier_available,
+        is_kagemusha_recursive_spend_topup_available
+        as root_is_recursive_spend_topup_available,
         is_kagemusha_pallas_open_envelope_builder_available
         as root_is_pallas_open_envelope_builder_available,
+        kagemusha_recursive_spend_topup as root_recursive_spend_topup,
+        kagemusha_recursive_spend_topup_typed as root_recursive_spend_topup_typed,
+        kagemusha_recursive_topup_instruction as root_recursive_topup_instruction,
+        build_kagemusha_recursive_topup_transaction
+        as root_build_recursive_topup_transaction,
         kagemusha_build_pallas_open_envelopes_archive
         as root_pallas_open_envelope_builder,
         kagemusha_build_previous_proof_open_envelopes_archive
@@ -5728,6 +5997,11 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"
         in iroha_python.__all__
     )
+    assert "is_kagemusha_recursive_spend_topup_available" in iroha_python.__all__
+    assert "kagemusha_recursive_spend_topup" in iroha_python.__all__
+    assert "kagemusha_recursive_spend_topup_typed" in iroha_python.__all__
+    assert "kagemusha_recursive_topup_instruction" in iroha_python.__all__
+    assert "build_kagemusha_recursive_topup_transaction" in iroha_python.__all__
     assert (
         root_requires_key_artifacts_for_init
         is kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init
@@ -5775,6 +6049,23 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
     assert (
         root_is_pallas_open_envelope_builder_available
         is kagemusha.is_kagemusha_pallas_open_envelope_builder_available
+    )
+    assert (
+        root_is_recursive_spend_topup_available
+        is kagemusha.is_kagemusha_recursive_spend_topup_available
+    )
+    assert root_recursive_spend_topup is kagemusha.kagemusha_recursive_spend_topup
+    assert (
+        root_recursive_spend_topup_typed
+        is kagemusha.kagemusha_recursive_spend_topup_typed
+    )
+    assert (
+        root_recursive_topup_instruction
+        is kagemusha.kagemusha_recursive_topup_instruction
+    )
+    assert (
+        root_build_recursive_topup_transaction
+        is kagemusha.build_kagemusha_recursive_topup_transaction
     )
     assert (
         root_pallas_open_envelope_builder
@@ -6364,6 +6655,11 @@ def test_recursive_kagemusha_lineage_key_artifacts_validate_inputs() -> None:
 
 def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
     assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 6
+    assert kagemusha.KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 15
+    assert (
+        kagemusha.KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME
+        == kagemusha.KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME
+    )
     assert kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND == "halo2/ipa"
     assert (
         kagemusha.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
@@ -6944,6 +7240,34 @@ def test_recursive_kagemusha_availability_rejects_broken_abi_probe(
         kagemusha.kagemusha_recursive_spend_init(_kagemusha_input_archive(0x71))
 
 
+def test_recursive_kagemusha_topup_availability_requires_abi_15_and_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+    native.kagemusha_recursive_spend_native_bridge_abi_version = lambda: 14
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+
+    assert kagemusha.is_kagemusha_recursive_spend_available() is True
+    assert kagemusha.is_kagemusha_recursive_spend_topup_available() is False
+    with pytest.raises(RuntimeError, match="native bridge ABI 15"):
+        kagemusha.kagemusha_recursive_spend_topup(_kagemusha_input_archive(0x74))
+
+    missing = _Native()
+    setattr(missing, RECURSIVE_SPEND_TOPUP_METHOD, None)
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: missing)
+    assert kagemusha.is_kagemusha_recursive_spend_available() is True
+    assert kagemusha.is_kagemusha_recursive_spend_topup_available() is False
+    with pytest.raises(RuntimeError, match=RECURSIVE_SPEND_TOPUP_METHOD):
+        kagemusha.kagemusha_recursive_spend_topup(_kagemusha_input_archive(0x75))
+
+    native = _Native()
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+    request = _kagemusha_input_archive(0x76)
+    assert kagemusha.is_kagemusha_recursive_spend_topup_available() is True
+    assert kagemusha.kagemusha_recursive_spend_topup(request).startswith(b"NRT0")
+    assert native.calls[-1] == ("topup", request)
+
+
 def test_recursive_kagemusha_helpers_require_complete_abi_surface(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7018,6 +7342,7 @@ def test_recursive_kagemusha_helpers_reject_empty_native_outputs(
     native.kagemusha_prove_verified_compact_payment_token_with_records = empty_one
     setattr(native, RECURSIVE_AGGREGATION_METHOD, empty_two)
     native.kagemusha_recursive_spend_init = empty_one
+    native.kagemusha_recursive_spend_topup = empty_one
     native.kagemusha_recursive_spend_append = empty_one
     native.kagemusha_recursive_spend_transition_profile_init = empty_one
     native.kagemusha_recursive_spend_transition_profile_append = empty_one
@@ -7040,6 +7365,7 @@ def test_recursive_kagemusha_helpers_reject_empty_native_outputs(
 
     for helper in (
         kagemusha.kagemusha_recursive_spend_init,
+        kagemusha.kagemusha_recursive_spend_topup,
         kagemusha.kagemusha_recursive_spend_append,
         kagemusha.kagemusha_recursive_spend_transition_profile_init,
         kagemusha.kagemusha_recursive_spend_transition_profile_append,

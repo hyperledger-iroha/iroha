@@ -17,6 +17,7 @@ const REQUIRED_C_SYMBOLS = Object.freeze([
   "connect_norito_kagemusha_recursive_spend_lineage_witness_append_result",
   "connect_norito_kagemusha_recursive_spend_verify",
   "connect_norito_kagemusha_recursive_spend_redeem",
+  "connect_norito_kagemusha_recursive_spend_topup",
   "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
 ]);
 
@@ -38,6 +39,7 @@ const REQUIRED_JS_NATIVE_METHODS = Object.freeze([
   "kagemushaRecursiveSpendLineageWitnessAppendResult",
   "kagemushaRecursiveSpendVerify",
   "kagemushaRecursiveSpendRedeem",
+  "kagemushaRecursiveSpendTopUp",
 ]);
 
 const REQUIRED_RECURSIVE_COMPACT_JS_METHODS = Object.freeze([
@@ -67,6 +69,7 @@ const REQUIRED_PYTHON_NATIVE_METHODS = Object.freeze([
   "kagemusha_recursive_spend_lineage_witness_append_result",
   "kagemusha_recursive_spend_verify",
   "kagemusha_recursive_spend_redeem",
+  "kagemusha_recursive_spend_topup",
 ]);
 
 const REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS = Object.freeze([
@@ -594,6 +597,7 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "lineageWitnessAppendResult",
       "verifySpend",
       "redeemSpend",
+      "topUpSpend",
     ],
     "Swift public prover",
   );
@@ -610,8 +614,10 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "lineageWitnessAppendResult",
       "verifySpend",
       "redeemSpend",
+      "topUpSpend",
       "nativeTransitionProfileInit",
       "nativeTransitionProfileAppend",
+      "nativeTopUpSpend",
     ],
     "Android Java SDK",
   );
@@ -627,8 +633,10 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "lineageWitnessAppendResult",
       "verifySpend",
       "redeemSpend",
+      "topUpSpend",
       "nativeTransitionProfileInit",
       "nativeTransitionProfileAppend",
+      "nativeTopUpSpend",
       "nativeBuildPallasOpenEnvelopesArchive",
       "nativeBuildPreviousProofOpenEnvelopesArchive",
     ],
@@ -646,6 +654,7 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "LineageWitnessAppendResult",
       "Verify",
       "Redeem",
+      "TopUp",
       "ProveVerifiedCompactPaymentTokenWithRecords",
       "BuildPallasOpenEnvelopesArchive",
       "BuildPreviousProofOpenEnvelopesArchive",
@@ -654,6 +663,7 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "NativeTransitionProfileInit",
       "NativeTransitionProfileAppend",
       "NativeLineageAppendBoundary",
+      "NativeTopUp",
       "NativeCompactPaymentToken",
       "NativeBuildPallasOpenEnvelopesArchive",
       "NativeBuildPreviousProofOpenEnvelopesArchive",
@@ -678,6 +688,7 @@ test("Kagemusha Kotlin recursive spend JNI declarations stay static", () => {
     "nativeLineageWitnessAppendResult",
     "nativeVerifySpend",
     "nativeRedeemSpend",
+    "nativeTopUpSpend",
     "nativeBuildPallasOpenEnvelopesArchive",
     "nativeBuildPreviousProofOpenEnvelopesArchive",
   ];
@@ -1960,6 +1971,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
         "buildKagemushaInstructionArchiveInstruction",
         "buildKagemushaInstructionTransaction",
         "buildKagemushaRecursiveRedeemTransaction",
+        "buildKagemushaRecursiveTopUpTransaction",
         "KagemushaInstructionArchive",
         "KagemushaTransfer",
         "RedeemKagemushaRecursive",
@@ -1974,6 +1986,8 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "must not contain surrounding whitespace",
       "kagemushaRecursiveSpendRedeem",
       "kagemushaRecursiveRedeem.redeemRequestArchive",
+      "kagemushaRecursiveSpendTopUp",
+      "kagemushaRecursiveTopUp.initRequestArchive",
       "Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))",
       "Buffer.from(new Uint8Array(value))",
     ],
@@ -1983,6 +1997,11 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       transactionSource,
       /buildKagemushaRecursiveRedeemTransaction[\s\S]*?kagemushaRecursiveSpendRedeem[\s\S]*?buildKagemushaInstructionTransaction/u,
       `${relative} must derive the redeem instruction before signing`,
+    );
+    assert.match(
+      transactionSource,
+      /buildKagemushaRecursiveTopUpTransaction[\s\S]*?kagemushaRecursiveSpendTopUp[\s\S]*?buildKagemushaInstructionTransaction/u,
+      `${relative} must derive the top-up transfer instruction before signing`,
     );
   }
   for (const relative of [
@@ -1995,6 +2014,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
         "buildKagemushaInstructionArchiveInstruction",
         "buildKagemushaInstructionTransaction",
         "buildKagemushaRecursiveRedeemTransaction",
+        "buildKagemushaRecursiveTopUpTransaction",
       ],
       `${relative} Kagemusha instruction transaction exports`,
     );
@@ -2010,9 +2030,15 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "KagemushaRecursiveRedeemTransactionBaseInput",
       "KagemushaRecursiveRedeemArchiveInput",
       "KagemushaRecursiveRedeemTransactionInput",
+      "KagemushaRecursiveTopUpTransactionBaseInput",
+      "KagemushaRecursiveTopUpArchiveInput",
+      "KagemushaRecursiveTopUpTransactionInput",
       "buildKagemushaInstructionArchiveInstruction",
       "buildKagemushaInstructionTransaction",
       "buildKagemushaRecursiveRedeemTransaction",
+      "buildKagemushaRecursiveTopUpTransaction",
+      "initRequestArchive: BinaryLike;",
+      "init_request_archive: BinaryLike;",
       "redeemRequestArchive: BinaryLike;",
       "redeem_request_archive: BinaryLike;",
       "requestArchive: BinaryLike;",
@@ -2049,6 +2075,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "valid KagemushaTransfer Norito archive",
       "bytesBase64 must be canonical standard base64",
       "buildKagemushaInstructionTransaction wraps one archive instruction",
+      "buildKagemushaRecursiveTopUpTransaction derives transfer instruction before signing",
       "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
       "transaction builders reject padded authority and asset definition IDs before native dispatch",
       "authority must not contain surrounding whitespace",
@@ -2058,6 +2085,8 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "privateKaigiFeeSpend\\.verifyingKey\\.id\\.backend must not contain surrounding whitespace",
       "privateKaigiFeeSpend\\.verifyingKey\\.record\\.circuit_id must not contain surrounding whitespace",
       "instruction_type: \"KagemushaTransfer\"",
+      "kagemushaRecursiveTopUp\\.initRequestArchive must be a Buffer or ArrayBuffer view",
+      "top-up native rejected",
       "redeemRequestArchive must be a Buffer or ArrayBuffer view",
       "redeem native rejected",
       "buildKagemusha transaction helpers copy mutable buffers before native calls",
@@ -10175,7 +10204,7 @@ test("recursive Kagemusha policy workflow and doc negative controls require exac
     ],
     [
       "--negative-control-doc-sdk-availability-surface",
-      "docs/source/offline_kagemusha.md is missing previous-proof opening SDK-host boundary documentation: native availability probes: init, append, both transition-profile helpers, the append-boundary helper, both lineage-witness helpers, verify, and redeem must be callable",
+      "docs/source/offline_kagemusha.md is missing previous-proof opening SDK-host boundary documentation: native availability probes: init, append, top-up, both transition-profile helpers, the append-boundary helper, both lineage-witness helpers, verify, and redeem must be callable",
     ],
     [
       "--negative-control-doc-abi-entry-count",
@@ -17829,18 +17858,18 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     guard,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*13\\s\*;[\s\S]*?C native bridge ABI version/u,
-    "SDK parity guard must pin the native C bridge ABI-13 advertisement",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*15\\s\*;[\s\S]*?C native bridge ABI version/u,
+    "SDK parity guard must pin the native C bridge ABI-15 advertisement",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 13;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;/u,
-    "native C bridge ABI negative control must mutate ABI 13 back to the stale ABI 12 value",
+    /CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 15;[\s\S]*?CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 12;/u,
+    "native C bridge ABI negative control must mutate ABI 15 back to the stale ABI 12 value",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
-    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*13\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
-    "native C bridge ABI negative control must require the exact ABI-13 diagnostic",
+    /expected_labels\s*=\s*\([\s\S]*?C native bridge ABI version missing pattern CONNECT_NORITO_BRIDGE_ABI_VERSION\\s\*:\\s\*u32\\s\*=\\s\*15\\s\*;[\s\S]*?missing\s*=\s*\[label for label in expected_labels if label not in message\]/u,
+    "native C bridge ABI negative control must require the exact ABI-15 diagnostic",
   );
   assert.match(
     nativeCBridgeAbiVersionBranch,
@@ -27678,12 +27707,12 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   assert.match(
     kotlinOfflineWalletAttestationPayloadStrictnessBranch,
-    /mutations\s*=\s*\([\s\S]*?BearerOfflineWalletModels\.kt[\s\S]*?require\(version == 1L\)[\s\S]*?check\(version == 1L\)[\s\S]*?require\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?check\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?val offlinePublicKey = requireCanonicalNonEmptyBase64\(offlinePublicKeyBase64, "offline_public_key_base64"\)[\s\S]*?offline_public_key_base64 must not be empty[\s\S]*?require\(attestationReportHashHex\.isLowerHex32\(\)\)[\s\S]*?check\(attestationReportHashHex\.isLowerHex32\(\)\)[\s\S]*?val signature = requireCanonicalNonEmptyBase64\(signatureBase64, "signature_base64"\)[\s\S]*?signature_base64 must not be empty[\s\S]*?require\(isSupportedFirstReleasePlatform\(platform\)\)[\s\S]*?check\(isSupportedFirstReleasePlatform\(platform\)\)[\s\S]*?requireCanonicalNonEmptyBase64\(assertionBase64, "assertion_base64"\)[\s\S]*?assertion_base64 must not be empty[\s\S]*?BearerOfflineWalletModelsTest\.kt[\s\S]*?attestationReceiptRejectsNonCanonicalProfileAndEncodingFields[\s\S]*?attestationReceiptAcceptsNonCanonicalProfileAndEncodingFields[\s\S]*?deviceProofRejectsNonCanonicalPlatformHashAndAssertion[\s\S]*?deviceProofAcceptsNonCanonicalPlatformHashAndAssertion[\s\S]*?Json\.decodeFromString<OfflineDeviceProof>\(json\)[\s\S]*?Json\.decodeFromString<OfflineTransferReceipt>\(json\)/u,
+    /mutations\s*=\s*\([\s\S]*?BearerOfflineWalletModels\.kt[\s\S]*?require\(version == 1L\)[\s\S]*?check\(version == 1L\)[\s\S]*?require\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?check\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?val offlinePublicKey = requireCanonicalNonEmptyBase64\(offlinePublicKeyBase64, "offline_public_key_base64"\)[\s\S]*?offline_public_key_base64 must not be empty[\s\S]*?require\(attestationReportHashHex\.isLowerHex32\(\)\)[\s\S]*?check\(attestationReportHashHex\.isLowerHex32\(\)\)[\s\S]*?val signature = requireCanonicalNonEmptyBase64\(signatureBase64, "signature_base64"\)[\s\S]*?signature_base64 must not be empty[\s\S]*?require\(isSupportedFirstReleaseDevicePlatform\(platform\)\)[\s\S]*?check\(isSupportedFirstReleaseDevicePlatform\(platform\)\)[\s\S]*?requireCanonicalNonEmptyBase64\(assertionBase64, "assertion_base64"\)[\s\S]*?assertion_base64 must not be empty[\s\S]*?BearerOfflineWalletModelsTest\.kt[\s\S]*?attestationReceiptRejectsNonCanonicalProfileAndEncodingFields[\s\S]*?attestationReceiptAcceptsNonCanonicalProfileAndEncodingFields[\s\S]*?deviceProofRejectsNonCanonicalPlatformHashAndAssertion[\s\S]*?deviceProofAcceptsNonCanonicalPlatformHashAndAssertion[\s\S]*?Json\.decodeFromString<OfflineDeviceProof>\(json\)[\s\S]*?Json\.decodeFromString<OfflineTransferReceipt>\(json\)/u,
     "Kotlin offline wallet attestation payload negative control must mutate receipt, proof, and test markers",
   );
   assert.match(
     kotlinOfflineWalletAttestationPayloadStrictnessBranch,
-    /Kotlin offline wallet attestation receipt strictness source block missing require\(version == 1L\)[\s\S]*?Kotlin offline wallet attestation receipt strictness source block missing require\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?Kotlin offline wallet attestation receipt strictness source block missing val offlinePublicKey = requireCanonicalNonEmptyBase64\(offlinePublicKeyBase64, "offline_public_key_base64"\)[\s\S]*?Kotlin offline wallet attestation receipt strictness source block missing require\(attestationReportHashHex\.isLowerHex32\(\)\)[\s\S]*?Kotlin offline wallet attestation receipt strictness source block missing val signature = requireCanonicalNonEmptyBase64\(signatureBase64, "signature_base64"\)[\s\S]*?Kotlin offline wallet device proof strictness source block missing require\(isSupportedFirstReleasePlatform\(platform\)\)[\s\S]*?Kotlin offline wallet device proof strictness source block missing requireCanonicalNonEmptyBase64\(assertionBase64, "assertion_base64"\)[\s\S]*?Kotlin offline wallet attestation payload strictness tests missing attestationReceiptRejectsNonCanonicalProfileAndEncodingFields[\s\S]*?Kotlin offline wallet attestation payload strictness tests missing deviceProofRejectsNonCanonicalPlatformHashAndAssertion[\s\S]*?Kotlin offline wallet attestation payload strictness tests missing Json\.decodeFromString<OfflineDeviceProof>\(json\)/u,
+    /Kotlin offline wallet attestation receipt strictness source block missing require\(version == 1L\)[\s\S]*?Kotlin offline wallet attestation receipt strictness source block missing require\(assertionUsageCountLimit == expectedAssertionUsageCountLimit\(platform\)\)[\s\S]*?Kotlin offline wallet attestation receipt strictness source block missing val offlinePublicKey = requireCanonicalNonEmptyBase64\(offlinePublicKeyBase64, "offline_public_key_base64"\)[\s\S]*?Kotlin offline wallet attestation receipt strictness source block missing require\(attestationReportHashHex\.isLowerHex32\(\)\)[\s\S]*?Kotlin offline wallet attestation receipt strictness source block missing val signature = requireCanonicalNonEmptyBase64\(signatureBase64, "signature_base64"\)[\s\S]*?Kotlin offline wallet device proof strictness source block missing require\(isSupportedFirstReleaseDevicePlatform\(platform\)\)[\s\S]*?Kotlin offline wallet device proof strictness source block missing requireCanonicalNonEmptyBase64\(assertionBase64, "assertion_base64"\)[\s\S]*?Kotlin offline wallet attestation payload strictness tests missing attestationReceiptRejectsNonCanonicalProfileAndEncodingFields[\s\S]*?Kotlin offline wallet attestation payload strictness tests missing deviceProofRejectsNonCanonicalPlatformHashAndAssertion[\s\S]*?Kotlin offline wallet attestation payload strictness tests missing Json\.decodeFromString<OfflineDeviceProof>\(json\)/u,
     "Kotlin offline wallet attestation payload negative control must require exact diagnostics",
   );
   assert.match(

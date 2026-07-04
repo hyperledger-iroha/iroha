@@ -55,7 +55,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     require_object_array,
@@ -90,9 +90,9 @@ DEFAULT_MIN_PROVIDERS = 3
 DEFAULT_MIN_RECEIPTS = 6
 HEX64_LEN = 64
 PROVIDER_LABEL_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-name`"
+PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-*`"
 RECEIPT_LABEL_PATTERN = re.compile(r"^potr-receipt-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-RECEIPT_LABEL_ERROR = "receipts[].name must match canonical lowercase `potr-receipt-name`"
+RECEIPT_LABEL_ERROR = "receipts[].name must match canonical lowercase `potr-receipt-*`"
 FORBIDDEN_PROVIDER_LABEL_MARKERS = frozenset(
     (
         "debug",
@@ -360,7 +360,14 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_maximum_number(
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -466,8 +473,8 @@ def validate_multi_provider_probe(
             label_error=RECEIPT_LABEL_ERROR,
             errors=errors,
         )
-    require_maximum_number(payload, "max_hot_latency_ms", options.max_hot_latency_ms, errors)
-    require_maximum_number(
+    require_maximum_int(payload, "max_hot_latency_ms", options.max_hot_latency_ms, errors)
+    require_maximum_int(
         payload,
         "max_warm_latency_ms",
         options.max_warm_latency_ms,

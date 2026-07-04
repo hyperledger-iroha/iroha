@@ -299,6 +299,7 @@ def build_routes(args: argparse.Namespace) -> list[dict[str, Any]]:
             "name": route,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "latency_ms": args.route_latency_ms,
             "publisher_identity_present": True,
             "verification_valid": True,
@@ -432,6 +433,11 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors=errors,
         )
     elif args.kind == "dashboard_api":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.routes = validate_name_set(
             split_csv_values(args.route),
             allowed=REQUIRED_DASHBOARD_ROUTES,
@@ -575,6 +581,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--policy-digest-hex")
     raw_args = sys.argv[1:] if argv is None else argv

@@ -58,7 +58,6 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
     require_maximum_int,
-    require_maximum_number,
     require_maximum_value,
     require_minimum_int,
     require_non_negative_int,
@@ -101,61 +100,61 @@ APPEAL_CASE_LABEL_PATTERN = re.compile(
     r"^moderation-appeal-case-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 APPEAL_CASE_LABEL_ERROR = (
-    "cases[].name must match canonical lowercase `moderation-appeal-case-name`"
+    "cases[].name must match canonical lowercase `moderation-appeal-case-*`"
 )
 ROSTER_JUROR_LABEL_PATTERN = re.compile(
     r"^moderation-roster-juror-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 ROSTER_JUROR_LABEL_ERROR = (
-    "jurors[].name must match canonical lowercase `moderation-roster-juror-name`"
+    "jurors[].name must match canonical lowercase `moderation-roster-juror-*`"
 )
 VIEWER_SESSION_LABEL_PATTERN = re.compile(
     r"^moderation-viewer-session-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 VIEWER_SESSION_LABEL_ERROR = (
-    "sessions[].name must match canonical lowercase `moderation-viewer-session-name`"
+    "sessions[].name must match canonical lowercase `moderation-viewer-session-*`"
 )
 NOTIFICATION_LABEL_PATTERN = re.compile(
     r"^moderation-notification-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 NOTIFICATION_LABEL_ERROR = (
-    "notifications[].name must match canonical lowercase `moderation-notification-name`"
+    "notifications[].name must match canonical lowercase `moderation-notification-*`"
 )
 JUROR_LABEL_PATTERN = re.compile(r"^moderation-juror-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 JUROR_LABEL_ERROR = (
-    "jurors[].name must match canonical lowercase `moderation-juror-name`"
+    "jurors[].name must match canonical lowercase `moderation-juror-*`"
 )
 COMMIT_LABEL_PATTERN = re.compile(r"^moderation-commit-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 COMMIT_LABEL_ERROR = (
-    "commits[].name must match canonical lowercase `moderation-commit-name`"
+    "commits[].name must match canonical lowercase `moderation-commit-*`"
 )
 REVEAL_LABEL_PATTERN = re.compile(r"^moderation-reveal-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 REVEAL_LABEL_ERROR = (
-    "reveals[].name must match canonical lowercase `moderation-reveal-name`"
+    "reveals[].name must match canonical lowercase `moderation-reveal-*`"
 )
 SETTLEMENT_LABEL_PATTERN = re.compile(
     r"^moderation-settlement-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 SETTLEMENT_LABEL_ERROR = (
-    "settlements[].name must match canonical lowercase `moderation-settlement-name`"
+    "settlements[].name must match canonical lowercase `moderation-settlement-*`"
 )
 E2E_PEER_LABEL_PATTERN = re.compile(
     r"^moderation-peer-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 E2E_PEER_LABEL_ERROR = (
-    "peers[].name must match canonical lowercase `moderation-peer-name`"
+    "peers[].name must match canonical lowercase `moderation-peer-*`"
 )
 E2E_VALIDATOR_LABEL_PATTERN = re.compile(
     r"^moderation-validator-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 E2E_VALIDATOR_LABEL_ERROR = (
-    "validators[].name must match canonical lowercase `moderation-validator-name`"
+    "validators[].name must match canonical lowercase `moderation-validator-*`"
 )
 E2E_CASE_LABEL_PATTERN = re.compile(
     r"^moderation-case-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 E2E_CASE_LABEL_ERROR = (
-    "cases[].name must match canonical lowercase `moderation-case-name`"
+    "cases[].name must match canonical lowercase `moderation-case-*`"
 )
 FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
     (
@@ -709,6 +708,13 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
         require_bool_true(
             record,
             "authz_enforced",
@@ -721,14 +727,13 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].signature_verified",
         )
-        if record.get("latency_ms") is not None:
-            require_maximum_number(
-                record,
-                "latency_ms",
-                options.max_route_latency_ms,
-                errors,
-                path=f"routes[{index}].latency_ms",
-            )
+        require_maximum_int(
+            record,
+            "latency_ms",
+            options.max_route_latency_ms,
+            errors,
+            path=f"routes[{index}].latency_ms",
+        )
 
 
 def validate_route_inventory(
@@ -1231,7 +1236,7 @@ def validate_commit_reveal(
     require_bool_true(payload, "tally_deterministic_replay_verified", errors)
     require_bool_true(payload, "governance_event_digest_bound", errors)
     require_bool_true(payload, "executor_canary_passed", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_event_lag_seconds",
         options.max_event_lag_secs,

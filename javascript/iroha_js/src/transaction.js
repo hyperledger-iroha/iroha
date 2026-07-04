@@ -911,6 +911,53 @@ export function buildKagemushaRecursiveRedeemTransaction({
   });
 }
 
+/**
+ * Build the native online-to-offline top-up instruction from an init request
+ * archive and sign it in a single-instruction transaction.
+ */
+export function buildKagemushaRecursiveTopUpTransaction({
+  chainId,
+  authority,
+  initRequestArchive,
+  init_request_archive,
+  requestArchive,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+  privateKeyAlgorithm = null,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.kagemushaRecursiveSpendTopUp !== "function") {
+    throw new Error(
+      "native binding 'kagemushaRecursiveSpendTopUp' is unavailable",
+    );
+  }
+  const selectedArchive =
+    initRequestArchive ?? init_request_archive ?? requestArchive;
+  const instructionArchive = Buffer.from(
+    native.kagemushaRecursiveSpendTopUp(
+      toBuffer(
+        selectedArchive,
+        "kagemushaRecursiveTopUp.initRequestArchive",
+      ),
+    ),
+  );
+  return buildKagemushaInstructionTransaction({
+    chainId,
+    authority,
+    type: "KagemushaTransfer",
+    instructionArchive,
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+    privateKeyAlgorithm,
+  });
+}
+
 export function buildTimeTriggerAction(options) {
   if (!options || typeof options !== "object") {
     throw new TypeError("buildTimeTriggerAction options must be an object");

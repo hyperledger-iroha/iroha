@@ -73,8 +73,10 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         for metric in CHECKER.REQUIRED_METRICS:
             args.extend(["--metric", metric])
     if kind == "transport":
-        args.extend(["--sse-event", "sse-snapshot-00"])
-        args.extend(["--websocket-event", "websocket-snapshot-00"])
+        args.extend(["--sse-event", "reputation-sse-event-snapshot-00"])
+        args.extend(
+            ["--websocket-event", "reputation-websocket-event-snapshot-00"]
+        )
     return args
 
 
@@ -117,9 +119,11 @@ def test_builds_payload_free_transport_canary(tmp_path: Path) -> None:
 
     assert payload["schema"] == "sorafs.reputation.transport_canary.v1"
     assert payload["sse_event_count"] == 1
-    assert payload["sse_events"] == [{"name": "sse-snapshot-00"}]
+    assert payload["sse_events"] == [{"name": "reputation-sse-event-snapshot-00"}]
     assert payload["websocket_event_count"] == 1
-    assert payload["websocket_events"] == [{"name": "websocket-snapshot-00"}]
+    assert payload["websocket_events"] == [
+        {"name": "reputation-websocket-event-snapshot-00"}
+    ]
     assert payload["response_bodies_included"] is False
     errors = MODULE.validate_generated_payload(
         payload,
@@ -161,7 +165,7 @@ def test_provider_id_must_be_canonical(tmp_path: Path, capsys) -> None:
         kind="provider",
         tmp_path=tmp_path,
         capsys=capsys,
-        expected_error="--provider-id must match canonical lowercase `provider-name`",
+        expected_error="--provider-id must match canonical lowercase `provider-*`",
     )
 
 
@@ -304,7 +308,7 @@ def test_provider_inventory_must_use_provider_ids_before_write(
 
     captured = capsys.readouterr()
     assert (
-        "--provider-name must match canonical lowercase `provider-name`"
+        "--provider-name must match canonical lowercase `provider-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "metrics").exists()
@@ -427,7 +431,7 @@ def test_transport_sse_event_inventory_must_not_duplicate_before_write(
     capsys,
 ) -> None:
     args = args_for("transport", tmp_path)
-    args.extend(["--sse-event", "sse-snapshot-00"])
+    args.extend(["--sse-event", "reputation-sse-event-snapshot-00"])
     args.extend(["--sse-event-count", "2"])
 
     assert MODULE.main(args) == 2
@@ -435,6 +439,37 @@ def test_transport_sse_event_inventory_must_not_duplicate_before_write(
     captured = capsys.readouterr()
     assert "--sse-event must not contain duplicates" in captured.err
     assert "--sse-event unique values must match --sse-event-count" in captured.err
+    assert not canary_path(tmp_path, "transport").exists()
+
+
+def test_transport_sse_event_inventory_requires_production_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("transport", tmp_path)
+    args[args.index("--sse-event") + 1] = "sse-snapshot-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert MODULE.SSE_EVENT_LABEL_ERROR in captured.err
+    assert not canary_path(tmp_path, "transport").exists()
+
+
+def test_transport_sse_event_inventory_rejects_placeholder_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("transport", tmp_path)
+    args[args.index("--sse-event") + 1] = "reputation-sse-event-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--sse-event[0] must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
     assert not canary_path(tmp_path, "transport").exists()
 
 
@@ -460,7 +495,7 @@ def test_transport_websocket_event_inventory_must_not_duplicate_before_write(
     capsys,
 ) -> None:
     args = args_for("transport", tmp_path)
-    args.extend(["--websocket-event", "websocket-snapshot-00"])
+    args.extend(["--websocket-event", "reputation-websocket-event-snapshot-00"])
     args.extend(["--websocket-event-count", "2"])
 
     assert MODULE.main(args) == 2
@@ -469,6 +504,40 @@ def test_transport_websocket_event_inventory_must_not_duplicate_before_write(
     assert "--websocket-event must not contain duplicates" in captured.err
     assert (
         "--websocket-event unique values must match --websocket-event-count"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "transport").exists()
+
+
+def test_transport_websocket_event_inventory_requires_production_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("transport", tmp_path)
+    args[args.index("--websocket-event") + 1] = "websocket-snapshot-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert MODULE.WEBSOCKET_EVENT_LABEL_ERROR in captured.err
+    assert not canary_path(tmp_path, "transport").exists()
+
+
+def test_transport_websocket_event_inventory_rejects_placeholder_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("transport", tmp_path)
+    args[args.index("--websocket-event") + 1] = (
+        "reputation-websocket-event-placeholder"
+    )
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--websocket-event[0] must not contain non-production markers "
+        "['placeholder']"
         in captured.err
     )
     assert not canary_path(tmp_path, "transport").exists()

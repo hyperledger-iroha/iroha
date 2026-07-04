@@ -505,8 +505,10 @@ The rollout evidence scripts have focused Python coverage in:
   requires reviewed publisher/IPFS `governance-dag-block-*` block-reference
   inventories whose unique rows match `--block-count`, rejects non-production
   block-reference markers before writing, forces raw block/head/CAR/checkpoint/
-  response inclusion flags to `false`, validates the generated artifact through
-  the SF-12 checker, and writes atomically without following output symlinks.
+  response inclusion flags to `false`, requires an explicit
+  `--route-body-blake3-hex` digest for dashboard canaries, validates the
+  generated artifact through the SF-12 checker, and writes atomically without
+  following output symlinks.
 - Keep `configs/taikai_cache/` and `cargo xtask sorafs-taikai-cache-bundle` documented as Taikai cache governance bundle tooling, not as the full DAG publisher.
 - Add live-head, public checkpoint recovery, and dashboard runbooks only when
   the IPFS/IPNS pipeline and metrics actually exist.
@@ -549,8 +551,9 @@ approval evidence. It reports `ready` only when every required kind is present,
 every recognized artifact is valid, raw DAG blocks, raw heads, CAR payloads,
 node payloads, response bodies, private keys, bearer tokens, signed
 transactions, and ledgers are absent, route latency, IPFS pin lag, and public
-head age stay under configured thresholds, enough public blocks and payload
-kinds are covered, and governance is bound to `iroha_config`. Ingest-service
+head age stay under configured thresholds, those timing fields are
+non-negative integer-unit evidence, enough public blocks and payload kinds are
+covered, and governance is bound to `iroha_config`. Ingest-service
 artifacts also bind `source_count` to the unique canonical `payload_kinds`
 inventory and reject duplicate or unknown payload-kind entries before promotion
 can report ready. Publisher-service and IPFS/IPNS end-to-end artifacts also bind
@@ -560,12 +563,17 @@ reviewed `governance-dag-block-*` block-reference labels without non-production
 markers, and reject duplicate block-reference entries and duplicate or unknown
 payload-kind entries before promotion can report ready. Dashboard API artifacts also bind `route_count` to the unique canonical
 `routes[].name` inventory and reject duplicate or unknown route entries before promotion
-can report ready. Observability artifacts also bind `metric_count` to the
+can report ready. Every dashboard route response must also include a
+`body_blake3_hex` digest. Observability artifacts also bind `metric_count` to the
 unique canonical `metrics` inventory and reject duplicate or unknown metric
 entries before promotion can report ready. The summary exports the sorted
 reviewed `metrics` inventory plus `metric_count_values`, and the aggregate
 production-readiness gate requires those fields to match the observability
-artifact fingerprint before final promotion can report ready. Valid
+artifact fingerprint before final promotion can report ready. Governance DAG
+payload-safety artifacts must explicitly set `payload_bytes_included`,
+`raw_head_included`, `raw_car_included`, `mirror_drift_detected`,
+`raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`,
+and `critical_alerts_firing` to `false` before promotion can report ready. Valid
 operator-recovery artifacts now publish their reviewed `checkpoint_digest_hex`
 values as `valid_checkpoint_digests`, and the aggregate production-readiness
 gate accepts those digests only as payload-free lowercase-hex metadata tethered

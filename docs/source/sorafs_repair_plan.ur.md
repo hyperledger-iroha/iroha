@@ -4,11 +4,12 @@ direction: rtl
 source: docs/source/sorafs_repair_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f97de285dbcbf9f5137163007b2d5870a706c0b99a815baad822f8c5e8dd6906
-source_last_modified: "2026-07-03T12:48:28.492969+00:00"
+source_hash: 2113511f46848a7e71e08af3906d983a88c5d687172a905419e238e5357b1bb6
+source_last_modified: "2026-07-04T05:45:35.106585+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T12:48:28.492969+00:00
+source_mtime: 2026-07-04T05:45:35.106585+00:00
 ---
+
 # SoraFS Repair Automation & Auditor API
 
 ## Goals & Scope
@@ -57,19 +58,26 @@ digest, and the checker emits those valid handoff policies as
 `valid_policy_digests`. Signed auditor API, worker lifecycle, and event stream
 artifacts also bind `route_count` to the unique canonical `routes[].name`
 inventory and reject duplicate or unknown route entries before promotion can
-report ready.
+report ready. Every signed repair route response must include a
+`body_blake3_hex` digest before auditor, worker, or event readiness can report
+ready.
 Auditor-roster artifacts also bind `auditor_count` to the unique canonical
 `auditors[].name` inventory, require reviewed `repair-auditor-*` labels without
 non-production markers, and reject duplicate auditor entries before promotion
 can report ready.
 Failure-capture artifacts also bind `failure_source_count` to the unique
 canonical `failure_sources` inventory and `failure_event_count` to the unique
-canonical `failure_events[].name` inventory, require reviewed failure events to
-cover both PoR and PoTR sources, and reject duplicate or unknown source entries
-plus duplicate event entries.
+canonical `failure_events[].name` inventory, require reviewed
+`repair-failure-event-*` labels without non-production markers, require
+reviewed failure events to cover both PoR and PoTR sources, and reject
+duplicate or unknown source entries plus duplicate event entries.
 Observability artifacts also bind `metric_count` to the unique canonical
 `metrics` inventory, require the reviewed repair metrics, and reject duplicate
 or unknown metric labels before promotion can report ready.
+Repair payload-safety artifacts must explicitly set `raw_roster_included`,
+`raw_evidence_included`, `response_bodies_included`,
+`raw_repair_payloads_included`, `raw_ledger_included`, and
+`critical_alerts_firing` to `false` before promotion can report ready.
 `scripts/build_sorafs_repair_canary.py` builds individual payload-free SF-8b
 canary artifacts for auditor roster, failure capture, signed auditor API,
 worker lifecycle, event streams, governance handoff, observability, and
@@ -79,8 +87,9 @@ lifecycle-status, handoff-target, and metric coverage where applicable,
 rejects duplicate or unknown failure-source, route, lifecycle-status,
 handoff-target, and metric inputs before writing,
 auditor-roster and failure-bundle digest bindings, governance handoff digest
-bindings, auditor minimum counts, reviewed `repair-auditor-*` labels and failure events
-matching their counts, derived `status_count` and `handoff_target_count`
+bindings, auditor minimum counts, reviewed `repair-auditor-*` labels and
+`repair-failure-event-*` failure events matching their counts, derived
+`status_count` and `handoff_target_count`
 fields for reviewed lifecycle-status and handoff-target inventories, route,
 event-lag, and repair-latency threshold facts,
 config-backed governance metadata, reviewed policy-digest input for
@@ -427,8 +436,9 @@ governance handoff, observability, and governance approval evidence. It reports
 valid, raw PoR/PoTR evidence, raw repair payloads, signed auditor requests,
 response bodies, signed transactions, secrets, and ledgers are absent, route
 latency, event lag, and repair latency stay under configured thresholds, the
-auditor roster meets the configured minimum, governance is bound to
-`iroha_config`, auditor API / worker lifecycle / event stream / governance
+timing fields are non-negative integer-unit evidence, the auditor roster meets
+the configured minimum, governance is bound to `iroha_config`, auditor API /
+worker lifecycle / event stream / governance
 handoff / governance approval artifacts carry a `roster_digest_hex` that
 matches a valid auditor-roster artifact, and worker lifecycle / event stream /
 governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches
@@ -440,7 +450,7 @@ those values as `valid_policy_digests`, and governance approval artifacts must
 carry a matching `policy_digest_hex`. Signed auditor API, worker lifecycle, and
 event stream artifacts must also keep `route_count` equal to the unique
 canonical `routes[].name` inventory and reject duplicate or unknown route
-entries.
+entries. Every route response must carry a `body_blake3_hex` digest.
 Auditor-roster artifacts also bind `auditor_count` to the unique canonical
 `auditors[].name` inventory, require reviewed `repair-auditor-*` labels without
 non-production markers, and reject duplicate auditor entries before promotion
@@ -448,8 +458,9 @@ can report ready.
 Failure-capture artifacts must also keep `failure_source_count` equal to the
 unique canonical `failure_sources` inventory, keep `failure_event_count` equal
 to the unique canonical `failure_events[].name` inventory, require reviewed
-failure events to cover both PoR and PoTR sources, and reject duplicate or
-unknown source entries plus duplicate event entries. Worker lifecycle artifacts
+`repair-failure-event-*` labels without non-production markers, require
+reviewed failure events to cover both PoR and PoTR sources, and reject
+duplicate or unknown source entries plus duplicate event entries. Worker lifecycle artifacts
 require `status_count`, bind it to the unique canonical `statuses_observed`
 inventory, and reject missing, inflated, duplicate, or unknown lifecycle-status
 evidence. Governance handoff artifacts require `handoff_target_count`, bind it

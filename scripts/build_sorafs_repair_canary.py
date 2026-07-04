@@ -26,6 +26,8 @@ from check_sorafs_repair_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_REPAIR_LATENCY_SECS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
     DEFAULT_MIN_AUDITORS,
+    FAILURE_EVENT_LABEL_ERROR,
+    FAILURE_EVENT_LABEL_PATTERN,
     FAILURE_BOUND_KINDS,
     FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
@@ -142,7 +144,9 @@ def validate_reviewed_inventory(
 def render_inventory_label_error(label_error: str, option: str) -> str:
     """Render checker inventory-label diagnostics against a CLI option."""
 
-    return label_error.replace("auditors[].name", option)
+    return label_error.replace("auditors[].name", option).replace(
+        "failure_events[].name", option
+    )
 
 
 def validate_failure_events(
@@ -176,6 +180,22 @@ def validate_failure_events(
             label=f"--failure-event[{index}].name",
             errors=errors,
         )
+        if name and FAILURE_EVENT_LABEL_PATTERN.fullmatch(name) is None:
+            errors.append(
+                render_inventory_label_error(
+                    FAILURE_EVENT_LABEL_ERROR,
+                    "--failure-event",
+                )
+            )
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in name.split("-")
+        )
+        if forbidden:
+            errors.append(
+                f"--failure-event must not contain non-production markers {forbidden}"
+            )
         if source and source not in REQUIRED_FAILURE_SOURCES:
             errors.append("--failure-event source must be a reviewed failure source")
         if source and name:
@@ -270,6 +290,7 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
             "name": name,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "latency_ms": args.route_latency_ms,
             "authz_enforced": True,
             "signature_verified": True,
@@ -480,6 +501,11 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
     elif args.kind == "auditor_api":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.auditor_routes = validate_name_set(
             split_csv_values(args.auditor_route),
             allowed=REQUIRED_AUDITOR_ROUTES,
@@ -489,6 +515,11 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         if args.route_status_code < 200 or args.route_status_code > 299:
             errors.append("--route-status-code must be a 2xx HTTP status code")
     elif args.kind == "worker_lifecycle":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.worker_routes = validate_name_set(
             split_csv_values(args.worker_route),
             allowed=REQUIRED_WORKER_ROUTES,
@@ -504,6 +535,11 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         if args.route_status_code < 200 or args.route_status_code > 299:
             errors.append("--route-status-code must be a 2xx HTTP status code")
     elif args.kind == "event_streams":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.event_routes = validate_name_set(
             split_csv_values(args.event_route),
             allowed=REQUIRED_EVENT_ROUTES,
@@ -636,6 +672,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--metric", action="append", default=[])
     parser.add_argument("--auditor", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)
     parser.add_argument("--event-lag-seconds", type=non_negative_int_arg, default=30)
     parser.add_argument("--repair-latency-seconds", type=non_negative_int_arg, default=900)

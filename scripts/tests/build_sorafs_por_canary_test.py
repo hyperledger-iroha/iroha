@@ -64,13 +64,17 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     if kind == "randomness":
         for index in range(CHECKER.DEFAULT_MIN_PROVIDERS):
             args.extend(["--provider", f"provider-{index:02d}"])
+        for index in range(CHECKER.DEFAULT_MIN_CHALLENGES):
+            args.extend(["--challenge", f"por-challenge-{index:02d}"])
     elif kind == "scheduler_runtime":
+        args.extend(["--route-body-blake3-hex", DIGEST])
         for route in MODULE.REQUIRED_RUNTIME_ROUTES:
             args.extend(["--runtime-route", route])
     elif kind == "validator_replay":
         args.extend(["--validation-bundle-digest-hex", VALIDATION_DIGEST])
     elif kind == "reporting_archive":
         args.extend(["--report-digest-hex", REPORT_DIGEST])
+        args.extend(["--route-body-blake3-hex", DIGEST])
         for route in MODULE.REQUIRED_REPORTING_ROUTES:
             args.extend(["--reporting-route", route])
     elif kind == "observability":
@@ -115,6 +119,7 @@ def test_builds_payload_free_scheduler_runtime_canary(tmp_path: Path) -> None:
     assert payload["route_count"] == len(MODULE.REQUIRED_RUNTIME_ROUTES)
     assert payload["passed_route_count"] == len(MODULE.REQUIRED_RUNTIME_ROUTES)
     assert payload["response_bodies_included"] is False
+    assert all(route["body_blake3_hex"] == DIGEST for route in payload["routes"])
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "scheduler_runtime"
     assert errors == []
@@ -173,6 +178,11 @@ def test_response_file_can_build_randomness_canary(tmp_path: Path) -> None:
         {"name": f"provider-{index:02d}"}
         for index in range(CHECKER.DEFAULT_MIN_PROVIDERS)
     ]
+    assert payload["challenge_count"] == CHECKER.DEFAULT_MIN_CHALLENGES
+    assert payload["challenges"] == [
+        {"name": f"por-challenge-{index:02d}"}
+        for index in range(CHECKER.DEFAULT_MIN_CHALLENGES)
+    ]
 
 
 def test_randomness_provider_inventory_must_match_provider_count(
@@ -217,7 +227,7 @@ def test_randomness_provider_inventory_must_use_reviewed_labels_before_write(
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--provider must match canonical lowercase `provider-name`" in captured.err
+    assert "--provider must match canonical lowercase `provider-*`" in captured.err
     assert not canary_path(tmp_path, "randomness").exists()
 
 
@@ -234,6 +244,70 @@ def test_randomness_provider_inventory_rejects_non_production_markers_before_wri
     captured = capsys.readouterr()
     assert (
         "--provider must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "randomness").exists()
+
+
+def test_randomness_challenge_inventory_must_match_challenge_count(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("randomness", tmp_path)
+    index = args.index("--challenge")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--challenge unique values must match --challenge-count" in captured.err
+    assert not canary_path(tmp_path, "randomness").exists()
+
+
+def test_randomness_challenge_inventory_must_not_duplicate(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("randomness", tmp_path)
+    first_challenge_index = args.index("--challenge")
+    args[first_challenge_index + 1] = "por-challenge-01"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--challenge must not contain duplicates" in captured.err
+    assert "--challenge unique values must match --challenge-count" in captured.err
+    assert not canary_path(tmp_path, "randomness").exists()
+
+
+def test_randomness_challenge_inventory_must_use_reviewed_labels_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("randomness", tmp_path)
+    first_challenge_index = args.index("--challenge")
+    args[first_challenge_index + 1] = "challenge-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--challenge must match canonical lowercase `por-challenge-*`" in captured.err
+    assert not canary_path(tmp_path, "randomness").exists()
+
+
+def test_randomness_challenge_inventory_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("randomness", tmp_path)
+    first_challenge_index = args.index("--challenge")
+    args[first_challenge_index + 1] = "por-challenge-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--challenge must not contain non-production markers ['placeholder']"
         in captured.err
     )
     assert not canary_path(tmp_path, "randomness").exists()
@@ -313,6 +387,36 @@ def test_reporting_archive_routes_must_not_include_unknown_values_before_write(
         capsys=capsys,
         expected_error="--reporting-route contains an unknown value",
     )
+
+
+def test_scheduler_runtime_requires_route_body_digest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("scheduler_runtime", tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "scheduler_runtime").exists()
+
+
+def test_reporting_archive_requires_route_body_digest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reporting_archive", tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "reporting_archive").exists()
 
 
 def test_observability_metrics_must_not_duplicate_before_write(

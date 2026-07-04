@@ -5174,6 +5174,18 @@ fn build_confidential_transfer_proof_v2_py(
 }
 
 #[pyfunction]
+#[pyo3(name = "compute_confidential_root_v2", signature = (tree_commitments))]
+fn compute_confidential_root_v2_py(
+    py: Python<'_>,
+    tree_commitments: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyBytes>> {
+    let tree_commitments = py_fixed_array_list(tree_commitments, "tree_commitments")?;
+    let root = iroha_core::zk::confidential_v2::compute_confidential_root_v2(&tree_commitments)
+        .map_err(PyValueError::new_err)?;
+    Ok(PyBytes::new(py, &root).unbind())
+}
+
+#[pyfunction]
 #[pyo3(name = "build_confidential_unshield_proof_v3", signature = (
     chain_id,
     asset_definition_id,
@@ -5712,7 +5724,7 @@ fn kagemusha_verify_recursive_compact_payment_token_py(
 #[pyfunction]
 #[pyo3(name = "kagemusha_recursive_spend_native_bridge_abi_version")]
 fn kagemusha_recursive_spend_native_bridge_abi_version_py() -> u32 {
-    7
+    15
 }
 
 #[pyfunction]
@@ -5765,6 +5777,60 @@ fn kagemusha_recursive_spend_init_py(
         py,
         &bundle,
         "failed to encode Kagemusha recursive spend init bundle",
+    )
+}
+
+fn kagemusha_recursive_spend_topup_instruction_from_init_request(
+    request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1,
+) -> Result<iroha_data_model::isi::offline::KagemushaTransfer, String> {
+    use iroha_core::zk::{
+        kagemusha_verified_folded_public_inputs_from_record_bundle,
+        kagemusha_verified_folded_public_inputs_from_record_bundle_at_height,
+    };
+
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)
+        .map_err(|err| err.to_string())?;
+    request
+        .validate_public_binding()
+        .map_err(|err| err.to_string())?;
+    let _public_inputs = match request.block_height {
+        Some(block_height) => kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+            &request.record_bundle,
+            block_height,
+        ),
+        None => kagemusha_verified_folded_public_inputs_from_record_bundle(&request.record_bundle),
+    }
+    .map_err(|err| err.to_string())?;
+    let step = request.record_bundle.bundle.steps.first().ok_or_else(|| {
+        "Kagemusha recursive spend top-up init request has no fold steps".to_owned()
+    })?;
+    Ok(iroha_data_model::isi::offline::KagemushaTransfer::new(
+        request.record_bundle.bundle.asset.clone(),
+        step.input_nullifiers.clone(),
+        step.output_commitments.clone(),
+        step.attachment.clone(),
+        Some(step.root_before),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_topup")]
+fn kagemusha_recursive_spend_topup_py(
+    py: Python<'_>,
+    request_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+        decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend top-up")?;
+    let instruction = kagemusha_recursive_spend_topup_instruction_from_init_request(request)
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid Kagemusha recursive spend top-up request: {err}"
+            ))
+        })?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &instruction,
+        "failed to encode Kagemusha recursive spend top-up instruction",
     )
 }
 
@@ -12894,6 +12960,11 @@ mod tests {
                         as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
                 ),
                 (
+                    "top-up",
+                    kagemusha_recursive_spend_topup_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                ),
+                (
                     "append",
                     kagemusha_recursive_spend_append_py
                         as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
@@ -13184,6 +13255,10 @@ mod tests {
                 kagemusha_recursive_spend_init_py(py, &init_request_archive),
             );
             assert_empty_nested_pallas_archive_rejected_python(
+                "top-up",
+                kagemusha_recursive_spend_topup_py(py, &init_request_archive),
+            );
+            assert_empty_nested_pallas_archive_rejected_python(
                 "transition profile init",
                 kagemusha_recursive_spend_transition_profile_init_py(py, &init_request_archive),
             );
@@ -13228,8 +13303,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_native_bridge_abi_version_python_function_is_additive_seven() {
-        assert_eq!(kagemusha_recursive_spend_native_bridge_abi_version_py(), 7);
+    fn kagemusha_recursive_spend_native_bridge_abi_version_python_function_is_additive_fifteen() {
+        assert_eq!(kagemusha_recursive_spend_native_bridge_abi_version_py(), 15);
     }
 
     #[test]
@@ -23590,6 +23665,7 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         build_confidential_transfer_proof_v2_py,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(compute_confidential_root_v2_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         build_confidential_unshield_proof_v3_py,
         module
@@ -23639,6 +23715,10 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(kagemusha_recursive_spend_init_py, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_recursive_spend_topup_py,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         kagemusha_recursive_spend_append_py,
         module

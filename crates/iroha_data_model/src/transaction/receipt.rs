@@ -140,10 +140,18 @@ mod tests {
         0, 0,
     ];
 
-    fn signature_with_malformed_ed25519_r(signature: &Signature) -> Signature {
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    fn signature_with_malformed_ed25519_r(
+        signature: &Signature,
+        replacement_r: &[u8; 32],
+    ) -> Signature {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
-            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&payload)
     }
 
@@ -161,15 +169,24 @@ mod tests {
     #[test]
     fn submission_receipt_rejects_malformed_ed25519_signature_r() {
         let key_pair = checked_ed25519_keypair();
-        let mut receipt =
+        let receipt =
             TransactionSubmissionReceipt::sign(sample_receipt_payload(&key_pair), &key_pair);
-        receipt.signature = signature_with_malformed_ed25519_r(&receipt.signature);
 
-        assert_eq!(
-            receipt
-                .verify()
-                .expect_err("malformed receipt signature R must fail admission"),
-            iroha_crypto::Error::BadSignature
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let mut invalid_receipt = receipt.clone();
+            invalid_receipt.signature =
+                signature_with_malformed_ed25519_r(&receipt.signature, &replacement_r);
+
+            assert_eq!(
+                invalid_receipt
+                    .verify()
+                    .expect_err("malformed receipt signature R must fail admission"),
+                iroha_crypto::Error::BadSignature,
+                "{label} receipt signature R was not rejected"
+            );
+        }
     }
 }

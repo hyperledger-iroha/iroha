@@ -7,6 +7,7 @@
 --now-unix 1800100000
 --bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --route-latency-ms 120
+--route-body-blake3-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --denial-reason provider
 --denial-reason manifest_digest
 --denial-reason cid

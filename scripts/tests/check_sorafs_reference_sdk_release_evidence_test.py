@@ -518,6 +518,19 @@ def test_cookbook_smoke_duration_above_threshold_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_cookbook_smoke_duration_must_be_integer(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(tmp_path / "cookbook-smoke.json", cookbook_smoke(duration=12.5))
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["cookbook_smoke"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "smoke_duration_seconds must be a positive integer" in artifact["errors"]
+
+
 def test_ffi_contract_requires_ci_guard(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "ffi-header-contract.json", ffi_header_contract(ci_guard=False))

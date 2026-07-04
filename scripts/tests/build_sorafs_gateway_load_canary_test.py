@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shlex
 import sys
 from pathlib import Path
 
@@ -77,7 +78,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "--gateway-version",
                 "iroha-gateway 1.0.0",
                 "--hardware-profile",
-                "staging-c6i-2xlarge",
+                "gateway-load-hardware-c6i-2xlarge",
                 "--cache-state",
                 "cold-cache",
                 "--duration-seconds",
@@ -96,7 +97,12 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
                 "2200",
             ]
         )
-        for provider in ("provider-a", "provider-b", "provider-c", "provider-d"):
+        for provider in (
+            "gateway-load-provider-a",
+            "gateway-load-provider-b",
+            "gateway-load-provider-c",
+            "gateway-load-provider-d",
+        ):
             args.extend(["--provider", provider])
     elif kind == "telemetry_slo":
         for metric in MODULE.REQUIRED_METRICS:
@@ -142,14 +148,14 @@ def test_builds_payload_free_staging_load_canary(tmp_path: Path) -> None:
     assert payload["staging_report_digest_hex"] == STAGING_DIGEST
     assert payload["policy_digest_hex"] == POLICY_DIGEST
     assert payload["stream_count"] == 1200
-    assert payload["streams"][0] == {"name": "stream-0000"}
-    assert payload["streams"][-1] == {"name": "stream-1199"}
+    assert payload["streams"][0] == {"name": "gateway-load-stream-0000"}
+    assert payload["streams"][-1] == {"name": "gateway-load-stream-1199"}
     assert payload["provider_count"] == 4
     assert payload["providers"] == [
-        {"name": "provider-a"},
-        {"name": "provider-b"},
-        {"name": "provider-c"},
-        {"name": "provider-d"},
+        {"name": "gateway-load-provider-a"},
+        {"name": "gateway-load-provider-b"},
+        {"name": "gateway-load-provider-c"},
+        {"name": "gateway-load-provider-d"},
     ]
     assert payload["response_bodies_included"] is False
     assert payload["raw_payloads_included"] is False
@@ -193,6 +199,40 @@ def test_response_file_can_build_telemetry_canary(tmp_path: Path) -> None:
 
     payload = json.loads(canary_path(tmp_path, "telemetry_slo").read_text("utf-8"))
     assert payload["metrics"] == list(MODULE.REQUIRED_METRICS)
+
+
+def test_response_file_can_build_staging_canary_with_spaced_version(
+    tmp_path: Path,
+) -> None:
+    args_file = tmp_path / "staging.args"
+    args_file.write_text(
+        "\n".join(shlex.quote(arg) for arg in args_for("staging_load", tmp_path)),
+        encoding="utf-8",
+    )
+
+    assert MODULE.main([f"@{args_file}"]) == 0
+
+    payload = json.loads(canary_path(tmp_path, "staging_load").read_text("utf-8"))
+    assert payload["gateway_version"] == "iroha-gateway 1.0.0"
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "staging_load"
+    assert errors == []
+
+
+def test_success_rate_bps_rejects_out_of_range_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("staging_load", tmp_path)
+    args[args.index("--success-rate-bps") + 1] = "10001"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="staging_load",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--success-rate-bps must be <= 10000",
+    )
 
 
 def test_missing_metric_coverage_fails_closed(tmp_path: Path, capsys) -> None:
@@ -430,7 +470,7 @@ def test_staging_provider_inventory_must_match_count(tmp_path: Path, capsys) -> 
 
 def test_staging_provider_inventory_must_not_duplicate(tmp_path: Path, capsys) -> None:
     args = args_for("staging_load", tmp_path)
-    args.extend(["--provider", "provider-a"])
+    args.extend(["--provider", "gateway-load-provider-a"])
 
     assert MODULE.main(args) == 2
 
@@ -442,10 +482,10 @@ def test_staging_provider_inventory_must_not_duplicate(tmp_path: Path, capsys) -
 def test_staging_hardware_profile_rejects_placeholder_before_write(
     tmp_path: Path,
     capsys,
-) -> None:
+    ) -> None:
     args = args_for("staging_load", tmp_path)
     index = args.index("--hardware-profile")
-    args[index + 1] = "placeholder-hardware"
+    args[index + 1] = "gateway-load-hardware-placeholder"
 
     assert MODULE.main(args) == 2
 
@@ -472,19 +512,55 @@ def test_staging_cache_state_rejects_unknown_before_write(
     assert not canary_path(tmp_path, "staging_load").exists()
 
 
+def test_staging_hardware_profile_requires_gateway_load_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("staging_load", tmp_path)
+    index = args.index("--hardware-profile")
+    args[index + 1] = "staging-c6i-2xlarge"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--hardware-profile must match reviewed `gateway-load-hardware-*` label"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "staging_load").exists()
+
+
 def test_staging_provider_rejects_placeholder_before_write(
     tmp_path: Path,
     capsys,
 ) -> None:
     args = args_for("staging_load", tmp_path)
     first_provider = args.index("--provider") + 1
-    args[first_provider] = "provider-placeholder"
+    args[first_provider] = "gateway-load-provider-placeholder"
 
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
     assert (
         "--provider must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "staging_load").exists()
+
+
+def test_staging_provider_requires_production_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("staging_load", tmp_path)
+    first_provider = args.index("--provider") + 1
+    args[first_provider] = "provider-a"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        CHECKER.PROVIDER_NAME_ERROR.replace("providers[].name", "--provider")
         in captured.err
     )
     assert not canary_path(tmp_path, "staging_load").exists()

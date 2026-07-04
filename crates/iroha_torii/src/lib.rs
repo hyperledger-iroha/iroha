@@ -38851,8 +38851,20 @@ impl Torii {
                     get(sorafs::api::handle_get_sorafs_moderation_ballot),
                 )
                 .route(
+                    "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan",
+                    get(sorafs::api::handle_get_sorafs_moderation_ballot_no_show_plan),
+                )
+                .route(
                     "/v1/sorafs/moderation/ballots/commits",
                     post(sorafs::api::handle_post_sorafs_moderation_ballot_commit),
+                )
+                .route(
+                    "/v1/sorafs/moderation/ballots/challenges",
+                    post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge),
+                )
+                .route(
+                    "/v1/sorafs/moderation/ballots/challenges/resolve",
+                    post(sorafs::api::handle_post_sorafs_moderation_ballot_challenge_resolution),
                 )
                 .route(
                     "/v1/sorafs/moderation/ballots/reveals",
@@ -38911,6 +38923,24 @@ impl Torii {
                     "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object",
                     post(sorafs::api::handle_post_sorafs_moderation_quarantine_object)
                         .get(sorafs::api::handle_get_sorafs_moderation_quarantine_object),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_viewer_session),
+                )
+                .route(
+                    "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access",
+                    post(sorafs::api::handle_post_sorafs_moderation_quarantine_viewer_access),
+                )
+                .route(
+                    "/v1/sorafs/moderation/viewer-audit-reports",
+                    post(sorafs::api::handle_post_sorafs_moderation_viewer_audit_report),
+                )
+                .route(
+                    "/v1/sorafs/moderation/viewer-audit-reports/publish-due",
+                    post(
+                        sorafs::api::handle_post_sorafs_moderation_viewer_audit_report_publish_due,
+                    ),
                 );
             let group = group
                 .route(
@@ -42081,6 +42111,10 @@ impl Torii {
                 shutdown_signal.clone(),
             );
             sorafs::api::spawn_sorafs_reserve_lifecycle_scheduler(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            );
+            sorafs::api::spawn_sorafs_moderation_evidence_viewer_audit_scheduler(
                 app_state,
                 shutdown_signal.clone(),
             );
@@ -53981,7 +54015,9 @@ pub(crate) mod tests_runtime_handlers {
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
             let state = Arc::get_mut(&mut app_mut.state).expect("unique core state");
-            state.zk.sccp_route_manifests.push(configured_route.clone());
+            let mut zk = state.zk_snapshot();
+            zk.sccp_route_manifests.push(configured_route.clone());
+            state.set_zk(zk);
         }
 
         let response = routing::handle_v1_sccp_manifests(app.state.as_ref(), None)

@@ -104,6 +104,13 @@ public sealed class KagemushaRecursiveSpendRedeemInstructionArchive : KagemushaN
     }
 }
 
+public sealed class KagemushaRecursiveSpendTopUpInstructionArchive : KagemushaNativeArchive
+{
+    public KagemushaRecursiveSpendTopUpInstructionArchive(byte[] noritoBytes) : base(noritoBytes)
+    {
+    }
+}
+
 public sealed class KagemushaCompactPaymentTokenArchive : KagemushaNativeArchive
 {
     public KagemushaCompactPaymentTokenArchive(byte[] noritoBytes) : base(noritoBytes)
@@ -475,6 +482,7 @@ public static class KagemushaRecursiveSpendNative
 
     public const uint RequiredNativeBridgeAbiVersion = 6;
     public const uint RecursiveCompactRequiredNativeBridgeAbiVersion = 7;
+    public const uint TopUpRequiredNativeBridgeAbiVersion = 15;
     public const uint CompactTokenMaxHops = 64;
     public const int FoldStepMaxInputs = 2;
     public const int FoldStepMaxOutputs = 2;
@@ -622,6 +630,48 @@ public static class KagemushaRecursiveSpendNative
             return version is not null
                 && version.Value >= RequiredNativeBridgeAbiVersion
                 && requiredSymbolsProbe();
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (SystemException)
+        {
+            return false;
+        }
+    }
+
+    public static bool IsTopUpAvailable()
+    {
+        return IsTopUpAvailable(
+            () => TryGetAbiVersion(out var version) ? version : null,
+            TryProbeTopUpSymbol);
+    }
+
+    internal static bool IsTopUpAvailable(Func<uint?> abiVersionProbe, Func<bool> topUpSymbolProbe)
+    {
+        try
+        {
+            var version = abiVersionProbe();
+            return version is not null
+                && version.Value >= TopUpRequiredNativeBridgeAbiVersion
+                && topUpSymbolProbe();
         }
         catch (DllNotFoundException)
         {
@@ -3956,7 +4006,7 @@ public static class KagemushaRecursiveSpendNative
         ReadOnlySpan<byte> recordBundleArchive,
         ReadOnlySpan<byte> pallasOpenEnvelopesArchive,
         KagemushaRecursiveSpendableNoteDescriptor currentNote,
-        string? outputProofCircuitId = null,
+        string outputProofCircuitId,
         byte[]? previousLineageVerifierRecordArchive = null,
         byte[]? previousProofOpenEnvelopesArchive = null,
         KagemushaRecursiveSpendLineageKeyArtifacts? lineageKeyArtifacts = null,
@@ -3995,7 +4045,7 @@ public static class KagemushaRecursiveSpendNative
         ReadOnlySpan<byte> recordBundleArchive,
         ReadOnlySpan<byte> pallasOpenEnvelopesArchive,
         KagemushaRecursiveSpendableNoteDescriptor currentNote,
-        string? outputProofCircuitId = null,
+        string outputProofCircuitId,
         byte[]? previousLineageVerifierRecordArchive = null,
         byte[]? previousProofOpenEnvelopesArchive = null,
         byte[]? lineageVerifierKey = null,
@@ -4019,7 +4069,7 @@ public static class KagemushaRecursiveSpendNative
         ReadOnlySpan<byte> previousBundleArchive,
         ReadOnlySpan<byte> recordBundleArchive,
         KagemushaRecursiveSpendableNoteDescriptor currentNote,
-        string? outputProofCircuitId = null,
+        string outputProofCircuitId,
         byte[]? previousLineageVerifierRecordArchive = null,
         KagemushaRecursiveSpendLineageKeyArtifacts? lineageKeyArtifacts = null,
         ulong? blockHeight = null)
@@ -4045,7 +4095,7 @@ public static class KagemushaRecursiveSpendNative
         ReadOnlySpan<byte> previousBundleArchive,
         ReadOnlySpan<byte> recordBundleArchive,
         KagemushaRecursiveSpendableNoteDescriptor currentNote,
-        string? outputProofCircuitId = null,
+        string outputProofCircuitId,
         byte[]? previousLineageVerifierRecordArchive = null,
         byte[]? lineageVerifierKey = null,
         byte[]? lineageProvingKeyArchive = null,
@@ -4076,6 +4126,16 @@ public static class KagemushaRecursiveSpendNative
             "connect_norito_kagemusha_recursive_spend_init",
             NativeInit,
             RequireInitRequestRecordBundlePreflight));
+    }
+
+    public static KagemushaRecursiveSpendTopUpInstructionArchive TopUp(ReadOnlySpan<byte> requestArchive)
+    {
+        return new KagemushaRecursiveSpendTopUpInstructionArchive(Call(
+            requestArchive,
+            "connect_norito_kagemusha_recursive_spend_topup",
+            NativeTopUp,
+            requestPreflight: null,
+            requireAbi: RequireTopUpAbi));
     }
 
     public static KagemushaRecursiveSpendArchive Append(ReadOnlySpan<byte> requestArchive)
@@ -5309,7 +5369,8 @@ public static class KagemushaRecursiveSpendNative
         ReadOnlySpan<byte> requestArchive,
         string symbol,
         NativeArchiveCall nativeCall,
-        Action<byte[]>? requestPreflight = null)
+        Action<byte[]>? requestPreflight = null,
+        Action? requireAbi = null)
     {
         byte[]? request = null;
         try
@@ -5320,7 +5381,7 @@ public static class KagemushaRecursiveSpendNative
                 "Request archive");
             requestPreflight?.Invoke(request);
 
-            RequireAbi();
+            (requireAbi ?? RequireAbi)();
 
             int code;
             IntPtr outPtr;
@@ -5541,6 +5602,27 @@ public static class KagemushaRecursiveSpendNative
         }
     }
 
+    private static void RequireTopUpAbi()
+    {
+        if (!TryGetAbiVersion(out var version))
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} is unavailable; install the native bridge before using recursive Kagemusha top-up.");
+        }
+
+        if (version < TopUpRequiredNativeBridgeAbiVersion)
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} ABI v{TopUpRequiredNativeBridgeAbiVersion} is required for recursive Kagemusha top-up, found v{version}.");
+        }
+
+        if (!TryProbeTopUpSymbol())
+        {
+            throw new InvalidOperationException(
+                $"{LibraryName} ABI v{TopUpRequiredNativeBridgeAbiVersion} recursive Kagemusha top-up surface is incomplete.");
+        }
+    }
+
     internal static byte[] ReadBridgeOutput(string symbol, int code, IntPtr outPtr, UIntPtr outLen)
     {
         return ReadBridgeOutput(symbol, code, outPtr, outLen, NativeFree);
@@ -5664,6 +5746,40 @@ public static class KagemushaRecursiveSpendNative
             }
             NativeFree(IntPtr.Zero);
             return true;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (SystemException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryProbeTopUpSymbol()
+    {
+        try
+        {
+            var ok = Probe(NativeTopUp);
+            NativeFree(IntPtr.Zero);
+            return ok;
         }
         catch (DllNotFoundException)
         {
@@ -6043,6 +6159,9 @@ public static class KagemushaRecursiveSpendNative
 
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_init", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeInit(byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_topup", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeTopUp(byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen);
 
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_append", CallingConvention = CallingConvention.Cdecl)]
     private static extern int NativeAppend(byte[] requestPtr, UIntPtr requestLen, out IntPtr outPtr, out UIntPtr outLen);

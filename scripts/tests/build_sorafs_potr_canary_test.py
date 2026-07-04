@@ -72,6 +72,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--validation-bundle-digest-hex", VALIDATION_DIGEST])
         args.extend(["--pq-key-roster-digest-hex", PQ_KEY_ROSTER_DIGEST])
     elif kind == "proof_stream":
+        args.extend(["--route-body-blake3-hex", DIGEST])
         for route in MODULE.REQUIRED_ROUTES:
             args.extend(["--route", route])
     elif kind == "reputation_integration":
@@ -133,6 +134,7 @@ def test_builds_payload_free_proof_stream_canary(tmp_path: Path) -> None:
     assert payload["route_count"] == len(MODULE.REQUIRED_ROUTES)
     assert payload["passed_route_count"] == len(MODULE.REQUIRED_ROUTES)
     assert payload["response_bodies_included"] is False
+    assert all(route["body_blake3_hex"] == DIGEST for route in payload["routes"])
     assert all(route["norito_verified"] is True for route in payload["routes"])
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "proof_stream"
@@ -268,7 +270,7 @@ def test_probe_provider_inventory_must_use_reviewed_labels_before_write(
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--provider must match canonical lowercase `provider-name`" in captured.err
+    assert "--provider must match canonical lowercase `provider-*`" in captured.err
     assert not canary_path(tmp_path, "multi_provider_probe").exists()
 
 
@@ -317,7 +319,7 @@ def test_probe_receipt_inventory_must_use_reviewed_labels_before_write(
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--receipt must match canonical lowercase `potr-receipt-name`" in captured.err
+    assert "--receipt must match canonical lowercase `potr-receipt-*`" in captured.err
     assert not canary_path(tmp_path, "multi_provider_probe").exists()
 
 
@@ -384,6 +386,21 @@ def test_proof_stream_routes_must_not_include_unknown_values_before_write(
         capsys=capsys,
         expected_error="--route contains an unknown value",
     )
+
+
+def test_proof_stream_requires_route_body_digest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("proof_stream", tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "proof_stream").exists()
 
 
 def test_observability_metrics_must_not_duplicate_before_write(

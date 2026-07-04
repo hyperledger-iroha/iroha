@@ -63,6 +63,10 @@ pub enum SoraFsModerationBallotGovernanceEventKindV1 {
     BallotAnnounced,
     /// Juror commitment accepted by a node.
     CommitAccepted,
+    /// Ballot challenge accepted during the post-commit dispute buffer.
+    ChallengeSubmitted,
+    /// Ballot challenge was resolved before reveal progress.
+    ChallengeResolved,
     /// Juror reveal accepted by a node.
     RevealAccepted,
     /// Ballot tally finalized by a node.
@@ -75,6 +79,8 @@ impl SoraFsModerationBallotGovernanceEventKindV1 {
         match self {
             Self::BallotAnnounced => "ballot_announced",
             Self::CommitAccepted => "commit_accepted",
+            Self::ChallengeSubmitted => "challenge_submitted",
+            Self::ChallengeResolved => "challenge_resolved",
             Self::RevealAccepted => "reveal_accepted",
             Self::BallotTallied => "ballot_tallied",
         }
@@ -260,6 +266,235 @@ impl SoraFsModerationBallotGovernanceTallyV1 {
     }
 }
 
+/// Governance DAG moderation ballot challenge category.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    PartialEq,
+    Eq,
+)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SoraFsModerationBallotGovernanceChallengeKindV1 {
+    /// The announced panel roster or roster hash is disputed.
+    RosterMismatch,
+    /// A duplicate commitment attempt or duplicate-commit evidence is disputed.
+    DuplicateCommit,
+    /// A commitment or reveal is alleged to be bound to the wrong payload.
+    PayloadMismatch,
+    /// A juror eligibility or authority assertion is disputed.
+    JurorEligibility,
+    /// The evidence bundle or policy binding is disputed.
+    EvidenceMismatch,
+    /// Operator-reviewed challenge category outside the fixed labels.
+    Other,
+}
+
+impl SoraFsModerationBallotGovernanceChallengeKindV1 {
+    /// Stable label used in local indexes and JSON sidecars.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::RosterMismatch => "roster_mismatch",
+            Self::DuplicateCommit => "duplicate_commit",
+            Self::PayloadMismatch => "payload_mismatch",
+            Self::JurorEligibility => "juror_eligibility",
+            Self::EvidenceMismatch => "evidence_mismatch",
+            Self::Other => "other",
+        }
+    }
+
+    const fn requires_target_juror(self) -> bool {
+        matches!(
+            self,
+            Self::DuplicateCommit | Self::PayloadMismatch | Self::JurorEligibility
+        )
+    }
+}
+
+/// Governance DAG moderation ballot challenge decision.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    PartialEq,
+    Eq,
+)]
+#[norito(tag = "decision", content = "value", rename_all = "snake_case")]
+pub enum SoraFsModerationBallotGovernanceChallengeDecisionV1 {
+    /// The challenge was rejected and the ballot may continue.
+    Rejected,
+    /// The challenge was accepted and higher-level dispute handling must resolve the ballot.
+    Accepted,
+}
+
+impl SoraFsModerationBallotGovernanceChallengeDecisionV1 {
+    /// Stable label used in local indexes and JSON sidecars.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rejected => "rejected",
+            Self::Accepted => "accepted",
+        }
+    }
+}
+
+/// Payload-free challenge record carried by moderation ballot Governance DAG events.
+#[derive(
+    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+)]
+pub struct SoraFsModerationBallotGovernanceChallengeV1 {
+    /// Challenge id unique within the ballot.
+    pub challenge_id: String,
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Canonical account or service identifier raising the challenge.
+    pub challenger_id: String,
+    /// Challenge category.
+    pub kind: SoraFsModerationBallotGovernanceChallengeKindV1,
+    /// Juror targeted by the challenge, when any.
+    #[norito(default)]
+    pub target_juror_id: Option<String>,
+    /// Digest of the payload-free challenge evidence packet.
+    pub evidence_digest: [u8; 32],
+    /// Payload-free operator-readable reason label.
+    pub reason: String,
+    /// UTC timestamp (milliseconds) when the challenge was raised.
+    pub raised_at_unix_ms: u64,
+    /// Resolution decision, when reviewed.
+    #[norito(default)]
+    pub decision: Option<SoraFsModerationBallotGovernanceChallengeDecisionV1>,
+    /// Canonical account or service identifier that resolved the challenge.
+    #[norito(default)]
+    pub resolved_by: Option<String>,
+    /// UTC timestamp (milliseconds) when the challenge was resolved.
+    #[norito(default)]
+    pub resolved_at_unix_ms: Option<u64>,
+    /// Optional payload-free resolution note.
+    #[norito(default)]
+    pub resolution_note: Option<String>,
+}
+
+impl SoraFsModerationBallotGovernanceChallengeV1 {
+    fn validate(
+        &self,
+        event_kind: SoraFsModerationBallotGovernanceEventKindV1,
+        event_case_id: &str,
+        event_round_id: &str,
+    ) -> Result<(), SoraFsModerationBallotGovernanceEventValidationError> {
+        validate_non_empty_governance_label(
+            &self.challenge_id,
+            SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeId,
+        )?;
+        validate_non_empty_governance_label(
+            &self.case_id,
+            SoraFsModerationBallotGovernanceEventValidationError::MissingCaseId,
+        )?;
+        validate_non_empty_governance_label(
+            &self.round_id,
+            SoraFsModerationBallotGovernanceEventValidationError::MissingRoundId,
+        )?;
+        validate_non_empty_governance_label(
+            &self.challenger_id,
+            SoraFsModerationBallotGovernanceEventValidationError::MissingChallengerId,
+        )?;
+        if self.case_id != event_case_id {
+            return Err(
+                SoraFsModerationBallotGovernanceEventValidationError::ChallengeCaseMismatch {
+                    event: event_case_id.to_owned(),
+                    challenge: self.case_id.clone(),
+                },
+            );
+        }
+        if self.round_id != event_round_id {
+            return Err(
+                SoraFsModerationBallotGovernanceEventValidationError::ChallengeRoundMismatch {
+                    event: event_round_id.to_owned(),
+                    challenge: self.round_id.clone(),
+                },
+            );
+        }
+        if self.evidence_digest.iter().all(|byte| *byte == 0) {
+            return Err(
+                SoraFsModerationBallotGovernanceEventValidationError::InvalidChallengeEvidence,
+            );
+        }
+        validate_non_empty_governance_label(
+            &self.reason,
+            SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeReason,
+        )?;
+        if let Some(target) = self.target_juror_id.as_deref() {
+            validate_non_empty_governance_label(
+                target,
+                SoraFsModerationBallotGovernanceEventValidationError::BlankChallengeTarget,
+            )?;
+        } else if self.kind.requires_target_juror() {
+            return Err(
+                SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeTarget,
+            );
+        }
+
+        match event_kind {
+            SoraFsModerationBallotGovernanceEventKindV1::ChallengeSubmitted => {
+                if self.decision.is_some()
+                    || self.resolved_by.is_some()
+                    || self.resolved_at_unix_ms.is_some()
+                    || self.resolution_note.is_some()
+                {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::UnexpectedChallengeResolution,
+                    );
+                }
+            }
+            SoraFsModerationBallotGovernanceEventKindV1::ChallengeResolved => {
+                if self.decision.is_none() {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeDecision,
+                    );
+                }
+                let Some(resolved_by) = self.resolved_by.as_deref() else {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeResolver,
+                    );
+                };
+                validate_non_empty_governance_label(
+                    resolved_by,
+                    SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeResolver,
+                )?;
+                let Some(resolved_at) = self.resolved_at_unix_ms else {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeResolvedAt,
+                    );
+                };
+                if resolved_at < self.raised_at_unix_ms {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::InvalidChallengeResolutionTimestamp,
+                    );
+                }
+                if self
+                    .resolution_note
+                    .as_deref()
+                    .is_some_and(|note| note.trim().is_empty())
+                {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::BlankChallengeResolutionNote,
+                    );
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 /// Governance DAG payload for one local SoraFS moderation ballot lifecycle event.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -284,9 +519,14 @@ pub struct SoraFsModerationBallotGovernanceEventV1 {
     pub committed_count: u64,
     /// Accepted reveal count after the event.
     pub revealed_count: u64,
+    /// Local challenge count after the event.
+    pub challenge_count: u64,
     /// Final tally for `BallotTallied` events.
     #[norito(default)]
     pub tally: Option<SoraFsModerationBallotGovernanceTallyV1>,
+    /// Challenge record for challenge submit/resolve events.
+    #[norito(default)]
+    pub challenge: Option<SoraFsModerationBallotGovernanceChallengeV1>,
 }
 
 impl SoraFsModerationBallotGovernanceEventV1 {
@@ -327,6 +567,11 @@ impl SoraFsModerationBallotGovernanceEventV1 {
                         SoraFsModerationBallotGovernanceEventValidationError::UnexpectedTally,
                     );
                 }
+                if self.challenge.is_some() {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::UnexpectedChallenge,
+                    );
+                }
             }
             SoraFsModerationBallotGovernanceEventKindV1::CommitAccepted
             | SoraFsModerationBallotGovernanceEventKindV1::RevealAccepted => {
@@ -344,6 +589,35 @@ impl SoraFsModerationBallotGovernanceEventV1 {
                         SoraFsModerationBallotGovernanceEventValidationError::UnexpectedTally,
                     );
                 }
+                if self.challenge.is_some() {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::UnexpectedChallenge,
+                    );
+                }
+            }
+            SoraFsModerationBallotGovernanceEventKindV1::ChallengeSubmitted
+            | SoraFsModerationBallotGovernanceEventKindV1::ChallengeResolved => {
+                if self.juror_id.is_some() {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::UnexpectedJurorId,
+                    );
+                }
+                if self.tally.is_some() {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::UnexpectedTally,
+                    );
+                }
+                if self.challenge_count == 0 {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::InvalidChallengeCount,
+                    );
+                }
+                let Some(challenge) = self.challenge.as_ref() else {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::MissingChallenge,
+                    );
+                };
+                challenge.validate(self.kind, &self.case_id, &self.round_id)?;
             }
             SoraFsModerationBallotGovernanceEventKindV1::BallotTallied => {
                 if self.juror_id.is_some() {
@@ -354,6 +628,11 @@ impl SoraFsModerationBallotGovernanceEventV1 {
                 let Some(tally) = self.tally.as_ref() else {
                     return Err(SoraFsModerationBallotGovernanceEventValidationError::MissingTally);
                 };
+                if self.challenge.is_some() {
+                    return Err(
+                        SoraFsModerationBallotGovernanceEventValidationError::UnexpectedChallenge,
+                    );
+                }
                 tally.validate(&self.case_id, &self.round_id)?;
             }
         }
@@ -2389,6 +2668,71 @@ pub enum SoraFsModerationBallotGovernanceEventValidationError {
     /// A tally event omitted its tally payload.
     #[error("SoraFS moderation ballot governance tally is required")]
     MissingTally,
+    /// A non-challenge event unexpectedly included a challenge record.
+    #[error("SoraFS moderation ballot governance event must not include a challenge")]
+    UnexpectedChallenge,
+    /// A challenge event omitted its challenge payload.
+    #[error("SoraFS moderation ballot governance challenge is required")]
+    MissingChallenge,
+    /// Challenge count is invalid for a challenge event.
+    #[error("SoraFS moderation ballot governance challenge count must be nonzero")]
+    InvalidChallengeCount,
+    /// Missing moderation challenge identifier.
+    #[error("SoraFS moderation ballot governance challenge id is required")]
+    MissingChallengeId,
+    /// Missing moderation challenge submitter.
+    #[error("SoraFS moderation ballot governance challenger id is required")]
+    MissingChallengerId,
+    /// Challenge target juror id is required for this kind.
+    #[error("SoraFS moderation ballot governance challenge target juror id is required")]
+    MissingChallengeTarget,
+    /// Challenge target juror id is blank.
+    #[error("SoraFS moderation ballot governance challenge target juror id must not be blank")]
+    BlankChallengeTarget,
+    /// Challenge evidence digest is all zeroes.
+    #[error("SoraFS moderation ballot governance challenge evidence digest must be nonzero")]
+    InvalidChallengeEvidence,
+    /// Challenge reason is missing.
+    #[error("SoraFS moderation ballot governance challenge reason is required")]
+    MissingChallengeReason,
+    /// Challenge case id does not match the enclosing event case id.
+    #[error(
+        "SoraFS moderation challenge case id mismatch: event `{event}`, challenge `{challenge}`"
+    )]
+    ChallengeCaseMismatch {
+        /// Case id from the event.
+        event: String,
+        /// Case id from the challenge.
+        challenge: String,
+    },
+    /// Challenge round id does not match the enclosing event round id.
+    #[error(
+        "SoraFS moderation challenge round id mismatch: event `{event}`, challenge `{challenge}`"
+    )]
+    ChallengeRoundMismatch {
+        /// Round id from the event.
+        event: String,
+        /// Round id from the challenge.
+        challenge: String,
+    },
+    /// Submitted challenge event included resolution fields.
+    #[error("SoraFS moderation challenge submission must not include resolution fields")]
+    UnexpectedChallengeResolution,
+    /// Resolved challenge event omitted its decision.
+    #[error("SoraFS moderation challenge decision is required")]
+    MissingChallengeDecision,
+    /// Resolved challenge event omitted its resolver.
+    #[error("SoraFS moderation challenge resolver is required")]
+    MissingChallengeResolver,
+    /// Resolved challenge event omitted its resolution timestamp.
+    #[error("SoraFS moderation challenge resolved timestamp is required")]
+    MissingChallengeResolvedAt,
+    /// Challenge resolution timestamp predates the challenge.
+    #[error("SoraFS moderation challenge resolution timestamp predates the challenge")]
+    InvalidChallengeResolutionTimestamp,
+    /// Challenge resolution note is blank.
+    #[error("SoraFS moderation challenge resolution note must not be blank")]
+    BlankChallengeResolutionNote,
     /// Tally case id does not match the enclosing event case id.
     #[error("SoraFS moderation tally case id mismatch: event `{event}`, tally `{tally}`")]
     TallyCaseMismatch {
@@ -3661,6 +4005,7 @@ mod tests {
             juror_id: None,
             committed_count: 2,
             revealed_count: 2,
+            challenge_count: 0,
             tally: Some(SoraFsModerationBallotGovernanceTallyV1 {
                 case_id: "case-42".to_string(),
                 round_id: "round-1".to_string(),
@@ -3676,6 +4021,7 @@ mod tests {
                 contested: false,
                 tallied_at_unix_ms: 1_800_000_030_000,
             }),
+            challenge: None,
         };
         let payload = GovernanceLogPayloadV1::ModerationBallotEvent(event);
 
@@ -4033,6 +4379,7 @@ mod tests {
             juror_id: None,
             committed_count: 2,
             revealed_count: 2,
+            challenge_count: 0,
             tally: Some(SoraFsModerationBallotGovernanceTallyV1 {
                 case_id: "case-42".to_string(),
                 round_id: "round-2".to_string(),
@@ -4048,11 +4395,112 @@ mod tests {
                 contested: false,
                 tallied_at_unix_ms: 1_800_000_030_000,
             }),
+            challenge: None,
         };
 
         assert!(matches!(
             event.validate(),
             Err(SoraFsModerationBallotGovernanceEventValidationError::TallyRoundMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn moderation_ballot_event_accepts_challenge_lifecycle_events() {
+        let submitted_challenge = SoraFsModerationBallotGovernanceChallengeV1 {
+            challenge_id: "challenge-1".to_owned(),
+            case_id: "case-42".to_owned(),
+            round_id: "round-1".to_owned(),
+            challenger_id: "moderation-provider".to_owned(),
+            kind: SoraFsModerationBallotGovernanceChallengeKindV1::EvidenceMismatch,
+            target_juror_id: None,
+            evidence_digest: [0x42; 32],
+            reason: "payload-free-evidence-digest".to_owned(),
+            raised_at_unix_ms: 1_800_000_011_000,
+            decision: None,
+            resolved_by: None,
+            resolved_at_unix_ms: None,
+            resolution_note: None,
+        };
+        let submitted = SoraFsModerationBallotGovernanceEventV1 {
+            version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
+            sequence: 3,
+            kind: SoraFsModerationBallotGovernanceEventKindV1::ChallengeSubmitted,
+            generated_at_unix_ms: 1_800_000_011_000,
+            case_id: "case-42".to_owned(),
+            round_id: "round-1".to_owned(),
+            juror_id: None,
+            committed_count: 2,
+            revealed_count: 0,
+            challenge_count: 1,
+            tally: None,
+            challenge: Some(submitted_challenge.clone()),
+        };
+        submitted
+            .validate()
+            .expect("submitted challenge event validates");
+
+        let resolved_challenge = SoraFsModerationBallotGovernanceChallengeV1 {
+            decision: Some(SoraFsModerationBallotGovernanceChallengeDecisionV1::Rejected),
+            resolved_by: Some("moderation-operator".to_owned()),
+            resolved_at_unix_ms: Some(1_800_000_012_000),
+            resolution_note: Some("packet matches ballot".to_owned()),
+            ..submitted_challenge
+        };
+        let resolved = SoraFsModerationBallotGovernanceEventV1 {
+            kind: SoraFsModerationBallotGovernanceEventKindV1::ChallengeResolved,
+            generated_at_unix_ms: 1_800_000_012_000,
+            challenge: Some(resolved_challenge),
+            ..submitted
+        };
+        resolved
+            .validate()
+            .expect("resolved challenge event validates");
+    }
+
+    #[test]
+    fn moderation_ballot_event_rejects_invalid_challenge_payloads() {
+        let base_challenge = SoraFsModerationBallotGovernanceChallengeV1 {
+            challenge_id: "challenge-1".to_owned(),
+            case_id: "case-42".to_owned(),
+            round_id: "round-1".to_owned(),
+            challenger_id: "moderation-provider".to_owned(),
+            kind: SoraFsModerationBallotGovernanceChallengeKindV1::DuplicateCommit,
+            target_juror_id: None,
+            evidence_digest: [0x42; 32],
+            reason: "payload-free-evidence-digest".to_owned(),
+            raised_at_unix_ms: 1_800_000_011_000,
+            decision: None,
+            resolved_by: None,
+            resolved_at_unix_ms: None,
+            resolution_note: None,
+        };
+        let event = SoraFsModerationBallotGovernanceEventV1 {
+            version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
+            sequence: 3,
+            kind: SoraFsModerationBallotGovernanceEventKindV1::ChallengeSubmitted,
+            generated_at_unix_ms: 1_800_000_011_000,
+            case_id: "case-42".to_owned(),
+            round_id: "round-1".to_owned(),
+            juror_id: None,
+            committed_count: 2,
+            revealed_count: 0,
+            challenge_count: 1,
+            tally: None,
+            challenge: Some(base_challenge),
+        };
+        assert!(matches!(
+            event.validate(),
+            Err(SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeTarget)
+        ));
+
+        let mut resolved = event;
+        let challenge = resolved.challenge.as_mut().expect("challenge");
+        challenge.kind = SoraFsModerationBallotGovernanceChallengeKindV1::EvidenceMismatch;
+        challenge.decision = Some(SoraFsModerationBallotGovernanceChallengeDecisionV1::Accepted);
+        resolved.kind = SoraFsModerationBallotGovernanceEventKindV1::ChallengeResolved;
+        assert!(matches!(
+            resolved.validate(),
+            Err(SoraFsModerationBallotGovernanceEventValidationError::MissingChallengeResolver)
         ));
     }
 }

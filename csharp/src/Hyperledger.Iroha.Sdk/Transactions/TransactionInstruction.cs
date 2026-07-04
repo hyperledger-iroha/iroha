@@ -186,4 +186,10 @@ public abstract record class TransactionInstruction
     {
         return KagemushaInstructionArchiveInstruction.RedeemRecursive(instructionArchive);
     }
+
+    public static KagemushaInstructionArchiveInstruction KagemushaRecursiveTopUp(
+        KagemushaRecursiveSpendTopUpInstructionArchive instructionArchive)
+    {
+        return KagemushaInstructionArchiveInstruction.TopUp(instructionArchive);
+    }
 }

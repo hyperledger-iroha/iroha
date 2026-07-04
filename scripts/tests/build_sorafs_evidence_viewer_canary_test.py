@@ -59,6 +59,7 @@ def route(name: str) -> dict:
         "name": name,
         "passed": True,
         "status_code": 200,
+        "body_blake3_hex": DIGEST,
         "authz_enforced": True,
         "signature_verified": True,
         "latency_ms": 40,
@@ -81,8 +82,8 @@ def appeal_intake() -> dict:
             "case_count": 2,
             "accepted_case_count": 2,
             "cases": [
-                {"name": "appeal-case-00", "accepted": True},
-                {"name": "appeal-case-01", "accepted": True},
+                {"name": "moderation-appeal-case-00", "accepted": True},
+                {"name": "moderation-appeal-case-01", "accepted": True},
             ],
             "appellant_auth_enforced": True,
             "proof_token_verified": True,
@@ -107,7 +108,7 @@ def sortition_roster() -> dict:
             "sortition_seed_hex": DIGEST,
             "panel_size": 7,
             "jurors": [
-                {"name": f"roster-juror-{index:02d}", "eligible": True}
+                {"name": f"moderation-roster-juror-{index:02d}", "eligible": True}
                 for index in range(7)
             ],
             "quorum": 5,
@@ -139,11 +140,11 @@ def complete_args(tmp_path: Path) -> list[str]:
         "--session-count",
         "3",
         "--viewer-session",
-        "viewer-session-00",
+        "moderation-viewer-session-00",
         "--viewer-session",
-        "viewer-session-01",
+        "moderation-viewer-session-01",
         "--viewer-session",
-        "viewer-session-02",
+        "moderation-viewer-session-02",
         "--max-url-ttl-secs",
         "300",
         "--session-manifest-digest-hex",
@@ -210,9 +211,9 @@ def test_builds_payload_free_evidence_viewer_canary(tmp_path: Path) -> None:
     assert payload["attested_session_count"] == 3
     assert payload["logged_session_count"] == 3
     assert payload["sessions"] == [
-        {"name": "viewer-session-00", "attested": True, "logged": True},
-        {"name": "viewer-session-01", "attested": True, "logged": True},
-        {"name": "viewer-session-02", "attested": True, "logged": True},
+        {"name": "moderation-viewer-session-00", "attested": True, "logged": True},
+        {"name": "moderation-viewer-session-01", "attested": True, "logged": True},
+        {"name": "moderation-viewer-session-02", "attested": True, "logged": True},
     ]
     for claim in MODULE.VERIFIED_TRUE_CLAIMS:
         assert payload[claim] is True
@@ -383,6 +384,42 @@ def test_duplicate_session_inventory_fails_before_write(
 
     captured = capsys.readouterr()
     assert "--viewer-session must not contain duplicates" in captured.err
+    assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_viewer_session_label_family_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    first_session = args.index("--viewer-session") + 1
+    args[first_session] = "viewer-session-00"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--viewer-session must match canonical lowercase "
+        "`moderation-viewer-session-*`"
+    ) in captured.err
+    assert not (tmp_path / "evidence-viewer.json").exists()
+
+
+def test_viewer_session_placeholder_marker_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    first_session = args.index("--viewer-session") + 1
+    args[first_session] = "moderation-viewer-session-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--viewer-session[0] must not contain non-production markers "
+        "['placeholder']"
+    ) in captured.err
     assert not (tmp_path / "evidence-viewer.json").exists()
 
 

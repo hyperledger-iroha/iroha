@@ -471,8 +471,8 @@ duplicate or unknown downstream-package entries, `package_count` values that do 
 the unique package list,
 SDK export or `ValidationOutcomeV1` drift, missing native bridge/header binding,
 failed published-archive cookbook smoke, missing fixture bundle or manifest/CAR
-replay, smoke duration above threshold, FFI header drift, and governance packets
-not bound to the governed release key roster, targets, downstream packages,
+replay, non-integer or above-threshold smoke duration, FFI header drift, and
+governance packets not bound to the governed release key roster, targets, downstream packages,
 smoke evidence, and a `release_manifest_digest_hex` matching a valid signed
 manifest artifact in the same bundle. Signed manifests also publish a
 `policy_digest_hex`, governance approval must reference that same digest, and
@@ -503,8 +503,8 @@ package coverage where applicable, reviewed target/package inventories
 closed to unknown values,
 duplicate-free target/package inventories
 whose count fields match their unique entries, release-manifest digest bindings,
-threshold-reviewed smoke duration, signed-manifest policy digests,
-governed-release approval markers, and checker-backed validation before
+positive integer threshold-reviewed smoke duration, signed-manifest policy
+digests, governed-release approval markers, and checker-backed validation before
 atomically writing JSON without following output symlinks or output directories.
 The release-archive and signed-manifest response-file examples are
 `scripts/examples/sorafs_reference_sdk_release_archive_canary.args.example` and

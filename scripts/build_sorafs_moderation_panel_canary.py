@@ -92,6 +92,12 @@ TALLY_DIGEST_KINDS = (
     "metrics_alerts",
     "governance_approval",
 )
+ROUTE_BODY_DIGEST_KINDS = (
+    "appeal_intake",
+    "operator_workflow",
+    "commit_reveal",
+    "decision_publication",
+)
 HEX64_LEN = 64
 TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
     "appeal_intake": (
@@ -417,6 +423,7 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
             "name": route,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "authz_enforced": True,
             "signature_verified": True,
             "latency_ms": args.route_latency_ms,
@@ -621,6 +628,12 @@ def validate_common_digests(args: argparse.Namespace, errors: list[str]) -> None
         validate_hex64(args.roster_hash_hex, option="--roster-hash-hex", errors=errors)
     if args.kind in TALLY_DIGEST_KINDS:
         validate_hex64(args.tally_digest_hex, option="--tally-digest-hex", errors=errors)
+    if args.kind in ROUTE_BODY_DIGEST_KINDS:
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
 
 
 def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
@@ -1027,6 +1040,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--verified-claim", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=40)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--intake-route", action="append", default=[])
     parser.add_argument("--case-count", type=positive_int_arg)
     parser.add_argument("--case", action="append", default=[])

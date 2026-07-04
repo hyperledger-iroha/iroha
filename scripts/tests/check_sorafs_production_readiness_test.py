@@ -398,6 +398,9 @@ def default_gate_metadata(
                 "matrix_digest_hex": SHA256,
                 "policy_digest_hex": SHA256,
                 "provider_count": 1,
+                "scheduled_lifecycle_canary_defaulted_provider_count": 1,
+                "scheduled_lifecycle_canary_last_tick_unix": generated_at_unix - 30,
+                "scheduled_lifecycle_canary_tick_count": 2,
                 "started_at_unix": generated_at_unix - 60,
             }
         ]
@@ -410,6 +413,9 @@ def default_gate_metadata(
                 "metric_count": len(MODULE.RESERVE_RENT_REQUIRED_METRICS),
                 "metrics": list(MODULE.RESERVE_RENT_REQUIRED_METRICS),
                 "provider_count": 1,
+                "scheduled_lifecycle_canary_defaulted_provider_count": 1,
+                "scheduled_lifecycle_canary_last_tick_unix": generated_at_unix - 30,
+                "scheduled_lifecycle_canary_tick_count": 2,
                 "started_at_unix": generated_at_unix - 60,
             }
         )
@@ -1345,12 +1351,20 @@ def test_artifact_paths_must_be_archive_portable(tmp_path: Path) -> None:
     encoded_parent_path = "nested/%2e%2e/private_key.json"
     encoded_separator_path = "nested/bad%2Fprivate_key.json"
     encoded_drive_path = "nested/C%3A/private_key.json"
+    html_separator_path = "nested/bad&#47;private_key.json"
+    html_drive_path = "nested/C&#58;/private_key.json"
     payload["required"][first_required]["artifacts"][0]["path"] = absolute_path
     payload["recognized_artifacts"][0]["path"] = absolute_path
     payload["recognized_artifacts"][1]["path"] = parent_path
     payload["recognized_artifacts"][2]["path"] = encoded_parent_path
     payload["recognized_artifacts"][3]["path"] = encoded_separator_path
     payload["recognized_artifacts"][4]["path"] = encoded_drive_path
+    html_separator_artifact = copy.deepcopy(payload["recognized_artifacts"][0])
+    html_separator_artifact["path"] = html_separator_path
+    payload["recognized_artifacts"].append(html_separator_artifact)
+    html_drive_artifact = copy.deepcopy(payload["recognized_artifacts"][0])
+    html_drive_artifact["path"] = html_drive_path
+    payload["recognized_artifacts"].append(html_drive_artifact)
     summary = tmp_path / "summary.json"
     write_json(tmp_path / "gateway_load.json", payload)
 
@@ -1369,17 +1383,21 @@ def test_artifact_paths_must_be_archive_portable(tmp_path: Path) -> None:
     errors = "\n".join(result["errors"])
     assert (
         ".path must be archive-relative without absolute, empty, current, "
-        "parent, encoded, URI-scheme-like, or platform-specific segments"
+        "parent, encoded, URI-scheme-like, platform-specific, or secret-looking segments"
         in errors
     )
     assert "recognized_artifacts[2].path" in errors
     assert "recognized_artifacts[3].path" in errors
     assert "recognized_artifacts[4].path" in errors
+    assert "recognized_artifacts[5].path" in errors
+    assert "recognized_artifacts[6].path" in errors
     assert absolute_path not in errors
     assert parent_path not in errors
     assert encoded_parent_path not in errors
     assert encoded_separator_path not in errors
     assert encoded_drive_path not in errors
+    assert html_separator_path not in errors
+    assert html_drive_path not in errors
 
 
 def test_artifact_paths_reject_platform_specific_segments(tmp_path: Path) -> None:
@@ -1408,11 +1426,82 @@ def test_artifact_paths_reject_platform_specific_segments(tmp_path: Path) -> Non
     errors = "\n".join(result["errors"])
     assert (
         ".path must be archive-relative without absolute, empty, current, "
-        "parent, encoded, URI-scheme-like, or platform-specific segments"
+        "parent, encoded, URI-scheme-like, platform-specific, or secret-looking segments"
         in errors
     )
     assert windows_path not in errors
     assert empty_segment_path not in errors
+
+
+def test_artifact_paths_reject_secret_looking_segments(tmp_path: Path) -> None:
+    payload = gate_summary("gateway_load")
+    secret_path = "nested/private&#95;key.json"
+    encoded_html_secret_path = "nested/private%26%2395%3Bkey.json"
+    proof_token_path = "nested/proof-token-report.json"
+    payload["recognized_artifacts"][0]["path"] = secret_path
+    payload["recognized_artifacts"][1]["path"] = encoded_html_secret_path
+    payload["recognized_artifacts"][2]["path"] = proof_token_path
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "recognized_artifacts[0].path must be archive-relative without absolute, "
+        "empty, current, parent, encoded, URI-scheme-like, platform-specific, "
+        "or secret-looking segments"
+        in errors
+    )
+    assert (
+        "recognized_artifacts[1].path must be archive-relative without absolute, "
+        "empty, current, parent, encoded, URI-scheme-like, platform-specific, "
+        "or secret-looking segments"
+        in errors
+    )
+    assert "recognized_artifacts[2].path must be archive-relative" not in errors
+    assert secret_path not in errors
+    assert encoded_html_secret_path not in errors
+    assert proof_token_path not in errors
+
+
+def test_portable_artifact_path_rejects_token_alias_segments() -> None:
+    assert MODULE.is_archive_portable_artifact_path("nested/api-token.json") is False
+    assert MODULE.is_archive_portable_artifact_path("nested/auth%2Dtoken.json") is False
+    assert MODULE.is_archive_portable_artifact_path("nested/auth&#45;token.json") is False
+    assert (
+        MODULE.is_archive_portable_artifact_path("nested/auth%26%2345%3Btoken.json")
+        is False
+    )
+    assert MODULE.is_archive_portable_artifact_path("nested/id-token.json") is False
+    assert MODULE.is_archive_portable_artifact_path("nested/jwt.json") is False
+    assert MODULE.is_archive_portable_artifact_path("nested/oauth-token.json") is False
+    assert (
+        MODULE.is_archive_portable_artifact_path("nested/refresh%2Dtoken.json")
+        is False
+    )
+    assert (
+        MODULE.is_archive_portable_artifact_path("nested/session%255Ftoken.json")
+        is False
+    )
+    assert MODULE.is_archive_portable_artifact_path("nested/set-cookie.txt") is False
+    assert MODULE.is_archive_portable_artifact_path("nested/x-api-token.txt") is False
+    assert MODULE.is_archive_portable_artifact_path("nested/password.txt") is False
+    assert MODULE.is_archive_portable_artifact_path("nested/response_body.json") is False
+    assert MODULE.is_archive_portable_artifact_path(
+        "nested/test_sensitive_response_body_f0/report.json"
+    )
+    assert MODULE.is_archive_portable_artifact_path("nested/proof-token-report.json")
 
 
 def test_malformed_required_row_schema_fails(tmp_path: Path) -> None:
@@ -4656,10 +4745,30 @@ def test_object_list_metadata_non_digest_details_must_match_fingerprints(
         ("hedging_billing", "valid_billing_cycles", "cycle_id", "cycle-2"),
         ("moderation_panel", "valid_e2e_runs", "validator_count", 5),
         ("reserve_rent", "valid_provider_bakes", "provider_count", 2),
+        (
+            "reserve_rent",
+            "valid_provider_bakes",
+            "scheduled_lifecycle_canary_tick_count",
+            3,
+        ),
+        (
+            "reserve_rent",
+            "valid_provider_bakes",
+            "scheduled_lifecycle_canary_defaulted_provider_count",
+            2,
+        ),
+        (
+            "reserve_rent",
+            "valid_provider_bakes",
+            "scheduled_lifecycle_canary_last_tick_unix",
+            GENERATED_AT - 1,
+        ),
     ]
 
-    for gate_name, metadata_field, detail_field, replacement in cases:
-        root = tmp_path / gate_name
+    for index, (gate_name, metadata_field, detail_field, replacement) in enumerate(
+        cases
+    ):
+        root = tmp_path / f"{index}_{gate_name}_{detail_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
         payload[metadata_field][0][detail_field] = replacement
@@ -4920,6 +5029,9 @@ def test_object_list_metadata_domain_identities_must_not_duplicate() -> None:
                     "matrix_digest_hex": SHA256,
                     "policy_digest_hex": SHA256,
                     "provider_count": 3,
+                    "scheduled_lifecycle_canary_defaulted_provider_count": 1,
+                    "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 30,
+                    "scheduled_lifecycle_canary_tick_count": 2,
                     "started_at_unix": GENERATED_AT - 60,
                 },
                 {
@@ -4931,6 +5043,9 @@ def test_object_list_metadata_domain_identities_must_not_duplicate() -> None:
                     "matrix_digest_hex": third_digest,
                     "policy_digest_hex": SHA256,
                     "provider_count": 4,
+                    "scheduled_lifecycle_canary_defaulted_provider_count": 1,
+                    "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT + 90,
+                    "scheduled_lifecycle_canary_tick_count": 2,
                     "started_at_unix": GENERATED_AT + 60,
                 },
             ],
@@ -4966,6 +5081,9 @@ def test_provider_bake_metadata_completed_at_must_not_precede_start(
             "started_at_unix": GENERATED_AT,
             "completed_at_unix": GENERATED_AT - 1,
             "provider_count": 3,
+            "scheduled_lifecycle_canary_defaulted_provider_count": 1,
+            "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 30,
+            "scheduled_lifecycle_canary_tick_count": 2,
         }
     ]
     summary = tmp_path / "summary.json"
@@ -4987,6 +5105,47 @@ def test_provider_bake_metadata_completed_at_must_not_precede_start(
         "valid_provider_bakes[0].completed_at_unix must be >= started_at_unix"
         in "\n".join(result["errors"])
     )
+
+
+def test_provider_bake_scheduler_metadata_is_validated(tmp_path: Path) -> None:
+    payload = gate_summary("reserve_rent")
+    payload["valid_policy_digests"] = [SHA256]
+    payload["valid_provider_bakes"][0][
+        "scheduled_lifecycle_canary_tick_count"
+    ] = 0
+    payload["valid_provider_bakes"][0][
+        "scheduled_lifecycle_canary_defaulted_provider_count"
+    ] = True
+    payload["valid_provider_bakes"][0][
+        "scheduled_lifecycle_canary_last_tick_unix"
+    ] = GENERATED_AT + 1
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_provider_bakes[0].scheduled_lifecycle_canary_tick_count "
+        "must be a positive integer"
+    ) in errors
+    assert (
+        "valid_provider_bakes[0].scheduled_lifecycle_canary_defaulted_provider_count "
+        "must be a positive integer"
+    ) in errors
+    assert (
+        "valid_provider_bakes[0].completed_at_unix must be >= "
+        "scheduled_lifecycle_canary_last_tick_unix"
+    ) in errors
 
 
 def test_reserve_rent_metrics_metadata_must_match_owner_kind_fingerprints(
@@ -5284,6 +5443,9 @@ def test_provider_bake_metadata_deployment_context_mismatch_fails(
             "started_at_unix": GENERATED_AT - 3_600,
             "completed_at_unix": GENERATED_AT,
             "provider_count": 3,
+            "scheduled_lifecycle_canary_defaulted_provider_count": 1,
+            "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 60,
+            "scheduled_lifecycle_canary_tick_count": 2,
         }
     ]
     summary = tmp_path / "summary.json"
@@ -5874,7 +6036,7 @@ def test_evidence_file_count_ignores_unsafe_recognized_artifact_paths(
     assert "evidence_file_count must match recognized artifact path count" in diagnostics
     assert (
         ".path must be archive-relative without absolute, empty, current, "
-        "parent, encoded, URI-scheme-like, or platform-specific segments"
+        "parent, encoded, URI-scheme-like, platform-specific, or secret-looking segments"
         in diagnostics
     )
     assert unsafe_path not in diagnostics

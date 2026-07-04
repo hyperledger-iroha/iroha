@@ -39,6 +39,7 @@ TALLY_DIGEST = "c" * 64
 POP_DIGEST = "d" * 64
 SORTITION_SEED = "e" * 64
 POLICY_DIGEST = "f" * 64
+ROUTE_BODY_DIGEST = "9" * 64
 GENERATED_AT = 1_800_300_000
 
 
@@ -78,6 +79,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--roster-hash-hex", ROSTER_HASH])
     if kind in MODULE.TALLY_DIGEST_KINDS:
         args.extend(["--tally-digest-hex", TALLY_DIGEST])
+    if kind in MODULE.ROUTE_BODY_DIGEST_KINDS:
+        args.extend(["--route-body-blake3-hex", ROUTE_BODY_DIGEST])
     for claim in MODULE.TRUE_CLAIMS[kind]:
         args.extend(["--verified-claim", claim])
     if kind == "appeal_intake":
@@ -363,6 +366,22 @@ def test_builds_payload_free_decision_publication_canary(tmp_path: Path) -> None
     assert errors == []
 
 
+@pytest.mark.parametrize("kind", MODULE.ROUTE_BODY_DIGEST_KINDS)
+def test_route_canaries_record_route_body_digest(kind: str, tmp_path: Path) -> None:
+    assert MODULE.main(args_for(kind, tmp_path)) == 0
+
+    payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
+
+    assert all(
+        route["body_blake3_hex"] == ROUTE_BODY_DIGEST for route in payload["routes"]
+    )
+    validated_kind, errors = CHECKER.validate_evidence_payload(
+        payload, checker_options()
+    )
+    assert validated_kind == kind
+    assert errors == []
+
+
 def test_builds_payload_free_transparency_reputation_canary(tmp_path: Path) -> None:
     assert MODULE.main(args_for("transparency_reputation", tmp_path)) == 0
 
@@ -527,6 +546,23 @@ def test_e2e_panel_requires_policy_digest(tmp_path: Path, capsys) -> None:
     assert not canary_path(tmp_path, "e2e_panel").exists()
 
 
+@pytest.mark.parametrize("kind", MODULE.ROUTE_BODY_DIGEST_KINDS)
+def test_route_canaries_require_route_body_digest(
+    kind: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for(kind, tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, kind).exists()
+
+
 def test_missing_viewer_event_coverage_fails_closed(tmp_path: Path, capsys) -> None:
     args = args_for("evidence_viewer", tmp_path)
     index = args.index("--viewer-event-kind")
@@ -687,7 +723,7 @@ def test_appeal_intake_case_inventory_must_not_duplicate(
     (
         (
             "appeal-case-00",
-            "--case must match canonical lowercase `moderation-appeal-case-name`",
+            "--case must match canonical lowercase `moderation-appeal-case-*`",
         ),
         (
             "moderation-appeal-case-placeholder",
@@ -746,7 +782,7 @@ def test_sortition_roster_juror_inventory_must_not_duplicate(
         (
             "roster-juror-00",
             "--roster-juror must match canonical lowercase "
-            "`moderation-roster-juror-name`",
+            "`moderation-roster-juror-*`",
         ),
         (
             "moderation-roster-juror-placeholder",
@@ -806,7 +842,7 @@ def test_evidence_viewer_session_inventory_must_not_duplicate(
         (
             "viewer-session-00",
             "--viewer-session must match canonical lowercase "
-            "`moderation-viewer-session-name`",
+            "`moderation-viewer-session-*`",
         ),
         (
             "moderation-viewer-session-placeholder",
@@ -869,7 +905,7 @@ def test_juror_notification_inventory_must_not_duplicate(
         (
             "notification-00",
             "--notification must match canonical lowercase "
-            "`moderation-notification-name`",
+            "`moderation-notification-*`",
         ),
         (
             "moderation-notification-placeholder",
@@ -928,7 +964,7 @@ def test_juror_inventory_must_not_duplicate(
         (
             "--juror",
             "juror-00",
-            "--juror must match canonical lowercase `moderation-juror-name`",
+            "--juror must match canonical lowercase `moderation-juror-*`",
         ),
         (
             "--juror",
@@ -989,7 +1025,7 @@ def test_commit_reveal_commit_inventory_must_not_duplicate(
         (
             "--commit",
             "commit-00",
-            "--commit must match canonical lowercase `moderation-commit-name`",
+            "--commit must match canonical lowercase `moderation-commit-*`",
         ),
         (
             "--commit",
@@ -999,7 +1035,7 @@ def test_commit_reveal_commit_inventory_must_not_duplicate(
         (
             "--reveal",
             "reveal-00",
-            "--reveal must match canonical lowercase `moderation-reveal-name`",
+            "--reveal must match canonical lowercase `moderation-reveal-*`",
         ),
         (
             "--reveal",
@@ -1103,7 +1139,7 @@ def test_settlement_integration_inventory_must_not_duplicate(
     (
         (
             "appeal-settlement-00",
-            "--settlement must match canonical lowercase `moderation-settlement-name`",
+            "--settlement must match canonical lowercase `moderation-settlement-*`",
         ),
         (
             "moderation-settlement-placeholder",
@@ -1173,7 +1209,7 @@ def test_e2e_panel_peer_inventory_must_not_duplicate(
         (
             "--peer",
             "peer-00",
-            "--peer must match canonical lowercase `moderation-peer-name`",
+            "--peer must match canonical lowercase `moderation-peer-*`",
         ),
         (
             "--peer",
@@ -1183,7 +1219,7 @@ def test_e2e_panel_peer_inventory_must_not_duplicate(
         (
             "--validator",
             "validator-00",
-            "--validator must match canonical lowercase `moderation-validator-name`",
+            "--validator must match canonical lowercase `moderation-validator-*`",
         ),
         (
             "--validator",
@@ -1193,7 +1229,7 @@ def test_e2e_panel_peer_inventory_must_not_duplicate(
         (
             "--panel-case",
             "panel-case-00",
-            "--panel-case must match canonical lowercase `moderation-case-name`",
+            "--panel-case must match canonical lowercase `moderation-case-*`",
         ),
         (
             "--panel-case",

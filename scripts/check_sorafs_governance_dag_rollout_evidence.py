@@ -55,7 +55,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     require_object_array,
@@ -94,7 +94,7 @@ BLOCK_REF_LABEL_PATTERN = re.compile(
     r"^governance-dag-block-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 BLOCK_REF_LABEL_ERROR = (
-    "block_refs entries must match canonical lowercase `governance-dag-block-name`"
+    "block_refs entries must match canonical lowercase `governance-dag-block-*`"
 )
 FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
     (
@@ -364,7 +364,14 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_maximum_number(
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -478,8 +485,8 @@ def validate_publisher_service(
     require_bool_true(payload, "car_segments_pinned", errors)
     require_hex(payload, "public_head_cid_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
-    require_maximum_number(payload, "pin_lag_seconds", options.max_pin_lag_secs, errors)
-    require_maximum_number(payload, "head_age_seconds", options.max_head_age_secs, errors)
+    require_maximum_int(payload, "pin_lag_seconds", options.max_pin_lag_secs, errors)
+    require_maximum_int(payload, "head_age_seconds", options.max_head_age_secs, errors)
     require_minimum_int(payload, "block_count", options.min_blocks, errors)
     require_string_inventory_count_match(
         payload,

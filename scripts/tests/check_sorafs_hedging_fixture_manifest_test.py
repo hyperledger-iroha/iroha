@@ -200,7 +200,7 @@ def test_summary_out_same_as_manifest_fails_before_write(
 ) -> None:
     manifest = write_manifest(tmp_path / "fixture_manifest.json", base_manifest())
     original = manifest.read_text(encoding="utf-8")
-    summary = tmp_path / "nested" / ".." / "fixture_manifest.json"
+    summary = manifest
 
     rc = MODULE.main(
         [

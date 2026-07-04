@@ -50,7 +50,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     required_evidence_kind_names,
@@ -376,11 +376,12 @@ def validate_cookbook_smoke(
     require_bool_true(payload, "fixture_bundle_validation_passed", errors)
     require_bool_true(payload, "manifest_car_replay_passed", errors)
     require_bool_true(payload, "validation_outcomes_emitted", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "smoke_duration_seconds",
         options.max_smoke_duration_secs,
         errors,
+        minimum=1,
     )
     require_hex(payload, "release_manifest_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "smoke_output_digest_hex", HEX64_LEN, errors)

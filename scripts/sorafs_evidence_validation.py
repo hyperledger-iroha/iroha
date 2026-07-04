@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable, Collection, Hashable, Mapping, Sequence
+from html import unescape
 from pathlib import Path
 from string import Formatter
 from typing import Any, TypeVar
@@ -13,7 +14,12 @@ from urllib.parse import unquote
 from sorafs_checker_preflight import record_artifact_error
 from sorafs_evidence_fingerprint import artifact_fingerprint
 from sorafs_evidence_paths import is_explicit_evidence_path
-from sorafs_evidence_sensitivity import visit_sensitive_fields
+from sorafs_evidence_sensitivity import (
+    COMMON_SENSITIVE_KEYS,
+    HIGH_RISK_SENSITIVE_KEY_FRAGMENTS,
+    normalize_sensitive_key,
+    visit_sensitive_fields,
+)
 from sorafs_path_identity import resolve_path_identity
 from sorafs_runner_preflight import runner_url_arg_is_plan_safe
 
@@ -25,23 +31,23 @@ UNKNOWN_REQUIRED_EVIDENCE_KIND = "<unknown>"
 EVIDENCE_URL_FIELD_ERROR = (
     "SoraFS rollout evidence URL fields must not contain userinfo, query strings, "
     "fragments, control characters, encoded traversal, separators, drive prefixes, "
-    "URI-scheme-like path tokens, or secret-looking host/path components"
+    "URI-scheme-like host/path tokens, or secret-looking host/path components"
 )
 EVIDENCE_PATH_FIELD_ERROR = (
     "SoraFS rollout evidence path fields must be archive-relative without "
-    "absolute, empty, current, parent, encoded, URI-scheme-like, or "
-    "platform-specific segments"
+    "absolute, empty, current, parent, encoded, URI-scheme-like, "
+    "platform-specific, or secret-looking segments"
 )
 
 
 def _decoded_text_variants(value: str) -> tuple[str, ...]:
-    """Return raw plus repeatedly percent-decoded text variants."""
+    """Return raw plus repeatedly percent/HTML-decoded text variants."""
 
     variants = [value]
     seen = {value}
     current = value
     for _ in range(4):
-        decoded = unquote(current)
+        decoded = unescape(unquote(current))
         if decoded == current or decoded in seen:
             break
         variants.append(decoded)
@@ -65,6 +71,29 @@ def _path_component_has_uri_scheme_prefix(component: str) -> bool:
     return re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", head) is not None
 
 
+def _path_component_has_sensitive_label(component: str) -> bool:
+    """Return whether a path component looks like runtime-only secret material."""
+
+    normalized_sensitive_keys = frozenset(
+        normalize_sensitive_key(key) for key in COMMON_SENSITIVE_KEYS
+    )
+    for variant in _decoded_text_variants(component):
+        stem = variant.rsplit(".", 1)[0]
+        normalized_values = {
+            normalize_sensitive_key(variant),
+            normalize_sensitive_key(stem),
+        }
+        if any(value in normalized_sensitive_keys for value in normalized_values):
+            return True
+        if any(
+            fragment in value
+            for value in normalized_values
+            for fragment in HIGH_RISK_SENSITIVE_KEY_FRAGMENTS
+        ):
+            return True
+    return False
+
+
 def _archive_path_component_is_portable(component: str) -> bool:
     """Return whether an archive path component is safe in raw or decoded form."""
 
@@ -78,6 +107,7 @@ def _archive_path_component_is_portable(component: str) -> bool:
             or any(ord(character) < 32 or ord(character) == 127 for character in variant)
             or _path_component_has_windows_drive_prefix(variant)
             or _path_component_has_uri_scheme_prefix(variant)
+            or _path_component_has_sensitive_label(variant)
         ):
             return False
     return True

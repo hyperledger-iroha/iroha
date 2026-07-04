@@ -27,7 +27,7 @@ config_route_2xx
 --verified-claim
 status_route_2xx
 --config-version
-baseline-v1
+appeal-finance-config-baseline-v1
 --class-count
 4
 --appeal-class

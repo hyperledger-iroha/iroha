@@ -15,6 +15,7 @@ public static class KagemushaWireNames
 {
     public const string TransferInstruction = "iroha_data_model::isi::offline::KagemushaTransfer";
     public const string RedeemRecursiveInstruction = "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
+    public const string RecursiveTopUpRequest = "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
     public const string RecursiveRedeemRequest = "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
 }
 
@@ -67,6 +68,15 @@ public sealed record class KagemushaInstructionArchiveInstruction : TransactionI
         ArgumentNullException.ThrowIfNull(instructionArchive);
         return new KagemushaInstructionArchiveInstruction(
             KagemushaInstructionType.RedeemRecursive,
+            instructionArchive.NoritoBytes);
+    }
+
+    public static KagemushaInstructionArchiveInstruction TopUp(
+        KagemushaRecursiveSpendTopUpInstructionArchive instructionArchive)
+    {
+        ArgumentNullException.ThrowIfNull(instructionArchive);
+        return new KagemushaInstructionArchiveInstruction(
+            KagemushaInstructionType.Transfer,
             instructionArchive.NoritoBytes);
     }
 

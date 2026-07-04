@@ -13,6 +13,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_checker_preflight import (  # noqa: E402
+    CHECKER_RENDERED_PATH_ERROR,
     artifact_path_label,
     checker_output_parent_sync_open_flags,
     checker_summary_write_open_flags,
@@ -31,6 +32,7 @@ from sorafs_checker_preflight import (  # noqa: E402
     validate_checker_output_parent,
     validate_checker_preflight,
     validate_checker_evidence_inputs,
+    validate_checker_rendered_paths,
     validate_checker_summary_output,
     write_checker_summary,
 )
@@ -84,6 +86,45 @@ def test_present_evidence_spec_passes_input_check(tmp_path: Path) -> None:
     )
 
     assert errors == []
+
+
+def test_validate_checker_rendered_paths_rejects_unsafe_components_without_leaking(
+    tmp_path: Path,
+) -> None:
+    errors: list[str] = []
+
+    validate_checker_rendered_paths(
+        (
+            tmp_path / "private&#95;key-summary.json",
+            tmp_path / "nested" / "bad&#47;summary.json",
+        ),
+        errors,
+    )
+
+    assert errors == [CHECKER_RENDERED_PATH_ERROR]
+    rendered = "\n".join(errors)
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
+    assert "bad&#47;summary" not in rendered
+
+
+def test_evidence_input_check_rejects_unsafe_rendered_paths_without_leaking(
+    tmp_path: Path,
+) -> None:
+    errors = validate_checker_evidence_inputs(
+        argparse.Namespace(
+            evidence_dir=[tmp_path / "bearer&#95;token_bundle"],
+            evidence=[f"latest={tmp_path / 'private%26%2395%3Bkey.json'}"],
+        )
+    )
+
+    assert errors == [CHECKER_RENDERED_PATH_ERROR]
+    rendered = "\n".join(errors)
+    assert "bearer&#95;token" not in rendered
+    assert "bearer_token" not in rendered
+    assert "private%26%2395%3Bkey" not in rendered
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
 
 
 def test_evidence_input_check_rejects_malformed_collections(tmp_path: Path) -> None:
@@ -228,6 +269,23 @@ def test_validate_checker_summary_output_rejects_non_path_without_traceback() ->
 
     assert not validate_checker_summary_output("summary.json", errors)
     assert errors == ["--summary-out `summary.json` must be a path"]
+
+
+def test_validate_checker_summary_output_rejects_unsafe_path_without_leaking(
+    tmp_path: Path,
+) -> None:
+    errors: list[str] = []
+
+    assert not validate_checker_summary_output(
+        tmp_path / "private%26%2395%3Bkey-summary.json",
+        errors,
+    )
+
+    assert errors == [CHECKER_RENDERED_PATH_ERROR]
+    rendered = "\n".join(errors)
+    assert "private%26%2395%3Bkey" not in rendered
+    assert "private&#95;key" not in rendered
+    assert "private_key" not in rendered
 
 
 def test_validate_checker_output_parent_rejects_non_path_without_traceback() -> None:
@@ -465,19 +523,18 @@ def test_summary_out_same_as_explicit_evidence_fails(tmp_path: Path) -> None:
 
     errors = validate_checker_preflight(
         argparse.Namespace(
-            summary_out=tmp_path / "nested" / ".." / "evidence.json",
+            summary_out=evidence,
             evidence=[evidence],
             evidence_dir=[],
         )
     )
 
     assert errors == [
-        f"--summary-out `{tmp_path / 'nested' / '..' / 'evidence.json'}` "
-        f"must not be the same path as --evidence `{evidence}`"
+        f"--summary-out `{evidence}` must not be the same path as --evidence `{evidence}`"
     ]
 
 
-def test_summary_out_same_as_explicit_evidence_sanitizes_noncanonical_paths(
+def test_summary_out_same_as_explicit_evidence_rejects_unsafe_paths_without_leaking(
     tmp_path: Path,
 ) -> None:
     evidence = tmp_path / "bad\nsummary.json"
@@ -491,10 +548,10 @@ def test_summary_out_same_as_explicit_evidence_sanitizes_noncanonical_paths(
         )
     )
 
-    assert errors == [
-        "--summary-out `<non-canonical-path>` must not be the same path as "
-        "--evidence `<non-canonical-path>`"
-    ]
+    assert errors == [CHECKER_RENDERED_PATH_ERROR]
+    rendered = "\n".join(errors)
+    assert "bad\nsummary" not in rendered
+    assert "<non-canonical-path>" not in rendered
 
 
 def test_summary_out_same_as_discovered_evidence_fails(tmp_path: Path) -> None:
@@ -503,7 +560,7 @@ def test_summary_out_same_as_discovered_evidence_fails(tmp_path: Path) -> None:
 
     errors = validate_checker_preflight(
         argparse.Namespace(
-            summary_out=tmp_path / "nested" / ".." / "evidence.json",
+            summary_out=evidence,
             evidence=[],
             evidence_dir=[tmp_path],
         )
@@ -511,7 +568,6 @@ def test_summary_out_same_as_discovered_evidence_fails(tmp_path: Path) -> None:
 
     assert errors == ["evidence file conflicts with reserved output"]
     assert str(evidence) not in errors[0]
-    assert str(tmp_path / "nested" / ".." / "evidence.json") not in errors[0]
 
 
 def test_write_checker_summary_ignores_absent_path() -> None:
@@ -815,7 +871,7 @@ def test_write_checker_summary_sanitizes_parent_fsync_failure(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    summary = tmp_path / "bad\nparent" / "summary.json"
+    summary = tmp_path / "summary-parent" / "summary.json"
     original_open = os.open
     original_fsync = os.fsync
     parent_fds: set[int] = set()
@@ -828,7 +884,7 @@ def test_write_checker_summary_sanitizes_parent_fsync_failure(
 
     def fsync(fd: int) -> None:
         if fd in parent_fds:
-            raise OSError(f"parent fsync denied for {summary.parent}")
+            raise OSError(f"parent fsync denied for {summary.parent}\nsecret")
         original_fsync(fd)
 
     monkeypatch.setattr(os, "open", open_path)
@@ -837,7 +893,7 @@ def test_write_checker_summary_sanitizes_parent_fsync_failure(
     errors = write_checker_summary(summary, "{}")
 
     assert errors == [
-        "failed to fsync --summary-out parent `<non-canonical-path>`: "
+        f"failed to fsync --summary-out parent `{summary.parent}`: "
         "<non-canonical-error>"
     ]
 
@@ -898,12 +954,12 @@ def test_write_checker_summary_sanitizes_create_parent_failure(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    summary = tmp_path / "bad\nparent" / "summary.json"
+    summary = tmp_path / "summary-parent" / "summary.json"
     original_mkdir = Path.mkdir
 
     def mkdir(path: Path, *args, **kwargs):
         if path == summary.parent:
-            raise OSError(f"mkdir denied for {path}")
+            raise OSError(f"mkdir denied for {path}\nsecret")
         return original_mkdir(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "mkdir", mkdir)
@@ -911,7 +967,7 @@ def test_write_checker_summary_sanitizes_create_parent_failure(
     errors = write_checker_summary(summary, "{}")
 
     assert errors == [
-        "failed to create --summary-out parent `<non-canonical-path>`: "
+        f"failed to create --summary-out parent `{summary.parent}`: "
         "<non-canonical-error>"
     ]
 
@@ -920,41 +976,35 @@ def test_write_checker_summary_sanitizes_write_failure(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    summary = tmp_path / "bad\nsummary.json"
+    summary = tmp_path / "summary.json"
     original_open = os.open
 
     def open_path(path: Path, flags: int, mode: int = 0o777, *args, **kwargs):
         if path == summary:
-            raise OSError(f"write denied for {path}")
+            raise OSError(f"write denied for {path}\nsecret")
         return original_open(path, flags, mode, *args, **kwargs)
 
     monkeypatch.setattr(os, "open", open_path)
 
     errors = write_checker_summary(summary, "{}")
 
-    assert errors == [
-        "failed to write --summary-out `<non-canonical-path>`: "
-        "<non-canonical-error>"
-    ]
+    assert errors == [f"failed to write --summary-out `{summary}`: <non-canonical-error>"]
 
 
 def test_write_checker_summary_sanitizes_fsync_failure(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    summary = tmp_path / "bad\nsummary.json"
+    summary = tmp_path / "summary.json"
 
     def fsync(_fd: int) -> None:
-        raise OSError(f"fsync denied for {summary}")
+        raise OSError(f"fsync denied for {summary}\nsecret")
 
     monkeypatch.setattr(os, "fsync", fsync)
 
     errors = write_checker_summary(summary, "{}")
 
-    assert errors == [
-        "failed to write --summary-out `<non-canonical-path>`: "
-        "<non-canonical-error>"
-    ]
+    assert errors == [f"failed to write --summary-out `{summary}`: <non-canonical-error>"]
 
 
 def test_emit_checker_error_lines_writes_prefixed_stderr(capsys) -> None:

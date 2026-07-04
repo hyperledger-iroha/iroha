@@ -114,6 +114,21 @@ public sealed class KagemushaRecursiveSpendNativeTests
         Assert.False(KagemushaRecursiveSpendNative.IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable(
             () => 7u,
             () => false));
+        Assert.True(KagemushaRecursiveSpendNative.IsTopUpAvailable(
+            () => 15u,
+            () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsTopUpAvailable(
+            () => 14u,
+            () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsTopUpAvailable(
+            () => 15u,
+            () => false));
+        Assert.False(KagemushaRecursiveSpendNative.IsTopUpAvailable(
+            () => throw new EntryPointNotFoundException("missing ABI probe"),
+            () => true));
+        Assert.False(KagemushaRecursiveSpendNative.IsTopUpAvailable(
+            () => 15u,
+            () => throw new EntryPointNotFoundException("missing top-up symbol")));
     }
 
     [Fact]
@@ -200,6 +215,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             Enum.GetValues<KagemushaOfflineSpendMode>().Select(mode => mode.WireName()));
         Assert.Equal(6u, KagemushaRecursiveSpendNative.RequiredNativeBridgeAbiVersion);
         Assert.Equal(7u, KagemushaRecursiveSpendNative.RecursiveCompactRequiredNativeBridgeAbiVersion);
+        Assert.Equal(15u, KagemushaRecursiveSpendNative.TopUpRequiredNativeBridgeAbiVersion);
         Assert.Equal(
             "kagemusha-recursive-compact-v1",
             KagemushaRecursiveSpendNative.RecursiveCompactCircuitIdV1);
@@ -4017,6 +4033,7 @@ public sealed class KagemushaRecursiveSpendNativeTests
             byte[] validRecordBundle)
         {
             Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Init(malformed));
+            Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.TopUp(malformed));
             Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.Append(malformed));
             Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.TransitionProfileInit(malformed));
             Assert.Throws<ArgumentException>(() => KagemushaRecursiveSpendNative.TransitionProfileAppend(malformed));
@@ -4102,6 +4119,10 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "requestArchive");
         AssertOversizedArchive(
             () => KagemushaRecursiveSpendNative.Append(oversizedArchive),
+            "Request archive must not exceed",
+            "requestArchive");
+        AssertOversizedArchive(
+            () => KagemushaRecursiveSpendNative.TopUp(oversizedArchive),
             "Request archive must not exceed",
             "requestArchive");
         AssertOversizedArchive(
@@ -4406,6 +4427,10 @@ public sealed class KagemushaRecursiveSpendNativeTests
             "Request archive",
             "requestArchive",
             () => KagemushaRecursiveSpendNative.Init(rejectedArchive));
+        AssertRejected(
+            "Request archive",
+            "requestArchive",
+            () => KagemushaRecursiveSpendNative.TopUp(rejectedArchive));
         AssertRejected(
             "Request archive",
             "requestArchive",

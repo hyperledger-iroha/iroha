@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_appeal_finance_rollout_evidence.py"
 SPEC = importlib.util.spec_from_file_location(
@@ -37,6 +39,7 @@ def route(name: str, *, authz: bool = True) -> dict:
         "name": name,
         "passed": True,
         "status_code": 200,
+        "body_blake3_hex": DIGEST_2,
         "authz_enforced": authz,
         "signature_verified": True,
         "latency_ms": 30,
@@ -57,7 +60,7 @@ def pricing_config() -> dict:
         "status": "passed",
         "generated_at_unix": GENERATED_AT,
         "config_digest_hex": DIGEST,
-        "config_version": "baseline-v1",
+        "config_version": "appeal-finance-config-baseline-v1",
         "config_source": "iroha_config",
         "policy_digest_hex": DIGEST,
         "class_count": 4,
@@ -116,8 +119,8 @@ def deposit_lifecycle(*, authz: bool = True) -> dict:
         "routes": routes,
         "deposit_probe_count": 2,
         "deposit_probes": [
-            {"name": "deposit-probe-00", "confirmed": True},
-            {"name": "deposit-probe-01", "confirmed": True},
+            {"name": "appeal-finance-deposit-probe-00", "confirmed": True},
+            {"name": "appeal-finance-deposit-probe-01", "confirmed": True},
         ],
         "confirmed_deposit_count": 2,
         "payer_auth_enforced": True,
@@ -190,13 +193,13 @@ def settlement_submitter() -> dict:
         "config_digest_hex": DIGEST,
         "configured_signer_count": 2,
         "signers": [
-            {"name": "submitter-signer-00"},
-            {"name": "submitter-signer-01"},
+            {"name": "appeal-finance-submitter-signer-00"},
+            {"name": "appeal-finance-submitter-signer-01"},
         ],
         "queued_step_count": 2,
         "steps": [
-            {"name": "settlement-step-00", "submitted": True},
-            {"name": "settlement-step-01", "submitted": True},
+            {"name": "appeal-finance-submitter-step-00", "submitted": True},
+            {"name": "appeal-finance-submitter-step-01", "submitted": True},
         ],
         "submitted_step_count": 2,
         "receipt_published": True,
@@ -220,6 +223,11 @@ def moderation_worker() -> dict:
         "storage_configured": True,
         "submitter_keys_configured": True,
         "ballot_replay_count": 3,
+        "ballots": [
+            {"name": "appeal-finance-worker-ballot-00"},
+            {"name": "appeal-finance-worker-ballot-01"},
+            {"name": "appeal-finance-worker-ballot-02"},
+        ],
         "live_event_subscription_verified": True,
         "deposit_fingerprint_reconstructed": True,
         "evidence_hashes_verified": True,
@@ -389,6 +397,25 @@ def validation_options() -> object:
     )
 
 
+def artifact_errors_for_mutation(
+    root: Path,
+    *,
+    filename: str,
+    payload: dict,
+    kind: str,
+) -> list[str]:
+    """Write one mutated evidence artifact and return its validation errors."""
+
+    write_complete_evidence(root)
+    write_json(root / filename, payload)
+    summary = root / "summary.json"
+
+    assert run_gate(root, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    return result["required"][kind]["artifacts"][0]["errors"]
+
+
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -423,8 +450,95 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     ] == DEPLOYMENT_ID
 
 
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        (
+            "pricing-config.json",
+            "pricing_config",
+            pricing_config,
+            ("config_payload_included", "response_bodies_included"),
+        ),
+        (
+            "quote-api.json",
+            "quote_api",
+            quote_api,
+            ("payloads_included", "response_bodies_included"),
+        ),
+        (
+            "deposit-lifecycle.json",
+            "deposit_lifecycle",
+            deposit_lifecycle,
+            (
+                "raw_instruction_included",
+                "deposit_payloads_included",
+                "response_bodies_included",
+            ),
+        ),
+        (
+            "settlement-execution.json",
+            "settlement_execution",
+            settlement_execution,
+            (
+                "raw_instruction_included",
+                "signed_transaction_included",
+                "response_bodies_included",
+            ),
+        ),
+        (
+            "settlement-submitter.json",
+            "settlement_submitter",
+            settlement_submitter,
+            ("raw_receipt_included", "signed_transaction_included"),
+        ),
+        (
+            "moderation-worker.json",
+            "moderation_worker",
+            moderation_worker,
+            ("raw_ballot_included", "deposit_confirmation_payload_included"),
+        ),
+        (
+            "governance-dag-publication.json",
+            "governance_dag_publication",
+            governance_dag_publication,
+            ("raw_report_included", "raw_rollup_included", "raw_receipt_included"),
+        ),
+        (
+            "dashboard-metrics.json",
+            "dashboard_metrics",
+            dashboard_metrics,
+            ("critical_alerts_firing", "response_bodies_included"),
+        ),
+        (
+            "multi-peer-reconciliation.json",
+            "multi_peer_reconciliation",
+            multi_peer_reconciliation,
+            ("raw_ledger_included",),
+        ),
+    )
+
+    for artifact_file, kind, make_payload, fields in cases:
+        for field in fields:
+            case_dir = tmp_path / kind / field
+            case_dir.mkdir(parents=True)
+            write_complete_evidence(case_dir)
+            payload = make_payload()
+            payload.pop(field)
+            write_json(case_dir / artifact_file, payload)
+            summary = case_dir / "summary.json"
+
+            assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            artifact = result["required"][kind]["artifacts"][0]
+            assert artifact["valid"] is False
+            assert f"{field} must be false" in artifact["errors"]
+
+
 def test_pricing_config_version_must_be_canonical() -> None:
-    for version in ("baseline-v1", "governance-baseline-v12"):
+    for version in (
+        "appeal-finance-config-baseline-v1",
+        "appeal-finance-config-governance-baseline-v12",
+    ):
         payload = pricing_config()
         payload["config_version"] = version
         kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
@@ -437,6 +551,7 @@ def test_pricing_config_version_must_be_canonical() -> None:
         "baseline-v0",
         "baseline-v01",
         "Baseline-v1",
+        "appeal-finance-config-v1",
     ):
         payload = pricing_config()
         payload["config_version"] = version
@@ -445,9 +560,19 @@ def test_pricing_config_version_must_be_canonical() -> None:
         assert MODULE.CONFIG_VERSION_ERROR in errors
 
     payload = pricing_config()
-    payload["config_version"] = "dev-baseline-v1"
+    payload["config_version"] = "appeal-finance-config-dev-baseline-v1"
     _kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
     assert "config_version must not contain non-production markers ['dev']" in errors
+
+
+def test_pricing_config_version_rejects_generic_name_family() -> None:
+    payload = pricing_config()
+    payload["config_version"] = "baseline-v1"
+
+    kind, errors = MODULE.validate_evidence_payload(payload, validation_options())
+
+    assert kind == "pricing_config"
+    assert MODULE.CONFIG_VERSION_ERROR in errors
 
 
 def test_missing_multi_peer_reconciliation_fails(tmp_path: Path) -> None:
@@ -595,6 +720,87 @@ def test_routes_must_not_include_unknown_values_for_route_artifacts(
         assert "routes must not include unknown values" in artifact["errors"]
 
 
+@pytest.mark.parametrize(
+    ("kind", "filename", "factory"),
+    (
+        ("quote_api", "quote-api.json", quote_api),
+        ("deposit_lifecycle", "deposit-lifecycle.json", deposit_lifecycle),
+        ("settlement_execution", "settlement-execution.json", settlement_execution),
+    ),
+)
+def test_route_body_hash_is_required_for_route_artifacts(
+    kind: str,
+    filename: str,
+    factory,
+    tmp_path: Path,
+) -> None:
+    payload = factory()
+    del payload["routes"][0]["body_blake3_hex"]
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename=filename,
+        payload=payload,
+        kind=kind,
+    )
+
+    assert "routes[0].body_blake3_hex must be a non-empty string" in errors
+
+
+@pytest.mark.parametrize(
+    ("kind", "filename", "factory"),
+    (
+        ("quote_api", "quote-api.json", quote_api),
+        ("deposit_lifecycle", "deposit-lifecycle.json", deposit_lifecycle),
+        ("settlement_execution", "settlement-execution.json", settlement_execution),
+    ),
+)
+def test_route_latency_must_be_integer_for_route_artifacts(
+    kind: str,
+    filename: str,
+    factory,
+    tmp_path: Path,
+) -> None:
+    payload = factory()
+    payload["routes"][0]["latency_ms"] = 12.5
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename=filename,
+        payload=payload,
+        kind=kind,
+    )
+
+    assert "routes[0].latency_ms must be a non-negative integer" in errors
+
+
+@pytest.mark.parametrize(
+    ("kind", "filename", "factory"),
+    (
+        ("quote_api", "quote-api.json", quote_api),
+        ("deposit_lifecycle", "deposit-lifecycle.json", deposit_lifecycle),
+        ("settlement_execution", "settlement-execution.json", settlement_execution),
+    ),
+)
+def test_route_latency_is_required_for_route_artifacts(
+    kind: str,
+    filename: str,
+    factory,
+    tmp_path: Path,
+) -> None:
+    payload = factory()
+    del payload["routes"][0]["latency_ms"]
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename=filename,
+        payload=payload,
+        kind=kind,
+    )
+
+    assert "routes[0].latency_ms must be a non-negative integer" in errors
+
+
 def test_deposit_probe_count_must_match_unique_probes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = deposit_lifecycle()
@@ -661,6 +867,35 @@ def test_deposit_probe_confirmation_must_be_boolean(tmp_path: Path) -> None:
     assert "deposit_probes[0].confirmed must be a boolean" in artifact["errors"]
 
 
+@pytest.mark.parametrize(
+    ("label", "expected_error"),
+    (
+        ("deposit-probe-00", MODULE.DEPOSIT_PROBE_LABEL_ERROR),
+        (
+            "appeal-finance-deposit-probe-placeholder",
+            "deposit_probes[0].name must not contain non-production markers "
+            "['placeholder']",
+        ),
+    ),
+)
+def test_deposit_probe_labels_must_be_reviewed_production_inventory(
+    label: str,
+    expected_error: str,
+    tmp_path: Path,
+) -> None:
+    payload = deposit_lifecycle()
+    payload["deposit_probes"][0]["name"] = label
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename="deposit-lifecycle.json",
+        payload=payload,
+        kind="deposit_lifecycle",
+    )
+
+    assert expected_error in errors
+
+
 def test_quote_api_classes_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = quote_api()
@@ -720,6 +955,34 @@ def test_quote_api_dimensions_must_not_include_unknown_values(
         artifact = result["required"]["quote_api"]["artifacts"][0]
         assert artifact["valid"] is False
         assert f"{field} must not include unknown values" in artifact["errors"]
+
+
+def test_quote_api_max_route_latency_must_be_integer(tmp_path: Path) -> None:
+    payload = quote_api()
+    payload["max_route_latency_ms"] = 12.5
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename="quote-api.json",
+        payload=payload,
+        kind="quote_api",
+    )
+
+    assert "max_route_latency_ms must be a positive integer" in errors
+
+
+def test_deposit_lifecycle_max_route_latency_must_be_integer(tmp_path: Path) -> None:
+    payload = deposit_lifecycle()
+    payload["max_route_latency_ms"] = 12.5
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename="deposit-lifecycle.json",
+        payload=payload,
+        kind="deposit_lifecycle",
+    )
+
+    assert "max_route_latency_ms must be a positive integer" in errors
 
 
 def test_settlement_outcomes_must_not_duplicate(tmp_path: Path) -> None:
@@ -953,6 +1216,134 @@ def test_settlement_submitter_step_submission_must_be_boolean(tmp_path: Path) ->
     assert "steps[0].submitted must be a boolean" in artifact["errors"]
 
 
+def test_settlement_submitter_lag_must_be_integer(tmp_path: Path) -> None:
+    payload = settlement_submitter()
+    payload["max_settlement_lag_seconds"] = 12.5
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename="settlement-submitter.json",
+        payload=payload,
+        kind="settlement_submitter",
+    )
+
+    assert "max_settlement_lag_seconds must be a non-negative integer" in errors
+
+
+@pytest.mark.parametrize(
+    ("field", "label", "expected_error"),
+    (
+        ("signers", "submitter-signer-00", MODULE.SUBMITTER_SIGNER_LABEL_ERROR),
+        (
+            "signers",
+            "appeal-finance-submitter-signer-placeholder",
+            "signers[0].name must not contain non-production markers ['placeholder']",
+        ),
+        ("steps", "settlement-step-00", MODULE.SUBMITTER_STEP_LABEL_ERROR),
+        (
+            "steps",
+            "appeal-finance-submitter-step-placeholder",
+            "steps[0].name must not contain non-production markers ['placeholder']",
+        ),
+    ),
+)
+def test_settlement_submitter_labels_must_be_reviewed_production_inventory(
+    field: str,
+    label: str,
+    expected_error: str,
+    tmp_path: Path,
+) -> None:
+    payload = settlement_submitter()
+    payload[field][0]["name"] = label
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename="settlement-submitter.json",
+        payload=payload,
+        kind="settlement_submitter",
+    )
+
+    assert expected_error in errors
+
+
+def test_moderation_worker_ballot_count_must_match_unique_ballots(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = moderation_worker()
+    payload["ballot_replay_count"] += 1
+    write_json(tmp_path / "moderation-worker.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["moderation_worker"]["artifacts"][0]
+    assert "ballot_replay_count must match unique ballots count" in artifact[
+        "errors"
+    ]
+
+
+def test_moderation_worker_ballots_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = moderation_worker()
+    payload["ballots"].append(dict(payload["ballots"][0]))
+    payload["ballot_replay_count"] = len(payload["ballots"])
+    write_json(tmp_path / "moderation-worker.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["moderation_worker"]["artifacts"][0]
+    assert "ballots must not contain duplicate values" in artifact["errors"]
+    assert "ballot_replay_count must match unique ballots count" in artifact[
+        "errors"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("label", "expected_error"),
+    (
+        ("worker-ballot-00", MODULE.WORKER_BALLOT_LABEL_ERROR),
+        (
+            "appeal-finance-worker-ballot-placeholder",
+            "ballots[0].name must not contain non-production markers ['placeholder']",
+        ),
+    ),
+)
+def test_moderation_worker_ballots_must_be_reviewed_production_inventory(
+    label: str,
+    expected_error: str,
+    tmp_path: Path,
+) -> None:
+    payload = moderation_worker()
+    payload["ballots"][0]["name"] = label
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename="moderation-worker.json",
+        payload=payload,
+        kind="moderation_worker",
+    )
+
+    assert expected_error in errors
+
+
+def test_moderation_worker_settlement_lag_must_be_integer(tmp_path: Path) -> None:
+    payload = moderation_worker()
+    payload["max_settlement_lag_seconds"] = 12.5
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename="moderation-worker.json",
+        payload=payload,
+        kind="moderation_worker",
+    )
+
+    assert "max_settlement_lag_seconds must be a non-negative integer" in errors
+
+
 def test_governance_dag_report_count_must_match_unique_reports(
     tmp_path: Path,
 ) -> None:
@@ -1084,6 +1475,58 @@ def test_governance_dag_settlement_receipt_count_must_match_unique_receipts(
         "settlement_receipt_count must match unique settlement_receipts count"
         in artifact["errors"]
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "label", "expected_error"),
+    (
+        ("reports", "report-00", MODULE.GOVERNANCE_REPORT_LABEL_ERROR),
+        (
+            "reports",
+            "appeal-finance-report-placeholder",
+            "reports[0].name must not contain non-production markers ['placeholder']",
+        ),
+        (
+            "weekly_rollups",
+            "weekly-rollup-00",
+            MODULE.GOVERNANCE_WEEKLY_ROLLUP_LABEL_ERROR,
+        ),
+        (
+            "weekly_rollups",
+            "appeal-finance-weekly-rollup-placeholder",
+            "weekly_rollups[0].name must not contain non-production markers "
+            "['placeholder']",
+        ),
+        (
+            "settlement_receipts",
+            "settlement-receipt-00",
+            MODULE.GOVERNANCE_SETTLEMENT_RECEIPT_LABEL_ERROR,
+        ),
+        (
+            "settlement_receipts",
+            "appeal-finance-settlement-receipt-placeholder",
+            "settlement_receipts[0].name must not contain non-production markers "
+            "['placeholder']",
+        ),
+    ),
+)
+def test_governance_dag_publication_labels_must_be_reviewed_production_inventory(
+    field: str,
+    label: str,
+    expected_error: str,
+    tmp_path: Path,
+) -> None:
+    payload = governance_dag_publication()
+    payload[field][0]["name"] = label
+
+    errors = artifact_errors_for_mutation(
+        tmp_path,
+        filename="governance-dag-publication.json",
+        payload=payload,
+        kind="governance_dag_publication",
+    )
+
+    assert expected_error in errors
 
 
 def test_pricing_config_requires_policy_digest(tmp_path: Path) -> None:

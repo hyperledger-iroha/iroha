@@ -736,7 +736,12 @@ public enum OfflineNoteReceiveRequestCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        OfflineNoteTextTransferContract.base64URLDecodedData(value)
+        guard !value.isEmpty,
+              !value.contains("="),
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            return nil
+        }
+        return OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }
 
@@ -988,7 +993,12 @@ public enum OfflineNotePaymentTokenCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        OfflineNoteTextTransferContract.base64URLDecodedData(value)
+        guard !value.isEmpty,
+              !value.contains("="),
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            return nil
+        }
+        return OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }
 
@@ -1208,7 +1218,12 @@ public enum OfflineNoteReceiptAckCodec {
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
-        OfflineNoteTextTransferContract.base64URLDecodedData(value)
+        guard !value.isEmpty,
+              !value.contains("="),
+              value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
+            return nil
+        }
+        return OfflineNoteTextTransferContract.base64URLDecodedData(value)
     }
 }
 
@@ -1615,68 +1630,7 @@ public final class OfflineNoteWallet {
     }
 
     public func load(assetDefinitionId: String, amount: String) async throws -> OfflineNoteWalletNote {
-        guard let issuerClient else {
-            throw OfflineNoteWalletError.missingIssuerClient
-        }
-        let canonicalAmount = try canonicalPositivePaymentAmountString(amount)
-        let assetId = walletAssetId(assetDefinitionId: assetDefinitionId, accountId: accountId)
-        // Pass the full `name#domain` assetDefinitionId to Torii — the
-        // internal `assetId` is the SDK's 2-part `name#account` form
-        // (domain stripped by walletAssetId), so deriving the definition
-        // id from it would drop the domain and the server would reject
-        // with `OFFLINE_INVALID_ASSET` (400) because Iroha asset
-        // definition ids are always `name#domain`.
-        let context = try await issuerClient.prepareLoad(
-            chainId: chainId,
-            accountId: accountId,
-            assetDefinitionId: assetDefinitionId,
-            amount: canonicalAmount
-        )
-        try requireTrustedIssuerCertificate(context.keyCertificate, expectedAccountId: accountId)
-        let noteSecret = try random32()
-        let origin = try OfflineNoteCommitmentOrigin.issuerLoad(OfflineNoteIssuerLoadOrigin(
-            operationId: context.operationId,
-            lineageId: context.lineageId,
-            localRevision: context.localRevision
-        ))
-        let commitment = try deriveNoteCommitment(
-            keyCertificate: context.keyCertificate,
-            assetId: assetId,
-            amount: canonicalAmount,
-            noteSecret: noteSecret,
-            origin: origin
-        )
-        let request = OfflineNoteIssueRequest(
-            chainId: chainId,
-            accountId: accountId,
-            assetDefinitionId: assetDefinitionId,
-            assetId: assetId,
-            amount: canonicalAmount,
-            loadContext: context,
-            noteCommitment: commitment
-        )
-        let response = try await issuerClient.issueNote(request)
-        guard response.noteCommitment == commitment else {
-            throw OfflineNoteWalletError.issuerCommitmentMismatch
-        }
-        let issuedCertificate = response.keyCertificate ?? context.keyCertificate
-        try requireTrustedIssuerCertificate(issuedCertificate, expectedAccountId: accountId)
-        let now = clock()
-        let note = try OfflineNoteWalletNote(
-            chainId: chainId,
-            accountId: accountId,
-            assetId: assetId,
-            amount: canonicalAmount,
-            keyCertificate: issuedCertificate,
-            noteCommitment: commitment,
-            noteSecret: noteSecret,
-            origin: origin,
-            state: .issuePending,
-            createdAtMs: now,
-            updatedAtMs: now
-        )
-        try store.upsert(note)
-        return note
+        throw ToriiOfflineNoteIssuerClientError.retiredOfflineNoteIssue
     }
 
     public func prepareReceive(assetDefinitionId: String, amount: String) throws -> OfflineNoteReceiveRequest {

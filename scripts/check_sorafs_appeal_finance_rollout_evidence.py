@@ -57,7 +57,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_config_backed_governance_approval,
     require_iroha_config_binding,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_non_negative_int,
     require_object,
@@ -93,9 +93,11 @@ DEFAULT_MAX_SETTLEMENT_LAG_SECS = 15 * 60
 DEFAULT_MIN_PEERS = 4
 HEX64_LEN = 64
 CONFIG_VERSION_PATTERN = re.compile(
-    r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*-v([1-9][0-9]*)\Z"
+    r"^appeal-finance-config-[a-z0-9]+(?:-[a-z0-9]+)*-v([1-9][0-9]*)\Z"
 )
-CONFIG_VERSION_ERROR = "config_version must match canonical lowercase `name-vN`"
+CONFIG_VERSION_ERROR = (
+    "config_version must match canonical lowercase `appeal-finance-config-name-vN`"
+)
 FORBIDDEN_CONFIG_VERSION_MARKERS = frozenset(
     (
         "debug",
@@ -118,15 +120,63 @@ VALIDATOR_LABEL_PATTERN = re.compile(
 RECONCILIATION_CASE_LABEL_PATTERN = re.compile(
     r"^appeal-finance-case-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
+DEPOSIT_PROBE_LABEL_PATTERN = re.compile(
+    r"^appeal-finance-deposit-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+SUBMITTER_SIGNER_LABEL_PATTERN = re.compile(
+    r"^appeal-finance-submitter-signer-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+SUBMITTER_STEP_LABEL_PATTERN = re.compile(
+    r"^appeal-finance-submitter-step-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+WORKER_BALLOT_LABEL_PATTERN = re.compile(
+    r"^appeal-finance-worker-ballot-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+GOVERNANCE_REPORT_LABEL_PATTERN = re.compile(
+    r"^appeal-finance-report-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+GOVERNANCE_WEEKLY_ROLLUP_LABEL_PATTERN = re.compile(
+    r"^appeal-finance-weekly-rollup-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+GOVERNANCE_SETTLEMENT_RECEIPT_LABEL_PATTERN = re.compile(
+    r"^appeal-finance-settlement-receipt-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
 PEER_LABEL_ERROR = (
-    "peers[].name must match canonical lowercase `appeal-finance-peer-name`"
+    "peers[].name must match canonical lowercase `appeal-finance-peer-*`"
 )
 VALIDATOR_LABEL_ERROR = (
     "validators[].name must match canonical lowercase "
     "`appeal-finance-validator-name`"
 )
 RECONCILIATION_CASE_LABEL_ERROR = (
-    "cases[].name must match canonical lowercase `appeal-finance-case-name`"
+    "cases[].name must match canonical lowercase `appeal-finance-case-*`"
+)
+DEPOSIT_PROBE_LABEL_ERROR = (
+    "deposit_probes[].name must match canonical lowercase "
+    "`appeal-finance-deposit-probe-name`"
+)
+SUBMITTER_SIGNER_LABEL_ERROR = (
+    "signers[].name must match canonical lowercase "
+    "`appeal-finance-submitter-signer-name`"
+)
+SUBMITTER_STEP_LABEL_ERROR = (
+    "steps[].name must match canonical lowercase "
+    "`appeal-finance-submitter-step-name`"
+)
+WORKER_BALLOT_LABEL_ERROR = (
+    "ballots[].name must match canonical lowercase "
+    "`appeal-finance-worker-ballot-name`"
+)
+GOVERNANCE_REPORT_LABEL_ERROR = (
+    "reports[].name must match canonical lowercase `appeal-finance-report-*`"
+)
+GOVERNANCE_WEEKLY_ROLLUP_LABEL_ERROR = (
+    "weekly_rollups[].name must match canonical lowercase "
+    "`appeal-finance-weekly-rollup-name`"
+)
+GOVERNANCE_SETTLEMENT_RECEIPT_LABEL_ERROR = (
+    "settlement_receipts[].name must match canonical lowercase "
+    "`appeal-finance-settlement-receipt-name`"
 )
 FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
     (
@@ -406,6 +456,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "storage_configured",
         "submitter_keys_configured",
         "ballot_replay_count",
+        "ballots",
         "live_event_subscription_verified",
         "deposit_fingerprint_reconstructed",
         "evidence_hashes_verified",
@@ -545,6 +596,13 @@ def validate_route_records(
             errors,
             path=f"routes[{index}].status_code",
         )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
         if require_authz:
             require_bool_true(
                 record,
@@ -559,14 +617,13 @@ def validate_route_records(
                 errors,
                 path=f"routes[{index}].signature_verified",
             )
-        if record.get("latency_ms") is not None:
-            require_maximum_number(
-                record,
-                "latency_ms",
-                options.max_route_latency_ms,
-                errors,
-                path=f"routes[{index}].latency_ms",
-            )
+        require_maximum_int(
+            record,
+            "latency_ms",
+            options.max_route_latency_ms,
+            errors,
+            path=f"routes[{index}].latency_ms",
+        )
 
 
 def validate_route_inventory(
@@ -728,11 +785,12 @@ def validate_quote_api(
             errors.append("quote_count must equal unique classes * urgencies count")
     require_bool_true(payload, "deterministic_replay_passed", errors)
     require_bool_true(payload, "deposit_bounds_enforced", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_route_latency_ms",
         options.max_route_latency_ms,
         errors,
+        minimum=1,
     )
     require_false(payload, "payloads_included", errors)
     require_false(payload, "response_bodies_included", errors)
@@ -773,7 +831,14 @@ def validate_deposit_lifecycle(
     )
     confirmed_probe_count = 0
     for index, record in require_object_array(payload, "deposit_probes", errors):
-        require_string(record, "name", errors)
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"deposit_probes[{index}].name",
+            pattern=DEPOSIT_PROBE_LABEL_PATTERN,
+            label_error=DEPOSIT_PROBE_LABEL_ERROR,
+            errors=errors,
+        )
         confirmed = record.get("confirmed")
         if not isinstance(confirmed, bool):
             errors.append(f"deposit_probes[{index}].confirmed must be a boolean")
@@ -799,11 +864,12 @@ def validate_deposit_lifecycle(
     require_bool_true(payload, "ledger_lock_confirmed", errors)
     require_bool_true(payload, "idempotency_key_bound", errors)
     require_bool_true(payload, "evidence_hashes_bound", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_route_latency_ms",
         options.max_route_latency_ms,
         errors,
+        minimum=1,
     )
     require_false(payload, "raw_instruction_included", errors)
     require_false(payload, "deposit_payloads_included", errors)
@@ -913,8 +979,15 @@ def validate_settlement_submitter(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "signers", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "signers", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"signers[{index}].name",
+            pattern=SUBMITTER_SIGNER_LABEL_PATTERN,
+            label_error=SUBMITTER_SIGNER_LABEL_ERROR,
+            errors=errors,
+        )
     queued_step_count = require_positive_int(payload, "queued_step_count", errors)
     submitted_step_count = require_positive_int(payload, "submitted_step_count", errors)
     require_string_inventory_count_match(
@@ -927,7 +1000,14 @@ def validate_settlement_submitter(
     )
     submitted_partition_count = 0
     for index, record in require_object_array(payload, "steps", errors):
-        require_string(record, "name", errors)
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"steps[{index}].name",
+            pattern=SUBMITTER_STEP_LABEL_PATTERN,
+            label_error=SUBMITTER_STEP_LABEL_ERROR,
+            errors=errors,
+        )
         submitted = record.get("submitted")
         if not isinstance(submitted, bool):
             errors.append(f"steps[{index}].submitted must be a boolean")
@@ -949,7 +1029,7 @@ def validate_settlement_submitter(
     require_bool_true(payload, "missing_signer_rejected", errors)
     require_bool_true(payload, "wrong_authority_rejected", errors)
     require_bool_true(payload, "rejected_or_expired_retry_verified", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_settlement_lag_seconds",
         options.max_settlement_lag_secs,
@@ -976,6 +1056,23 @@ def validate_moderation_worker(
     require_bool_true(payload, "storage_configured", errors)
     require_bool_true(payload, "submitter_keys_configured", errors)
     require_positive_int(payload, "ballot_replay_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "ballots",
+        "ballot_replay_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(payload, "ballots", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"ballots[{index}].name",
+            pattern=WORKER_BALLOT_LABEL_PATTERN,
+            label_error=WORKER_BALLOT_LABEL_ERROR,
+            errors=errors,
+        )
     require_bool_true(payload, "live_event_subscription_verified", errors)
     require_bool_true(payload, "deposit_fingerprint_reconstructed", errors)
     require_bool_true(payload, "evidence_hashes_verified", errors)
@@ -983,7 +1080,7 @@ def validate_moderation_worker(
     require_bool_true(payload, "pending_step_queued", errors)
     require_bool_true(payload, "idempotent_rescan_verified", errors)
     require_bool_true(payload, "retry_cap_enforced", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "max_settlement_lag_seconds",
         options.max_settlement_lag_secs,
@@ -1015,8 +1112,15 @@ def validate_governance_dag_publication(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "reports", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "reports", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"reports[{index}].name",
+            pattern=GOVERNANCE_REPORT_LABEL_PATTERN,
+            label_error=GOVERNANCE_REPORT_LABEL_ERROR,
+            errors=errors,
+        )
     require_positive_int(payload, "weekly_rollup_count", errors)
     require_string_inventory_count_match(
         payload,
@@ -1026,8 +1130,15 @@ def validate_governance_dag_publication(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "weekly_rollups", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "weekly_rollups", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"weekly_rollups[{index}].name",
+            pattern=GOVERNANCE_WEEKLY_ROLLUP_LABEL_PATTERN,
+            label_error=GOVERNANCE_WEEKLY_ROLLUP_LABEL_ERROR,
+            errors=errors,
+        )
     require_positive_int(payload, "settlement_receipt_count", errors)
     require_string_inventory_count_match(
         payload,
@@ -1037,8 +1148,15 @@ def validate_governance_dag_publication(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "settlement_receipts", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "settlement_receipts", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"settlement_receipts[{index}].name",
+            pattern=GOVERNANCE_SETTLEMENT_RECEIPT_LABEL_PATTERN,
+            label_error=GOVERNANCE_SETTLEMENT_RECEIPT_LABEL_ERROR,
+            errors=errors,
+        )
     require_string_coverage(payload, "payload_kinds", "", REQUIRED_PAYLOAD_KINDS, errors)
     require_minimum_int(
         payload,

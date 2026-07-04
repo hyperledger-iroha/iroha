@@ -102,6 +102,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     elif kind == "operator_recovery":
         args.extend(["--checkpoint-digest-hex", CHECKPOINT])
     elif kind == "dashboard_api":
+        args.extend(["--route-body-blake3-hex", PUBLIC_HEAD])
         for route in MODULE.REQUIRED_DASHBOARD_ROUTES:
             args.extend(["--route", route])
     elif kind == "observability":
@@ -186,6 +187,22 @@ def test_response_file_can_build_dashboard_canary(tmp_path: Path) -> None:
     assert [route["name"] for route in payload["routes"]] == list(
         MODULE.REQUIRED_DASHBOARD_ROUTES
     )
+    assert {route["body_blake3_hex"] for route in payload["routes"]} == {PUBLIC_HEAD}
+
+
+def test_dashboard_canary_requires_route_body_digest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("dashboard_api", tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "dashboard_api").exists()
 
 
 def test_ingest_source_count_must_match_payload_kinds_before_write(
@@ -244,7 +261,7 @@ def test_publisher_block_ref_inventory_must_use_production_family(
 
     captured = capsys.readouterr()
     assert (
-        "--block-ref must match canonical lowercase `governance-dag-block-name`"
+        "--block-ref must match canonical lowercase `governance-dag-block-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "publisher_service").exists()
@@ -293,7 +310,7 @@ def test_ipfs_block_ref_inventory_must_use_production_family(
 
     captured = capsys.readouterr()
     assert (
-        "--block-ref must match canonical lowercase `governance-dag-block-name`"
+        "--block-ref must match canonical lowercase `governance-dag-block-*`"
         in captured.err
     )
     assert not canary_path(tmp_path, "ipfs_ipns_e2e").exists()

@@ -6,7 +6,7 @@
 --environment production
 --generated-at-unix 1800100000
 --now-unix 1800100000
---cycle-id cycle-a
+--cycle-id billing-cycle-a
 --cycle-index 1
 --line-item-count 5
 --line-item billing-line-item-00

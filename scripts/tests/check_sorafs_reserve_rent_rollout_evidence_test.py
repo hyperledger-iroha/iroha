@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_sorafs_reserve_rent_rollout_evidence.py"
 SPEC = importlib.util.spec_from_file_location(
@@ -25,6 +27,7 @@ DIGEST = "ab" * 32
 MATRIX_DIGEST = "cd" * 32
 LEDGER_DIGEST = "ef" * 32
 ALT_LEDGER_DIGEST = "12" * 32
+ROUTE_BODY_DIGEST = "34" * 32
 DEPLOYMENT_ID = "reserve-prod-20260626"
 ENVIRONMENT = "production"
 
@@ -84,7 +87,12 @@ def ledger_digest(*, generated_at: int = GENERATED_AT) -> dict:
         "ledger_digest_hex": LEDGER_DIGEST,
         "generated_at_unix": generated_at,
         "ledger_count": 1,
+        "ledgers": [{"name": "reserve-ledger-main"}],
         "instruction_count": 2,
+        "instructions": [
+            {"name": "reserve-instruction-rent-settlement"},
+            {"name": "reserve-instruction-reserve-top-up"},
+        ],
         "rent_transfer_present": True,
         "reserve_top_up_transfer_present": True,
         "instruction_hashes_verified": True,
@@ -99,6 +107,7 @@ def route(name: str) -> dict:
         "name": name,
         "passed": True,
         "status_code": 200,
+        "body_blake3_hex": ROUTE_BODY_DIGEST,
         "authz_enforced": True,
         "signature_verified": True,
         "latency_ms": 25,
@@ -123,6 +132,12 @@ def lifecycle_service() -> dict:
         "routes": routes,
         "max_lifecycle_lag_seconds": 60,
         "persisted_stage_count": 4,
+        "persisted_stages": [
+            {"name": "reserve-lifecycle-stage-active"},
+            {"name": "reserve-lifecycle-stage-warning"},
+            {"name": "reserve-lifecycle-stage-defaulted"},
+            {"name": "reserve-lifecycle-stage-suspended"},
+        ],
         "stage_transition_replay_passed": True,
         "governance_event_emitted": True,
         "manual_override_audited": True,
@@ -336,14 +351,14 @@ def provider_bake(*, failure_count: int = 0) -> dict:
         },
     ]
     rent_cycles = [
-        {"name": "rent-cycle-001", "settled": True},
-        {"name": "rent-cycle-002", "settled": True},
+        {"name": "reserve-rent-cycle-001", "settled": True},
+        {"name": "reserve-rent-cycle-002", "settled": True},
     ]
     top_up_cycles = [
-        {"name": "top-up-cycle-001", "reconciled": True},
-        {"name": "top-up-cycle-002", "reconciled": True},
+        {"name": "reserve-top-up-cycle-001", "reconciled": True},
+        {"name": "reserve-top-up-cycle-002", "reconciled": True},
     ]
-    appeal_cycles = [{"name": "appeal-cycle-001", "reviewed": True}]
+    appeal_cycles = [{"name": "reserve-appeal-cycle-001", "reviewed": True}]
     return with_reviewed_context({
         "schema": "sorafs.reserve.provider_bake.v1",
         "status": "passed",
@@ -367,6 +382,10 @@ def provider_bake(*, failure_count: int = 0) -> dict:
         "scheduled_lifecycle_canary_passed": True,
         "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 60,
         "scheduled_lifecycle_canary_tick_count": 2,
+        "scheduled_lifecycle_canary_ticks": [
+            {"name": "reserve-lifecycle-tick-001"},
+            {"name": "reserve-lifecycle-tick-002"},
+        ],
         "scheduled_lifecycle_canary_defaulted_provider_count": 1,
         "scheduled_lifecycle_canary_gateway_sync_verified": True,
         "scheduled_lifecycle_canary_orderbook_rejection_verified": True,
@@ -395,6 +414,10 @@ def governance_approval() -> dict:
         "governance_source_entries_published": True,
         "downstream_compliance_policy_applied": True,
         "downstream_compliance_consumer_count": 2,
+        "downstream_compliance_consumers": [
+            {"name": "reserve-compliance-consumer-gateway"},
+            {"name": "reserve-compliance-consumer-orderbook"},
+        ],
         "non_reserve_compliance_entries_preserved": True,
         "governance_source_entry_handoff_verified": True,
         "denylist_and_policy_consumers_consistent": True,
@@ -464,8 +487,109 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "started_at_unix": GENERATED_AT - 3_600,
             "completed_at_unix": GENERATED_AT,
             "provider_count": 3,
+            "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 60,
+            "scheduled_lifecycle_canary_tick_count": 2,
+            "scheduled_lifecycle_canary_defaulted_provider_count": 1,
         }
     ]
+
+
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        (
+            "policy_config",
+            "policy-config.json",
+            policy_config,
+            "policy_payload_included",
+        ),
+        (
+            "quote_matrix",
+            "quote-matrix.json",
+            quote_matrix,
+            "quote_payloads_included",
+        ),
+        (
+            "ledger_digest",
+            "ledger-digest.json",
+            ledger_digest,
+            "raw_ledger_included",
+        ),
+        (
+            "ledger_digest",
+            "ledger-digest.json",
+            ledger_digest,
+            "raw_transfer_instructions_included",
+        ),
+        (
+            "lifecycle_service",
+            "lifecycle-service.json",
+            lifecycle_service,
+            "response_bodies_included",
+        ),
+        (
+            "signed_routes",
+            "signed-routes.json",
+            signed_routes,
+            "response_bodies_included",
+        ),
+        (
+            "reserve_movement",
+            "reserve-movement.json",
+            reserve_movement,
+            "raw_transfer_included",
+        ),
+        (
+            "reserve_movement",
+            "reserve-movement.json",
+            reserve_movement,
+            "raw_instruction_included",
+        ),
+        (
+            "credit_line",
+            "credit-line.json",
+            credit_line,
+            "raw_ledger_included",
+        ),
+        (
+            "appeal_policy",
+            "appeal-policy.json",
+            appeal_policy,
+            "appeal_payloads_included",
+        ),
+        (
+            "metrics_alerts",
+            "metrics-alerts.json",
+            metrics_alerts,
+            "critical_alerts_firing",
+        ),
+        (
+            "metrics_alerts",
+            "metrics-alerts.json",
+            metrics_alerts,
+            "response_bodies_included",
+        ),
+        (
+            "provider_bake",
+            "provider-bake.json",
+            provider_bake,
+            "payloads_included",
+        ),
+    )
+    for kind, filename, factory, field in cases:
+        root = tmp_path / f"{kind}-{field}"
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload[field]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be false" in artifact["errors"]
 
 
 def test_missing_signed_routes_fails(tmp_path: Path) -> None:
@@ -615,12 +739,318 @@ def test_routes_must_not_include_unknown_values_for_route_artifacts(
         assert "routes must not include unknown values" in artifact["errors"]
 
 
+def test_route_body_hash_is_required_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("lifecycle_service", "lifecycle-service.json", lifecycle_service),
+        ("signed_routes", "signed-routes.json", signed_routes),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload["routes"][0]["body_blake3_hex"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert (
+            "routes[0].body_blake3_hex must be a non-empty string"
+            in artifact["errors"]
+        )
+
+
+def test_route_latency_is_required_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("lifecycle_service", "lifecycle-service.json", lifecycle_service),
+        ("signed_routes", "signed-routes.json", signed_routes),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload["routes"][0]["latency_ms"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert (
+            "routes[0].latency_ms must be a non-negative integer"
+            in artifact["errors"]
+        )
+
+
+def test_lifecycle_persisted_stage_count_must_match_unique_stages(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = lifecycle_service()
+    payload["persisted_stages"].pop()
+    write_json(tmp_path / "lifecycle-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["lifecycle_service"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "persisted_stage_count must match unique persisted_stages count"
+        in artifact["errors"]
+    )
+
+
+def test_lifecycle_persisted_stages_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = lifecycle_service()
+    payload["persisted_stages"].append(
+        {"name": "reserve-lifecycle-stage-active"}
+    )
+    payload["persisted_stage_count"] = len(payload["persisted_stages"])
+    write_json(tmp_path / "lifecycle-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["lifecycle_service"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "persisted_stages must not contain duplicate values" in artifact["errors"]
+
+
+def test_lifecycle_persisted_stages_must_use_reviewed_labels(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = lifecycle_service()
+    payload["persisted_stages"][0]["name"] = "lifecycle-stage-active"
+    write_json(tmp_path / "lifecycle-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["lifecycle_service"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert MODULE.PERSISTED_STAGE_LABEL_ERROR in artifact["errors"]
+
+
+def test_lifecycle_persisted_stages_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = lifecycle_service()
+    payload["persisted_stages"][0]["name"] = "reserve-lifecycle-stage-placeholder"
+    write_json(tmp_path / "lifecycle-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["lifecycle_service"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "persisted_stages[0].name must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
+
+
+def test_lifecycle_latency_evidence_must_be_integer_units(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = lifecycle_service()
+    payload["max_lifecycle_lag_seconds"] = 12.5
+    payload["routes"][0]["latency_ms"] = 7.5
+    write_json(tmp_path / "lifecycle-service.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["lifecycle_service"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "max_lifecycle_lag_seconds must be a non-negative integer"
+        in artifact["errors"]
+    )
+    assert (
+        "routes[0].latency_ms must be a non-negative integer"
+        in artifact["errors"]
+    )
+
+
+def test_signed_route_latency_threshold_must_be_positive_integer(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = signed_routes()
+    payload["max_route_latency_ms"] = 12.5
+    payload["routes"][0]["latency_ms"] = 7.5
+    write_json(tmp_path / "signed-routes.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["signed_routes"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "max_route_latency_ms must be a positive integer" in artifact["errors"]
+    assert (
+        "routes[0].latency_ms must be a non-negative integer"
+        in artifact["errors"]
+    )
+
+
 def test_stale_ledger_digest_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     stale = NOW_UNIX - MODULE.DEFAULT_MAX_LEDGER_AGE_SECS - 1
     write_json(tmp_path / "ledger-digest.json", ledger_digest(generated_at=stale))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_ledger_digest_ledger_count_must_match_unique_ledgers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ledger_digest()
+    payload["ledgers"].append({"name": "reserve-ledger-secondary"})
+    write_json(tmp_path / "ledger-digest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["ledger_digest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "ledger_count must match unique ledgers count" in artifact["errors"]
+
+
+def test_ledger_digest_ledgers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ledger_digest()
+    payload["ledgers"].append({"name": "reserve-ledger-main"})
+    payload["ledger_count"] = len(payload["ledgers"])
+    write_json(tmp_path / "ledger-digest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["ledger_digest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "ledgers must not contain duplicate values" in artifact["errors"]
+
+
+def test_ledger_digest_ledgers_must_use_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ledger_digest()
+    payload["ledgers"][0]["name"] = "ledger-main"
+    write_json(tmp_path / "ledger-digest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["ledger_digest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert MODULE.LEDGER_REF_LABEL_ERROR in artifact["errors"]
+
+
+def test_ledger_digest_ledgers_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ledger_digest()
+    payload["ledgers"][0]["name"] = "reserve-ledger-placeholder"
+    write_json(tmp_path / "ledger-digest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["ledger_digest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "ledgers[0].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_ledger_digest_instruction_count_must_match_unique_instructions(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ledger_digest()
+    payload["instructions"].pop()
+    write_json(tmp_path / "ledger-digest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["ledger_digest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "instruction_count must match unique instructions count" in artifact["errors"]
+
+
+def test_ledger_digest_instructions_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ledger_digest()
+    payload["instructions"].append({"name": "reserve-instruction-rent-settlement"})
+    payload["instruction_count"] = len(payload["instructions"])
+    write_json(tmp_path / "ledger-digest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["ledger_digest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "instructions must not contain duplicate values" in artifact["errors"]
+
+
+def test_ledger_digest_instructions_must_use_reviewed_labels(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ledger_digest()
+    payload["instructions"][0]["name"] = "instruction-rent-settlement"
+    write_json(tmp_path / "ledger-digest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["ledger_digest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert MODULE.INSTRUCTION_REF_LABEL_ERROR in artifact["errors"]
+
+
+def test_ledger_digest_instructions_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = ledger_digest()
+    payload["instructions"][0]["name"] = "reserve-instruction-placeholder"
+    write_json(tmp_path / "ledger-digest.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["ledger_digest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "instructions[0].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_payload_leakage_fails(tmp_path: Path) -> None:
@@ -653,6 +1083,24 @@ def test_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
     artifact = payload["required"]["metrics_alerts"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "metrics must not include unknown values" in artifact["errors"]
+
+
+def test_metrics_payload_free_flags_are_required(tmp_path: Path) -> None:
+    for field in ("critical_alerts_firing", "response_bodies_included"):
+        root = tmp_path / field
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = metrics_alerts()
+        del payload[field]
+        write_json(root / "metrics-alerts.json", payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["metrics_alerts"]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be false" in artifact["errors"]
 
 
 def test_ledger_requires_policy_matrix_binding(tmp_path: Path) -> None:
@@ -845,6 +1293,24 @@ def test_reserve_movement_accepted_count_must_match_rows(tmp_path: Path) -> None
         "accepted_movement_count must match accepted movements count"
         in artifact["errors"]
     )
+
+
+def test_reserve_movement_payload_free_flags_are_required(tmp_path: Path) -> None:
+    for field in ("raw_transfer_included", "raw_instruction_included"):
+        root = tmp_path / field
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = reserve_movement()
+        del payload[field]
+        write_json(root / "reserve-movement.json", payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["reserve_movement"]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be false" in artifact["errors"]
 
 
 def test_appeal_policy_probes_must_not_duplicate(tmp_path: Path) -> None:
@@ -1277,7 +1743,7 @@ def test_provider_bake_provider_names_must_be_reviewed_labels(tmp_path: Path) ->
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["provider_bake"]["artifacts"][0]
     assert (
-        "providers[].name must match canonical lowercase `provider-name`"
+        "providers[].name must match canonical lowercase `provider-*`"
         in artifact["errors"]
     )
 
@@ -1366,6 +1832,156 @@ def test_provider_bake_cycle_counts_must_match_unique_inventories(
     )
 
 
+def test_provider_bake_tick_count_must_match_unique_ticks(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["scheduled_lifecycle_canary_ticks"].pop()
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert (
+        "scheduled_lifecycle_canary_tick_count must match unique "
+        "scheduled_lifecycle_canary_ticks count"
+    ) in artifact["errors"]
+
+
+def test_provider_bake_ticks_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["scheduled_lifecycle_canary_ticks"].append(
+        {"name": "reserve-lifecycle-tick-001"}
+    )
+    bake["scheduled_lifecycle_canary_tick_count"] = len(
+        bake["scheduled_lifecycle_canary_ticks"]
+    )
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert (
+        "scheduled_lifecycle_canary_ticks must not contain duplicate values"
+        in artifact["errors"]
+    )
+
+
+def test_provider_bake_ticks_must_use_reviewed_labels(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["scheduled_lifecycle_canary_ticks"][0]["name"] = "lifecycle-tick-001"
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert MODULE.SCHEDULED_LIFECYCLE_TICK_LABEL_ERROR in artifact["errors"]
+
+
+def test_provider_bake_ticks_reject_non_production_markers(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake["scheduled_lifecycle_canary_ticks"][0][
+        "name"
+    ] = "reserve-lifecycle-tick-placeholder"
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert (
+        "scheduled_lifecycle_canary_ticks[0].name must not contain "
+        "non-production markers ['placeholder']"
+    ) in artifact["errors"]
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "expected_error"),
+    (
+        (
+            "rent_cycles",
+            "rent-cycle-001",
+            "rent_cycles[].name must match canonical lowercase `reserve-rent-cycle-*`",
+        ),
+        (
+            "top_up_cycles",
+            "top-up-cycle-001",
+            "top_up_cycles[].name must match canonical lowercase `reserve-top-up-cycle-*`",
+        ),
+        (
+            "appeal_cycles",
+            "appeal-cycle-001",
+            "appeal_cycles[].name must match canonical lowercase `reserve-appeal-cycle-*`",
+        ),
+    ),
+)
+def test_provider_bake_cycle_labels_must_use_reviewed_families(
+    tmp_path: Path,
+    field: str,
+    replacement: str,
+    expected_error: str,
+) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake[field][0]["name"] = replacement
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert expected_error in artifact["errors"]
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "expected_error"),
+    (
+        (
+            "rent_cycles",
+            "reserve-rent-cycle-placeholder",
+            "rent_cycles[].name must not contain non-production markers ['placeholder']",
+        ),
+        (
+            "top_up_cycles",
+            "reserve-top-up-cycle-sample",
+            "top_up_cycles[].name must not contain non-production markers ['sample']",
+        ),
+        (
+            "appeal_cycles",
+            "reserve-appeal-cycle-test",
+            "appeal_cycles[].name must not contain non-production markers ['test']",
+        ),
+    ),
+)
+def test_provider_bake_cycle_labels_reject_non_production_markers(
+    tmp_path: Path,
+    field: str,
+    replacement: str,
+    expected_error: str,
+) -> None:
+    write_complete_evidence(tmp_path)
+    bake = provider_bake()
+    bake[field][0]["name"] = replacement
+    write_json(tmp_path / "provider-bake.json", bake)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["provider_bake"]["artifacts"][0]
+    assert expected_error in artifact["errors"]
+
+
 def test_provider_bake_cycle_rows_must_carry_proof_flags(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     bake = provider_bake()
@@ -1427,6 +2043,81 @@ def test_governance_approval_requires_downstream_compliance_evidence(
         in artifact["errors"]
     )
     assert "governance_source_entry_handoff_verified must be true" in artifact["errors"]
+
+
+def test_governance_approval_consumer_count_must_match_unique_consumers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["downstream_compliance_consumers"].pop()
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert (
+        "downstream_compliance_consumer_count must match unique "
+        "downstream_compliance_consumers count"
+    ) in artifact["errors"]
+
+
+def test_governance_approval_consumers_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["downstream_compliance_consumers"].append(
+        {"name": "reserve-compliance-consumer-gateway"}
+    )
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert (
+        "downstream_compliance_consumers must not contain duplicate values"
+        in artifact["errors"]
+    )
+
+
+def test_governance_approval_consumers_must_use_reviewed_labels(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["downstream_compliance_consumers"][0]["name"] = "consumer-gateway"
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert MODULE.DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_ERROR in artifact["errors"]
+
+
+def test_governance_approval_consumers_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["downstream_compliance_consumers"][0][
+        "name"
+    ] = "reserve-compliance-consumer-placeholder"
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert (
+        "downstream_compliance_consumers[0].name must not contain "
+        "non-production markers ['placeholder']"
+    ) in artifact["errors"]
 
 
 def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:

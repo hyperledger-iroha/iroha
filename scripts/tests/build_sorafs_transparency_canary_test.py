@@ -277,6 +277,42 @@ def test_unknown_cycle_detail_probe_coverage_fails_closed(
     assert not canary_path(tmp_path, "publication").exists()
 
 
+def test_cycle_detail_probe_label_family_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("publication", tmp_path)
+    index = args.index("--cycle-detail-probe")
+    args[index + 1] = "cycle_detail_readback"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--cycle-detail-probe must match canonical lowercase "
+        "`transparency-cycle-detail-name`"
+    ) in captured.err
+    assert not canary_path(tmp_path, "publication").exists()
+
+
+def test_cycle_detail_probe_non_production_marker_fails_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("publication", tmp_path)
+    index = args.index("--cycle-detail-probe")
+    args[index + 1] = "transparency-cycle-detail-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--cycle-detail-probe[0] must not contain non-production markers "
+        "['placeholder']"
+    ) in captured.err
+    assert not canary_path(tmp_path, "publication").exists()
+
+
 def test_duplicate_privacy_action_coverage_fails_closed(
     tmp_path: Path,
     capsys,

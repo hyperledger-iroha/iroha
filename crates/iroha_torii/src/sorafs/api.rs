@@ -125,26 +125,33 @@ use sorafs_manifest::{
     validate_manifest,
 };
 use sorafs_node::{
-    ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotCommitOutcome,
-    ModerationBallotEvent, ModerationBallotEventKind, ModerationBallotRecord,
+    ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotChallengeDecision,
+    ModerationBallotChallengeInput, ModerationBallotChallengeKind, ModerationBallotChallengeRecord,
+    ModerationBallotChallengeResolution, ModerationBallotCommitOutcome, ModerationBallotEvent,
+    ModerationBallotEventKind, ModerationBallotNoShowPlan, ModerationBallotRecord,
     ModerationBallotRevealOutcome, ModerationBallotRuntimeError, ModerationBallotTally,
-    ModerationCorpusRegistryRecord, ModerationModelRegistryError, ModerationModelRegistrySnapshot,
-    ModerationQuarantineObjectError, ModerationQuarantineObjectInput,
-    ModerationQuarantineObjectPayload, ModerationQuarantineObjectRecord,
-    ModerationQuarantineRecord, ModerationQuarantineReleaseInput, ModerationQuarantineReviewInput,
-    ModerationQuarantineState, ModerationReproRegistryRecord, ModerationScreeningError,
-    ModerationScreeningInput, ModerationScreeningOutcome, ModerationScreeningRecord,
-    ModerationScreeningSnapshot, ModerationScreeningVerdict, NodeStorageError,
-    OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind, OrderbookReceiptOutcome,
-    OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome, PorTrackerError,
-    PrivacyAggregateScheduleOutcome, PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
-    RepairEvent, ReserveAppealDecision, ReserveAppealOutcome, ReserveAppealRecord,
-    ReserveAppealRequest, ReserveAppealRuntimeError, ReserveAppealSnapshot, ReserveAppealStatus,
-    ReserveCreditLineSnapshot, ReserveLifecycleEvent, ReserveLifecyclePolicyOutcome,
-    ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot, ReserveLifecyclePolicyUpdate,
-    ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot, ReserveLifecycleUpdate,
-    ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate, ReserveMovementKind,
-    ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
+    ModerationCorpusRegistryRecord,
+    ModerationEvidenceViewerAccessEventRecord, ModerationEvidenceViewerAccessInput,
+    ModerationEvidenceViewerAccessKind, ModerationEvidenceViewerAuditKindCount,
+    ModerationEvidenceViewerAuditReport, ModerationEvidenceViewerAuditReportInput,
+    ModerationEvidenceViewerAuditScheduleOutcome, ModerationEvidenceViewerError,
+    ModerationEvidenceViewerSessionInput, ModerationEvidenceViewerSessionRecord,
+    ModerationModelRegistryError, ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
+    ModerationQuarantineObjectInput, ModerationQuarantineObjectPayload,
+    ModerationQuarantineObjectRecord, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
+    ModerationQuarantineReviewInput, ModerationQuarantineState, ModerationReproRegistryRecord,
+    ModerationScreeningError, ModerationScreeningInput, ModerationScreeningOutcome,
+    ModerationScreeningRecord, ModerationScreeningSnapshot, ModerationScreeningVerdict,
+    NodeStorageError, OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind,
+    OrderbookReceiptOutcome, OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome,
+    PorTrackerError, PrivacyAggregateScheduleOutcome, PrivacyAggregateSourceEvent,
+    PrivacyAggregateSourceMetric, RepairEvent, ReserveAppealDecision, ReserveAppealOutcome,
+    ReserveAppealRecord, ReserveAppealRequest, ReserveAppealRuntimeError, ReserveAppealSnapshot,
+    ReserveAppealStatus, ReserveCreditLineSnapshot, ReserveLifecycleEvent,
+    ReserveLifecyclePolicyOutcome, ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot,
+    ReserveLifecyclePolicyUpdate, ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot,
+    ReserveLifecycleUpdate, ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate,
+    ReserveMovementKind, ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
     ReserveMovementRuntimeError, ReserveProviderBalance, ReserveProviderCreditLineState,
     ReserveProviderLifecycleSummary, TransparencyLedgerSourceEntry,
     appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
@@ -243,7 +250,7 @@ const TELEMETRY_ENDPOINT_CHUNK: &str = "/v1/sorafs/storage/chunk";
 const TELEMETRY_ENDPOINT_PROVIDER_ADVERT: &str = "/v1/sorafs/provider/advert";
 const TELEMETRY_ENDPOINT_MANIFEST: &str = "/v1/sorafs/storage/manifest";
 const TELEMETRY_ENDPOINT_PLAN: &str = "/v1/sorafs/storage/plan";
-const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por/sample";
+const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por-sample";
 const TELEMETRY_ENDPOINT_PROOF_STREAM: &str = "/v1/sorafs/proof/stream";
 const TELEMETRY_ENDPOINT_TRANSPARENCY_TOKEN_VERIFY: &str = "/v1/sorafs/transparency/tokens/verify";
 const TELEMETRY_ENDPOINT_ORDERBOOK: &str = "/v1/sorafs/orderbook";
@@ -265,9 +272,13 @@ const RESERVE_MOVEMENT_GATEWAY_COMPLIANCE_REVIEW_REFERENCE: &str =
     "sorafs-reserve-movement-custody-compliance-v1";
 const MODERATION_ROUTE_BALLOTS: &str = "/v1/sorafs/moderation/ballots";
 const MODERATION_ROUTE_COMMITS: &str = "/v1/sorafs/moderation/ballots/commits";
+const MODERATION_ROUTE_CHALLENGES: &str = "/v1/sorafs/moderation/ballots/challenges";
+const MODERATION_ROUTE_CHALLENGE_RESOLUTIONS: &str =
+    "/v1/sorafs/moderation/ballots/challenges/resolve";
 const MODERATION_ROUTE_REVEALS: &str = "/v1/sorafs/moderation/ballots/reveals";
 const MODERATION_ROUTE_TALLY: &str = "/v1/sorafs/moderation/ballots/tally";
 const MODERATION_ROUTE_EVENTS: &str = "/v1/sorafs/moderation/ballots/events";
+const MODERATION_ROUTE_NO_SHOW_PLAN_SUFFIX: &str = "no-show-plan";
 const MODERATION_ROUTE_MODEL_REGISTRY: &str = "/v1/sorafs/moderation/model-registry";
 const MODERATION_ROUTE_MODEL_REGISTRY_REPRO: &str =
     "/v1/sorafs/moderation/model-registry/repro-manifests";
@@ -275,7 +286,13 @@ const MODERATION_ROUTE_MODEL_REGISTRY_CORPORA: &str =
     "/v1/sorafs/moderation/model-registry/corpora";
 const MODERATION_ROUTE_SCREENING_RESULTS: &str = "/v1/sorafs/moderation/screening-results";
 const MODERATION_ROUTE_QUARANTINE: &str = "/v1/sorafs/moderation/quarantine";
+const MODERATION_ROUTE_VIEWER_AUDIT_REPORTS: &str = "/v1/sorafs/moderation/viewer-audit-reports";
+const MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE: &str =
+    "/v1/sorafs/moderation/viewer-audit-reports/publish-due";
+const MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_DEFAULT_SCOPE: &str = "local-daily";
 const MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX: &str = "object";
+const MODERATION_ROUTE_QUARANTINE_VIEWER_SESSIONS_SUFFIX: &str = "viewer-sessions";
+const MODERATION_ROUTE_QUARANTINE_VIEWER_ACCESS_SUFFIX: &str = "viewer-access";
 const MODERATION_ROUTE_QUARANTINE_OPERATOR_PANEL_SUFFIX: &str = "operator-panel";
 const MODERATION_ROUTE_QUARANTINE_REVIEW_SUFFIX: &str = "review";
 const MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX: &str = "release";
@@ -1812,6 +1829,118 @@ pub struct ModerationQuarantineObjectStoreRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/quarantine/{id}/viewer-sessions`.
+pub struct ModerationEvidenceViewerSessionRequestDto {
+    /// Canonical operator or service account requesting the viewer session.
+    pub requested_by: String,
+    /// Canonical juror, auditor, or legal reviewer represented by the session.
+    pub viewer_account: String,
+    /// Role label scoped to this review session.
+    pub viewer_role: String,
+    /// Review purpose bound to the audit manifest.
+    pub purpose: String,
+    /// Hex-encoded digest of the device/user attestation transcript.
+    pub attestation_digest_hex: String,
+    /// Hex-encoded digest of the per-session watermark metadata.
+    pub watermark_metadata_digest_hex: String,
+    /// Hex-encoded digest of the session nonce or runtime-only token preimage.
+    pub session_nonce_digest_hex: String,
+    /// Optional Unix timestamp (milliseconds) when the session starts.
+    pub issued_at_unix_ms: Option<u64>,
+    /// Optional Unix timestamp (milliseconds) when the session expires.
+    pub expires_at_unix_ms: Option<u64>,
+    /// Optional legal-hold or retention receipt identifier.
+    pub legal_hold_id: Option<String>,
+    /// Optional session note.
+    pub notes: Option<String>,
+    /// Must be false; raw evidence bytes are never accepted by this endpoint.
+    pub raw_evidence_included: bool,
+    /// Must be false; signed URLs are never accepted by this endpoint.
+    pub signed_url_included: bool,
+    /// Must be false; runtime session tokens are never accepted by this endpoint.
+    pub session_token_included: bool,
+    /// Must be false; watermark secrets are never accepted by this endpoint.
+    pub watermark_secret_included: bool,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/quarantine/{id}/viewer-access`.
+pub struct ModerationEvidenceViewerAccessRequestDto {
+    /// Hex-encoded local evidence viewer session id.
+    pub session_id_hex: String,
+    /// Event kind: viewed, seeked, paused, screenshot_attempted, download_attempted, annotated, session_expired, or attestation_failed.
+    pub kind: String,
+    /// Canonical viewer account represented by the event.
+    pub actor_account: String,
+    /// Optional Unix timestamp (milliseconds) when the event occurred.
+    pub event_at_unix_ms: Option<u64>,
+    /// Hex-encoded digest of the request metadata or interaction envelope.
+    pub request_digest_hex: String,
+    /// Optional hex-encoded digest of event-specific metadata.
+    pub event_metadata_digest_hex: Option<String>,
+    /// Optional event note.
+    pub notes: Option<String>,
+    /// Must be false; raw evidence bytes are never accepted by this endpoint.
+    pub raw_evidence_included: bool,
+    /// Must be false; signed URLs are never accepted by this endpoint.
+    pub signed_url_included: bool,
+    /// Must be false; runtime session tokens are never accepted by this endpoint.
+    pub session_token_included: bool,
+    /// Must be false; response bodies or raw access-log payloads are never accepted.
+    pub response_body_included: bool,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/viewer-audit-reports`.
+pub struct ModerationEvidenceViewerAuditReportRequestDto {
+    /// Public report scope label, for example `local-daily`.
+    pub report_scope: Option<String>,
+    /// Inclusive Unix timestamp (seconds) at the start of the report window.
+    pub window_start_unix: u64,
+    /// Exclusive Unix timestamp (seconds) at the end of the report window.
+    pub window_end_unix: u64,
+    /// Optional Unix timestamp (seconds) when the report is generated.
+    pub generated_at_unix: Option<u64>,
+    /// Optional hex-encoded policy/configuration digest for this report.
+    pub policy_digest_hex: Option<String>,
+    /// Must be false; raw evidence bytes are never accepted by this endpoint.
+    pub raw_evidence_included: bool,
+    /// Must be false; raw access-log payloads are never accepted by this endpoint.
+    pub raw_access_logs_included: bool,
+    /// Must be false; raw viewer account identifiers are never accepted.
+    pub viewer_accounts_included: bool,
+    /// Must be false; signed URLs are never accepted by this endpoint.
+    pub signed_urls_included: bool,
+    /// Must be false; runtime session tokens are never accepted by this endpoint.
+    pub session_tokens_included: bool,
+    /// Must be false; response bodies are never accepted by this endpoint.
+    pub response_bodies_included: bool,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/viewer-audit-reports/publish-due`.
+pub struct ModerationEvidenceViewerAuditReportPublishDueRequestDto {
+    /// Unix timestamp (seconds) for the scheduler tick.
+    pub now_unix: u64,
+    /// Optional width of each audit-report publication window, in seconds.
+    /// When omitted, the configured SoraFS evidence-viewer audit schedule is used.
+    pub cycle_seconds: Option<u64>,
+    /// Optional delay after a cycle closes before it becomes eligible for publication.
+    /// When omitted, the configured SoraFS evidence-viewer audit schedule is used.
+    pub publish_delay_seconds: Option<u64>,
+    /// Public report scope label, for example `local-daily`.
+    pub report_scope: Option<String>,
+    /// Optional hex-encoded policy/configuration digest for generated reports.
+    pub policy_digest_hex: Option<String>,
+    /// Optional previous transparency block hash encoded as hexadecimal.
+    pub previous_block_hash_hex: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// One raw metric contribution in a SoraFS privacy aggregate source event.
 pub struct TransparencyPrivacyAggregateSourceMetricDto {
     /// Stable metric key.
@@ -2162,6 +2291,50 @@ pub struct ModerationBallotAnnounceRequestDto {
 pub struct ModerationBallotCommitRequestDto {
     /// Base64-encoded Norito `SoraFsModerationBallotCommitV1` payload.
     pub commit_b64: String,
+    /// Ignored by public handlers; acceptance uses server-side Iroha network time.
+    pub now_unix_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/ballots/challenges`.
+pub struct ModerationBallotChallengeRequestDto {
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Challenge id unique within the ballot.
+    pub challenge_id: String,
+    /// Canonical account id raising the challenge.
+    pub challenger_id: String,
+    /// Challenge kind: roster_mismatch, duplicate_commit, payload_mismatch, juror_eligibility, evidence_mismatch, or other.
+    pub kind: String,
+    /// Target juror id for juror-scoped challenge kinds.
+    pub target_juror_id: Option<String>,
+    /// Hex-encoded 32-byte digest of the payload-free challenge evidence packet.
+    pub evidence_digest_hex: String,
+    /// Payload-free operator-readable reason label.
+    pub reason: String,
+    /// Ignored by public handlers; acceptance uses server-side Iroha network time.
+    pub now_unix_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// JSON payload accepted by `/v1/sorafs/moderation/ballots/challenges/resolve`.
+pub struct ModerationBallotChallengeResolutionRequestDto {
+    /// Moderation or appeal case identifier.
+    pub case_id: String,
+    /// Moderation ballot round identifier.
+    pub round_id: String,
+    /// Challenge id being resolved.
+    pub challenge_id: String,
+    /// Canonical account id resolving the challenge.
+    pub resolved_by: String,
+    /// Resolution decision: rejected or accepted.
+    pub decision: String,
+    /// Optional payload-free resolution note.
+    pub note: Option<String>,
     /// Ignored by public handlers; acceptance uses server-side Iroha network time.
     pub now_unix_ms: Option<u64>,
 }
@@ -4570,6 +4743,77 @@ fn privacy_aggregate_publish_due_outcome_json(
     Ok(Value::Object(response))
 }
 
+fn moderation_evidence_viewer_audit_publish_due_outcome_json(
+    outcome: &ModerationEvidenceViewerAuditScheduleOutcome,
+    transparency_source_entry_count: usize,
+    has_governance_publisher: bool,
+) -> Result<Value, Response> {
+    let mut response = Map::new();
+    response.insert(
+        "schema".into(),
+        Value::from("sorafs.moderation.viewer_audit_report.publish_due.v1"),
+    );
+    response.insert(
+        "transparency_source_entry_count".into(),
+        Value::from(transparency_source_entry_count as u64),
+    );
+    response.insert(
+        "governance_publish_status".into(),
+        Value::from(if has_governance_publisher {
+            "published_to_local_governance_dag"
+        } else {
+            "accepted_without_governance_publisher"
+        }),
+    );
+    match outcome {
+        ModerationEvidenceViewerAuditScheduleOutcome::Disabled => {
+            response.insert("status".into(), Value::from("disabled"));
+            response.insert("published".into(), Value::from(false));
+            response.insert("cycle_id_hex".into(), Value::Null);
+            response.insert("window".into(), Value::Null);
+        }
+        ModerationEvidenceViewerAuditScheduleOutcome::NotDue => {
+            response.insert("status".into(), Value::from("not_due"));
+            response.insert("published".into(), Value::from(false));
+            response.insert("cycle_id_hex".into(), Value::Null);
+            response.insert("window".into(), Value::Null);
+        }
+        ModerationEvidenceViewerAuditScheduleOutcome::AlreadyPublished { window, cycle_id } => {
+            response.insert("status".into(), Value::from("already_published"));
+            response.insert("published".into(), Value::from(false));
+            insert_privacy_aggregate_window(&mut response, *window, *cycle_id);
+        }
+        ModerationEvidenceViewerAuditScheduleOutcome::NoSourceEvents { window, cycle_id } => {
+            response.insert("status".into(), Value::from("no_source_events"));
+            response.insert("published".into(), Value::from(false));
+            insert_privacy_aggregate_window(&mut response, *window, *cycle_id);
+        }
+        ModerationEvidenceViewerAuditScheduleOutcome::Published {
+            window,
+            report,
+            source_entry,
+            publication,
+        } => {
+            response.insert("status".into(), Value::from("published"));
+            response.insert("published".into(), Value::from(true));
+            insert_privacy_aggregate_window(&mut response, *window, publication.block.cycle_id);
+            response.insert(
+                "report".into(),
+                moderation_evidence_viewer_audit_report_json(report),
+            );
+            response.insert(
+                "source_entry".into(),
+                moderation_evidence_viewer_audit_source_entry_json(source_entry),
+            );
+            response.insert(
+                "publication".into(),
+                privacy_aggregate_publication_summary_json(publication)?,
+            );
+        }
+    }
+    Ok(Value::Object(response))
+}
+
 fn insert_privacy_aggregate_window(
     response: &mut Map,
     window: sorafs_node::PrivacyAggregateCycleWindow,
@@ -4643,6 +4887,13 @@ fn is_privacy_aggregate_publish_due_request_error(message: &str) -> bool {
         || message.contains("metadata")
         || message.contains("aggregate_id_prefix")
         || message.contains("build scheduled privacy aggregate cycle")
+}
+
+fn is_evidence_viewer_audit_publish_due_request_error(message: &str) -> bool {
+    message.contains("evidence viewer audit schedule")
+        || message.contains("record evidence viewer audit report")
+        || message.contains("invalid moderation evidence viewer input")
+        || message.contains("payload-safety violation")
 }
 
 fn is_proof_token_issuance_request_error(message: &str) -> bool {
@@ -7951,6 +8202,105 @@ pub(crate) async fn handle_post_sorafs_moderation_ballot_commit(
     }
 }
 
+pub(crate) async fn handle_post_sorafs_moderation_ballot_challenge(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    let request = match json::from_slice::<ModerationBallotChallengeRequestDto>(body.as_ref()) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation ballot challenge JSON: {err}"),
+            );
+        }
+    };
+    let expected_account =
+        match moderation_canonical_account_id(&state, &request.challenger_id, "challenger_id") {
+            Ok(account) => account,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        Some(&expected_account),
+    ) {
+        return response;
+    }
+    let input = match moderation_challenge_from_request(request) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let now_unix_ms = iroha_network_time_now_ms();
+    match state
+        .sorafs_node
+        .submit_moderation_ballot_challenge(input, now_unix_ms)
+    {
+        Ok(record) => JsonBody(moderation_ballot_challenge_json(&record)).into_response(),
+        Err(err) => moderation_ballot_runtime_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_ballot_challenge_resolution(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    let request =
+        match json::from_slice::<ModerationBallotChallengeResolutionRequestDto>(body.as_ref()) {
+            Ok(request) => request,
+            Err(err) => {
+                return json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "failed to decode SoraFS moderation ballot challenge resolution JSON: {err}"
+                    ),
+                );
+            }
+        };
+    let expected_account =
+        match moderation_canonical_account_id(&state, &request.resolved_by, "resolved_by") {
+            Ok(account) => account,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_request_auth(
+        &state,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        Some(&expected_account),
+    ) {
+        return response;
+    }
+    let input = match moderation_challenge_resolution_from_request(request) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    let now_unix_ms = iroha_network_time_now_ms();
+    match state
+        .sorafs_node
+        .resolve_moderation_ballot_challenge(input, now_unix_ms)
+    {
+        Ok(record) => JsonBody(moderation_ballot_challenge_json(&record)).into_response(),
+        Err(err) => moderation_ballot_runtime_error_response(err),
+    }
+}
+
 pub(crate) async fn handle_post_sorafs_moderation_ballot_reveal(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -8091,6 +8441,23 @@ pub(crate) async fn handle_get_sorafs_moderation_ballot(
             StatusCode::NOT_FOUND,
             format!("SoraFS moderation ballot `{case_id}` round `{round_id}` was not found"),
         ),
+    }
+}
+
+pub(crate) async fn handle_get_sorafs_moderation_ballot_no_show_plan(
+    State(state): State<SharedAppState>,
+    Path((case_id, round_id)): Path<(String, String)>,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs moderation ballot API is not enabled on this node");
+    }
+    let now_unix_ms = iroha_network_time_now_ms();
+    match state
+        .sorafs_node
+        .moderation_ballot_no_show_plan(&case_id, &round_id, now_unix_ms)
+    {
+        Ok(plan) => JsonBody(moderation_ballot_no_show_plan_json(&plan)).into_response(),
+        Err(err) => moderation_ballot_runtime_error_response(err),
     }
 }
 
@@ -8780,6 +9147,272 @@ pub(crate) async fn handle_get_sorafs_moderation_quarantine_object(
     }
 }
 
+pub(crate) async fn handle_post_sorafs_moderation_quarantine_viewer_session(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(quarantine_id_hex): Path<String>,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation evidence viewer session API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationEvidenceViewerSessionRequestDto>(body.as_ref())
+    {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation evidence viewer session JSON: {err}"),
+            );
+        }
+    };
+    let input =
+        match moderation_evidence_viewer_session_input_from_request(&quarantine_id_hex, request) {
+            Ok(input) => input,
+            Err(response) => return response,
+        };
+    match state
+        .sorafs_node
+        .create_moderation_evidence_viewer_session(input)
+    {
+        Ok(record) => {
+            let mut response = (
+                StatusCode::ACCEPTED,
+                JsonBody(moderation_evidence_viewer_session_json(&record)),
+            )
+                .into_response();
+            response
+                .headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+            response
+        }
+        Err(err) => moderation_evidence_viewer_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_quarantine_viewer_access(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(quarantine_id_hex): Path<String>,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation evidence viewer access-log API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationEvidenceViewerAccessRequestDto>(body.as_ref())
+    {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!("failed to decode SoraFS moderation evidence viewer access JSON: {err}"),
+            );
+        }
+    };
+    let input =
+        match moderation_evidence_viewer_access_input_from_request(&quarantine_id_hex, request) {
+            Ok(input) => input,
+            Err(response) => return response,
+        };
+    if let Err(response) =
+        ensure_evidence_viewer_access_binds_quarantine(&state, &quarantine_id_hex, &input)
+    {
+        return response;
+    }
+    match state
+        .sorafs_node
+        .record_moderation_evidence_viewer_access(input)
+    {
+        Ok(record) => {
+            let mut response = (
+                StatusCode::ACCEPTED,
+                JsonBody(moderation_evidence_viewer_access_event_json(&record)),
+            )
+                .into_response();
+            response
+                .headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+            response
+        }
+        Err(err) => moderation_evidence_viewer_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_viewer_audit_report(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation evidence viewer audit-report API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationEvidenceViewerAuditReportRequestDto>(
+        body.as_ref(),
+    ) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "failed to decode SoraFS moderation evidence viewer audit-report JSON: {err}"
+                ),
+            );
+        }
+    };
+    let input = match moderation_evidence_viewer_audit_report_input_from_request(request) {
+        Ok(input) => input,
+        Err(response) => return response,
+    };
+    match state
+        .sorafs_node
+        .record_moderation_evidence_viewer_audit_report(input)
+    {
+        Ok(outcome) => {
+            let mut response = (
+                StatusCode::ACCEPTED,
+                JsonBody(moderation_evidence_viewer_audit_report_outcome_json(
+                    &outcome.report,
+                    &outcome.source_entry,
+                    state.sorafs_node.transparency_ledger_source_entry_count(),
+                )),
+            )
+                .into_response();
+            response
+                .headers_mut()
+                .insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+            response
+        }
+        Err(err) => moderation_evidence_viewer_error_response(err),
+    }
+}
+
+pub(crate) async fn handle_post_sorafs_moderation_viewer_audit_report_publish_due(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled(
+            "sorafs moderation evidence viewer audit-report publish-due API is not enabled on this node",
+        );
+    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
+    if let Err(response) = require_moderation_quarantine_operator_role(&state, &verified) {
+        return response;
+    }
+    let request = match json::from_slice::<ModerationEvidenceViewerAuditReportPublishDueRequestDto>(
+        body.as_ref(),
+    ) {
+        Ok(request) => request,
+        Err(err) => {
+            return json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "failed to decode SoraFS moderation evidence viewer audit-report publish-due JSON: {err}"
+                ),
+            );
+        }
+    };
+    let request = match moderation_evidence_viewer_audit_report_publish_due_from_request(
+        request,
+        state
+            .sorafs_node
+            .configured_evidence_viewer_audit_schedule(),
+    ) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    let outcome = match if let Some(schedule) = request.schedule {
+        state
+            .sorafs_node
+            .publish_due_moderation_evidence_viewer_audit_report(
+                request.now_unix,
+                schedule,
+                request.report_scope,
+                request.policy_digest,
+                request.previous_block_hash,
+            )
+    } else {
+        state
+            .sorafs_node
+            .publish_due_configured_moderation_evidence_viewer_audit_report(
+                request.now_unix,
+                request.report_scope,
+                request.policy_digest,
+                request.previous_block_hash,
+            )
+    } {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            let message = err.to_string();
+            let status = if is_evidence_viewer_audit_publish_due_request_error(&message) {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return json_error(
+                status,
+                format!("failed to publish due SoraFS evidence viewer audit report: {message}"),
+            );
+        }
+    };
+    let body = match moderation_evidence_viewer_audit_publish_due_outcome_json(
+        &outcome,
+        state.sorafs_node.transparency_ledger_source_entry_count(),
+        state.sorafs_node.has_governance_publisher(),
+    ) {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    (StatusCode::OK, JsonBody(body)).into_response()
+}
+
 pub(crate) async fn handle_post_sorafs_orderbook_order(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
@@ -8972,6 +9605,64 @@ fn moderation_announcement_from_request(
     })
 }
 
+fn moderation_challenge_from_request(
+    request: ModerationBallotChallengeRequestDto,
+) -> Result<ModerationBallotChallengeInput, Response> {
+    Ok(ModerationBallotChallengeInput {
+        challenge_id: request.challenge_id,
+        case_id: request.case_id,
+        round_id: request.round_id,
+        challenger_id: request.challenger_id,
+        kind: moderation_challenge_kind_from_label(&request.kind)?,
+        target_juror_id: request.target_juror_id,
+        evidence_digest: decode_hex_32_field(&request.evidence_digest_hex, "evidence_digest_hex")?,
+        reason: request.reason,
+    })
+}
+
+fn moderation_challenge_resolution_from_request(
+    request: ModerationBallotChallengeResolutionRequestDto,
+) -> Result<ModerationBallotChallengeResolution, Response> {
+    Ok(ModerationBallotChallengeResolution {
+        case_id: request.case_id,
+        round_id: request.round_id,
+        challenge_id: request.challenge_id,
+        resolved_by: request.resolved_by,
+        decision: moderation_challenge_decision_from_label(&request.decision)?,
+        note: request.note,
+    })
+}
+
+fn moderation_challenge_kind_from_label(
+    label: &str,
+) -> Result<ModerationBallotChallengeKind, Response> {
+    match label.trim() {
+        "roster_mismatch" => Ok(ModerationBallotChallengeKind::RosterMismatch),
+        "duplicate_commit" => Ok(ModerationBallotChallengeKind::DuplicateCommit),
+        "payload_mismatch" => Ok(ModerationBallotChallengeKind::PayloadMismatch),
+        "juror_eligibility" => Ok(ModerationBallotChallengeKind::JurorEligibility),
+        "evidence_mismatch" => Ok(ModerationBallotChallengeKind::EvidenceMismatch),
+        "other" => Ok(ModerationBallotChallengeKind::Other),
+        _ => Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid SoraFS moderation ballot challenge kind",
+        )),
+    }
+}
+
+fn moderation_challenge_decision_from_label(
+    label: &str,
+) -> Result<ModerationBallotChallengeDecision, Response> {
+    match label.trim() {
+        "rejected" => Ok(ModerationBallotChallengeDecision::Rejected),
+        "accepted" => Ok(ModerationBallotChallengeDecision::Accepted),
+        _ => Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "invalid SoraFS moderation ballot challenge decision",
+        )),
+    }
+}
+
 fn moderation_appeal_deposit_from_confirmation(
     expected: &AppealFinanceDepositExpectation,
     record: &AssetEscrowRecord,
@@ -9093,28 +9784,36 @@ fn moderation_juror_account_id(
     state: &SharedAppState,
     juror_id: &str,
 ) -> Result<AccountId, Response> {
-    if juror_id.trim().is_empty() {
+    moderation_canonical_account_id(state, juror_id, "juror_id")
+}
+
+fn moderation_canonical_account_id(
+    state: &SharedAppState,
+    account_id: &str,
+    field: &'static str,
+) -> Result<AccountId, Response> {
+    if account_id.trim().is_empty() {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
-            "SoraFS moderation juror_id must not be empty",
+            format!("SoraFS moderation {field} must not be empty"),
         ));
     }
     let (account, canonical) = crate::routing::parse_account_literal_with_state(
         &state.state,
-        juror_id,
+        account_id,
         &state.telemetry,
-        "sorafs_moderation_juror_id",
+        field,
     )
     .map_err(|err| {
         json_error(
             StatusCode::BAD_REQUEST,
-            format!("invalid SoraFS moderation juror_id: {}", err.reason()),
+            format!("invalid SoraFS moderation {field}: {}", err.reason()),
         )
     })?;
-    if juror_id != canonical {
+    if account_id != canonical {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
-            "SoraFS moderation juror_id must be a canonical AccountId",
+            format!("SoraFS moderation {field} must be a canonical AccountId"),
         ));
     }
     Ok(account)
@@ -11786,6 +12485,130 @@ pub(crate) fn spawn_sorafs_reserve_lifecycle_scheduler(
             }
         }
     });
+}
+
+pub(crate) fn spawn_sorafs_moderation_evidence_viewer_audit_scheduler(
+    state: SharedAppState,
+    shutdown_signal: ShutdownSignal,
+) {
+    if !state.sorafs_node.is_enabled() {
+        debug!("SoraFS evidence-viewer audit scheduler disabled: SoraFS storage is disabled");
+        return;
+    }
+    let Some(schedule) = state
+        .sorafs_node
+        .configured_evidence_viewer_audit_schedule()
+    else {
+        debug!("SoraFS evidence-viewer audit scheduler disabled by configuration");
+        return;
+    };
+
+    tokio::spawn(async move {
+        loop {
+            let observed_at_unix = unix_timestamp_now();
+            let mut continue_catchup = false;
+            match run_sorafs_moderation_evidence_viewer_audit_scheduler_tick(
+                &state,
+                observed_at_unix,
+            ) {
+                Ok(ModerationEvidenceViewerAuditScheduleOutcome::Published {
+                    window,
+                    report,
+                    publication,
+                    ..
+                }) => {
+                    continue_catchup = true;
+                    debug!(
+                        observed_at_unix,
+                        cycle_start_unix = window.cycle_start_unix,
+                        cycle_end_unix = window.cycle_end_unix,
+                        session_count = report.session_count,
+                        access_event_count = report.access_event_count,
+                        entry_count = publication.block.entry_count,
+                        "SoraFS evidence-viewer audit scheduler published a due report cycle",
+                    );
+                }
+                Ok(ModerationEvidenceViewerAuditScheduleOutcome::AlreadyPublished {
+                    window,
+                    ..
+                }) => {
+                    debug!(
+                        observed_at_unix,
+                        cycle_start_unix = window.cycle_start_unix,
+                        cycle_end_unix = window.cycle_end_unix,
+                        "SoraFS evidence-viewer audit scheduler found an already published cycle",
+                    );
+                }
+                Ok(ModerationEvidenceViewerAuditScheduleOutcome::NoSourceEvents {
+                    window, ..
+                }) => {
+                    debug!(
+                        observed_at_unix,
+                        cycle_start_unix = window.cycle_start_unix,
+                        cycle_end_unix = window.cycle_end_unix,
+                        "SoraFS evidence-viewer audit scheduler found no due source events",
+                    );
+                }
+                Ok(ModerationEvidenceViewerAuditScheduleOutcome::NotDue) => {
+                    debug!(
+                        observed_at_unix,
+                        "SoraFS evidence-viewer audit scheduler tick found no due cycle",
+                    );
+                }
+                Ok(ModerationEvidenceViewerAuditScheduleOutcome::Disabled) => {
+                    debug!("SoraFS evidence-viewer audit scheduler stopped after disabled tick");
+                    break;
+                }
+                Err(err) => {
+                    warn!(
+                        observed_at_unix,
+                        error = %err,
+                        "SoraFS evidence-viewer audit scheduler tick failed",
+                    );
+                }
+            }
+
+            if continue_catchup {
+                continue;
+            }
+            let delay_secs =
+                evidence_viewer_audit_scheduler_next_delay_secs(schedule, observed_at_unix);
+            tokio::select! {
+                () = shutdown_signal.receive() => break,
+                () = tokio::time::sleep(Duration::from_secs(delay_secs)) => {}
+            }
+        }
+    });
+}
+
+pub(crate) fn run_sorafs_moderation_evidence_viewer_audit_scheduler_tick(
+    state: &SharedAppState,
+    observed_at_unix: u64,
+) -> Result<ModerationEvidenceViewerAuditScheduleOutcome, sorafs_node::GovernancePublishError> {
+    if !state.sorafs_node.is_enabled() {
+        return Ok(ModerationEvidenceViewerAuditScheduleOutcome::Disabled);
+    }
+    state
+        .sorafs_node
+        .publish_due_configured_moderation_evidence_viewer_audit_report(
+            observed_at_unix,
+            MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_DEFAULT_SCOPE.to_string(),
+            None,
+            None,
+        )
+}
+
+fn evidence_viewer_audit_scheduler_next_delay_secs(
+    schedule: sorafs_node::PrivacyAggregateScheduleConfig,
+    observed_at_unix: u64,
+) -> u64 {
+    let cycle_seconds = schedule.cycle_seconds.max(1);
+    let adjusted = observed_at_unix.saturating_sub(schedule.publish_delay_seconds);
+    let current_boundary = (adjusted / cycle_seconds).saturating_mul(cycle_seconds);
+    let next_due_at_unix = current_boundary
+        .saturating_add(cycle_seconds)
+        .saturating_add(schedule.publish_delay_seconds);
+    next_due_at_unix.saturating_sub(observed_at_unix).max(1)
 }
 
 pub(crate) fn run_sorafs_reserve_lifecycle_scheduler_tick(
@@ -15026,12 +15849,19 @@ fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -
         ModerationBallotRuntimeError::DuplicateBallot { .. }
         | ModerationBallotRuntimeError::DuplicateCommit { .. }
         | ModerationBallotRuntimeError::DuplicateReveal { .. }
+        | ModerationBallotRuntimeError::DuplicateChallenge { .. }
+        | ModerationBallotRuntimeError::ChallengeAlreadyResolved { .. }
         | ModerationBallotRuntimeError::AlreadyTallied { .. } => StatusCode::CONFLICT,
-        ModerationBallotRuntimeError::UnknownBallot { .. } => StatusCode::NOT_FOUND,
+        ModerationBallotRuntimeError::UnknownBallot { .. }
+        | ModerationBallotRuntimeError::UnknownChallenge { .. } => StatusCode::NOT_FOUND,
         ModerationBallotRuntimeError::IneligibleJuror { .. } => StatusCode::FORBIDDEN,
         ModerationBallotRuntimeError::CommitWindowClosed { .. }
         | ModerationBallotRuntimeError::RevealWindowNotOpen { .. }
         | ModerationBallotRuntimeError::RevealWindowClosed { .. }
+        | ModerationBallotRuntimeError::ChallengeWindowNotOpen { .. }
+        | ModerationBallotRuntimeError::ChallengeWindowClosed { .. }
+        | ModerationBallotRuntimeError::ChallengePending { .. }
+        | ModerationBallotRuntimeError::ChallengeAccepted { .. }
         | ModerationBallotRuntimeError::MissingCommit { .. }
         | ModerationBallotRuntimeError::TallyWindowOpen { .. }
         | ModerationBallotRuntimeError::QuorumNotMet { .. } => StatusCode::PRECONDITION_FAILED,
@@ -15046,10 +15876,30 @@ fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -
         | ModerationBallotRuntimeError::MissingAppealDepositEscrowId
         | ModerationBallotRuntimeError::AppealDepositEscrowIdMismatch
         | ModerationBallotRuntimeError::InvalidWindows
+        | ModerationBallotRuntimeError::MissingChallengeId
+        | ModerationBallotRuntimeError::MissingChallengerId
+        | ModerationBallotRuntimeError::MissingChallengeTarget { .. }
+        | ModerationBallotRuntimeError::BlankChallengeTarget
+        | ModerationBallotRuntimeError::MissingChallengeEvidence
+        | ModerationBallotRuntimeError::MissingChallengeReason
+        | ModerationBallotRuntimeError::MissingChallengeResolver
+        | ModerationBallotRuntimeError::BlankChallengeResolutionNote
+        | ModerationBallotRuntimeError::InvalidChallengeResolutionTimestamp
+        | ModerationBallotRuntimeError::InvalidSnapshot { .. }
         | ModerationBallotRuntimeError::PayloadContextMismatch
         | ModerationBallotRuntimeError::PayloadRoundMismatch { .. } => StatusCode::BAD_REQUEST,
     };
     json_error(status, format!("sorafs moderation ballot error: {err}"))
+}
+
+#[cfg(test)]
+#[test]
+fn moderation_ballot_invalid_snapshot_errors_map_to_bad_request() {
+    let response =
+        moderation_ballot_runtime_error_response(ModerationBallotRuntimeError::InvalidSnapshot {
+            message: "duplicate moderation ballot".to_owned(),
+        });
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 fn decode_moderation_model_registry_manifest<T>(
@@ -15302,6 +16152,211 @@ fn moderation_quarantine_object_input_from_request(
     })
 }
 
+fn moderation_evidence_viewer_session_input_from_request(
+    quarantine_id_hex: &str,
+    request: ModerationEvidenceViewerSessionRequestDto,
+) -> Result<ModerationEvidenceViewerSessionInput, Response> {
+    let quarantine_id = parse_hex_fixed::<16>(quarantine_id_hex, "quarantine_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let issued_at_unix_ms = request
+        .issued_at_unix_ms
+        .unwrap_or_else(iroha_network_time_now_ms);
+    let expires_at_unix_ms = request
+        .expires_at_unix_ms
+        .unwrap_or_else(|| issued_at_unix_ms.saturating_add(5 * 60 * 1_000));
+    Ok(ModerationEvidenceViewerSessionInput {
+        quarantine_id,
+        requested_by: request.requested_by,
+        viewer_account: request.viewer_account,
+        viewer_role: request.viewer_role,
+        purpose: request.purpose,
+        attestation_digest: parse_hex_fixed::<32>(
+            &request.attestation_digest_hex,
+            "attestation_digest_hex",
+        )
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
+        watermark_metadata_digest: parse_hex_fixed::<32>(
+            &request.watermark_metadata_digest_hex,
+            "watermark_metadata_digest_hex",
+        )
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
+        session_nonce_digest: parse_hex_fixed::<32>(
+            &request.session_nonce_digest_hex,
+            "session_nonce_digest_hex",
+        )
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
+        issued_at_unix_ms,
+        expires_at_unix_ms,
+        legal_hold_id: request.legal_hold_id,
+        notes: request.notes,
+        raw_evidence_included: request.raw_evidence_included,
+        signed_url_included: request.signed_url_included,
+        session_token_included: request.session_token_included,
+        watermark_secret_included: request.watermark_secret_included,
+    })
+}
+
+fn moderation_evidence_viewer_access_input_from_request(
+    quarantine_id_hex: &str,
+    request: ModerationEvidenceViewerAccessRequestDto,
+) -> Result<ModerationEvidenceViewerAccessInput, Response> {
+    parse_hex_fixed::<16>(quarantine_id_hex, "quarantine_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    Ok(ModerationEvidenceViewerAccessInput {
+        session_id: parse_hex_fixed::<16>(&request.session_id_hex, "session_id_hex")
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
+        kind: moderation_evidence_viewer_access_kind_from_label(&request.kind)?,
+        actor_account: request.actor_account,
+        event_at_unix_ms: request
+            .event_at_unix_ms
+            .unwrap_or_else(iroha_network_time_now_ms),
+        request_digest: parse_hex_fixed::<32>(&request.request_digest_hex, "request_digest_hex")
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
+        event_metadata_digest: request
+            .event_metadata_digest_hex
+            .as_deref()
+            .map(|value| parse_hex_fixed::<32>(value, "event_metadata_digest_hex"))
+            .transpose()
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?,
+        notes: request.notes,
+        raw_evidence_included: request.raw_evidence_included,
+        signed_url_included: request.signed_url_included,
+        session_token_included: request.session_token_included,
+        response_body_included: request.response_body_included,
+    })
+}
+
+fn moderation_evidence_viewer_audit_report_input_from_request(
+    request: ModerationEvidenceViewerAuditReportRequestDto,
+) -> Result<ModerationEvidenceViewerAuditReportInput, Response> {
+    let policy_digest =
+        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
+    Ok(ModerationEvidenceViewerAuditReportInput {
+        report_scope: request
+            .report_scope
+            .unwrap_or_else(|| MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_DEFAULT_SCOPE.to_string()),
+        window_start_unix: request.window_start_unix,
+        window_end_unix: request.window_end_unix,
+        generated_at_unix: request
+            .generated_at_unix
+            .unwrap_or_else(|| iroha_network_time_now_ms() / 1_000),
+        policy_digest,
+        raw_evidence_included: request.raw_evidence_included,
+        raw_access_logs_included: request.raw_access_logs_included,
+        viewer_accounts_included: request.viewer_accounts_included,
+        signed_urls_included: request.signed_urls_included,
+        session_tokens_included: request.session_tokens_included,
+        response_bodies_included: request.response_bodies_included,
+    })
+}
+
+struct ModerationEvidenceViewerAuditReportPublishDueRequest {
+    now_unix: u64,
+    schedule: Option<sorafs_node::PrivacyAggregateScheduleConfig>,
+    report_scope: String,
+    policy_digest: Option<[u8; 32]>,
+    previous_block_hash: Option<[u8; 32]>,
+}
+
+fn moderation_evidence_viewer_audit_report_publish_due_from_request(
+    request: ModerationEvidenceViewerAuditReportPublishDueRequestDto,
+    configured_schedule: Option<sorafs_node::PrivacyAggregateScheduleConfig>,
+) -> Result<ModerationEvidenceViewerAuditReportPublishDueRequest, Response> {
+    let policy_digest =
+        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
+    let previous_block_hash = decode_optional_hex_32_field(
+        request.previous_block_hash_hex.as_deref(),
+        "previous_block_hash_hex",
+    )?;
+    let schedule = match (
+        request.cycle_seconds,
+        request.publish_delay_seconds,
+        configured_schedule,
+    ) {
+        (Some(cycle_seconds), Some(publish_delay_seconds), _) => {
+            Some(sorafs_node::PrivacyAggregateScheduleConfig {
+                cycle_seconds,
+                publish_delay_seconds,
+            })
+        }
+        (Some(cycle_seconds), None, Some(base)) => {
+            Some(sorafs_node::PrivacyAggregateScheduleConfig {
+                cycle_seconds,
+                publish_delay_seconds: base.publish_delay_seconds,
+            })
+        }
+        (None, Some(publish_delay_seconds), Some(base)) => {
+            Some(sorafs_node::PrivacyAggregateScheduleConfig {
+                cycle_seconds: base.cycle_seconds,
+                publish_delay_seconds,
+            })
+        }
+        (None, None, base) => base,
+        (Some(_), None, None) | (None, Some(_), None) => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "cycle_seconds and publish_delay_seconds must both be supplied when SoraFS evidence-viewer audit scheduling is not configured",
+            ));
+        }
+    };
+    Ok(ModerationEvidenceViewerAuditReportPublishDueRequest {
+        now_unix: request.now_unix,
+        schedule,
+        report_scope: request
+            .report_scope
+            .unwrap_or_else(|| MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_DEFAULT_SCOPE.to_string()),
+        policy_digest,
+        previous_block_hash,
+    })
+}
+
+fn moderation_evidence_viewer_access_kind_from_label(
+    value: &str,
+) -> Result<ModerationEvidenceViewerAccessKind, Response> {
+    match value.trim() {
+        "viewed" => Ok(ModerationEvidenceViewerAccessKind::Viewed),
+        "seeked" => Ok(ModerationEvidenceViewerAccessKind::Seeked),
+        "paused" => Ok(ModerationEvidenceViewerAccessKind::Paused),
+        "screenshot_attempted" => Ok(ModerationEvidenceViewerAccessKind::ScreenshotAttempted),
+        "download_attempted" => Ok(ModerationEvidenceViewerAccessKind::DownloadAttempted),
+        "annotated" => Ok(ModerationEvidenceViewerAccessKind::Annotated),
+        "session_expired" => Ok(ModerationEvidenceViewerAccessKind::SessionExpired),
+        "attestation_failed" => Ok(ModerationEvidenceViewerAccessKind::AttestationFailed),
+        other => Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("unknown SoraFS moderation evidence viewer access kind `{other}`"),
+        )),
+    }
+}
+
+fn ensure_evidence_viewer_access_binds_quarantine(
+    state: &SharedAppState,
+    quarantine_id_hex: &str,
+    input: &ModerationEvidenceViewerAccessInput,
+) -> Result<(), Response> {
+    let quarantine_id = parse_hex_fixed::<16>(quarantine_id_hex, "quarantine_id_hex")
+        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    let snapshot = state.sorafs_node.moderation_evidence_viewer_snapshot();
+    match snapshot
+        .sessions
+        .iter()
+        .find(|session| session.session_id == input.session_id)
+    {
+        Some(session) if session.quarantine_id == quarantine_id => Ok(()),
+        Some(_) => Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation evidence viewer session does not belong to the requested quarantine record",
+        )),
+        None => Err(json_error(
+            StatusCode::NOT_FOUND,
+            format!(
+                "SoraFS moderation evidence viewer session `{}` was not found",
+                encode(input.session_id)
+            ),
+        )),
+    }
+}
+
 fn moderation_screening_error_response(err: ModerationScreeningError) -> Response {
     let status = match err {
         ModerationScreeningError::ConflictingRecord { .. } => StatusCode::CONFLICT,
@@ -15331,6 +16386,27 @@ fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectEr
     json_error(
         status,
         format!("sorafs moderation quarantine object error: {err}"),
+    )
+}
+
+fn moderation_evidence_viewer_error_response(err: ModerationEvidenceViewerError) -> Response {
+    let status = match err {
+        ModerationEvidenceViewerError::UnknownQuarantine { .. }
+        | ModerationEvidenceViewerError::MissingObject { .. }
+        | ModerationEvidenceViewerError::UnknownSession { .. } => StatusCode::NOT_FOUND,
+        ModerationEvidenceViewerError::ConflictingSession { .. }
+        | ModerationEvidenceViewerError::ExpiredSession { .. } => StatusCode::CONFLICT,
+        ModerationEvidenceViewerError::InvalidInput { .. }
+        | ModerationEvidenceViewerError::PayloadSafetyViolation { .. }
+        | ModerationEvidenceViewerError::InvalidSnapshot { .. }
+        | ModerationEvidenceViewerError::Codec { .. } => StatusCode::BAD_REQUEST,
+        ModerationEvidenceViewerError::TransparencyExport { .. }
+        | ModerationEvidenceViewerError::Io { .. }
+        | ModerationEvidenceViewerError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    json_error(
+        status,
+        format!("sorafs moderation evidence viewer error: {err}"),
     )
 }
 
@@ -15446,6 +16522,22 @@ fn moderation_quarantine_operator_panel_routes_json(quarantine_id_hex: &str) -> 
         json_entry("release", route(MODERATION_ROUTE_QUARANTINE_RELEASE_SUFFIX)),
         json_entry("object", route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX)),
         json_entry(
+            "viewer_sessions",
+            route(MODERATION_ROUTE_QUARANTINE_VIEWER_SESSIONS_SUFFIX),
+        ),
+        json_entry(
+            "viewer_access",
+            route(MODERATION_ROUTE_QUARANTINE_VIEWER_ACCESS_SUFFIX),
+        ),
+        json_entry(
+            "viewer_audit_reports",
+            Value::from(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS),
+        ),
+        json_entry(
+            "viewer_audit_reports_publish_due",
+            Value::from(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE),
+        ),
+        json_entry(
             "appeal_handoff",
             route(MODERATION_ROUTE_QUARANTINE_APPEAL_HANDOFF_SUFFIX),
         ),
@@ -15478,6 +16570,35 @@ fn moderation_quarantine_operator_panel_next_actions_json(
         actions.push(json_object(vec![
             json_entry("action", Value::from("read_object")),
             json_entry("route", route(MODERATION_ROUTE_QUARANTINE_OBJECT_SUFFIX)),
+            json_entry("required", Value::Bool(false)),
+        ]));
+        actions.push(json_object(vec![
+            json_entry("action", Value::from("issue_viewer_session")),
+            json_entry(
+                "route",
+                route(MODERATION_ROUTE_QUARANTINE_VIEWER_SESSIONS_SUFFIX),
+            ),
+            json_entry("required", Value::Bool(false)),
+        ]));
+        actions.push(json_object(vec![
+            json_entry("action", Value::from("log_viewer_access")),
+            json_entry(
+                "route",
+                route(MODERATION_ROUTE_QUARANTINE_VIEWER_ACCESS_SUFFIX),
+            ),
+            json_entry("required", Value::Bool(false)),
+        ]));
+        actions.push(json_object(vec![
+            json_entry("action", Value::from("record_viewer_audit_report")),
+            json_entry("route", Value::from(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS)),
+            json_entry("required", Value::Bool(false)),
+        ]));
+        actions.push(json_object(vec![
+            json_entry("action", Value::from("publish_due_viewer_audit_report")),
+            json_entry(
+                "route",
+                Value::from(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE),
+            ),
             json_entry("required", Value::Bool(false)),
         ]));
     }
@@ -15558,6 +16679,73 @@ fn moderation_quarantine_object_payload_json(payload: &ModerationQuarantineObjec
         json_entry(
             "payload_b64",
             Value::from(BASE64_STANDARD.encode(&payload.payload)),
+        ),
+    ])
+}
+
+fn moderation_evidence_viewer_session_json(
+    record: &ModerationEvidenceViewerSessionRecord,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.quarantine.viewer_session.v1"),
+        ),
+        json_entry("status", Value::from("issued")),
+        json_entry("payloads_included", Value::from(false)),
+        json_entry(
+            "session",
+            moderation_evidence_viewer_session_record_json(record),
+        ),
+    ])
+}
+
+fn moderation_evidence_viewer_access_event_json(
+    record: &ModerationEvidenceViewerAccessEventRecord,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.quarantine.viewer_access.v1"),
+        ),
+        json_entry("status", Value::from("logged")),
+        json_entry("response_bodies_included", Value::from(false)),
+        json_entry(
+            "event",
+            moderation_evidence_viewer_access_record_json(record),
+        ),
+    ])
+}
+
+fn moderation_evidence_viewer_audit_report_outcome_json(
+    report: &ModerationEvidenceViewerAuditReport,
+    source_entry: &TransparencyLedgerSourceEntry,
+    source_entry_count: usize,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.viewer_audit_report.v1"),
+        ),
+        json_entry("status", Value::from("recorded")),
+        json_entry("payloads_included", Value::from(false)),
+        json_entry("raw_access_logs_included", Value::from(false)),
+        json_entry("viewer_accounts_included", Value::from(false)),
+        json_entry("signed_urls_included", Value::from(false)),
+        json_entry("session_tokens_included", Value::from(false)),
+        json_entry("response_bodies_included", Value::from(false)),
+        json_entry("recorded_to_transparency_source_entries", Value::from(true)),
+        json_entry(
+            "transparency_source_entry_count",
+            Value::from(source_entry_count as u64),
+        ),
+        json_entry(
+            "report",
+            moderation_evidence_viewer_audit_report_json(report),
+        ),
+        json_entry(
+            "source_entry",
+            moderation_evidence_viewer_audit_source_entry_json(source_entry),
         ),
     ])
 }
@@ -15900,6 +17088,249 @@ fn moderation_quarantine_object_record_json(record: &ModerationQuarantineObjectR
     ])
 }
 
+fn moderation_evidence_viewer_session_record_json(
+    record: &ModerationEvidenceViewerSessionRecord,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "quarantine_id_hex",
+            Value::from(encode(record.quarantine_id)),
+        ),
+        json_entry("object_id_hex", Value::from(encode(record.object_id))),
+        json_entry("session_id_hex", Value::from(encode(record.session_id))),
+        json_entry(
+            "evidence_digest_hex",
+            Value::from(encode(record.evidence_digest)),
+        ),
+        json_entry(
+            "attestation_digest_hex",
+            Value::from(encode(record.attestation_digest)),
+        ),
+        json_entry(
+            "watermark_metadata_digest_hex",
+            Value::from(encode(record.watermark_metadata_digest)),
+        ),
+        json_entry(
+            "session_nonce_digest_hex",
+            Value::from(encode(record.session_nonce_digest)),
+        ),
+        json_entry("requested_by", Value::from(record.requested_by.clone())),
+        json_entry("viewer_account", Value::from(record.viewer_account.clone())),
+        json_entry("viewer_role", Value::from(record.viewer_role.clone())),
+        json_entry("purpose", Value::from(record.purpose.clone())),
+        json_entry("issued_at_unix_ms", Value::from(record.issued_at_unix_ms)),
+        json_entry("expires_at_unix_ms", Value::from(record.expires_at_unix_ms)),
+        json_entry(
+            "legal_hold_id",
+            record
+                .legal_hold_id
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "notes",
+            record
+                .notes
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "session_manifest_digest_hex",
+            Value::from(encode(record.session_manifest_digest)),
+        ),
+    ])
+}
+
+fn moderation_evidence_viewer_access_record_json(
+    record: &ModerationEvidenceViewerAccessEventRecord,
+) -> Value {
+    json_object(vec![
+        json_entry("sequence", Value::from(record.sequence)),
+        json_entry("event_id_hex", Value::from(encode(record.event_id))),
+        json_entry("session_id_hex", Value::from(encode(record.session_id))),
+        json_entry(
+            "quarantine_id_hex",
+            Value::from(encode(record.quarantine_id)),
+        ),
+        json_entry("object_id_hex", Value::from(encode(record.object_id))),
+        json_entry(
+            "evidence_digest_hex",
+            Value::from(encode(record.evidence_digest)),
+        ),
+        json_entry("kind", Value::from(record.kind.as_str())),
+        json_entry("actor_account", Value::from(record.actor_account.clone())),
+        json_entry("event_at_unix_ms", Value::from(record.event_at_unix_ms)),
+        json_entry(
+            "request_digest_hex",
+            Value::from(encode(record.request_digest)),
+        ),
+        json_entry(
+            "event_metadata_digest_hex",
+            record
+                .event_metadata_digest
+                .map(encode)
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "notes",
+            record
+                .notes
+                .as_deref()
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("event_digest_hex", Value::from(encode(record.event_digest))),
+    ])
+}
+
+fn moderation_evidence_viewer_audit_report_json(
+    report: &ModerationEvidenceViewerAuditReport,
+) -> Value {
+    json_object(vec![
+        json_entry("version", Value::from(report.version as u64)),
+        json_entry("report_id_hex", Value::from(encode(report.report_id))),
+        json_entry("report_scope", Value::from(report.report_scope.clone())),
+        json_entry("window_start_unix", Value::from(report.window_start_unix)),
+        json_entry("window_end_unix", Value::from(report.window_end_unix)),
+        json_entry("generated_at_unix", Value::from(report.generated_at_unix)),
+        json_entry("session_count", Value::from(report.session_count)),
+        json_entry(
+            "logged_session_count",
+            Value::from(report.logged_session_count),
+        ),
+        json_entry("access_event_count", Value::from(report.access_event_count)),
+        json_entry(
+            "unique_viewer_role_count",
+            Value::from(report.unique_viewer_role_count),
+        ),
+        json_entry(
+            "attested_session_count",
+            Value::from(report.attested_session_count),
+        ),
+        json_entry(
+            "watermarked_session_count",
+            Value::from(report.watermarked_session_count),
+        ),
+        json_entry(
+            "legal_hold_bound_session_count",
+            Value::from(report.legal_hold_bound_session_count),
+        ),
+        json_entry(
+            "first_event_at_unix_ms",
+            report
+                .first_event_at_unix_ms
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "last_event_at_unix_ms",
+            report
+                .last_event_at_unix_ms
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "access_kind_counts",
+            Value::Array(
+                report
+                    .access_kind_counts
+                    .iter()
+                    .map(moderation_evidence_viewer_audit_kind_count_json)
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "evidence_digest_set_digest_hex",
+            Value::from(encode(report.evidence_digest_set_digest)),
+        ),
+        json_entry(
+            "session_manifest_digest_set_digest_hex",
+            Value::from(encode(report.session_manifest_digest_set_digest)),
+        ),
+        json_entry(
+            "access_event_digest_set_digest_hex",
+            Value::from(encode(report.access_event_digest_set_digest)),
+        ),
+        json_entry(
+            "request_digest_set_digest_hex",
+            Value::from(encode(report.request_digest_set_digest)),
+        ),
+        json_entry(
+            "attestation_digest_set_digest_hex",
+            Value::from(encode(report.attestation_digest_set_digest)),
+        ),
+        json_entry(
+            "watermark_metadata_digest_set_digest_hex",
+            Value::from(encode(report.watermark_metadata_digest_set_digest)),
+        ),
+        json_entry(
+            "policy_digest_hex",
+            report
+                .policy_digest
+                .map(encode)
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "report_digest_hex",
+            Value::from(encode(report.report_digest)),
+        ),
+    ])
+}
+
+fn moderation_evidence_viewer_audit_kind_count_json(
+    item: &ModerationEvidenceViewerAuditKindCount,
+) -> Value {
+    json_object(vec![
+        json_entry("kind", Value::from(item.kind.clone())),
+        json_entry("count", Value::from(item.count)),
+    ])
+}
+
+fn moderation_evidence_viewer_audit_source_entry_json(
+    source_entry: &TransparencyLedgerSourceEntry,
+) -> Value {
+    json_object(vec![
+        json_entry(
+            "source_kind",
+            Value::from(TRANSPARENCY_SOURCE_KIND_EVIDENCE_ACCESS_SUMMARY),
+        ),
+        json_entry("event_id", Value::from(source_entry.event_id.clone())),
+        json_entry(
+            "occurred_at_unix",
+            Value::from(source_entry.occurred_at_unix),
+        ),
+        json_entry(
+            "ledger_kind",
+            Value::from(moderation_ledger_entry_kind_label(&source_entry.kind).into_owned()),
+        ),
+        json_entry("subject", Value::from(source_entry.subject.clone())),
+        json_entry(
+            "subject_digest_hex",
+            Value::from(encode(source_entry.subject_digest)),
+        ),
+        json_entry(
+            "payload_digest_hex",
+            Value::from(encode(source_entry.payload_digest)),
+        ),
+        json_entry(
+            "summary_digest_hex",
+            Value::from(encode(source_entry.summary_digest)),
+        ),
+        json_entry(
+            "policy_digest_hex",
+            source_entry
+                .policy_digest
+                .map(encode)
+                .map(Value::from)
+                .unwrap_or(Value::Null),
+        ),
+    ])
+}
+
 fn moderation_ballot_commit_outcome_json(outcome: &ModerationBallotCommitOutcome) -> Value {
     json_object(vec![
         json_entry("status", Value::from("accepted")),
@@ -15937,6 +17368,7 @@ fn moderation_ballot_record_json(record: &ModerationBallotRecord) -> Value {
             .commits
             .len()
             .max(record.reveals.len())
+            .max(record.challenges.len())
             .max(DEFAULT_LIST_LIMIT),
     )
 }
@@ -15947,6 +17379,7 @@ fn moderation_ballot_record_json_with_array_limit(
 ) -> Value {
     let returned_commit_count = record.commits.len().min(limit);
     let returned_reveal_count = record.reveals.len().min(limit);
+    let returned_challenge_count = record.challenges.len().min(limit);
     json_object(vec![
         json_entry("schema", Value::from("sorafs.moderation.ballot.local.v1")),
         json_entry("source", Value::from("local")),
@@ -15972,6 +17405,18 @@ fn moderation_ballot_record_json_with_array_limit(
             "truncated_reveals",
             Value::from(record.reveals.len() > returned_reveal_count),
         ),
+        json_entry(
+            "challenge_count",
+            Value::from(record.challenges.len() as u64),
+        ),
+        json_entry(
+            "returned_challenge_count",
+            Value::from(returned_challenge_count as u64),
+        ),
+        json_entry(
+            "truncated_challenges",
+            Value::from(record.challenges.len() > returned_challenge_count),
+        ),
         json_entry("limit", Value::from(limit as u64)),
         json_entry(
             "commits",
@@ -15996,11 +17441,80 @@ fn moderation_ballot_record_json_with_array_limit(
             ),
         ),
         json_entry(
+            "challenges",
+            Value::Array(
+                record
+                    .challenges
+                    .iter()
+                    .take(limit)
+                    .map(moderation_ballot_challenge_json)
+                    .collect(),
+            ),
+        ),
+        json_entry(
             "tally",
             record
                 .tally
                 .as_ref()
                 .map_or(Value::Null, moderation_ballot_tally_json),
+        ),
+    ])
+}
+
+fn moderation_ballot_challenge_json(challenge: &ModerationBallotChallengeRecord) -> Value {
+    json_object(vec![
+        json_entry("challenge_id", Value::from(challenge.challenge_id.clone())),
+        json_entry("case_id", Value::from(challenge.case_id.clone())),
+        json_entry("round_id", Value::from(challenge.round_id.clone())),
+        json_entry(
+            "challenger_id",
+            Value::from(challenge.challenger_id.clone()),
+        ),
+        json_entry(
+            "kind",
+            Value::from(moderation_challenge_kind_label(challenge.kind)),
+        ),
+        json_entry(
+            "target_juror_id",
+            challenge
+                .target_juror_id
+                .as_ref()
+                .map_or(Value::Null, |juror_id| Value::from(juror_id.clone())),
+        ),
+        json_entry(
+            "evidence_digest_hex",
+            Value::from(hex::encode(challenge.evidence_digest)),
+        ),
+        json_entry("reason", Value::from(challenge.reason.clone())),
+        json_entry(
+            "raised_at_unix_ms",
+            Value::from(challenge.raised_at_unix_ms),
+        ),
+        json_entry(
+            "decision",
+            challenge.decision.map_or(Value::Null, |decision| {
+                Value::from(moderation_challenge_decision_label(decision))
+            }),
+        ),
+        json_entry(
+            "resolved_by",
+            challenge
+                .resolved_by
+                .as_ref()
+                .map_or(Value::Null, |resolved_by| Value::from(resolved_by.clone())),
+        ),
+        json_entry(
+            "resolved_at_unix_ms",
+            challenge
+                .resolved_at_unix_ms
+                .map_or(Value::Null, Value::from),
+        ),
+        json_entry(
+            "resolution_note",
+            challenge
+                .resolution_note
+                .as_ref()
+                .map_or(Value::Null, |note| Value::from(note.clone())),
         ),
     ])
 }
@@ -16194,6 +17708,74 @@ fn moderation_ballot_tally_json(tally: &ModerationBallotTally) -> Value {
     ])
 }
 
+fn moderation_ballot_no_show_plan_json(plan: &ModerationBallotNoShowPlan) -> Value {
+    json_object(vec![
+        json_entry(
+            "schema",
+            Value::from("sorafs.moderation.ballot.no_show_plan.v1"),
+        ),
+        json_entry("source", Value::from("local")),
+        json_entry("case_id", Value::from(plan.case_id.clone())),
+        json_entry("round_id", Value::from(plan.round_id.clone())),
+        json_entry(
+            "generated_at_unix_ms",
+            Value::from(plan.generated_at_unix_ms),
+        ),
+        json_entry(
+            "reveal_deadline_unix_ms",
+            Value::from(plan.reveal_deadline_unix_ms),
+        ),
+        json_entry("quorum", Value::from(u64::from(plan.quorum))),
+        json_entry("roster_size", Value::from(u64::from(plan.roster_size))),
+        json_entry(
+            "committed_count",
+            Value::from(u64::from(plan.committed_count)),
+        ),
+        json_entry(
+            "revealed_count",
+            Value::from(u64::from(plan.revealed_count)),
+        ),
+        json_entry("no_show_count", Value::from(u64::from(plan.no_show_count))),
+        json_entry("quorum_met", Value::from(plan.quorum_met)),
+        json_entry("tally_finalized", Value::from(plan.tally_finalized)),
+        json_entry("contested", Value::from(plan.contested)),
+        json_entry(
+            "missing_commit_juror_ids",
+            Value::Array(
+                plan.missing_commit_juror_ids
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "unrevealed_committed_juror_ids",
+            Value::Array(
+                plan.unrevealed_committed_juror_ids
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "no_show_juror_ids",
+            Value::Array(
+                plan.no_show_juror_ids
+                    .iter()
+                    .cloned()
+                    .map(Value::from)
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "penalty_plan_digest_hex",
+            Value::from(hex::encode(plan.penalty_plan_digest)),
+        ),
+    ])
+}
+
 fn moderation_vote_counts_json(counts: &sorafs_node::ModerationVoteCounts) -> Value {
     json_object(vec![
         json_entry("uphold", Value::from(u64::from(counts.uphold))),
@@ -16284,12 +17866,20 @@ fn moderation_ballot_event_json(event: &ModerationBallotEvent) -> Value {
         ),
         json_entry("committed_count", Value::from(event.committed_count)),
         json_entry("revealed_count", Value::from(event.revealed_count)),
+        json_entry("challenge_count", Value::from(event.challenge_count)),
         json_entry(
             "tally",
             event
                 .tally
                 .as_ref()
                 .map_or(Value::Null, moderation_ballot_tally_json),
+        ),
+        json_entry(
+            "challenge",
+            event
+                .challenge
+                .as_ref()
+                .map_or(Value::Null, moderation_ballot_challenge_json),
         ),
     ])
 }
@@ -16303,10 +17893,32 @@ fn moderation_vote_choice_label(choice: SoraFsModerationVoteChoice) -> &'static 
     }
 }
 
+fn moderation_challenge_kind_label(kind: ModerationBallotChallengeKind) -> &'static str {
+    match kind {
+        ModerationBallotChallengeKind::RosterMismatch => "roster_mismatch",
+        ModerationBallotChallengeKind::DuplicateCommit => "duplicate_commit",
+        ModerationBallotChallengeKind::PayloadMismatch => "payload_mismatch",
+        ModerationBallotChallengeKind::JurorEligibility => "juror_eligibility",
+        ModerationBallotChallengeKind::EvidenceMismatch => "evidence_mismatch",
+        ModerationBallotChallengeKind::Other => "other",
+    }
+}
+
+fn moderation_challenge_decision_label(
+    decision: ModerationBallotChallengeDecision,
+) -> &'static str {
+    match decision {
+        ModerationBallotChallengeDecision::Rejected => "rejected",
+        ModerationBallotChallengeDecision::Accepted => "accepted",
+    }
+}
+
 fn moderation_ballot_event_kind_label(kind: ModerationBallotEventKind) -> &'static str {
     match kind {
         ModerationBallotEventKind::BallotAnnounced => "ballot_announced",
         ModerationBallotEventKind::CommitAccepted => "commit_accepted",
+        ModerationBallotEventKind::ChallengeSubmitted => "challenge_submitted",
+        ModerationBallotEventKind::ChallengeResolved => "challenge_resolved",
         ModerationBallotEventKind::RevealAccepted => "reveal_accepted",
         ModerationBallotEventKind::BallotTallied => "ballot_tallied",
     }
@@ -30720,6 +32332,67 @@ mod advert_tests {
         (app, temp_dir, auth)
     }
 
+    fn sorafs_app_state_with_moderation_operator_and_governance_publisher()
+    -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        let auth = orderbook_auth_fixture();
+        let mut app =
+            mk_app_state_for_tests_with_world(orderbook_world_with_moderation_operator(&auth));
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let governance_dir = root.join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .governance_dir(Some(governance_dir))
+            .build();
+        let node = sorafs_node::NodeHandle::new(cfg);
+        assert!(node.has_governance_publisher());
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir, auth)
+    }
+
+    fn sorafs_app_state_with_configured_viewer_audit_governance_publisher()
+    -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        let auth = orderbook_auth_fixture();
+        let mut app =
+            mk_app_state_for_tests_with_world(orderbook_world_with_moderation_operator(&auth));
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let governance_dir = root.join("governance");
+        fs::create_dir_all(&governance_dir).expect("create governance dir");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .governance_dir(Some(governance_dir))
+            .evidence_viewer_audit_schedule(Some(sorafs_node::PrivacyAggregateScheduleConfig {
+                cycle_seconds: 100,
+                publish_delay_seconds: 10,
+            }))
+            .build();
+        let node = sorafs_node::NodeHandle::new(cfg);
+        assert!(node.has_governance_publisher());
+        assert_eq!(
+            node.configured_evidence_viewer_audit_schedule(),
+            Some(sorafs_node::PrivacyAggregateScheduleConfig {
+                cycle_seconds: 100,
+                publish_delay_seconds: 10,
+            })
+        );
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir, auth)
+    }
+
     fn sorafs_app_state_with_appeal_finance_governance_publisher()
     -> (SharedAppState, TempDir, OrderbookAuthFixture) {
         let auth = orderbook_auth_fixture();
@@ -34247,6 +35920,114 @@ mod advert_tests {
         )
     }
 
+    fn moderation_evidence_viewer_session_body(
+        viewer_account: &str,
+        issued_at_unix_ms: u64,
+        expires_at_unix_ms: u64,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ModerationEvidenceViewerSessionRequestDto {
+                requested_by: "operator@moderation".to_owned(),
+                viewer_account: viewer_account.to_owned(),
+                viewer_role: "juror".to_owned(),
+                purpose: "appeal evidence review".to_owned(),
+                attestation_digest_hex: hex::encode([0xA8; 32]),
+                watermark_metadata_digest_hex: hex::encode([0xB8; 32]),
+                session_nonce_digest_hex: hex::encode([0xC8; 32]),
+                issued_at_unix_ms: Some(issued_at_unix_ms),
+                expires_at_unix_ms: Some(expires_at_unix_ms),
+                legal_hold_id: Some("legal-hold-api".to_owned()),
+                notes: Some("viewer session endpoint fixture".to_owned()),
+                raw_evidence_included: false,
+                signed_url_included: false,
+                session_token_included: false,
+                watermark_secret_included: false,
+            })
+            .expect("encode evidence viewer session request"),
+        )
+    }
+
+    fn moderation_evidence_viewer_access_body(
+        session_id_hex: &str,
+        actor_account: &str,
+        kind: &str,
+        event_at_unix_ms: u64,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ModerationEvidenceViewerAccessRequestDto {
+                session_id_hex: session_id_hex.to_owned(),
+                kind: kind.to_owned(),
+                actor_account: actor_account.to_owned(),
+                event_at_unix_ms: Some(event_at_unix_ms),
+                request_digest_hex: hex::encode([0xD8; 32]),
+                event_metadata_digest_hex: Some(hex::encode([0xE8; 32])),
+                notes: Some("viewer access endpoint fixture".to_owned()),
+                raw_evidence_included: false,
+                signed_url_included: false,
+                session_token_included: false,
+                response_body_included: false,
+            })
+            .expect("encode evidence viewer access request"),
+        )
+    }
+
+    fn moderation_evidence_viewer_audit_report_body(
+        window_start_unix: u64,
+        window_end_unix: u64,
+        generated_at_unix: u64,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ModerationEvidenceViewerAuditReportRequestDto {
+                report_scope: Some("local-daily".to_owned()),
+                window_start_unix,
+                window_end_unix,
+                generated_at_unix: Some(generated_at_unix),
+                policy_digest_hex: Some(hex::encode([0xF8; 32])),
+                raw_evidence_included: false,
+                raw_access_logs_included: false,
+                viewer_accounts_included: false,
+                signed_urls_included: false,
+                session_tokens_included: false,
+                response_bodies_included: false,
+            })
+            .expect("encode evidence viewer audit report request"),
+        )
+    }
+
+    fn moderation_evidence_viewer_audit_report_publish_due_body(
+        now_unix: u64,
+        cycle_seconds: u64,
+        publish_delay_seconds: u64,
+    ) -> Bytes {
+        moderation_evidence_viewer_audit_report_publish_due_body_with_schedule(
+            now_unix,
+            Some(cycle_seconds),
+            Some(publish_delay_seconds),
+        )
+    }
+
+    fn moderation_evidence_viewer_audit_report_publish_due_configured_body(now_unix: u64) -> Bytes {
+        moderation_evidence_viewer_audit_report_publish_due_body_with_schedule(now_unix, None, None)
+    }
+
+    fn moderation_evidence_viewer_audit_report_publish_due_body_with_schedule(
+        now_unix: u64,
+        cycle_seconds: Option<u64>,
+        publish_delay_seconds: Option<u64>,
+    ) -> Bytes {
+        Bytes::from(
+            norito::json::to_vec(&ModerationEvidenceViewerAuditReportPublishDueRequestDto {
+                now_unix,
+                cycle_seconds,
+                publish_delay_seconds,
+                report_scope: Some("local-daily".to_owned()),
+                policy_digest_hex: Some(hex::encode([0xF8; 32])),
+                previous_block_hash_hex: None,
+            })
+            .expect("encode evidence viewer audit report publish-due request"),
+        )
+    }
+
     fn moderation_commit_body(commit: SoraFsModerationBallotCommitV1, now_unix_ms: u64) -> Bytes {
         let commit_b64 =
             BASE64_STANDARD.encode(norito::to_bytes(&commit).expect("encode moderation commit"));
@@ -34267,6 +36048,49 @@ mod advert_tests {
         Bytes::from(norito::json::to_vec(&request).expect("encode reveal request"))
     }
 
+    fn moderation_challenge_body(
+        case_id: &str,
+        round_id: &str,
+        challenge_id: &str,
+        challenger: &OrderbookAccountFixture,
+        kind: &str,
+        target_juror_id: Option<String>,
+        now_unix_ms: u64,
+    ) -> Bytes {
+        let request = ModerationBallotChallengeRequestDto {
+            case_id: case_id.to_owned(),
+            round_id: round_id.to_owned(),
+            challenge_id: challenge_id.to_owned(),
+            challenger_id: challenger.account.to_string(),
+            kind: kind.to_owned(),
+            target_juror_id,
+            evidence_digest_hex: hex::encode([0xE7; 32]),
+            reason: "api-test-evidence-digest".to_owned(),
+            now_unix_ms: Some(now_unix_ms),
+        };
+        Bytes::from(norito::json::to_vec(&request).expect("encode challenge request"))
+    }
+
+    fn moderation_challenge_resolution_body(
+        case_id: &str,
+        round_id: &str,
+        challenge_id: &str,
+        resolver: &OrderbookAccountFixture,
+        decision: &str,
+        now_unix_ms: u64,
+    ) -> Bytes {
+        let request = ModerationBallotChallengeResolutionRequestDto {
+            case_id: case_id.to_owned(),
+            round_id: round_id.to_owned(),
+            challenge_id: challenge_id.to_owned(),
+            resolved_by: resolver.account.to_string(),
+            decision: decision.to_owned(),
+            note: Some("api test resolution".to_owned()),
+            now_unix_ms: Some(now_unix_ms),
+        };
+        Bytes::from(norito::json::to_vec(&request).expect("encode challenge resolution request"))
+    }
+
     fn moderation_tally_body(case_id: &str, round_id: &str, now_unix_ms: u64) -> Bytes {
         let request = ModerationBallotTallyRequestDto {
             case_id: case_id.to_owned(),
@@ -34278,6 +36102,14 @@ mod advert_tests {
 
     fn moderation_uri(path: &'static str) -> Uri {
         Uri::from_static(path)
+    }
+
+    fn moderation_ballot_no_show_plan_uri(case_id: &str, round_id: &str) -> Uri {
+        format!(
+            "{MODERATION_ROUTE_BALLOTS}/{case_id}/{round_id}/{MODERATION_ROUTE_NO_SHOW_PLAN_SUFFIX}"
+        )
+        .parse()
+        .expect("moderation no-show plan URI")
     }
 
     fn moderation_quarantine_action_uri(quarantine_id_hex: &str, suffix: &str) -> Uri {
@@ -34306,6 +36138,35 @@ mod advert_tests {
         let uri = moderation_uri(MODERATION_ROUTE_COMMITS);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
         handle_post_sorafs_moderation_ballot_commit(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_moderation_challenge(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_uri(MODERATION_ROUTE_CHALLENGES);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_ballot_challenge(State(app), headers, method, uri, body).await
+    }
+
+    async fn post_moderation_challenge_resolution(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_uri(MODERATION_ROUTE_CHALLENGE_RESOLUTIONS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_ballot_challenge_resolution(
+            State(app),
+            headers,
+            method,
+            uri,
+            body,
+        )
+        .await
     }
 
     async fn post_moderation_reveal(
@@ -34492,6 +36353,82 @@ mod advert_tests {
         .await
     }
 
+    async fn post_moderation_quarantine_viewer_session(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        quarantine_id_hex: &str,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_VIEWER_SESSIONS_SUFFIX,
+        );
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_quarantine_viewer_session(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(quarantine_id_hex.to_owned()),
+            body,
+        )
+        .await
+    }
+
+    async fn post_moderation_quarantine_viewer_access(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        quarantine_id_hex: &str,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_VIEWER_ACCESS_SUFFIX,
+        );
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_quarantine_viewer_access(
+            State(app),
+            headers,
+            method,
+            uri,
+            Path(quarantine_id_hex.to_owned()),
+            body,
+        )
+        .await
+    }
+
+    async fn post_moderation_viewer_audit_report(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_viewer_audit_report(State(app), headers, method, uri, body)
+            .await
+    }
+
+    async fn post_moderation_viewer_audit_report_publish_due(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        body: Bytes,
+    ) -> Response {
+        let method = Method::POST;
+        let uri = Uri::from_static(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE);
+        let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
+        handle_post_sorafs_moderation_viewer_audit_report_publish_due(
+            State(app),
+            headers,
+            method,
+            uri,
+            body,
+        )
+        .await
+    }
+
     async fn get_moderation_quarantine_object(
         app: SharedAppState,
         signer: &OrderbookAccountFixture,
@@ -34574,6 +36511,69 @@ mod advert_tests {
             .and_then(Value::as_str)
             .expect("quarantine id")
             .to_owned()
+    }
+
+    async fn seed_moderation_evidence_viewer_access_for_payload(
+        app: SharedAppState,
+        signer: &OrderbookAccountFixture,
+        subject: &str,
+        payload: &[u8],
+        viewer_account: &str,
+        access_kind: &str,
+    ) -> String {
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            signer,
+            subject,
+            payload,
+            1_800_000_001,
+        )
+        .await;
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            signer,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_002),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            signer,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_session_body(
+                viewer_account,
+                1_800_000_000_000,
+                1_800_000_060_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect seeded viewer session body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode seeded viewer session body");
+        let session_id_hex = value
+            .get("session")
+            .and_then(|session| session.get("session_id_hex"))
+            .and_then(Value::as_str)
+            .expect("seeded session id")
+            .to_owned();
+        let response = post_moderation_quarantine_viewer_access(
+            app,
+            signer,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_access_body(
+                &session_id_hex,
+                viewer_account,
+                access_kind,
+                1_800_000_010_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        quarantine_id_hex
     }
 
     #[test]
@@ -36938,6 +38938,1051 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn moderation_evidence_viewer_endpoints_issue_session_and_log_access_without_payloads() {
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
+        let payload = b"moderation evidence viewer endpoint fixture";
+        let expected_digest_hex = hex::encode(blake3::hash(payload).as_bytes());
+        let viewer_account = auth.provider.account.to_string();
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-viewer-session",
+            payload,
+            1_800_000_350,
+        )
+        .await;
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_351),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_session_body(
+                &viewer_account,
+                1_800_000_000_000,
+                1_800_000_300_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("private, no-store")
+        );
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect viewer session body");
+        let body_text = std::str::from_utf8(&body_bytes).expect("viewer session utf8");
+        assert!(!body_text.contains("payload_b64"));
+        assert!(!body_text.contains("signed_url"));
+        assert!(!body_text.contains("session_token"));
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode viewer session body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.viewer_session.v1")
+        );
+        assert_eq!(
+            value.get("payloads_included").and_then(Value::as_bool),
+            Some(false)
+        );
+        let session = value
+            .get("session")
+            .and_then(Value::as_object)
+            .expect("viewer session record");
+        assert_eq!(
+            session.get("quarantine_id_hex").and_then(Value::as_str),
+            Some(quarantine_id_hex.as_str())
+        );
+        assert_eq!(
+            session.get("evidence_digest_hex").and_then(Value::as_str),
+            Some(expected_digest_hex.as_str())
+        );
+        assert_eq!(
+            session.get("viewer_account").and_then(Value::as_str),
+            Some(viewer_account.as_str())
+        );
+        let session_id_hex = session
+            .get("session_id_hex")
+            .and_then(Value::as_str)
+            .expect("session id")
+            .to_owned();
+
+        let response = post_moderation_quarantine_viewer_access(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_access_body(
+                &session_id_hex,
+                &viewer_account,
+                "viewed",
+                1_800_000_010_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect viewer access body");
+        let body_text = std::str::from_utf8(&body_bytes).expect("viewer access utf8");
+        assert!(!body_text.contains("payload_b64"));
+        assert!(!body_text.contains("response_body"));
+        assert!(!body_text.contains("signed_url"));
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode viewer access body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.quarantine.viewer_access.v1")
+        );
+        assert_eq!(
+            value
+                .get("response_bodies_included")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let event = value
+            .get("event")
+            .and_then(Value::as_object)
+            .expect("viewer access event");
+        assert_eq!(event.get("sequence").and_then(Value::as_u64), Some(1));
+        assert_eq!(event.get("kind").and_then(Value::as_str), Some("viewed"));
+        assert_eq!(
+            event.get("session_id_hex").and_then(Value::as_str),
+            Some(session_id_hex.as_str())
+        );
+        assert_eq!(
+            app.sorafs_node
+                .moderation_evidence_viewer_snapshot()
+                .access_events
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_evidence_viewer_endpoints_reject_unsafe_and_stale_access() {
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
+        let payload = b"moderation evidence viewer rejection fixture";
+        let viewer_account = auth.provider.account.to_string();
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-viewer-reject",
+            payload,
+            1_800_000_360,
+        )
+        .await;
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_session_body(
+                &viewer_account,
+                1_800_000_000_000,
+                1_800_000_300_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_361),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let unsafe_session = Bytes::from(
+            norito::json::to_vec(&ModerationEvidenceViewerSessionRequestDto {
+                requested_by: "operator@moderation".to_owned(),
+                viewer_account: viewer_account.clone(),
+                viewer_role: "juror".to_owned(),
+                purpose: "appeal evidence review".to_owned(),
+                attestation_digest_hex: hex::encode([0xA8; 32]),
+                watermark_metadata_digest_hex: hex::encode([0xB8; 32]),
+                session_nonce_digest_hex: hex::encode([0xC8; 32]),
+                issued_at_unix_ms: Some(1_800_000_000_000),
+                expires_at_unix_ms: Some(1_800_000_300_000),
+                legal_hold_id: None,
+                notes: None,
+                raw_evidence_included: false,
+                signed_url_included: true,
+                session_token_included: false,
+                watermark_secret_included: false,
+            })
+            .expect("encode unsafe session request"),
+        );
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            unsafe_session,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_session_body(
+                &viewer_account,
+                1_800_000_000_000,
+                1_800_000_300_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect session body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode session body");
+        let session_id_hex = value
+            .get("session")
+            .and_then(|session| session.get("session_id_hex"))
+            .and_then(Value::as_str)
+            .expect("session id")
+            .to_owned();
+
+        let unsafe_access = Bytes::from(
+            norito::json::to_vec(&ModerationEvidenceViewerAccessRequestDto {
+                session_id_hex: session_id_hex.clone(),
+                kind: "viewed".to_owned(),
+                actor_account: viewer_account.clone(),
+                event_at_unix_ms: Some(1_800_000_010_000),
+                request_digest_hex: hex::encode([0xD8; 32]),
+                event_metadata_digest_hex: None,
+                notes: None,
+                raw_evidence_included: false,
+                signed_url_included: false,
+                session_token_included: false,
+                response_body_included: true,
+            })
+            .expect("encode unsafe access request"),
+        );
+        let response = post_moderation_quarantine_viewer_access(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            unsafe_access,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = post_moderation_quarantine_viewer_access(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_access_body(
+                &session_id_hex,
+                &viewer_account,
+                "viewed",
+                1_800_000_300_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let other_quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-viewer-replay",
+            b"other viewer payload",
+            1_800_000_370,
+        )
+        .await;
+        let response = post_moderation_quarantine_viewer_access(
+            app,
+            &auth.provider,
+            &other_quarantine_id_hex,
+            moderation_evidence_viewer_access_body(
+                &session_id_hex,
+                &viewer_account,
+                "viewed",
+                1_800_000_010_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn moderation_evidence_viewer_endpoints_require_auth_and_operator_role() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let payload = b"moderation evidence viewer auth fixture";
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-viewer-auth",
+            payload,
+            1_800_000_380,
+        )
+        .await;
+        let viewer_account = auth.provider.account.to_string();
+        let session_body = moderation_evidence_viewer_session_body(
+            &viewer_account,
+            1_800_000_000_000,
+            1_800_000_300_000,
+        );
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            &quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_VIEWER_SESSIONS_SUFFIX,
+        );
+        let response = handle_post_sorafs_moderation_quarantine_viewer_session(
+            State(app.clone()),
+            HeaderMap::new(),
+            method,
+            uri,
+            Path(quarantine_id_hex.clone()),
+            session_body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            session_body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let access_body = moderation_evidence_viewer_access_body(
+            &hex::encode([0x11; 16]),
+            &viewer_account,
+            "viewed",
+            1_800_000_010_000,
+        );
+        let method = Method::POST;
+        let uri = moderation_quarantine_action_uri(
+            &quarantine_id_hex,
+            MODERATION_ROUTE_QUARANTINE_VIEWER_ACCESS_SUFFIX,
+        );
+        let response = handle_post_sorafs_moderation_quarantine_viewer_access(
+            State(app.clone()),
+            HeaderMap::new(),
+            method,
+            uri,
+            Path(quarantine_id_hex.clone()),
+            access_body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = post_moderation_quarantine_viewer_access(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            access_body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let audit_body = moderation_evidence_viewer_audit_report_body(
+            1_800_000_000,
+            1_800_086_400,
+            1_800_086_401,
+        );
+        let method = Method::POST;
+        let uri = Uri::from_static(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS);
+        let response = handle_post_sorafs_moderation_viewer_audit_report(
+            State(app.clone()),
+            HeaderMap::new(),
+            method,
+            uri,
+            audit_body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response =
+            post_moderation_viewer_audit_report(app.clone(), &auth.provider, audit_body).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        let publish_due_body =
+            moderation_evidence_viewer_audit_report_publish_due_body(1_800_000_110, 100, 10);
+        let method = Method::POST;
+        let uri = Uri::from_static(MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE);
+        let response = handle_post_sorafs_moderation_viewer_audit_report_publish_due(
+            State(app.clone()),
+            HeaderMap::new(),
+            method,
+            uri,
+            publish_due_body.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response =
+            post_moderation_viewer_audit_report_publish_due(app, &auth.provider, publish_due_body)
+                .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn moderation_evidence_viewer_audit_report_endpoint_records_transparency_entry() {
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
+        let payload = b"moderation evidence viewer report endpoint fixture";
+        let viewer_account = auth.provider.account.to_string();
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-viewer-report",
+            payload,
+            1_800_000_390,
+        )
+        .await;
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_391),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_session_body(
+                &viewer_account,
+                1_800_000_000_000,
+                1_800_000_300_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect viewer session body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode session body");
+        let session_id_hex = value
+            .get("session")
+            .and_then(|session| session.get("session_id_hex"))
+            .and_then(Value::as_str)
+            .expect("session id")
+            .to_owned();
+        for (kind, timestamp) in [
+            ("viewed", 1_800_000_010_000),
+            ("download_attempted", 1_800_000_020_000),
+        ] {
+            let response = post_moderation_quarantine_viewer_access(
+                app.clone(),
+                &auth.provider,
+                &quarantine_id_hex,
+                moderation_evidence_viewer_access_body(
+                    &session_id_hex,
+                    &viewer_account,
+                    kind,
+                    timestamp,
+                ),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
+
+        let response = post_moderation_viewer_audit_report(
+            app.clone(),
+            &auth.provider,
+            moderation_evidence_viewer_audit_report_body(
+                1_800_000_000,
+                1_800_086_400,
+                1_800_086_401,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            response
+                .headers()
+                .get(CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("private, no-store")
+        );
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect viewer audit report body");
+        let body_text = std::str::from_utf8(&body_bytes).expect("audit report utf8");
+        assert!(!body_text.contains(viewer_account.as_str()));
+        assert!(!body_text.contains("payload_b64"));
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode viewer audit report body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.viewer_audit_report.v1")
+        );
+        for flag in [
+            "payloads_included",
+            "raw_access_logs_included",
+            "viewer_accounts_included",
+            "signed_urls_included",
+            "session_tokens_included",
+            "response_bodies_included",
+        ] {
+            assert_eq!(value.get(flag).and_then(Value::as_bool), Some(false));
+        }
+        assert_eq!(
+            value
+                .get("recorded_to_transparency_source_entries")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("transparency_source_entry_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let report = value
+            .get("report")
+            .and_then(Value::as_object)
+            .expect("report object");
+        assert_eq!(report.get("session_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            report.get("access_event_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        let source_entry = value
+            .get("source_entry")
+            .and_then(Value::as_object)
+            .expect("source entry object");
+        assert_eq!(
+            source_entry.get("ledger_kind").and_then(Value::as_str),
+            Some("evidence_access")
+        );
+        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
+
+        let response = post_moderation_viewer_audit_report(
+            app.clone(),
+            &auth.provider,
+            moderation_evidence_viewer_audit_report_body(
+                1_800_000_000,
+                1_800_086_400,
+                1_800_086_401,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn moderation_evidence_viewer_audit_report_publish_due_endpoint_publishes_and_is_idempotent()
+     {
+        let (app, _dir, auth) =
+            sorafs_app_state_with_moderation_operator_and_governance_publisher();
+        let payload = b"moderation evidence viewer publish due endpoint fixture";
+        let viewer_account = auth.provider.account.to_string();
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-viewer-publish-due",
+            payload,
+            1_800_000_001,
+        )
+        .await;
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_002),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_session_body(
+                &viewer_account,
+                1_800_000_000_000,
+                1_800_000_060_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect viewer session body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode session body");
+        let session_id_hex = value
+            .get("session")
+            .and_then(|session| session.get("session_id_hex"))
+            .and_then(Value::as_str)
+            .expect("session id")
+            .to_owned();
+        for (kind, timestamp) in [
+            ("viewed", 1_800_000_010_000),
+            ("download_attempted", 1_800_000_020_000),
+        ] {
+            let response = post_moderation_quarantine_viewer_access(
+                app.clone(),
+                &auth.provider,
+                &quarantine_id_hex,
+                moderation_evidence_viewer_access_body(
+                    &session_id_hex,
+                    &viewer_account,
+                    kind,
+                    timestamp,
+                ),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+        }
+
+        let response = post_moderation_viewer_audit_report_publish_due(
+            app.clone(),
+            &auth.provider,
+            moderation_evidence_viewer_audit_report_publish_due_body(1_800_000_110, 100, 10),
+        )
+        .await;
+        let status = response.status();
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect viewer audit report publish-due body");
+        let body_text = std::str::from_utf8(&body_bytes).expect("publish-due utf8");
+        assert_eq!(status, StatusCode::OK, "{body_text}");
+        assert!(!body_text.contains(viewer_account.as_str()));
+        assert!(!body_text.contains("payload_b64"));
+        let value: Value = norito::json::from_slice(&body_bytes)
+            .expect("decode viewer audit report publish-due body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.viewer_audit_report.publish_due.v1")
+        );
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("published")
+        );
+        assert_eq!(value.get("published").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            value
+                .get("governance_publish_status")
+                .and_then(Value::as_str),
+            Some("published_to_local_governance_dag")
+        );
+        assert_eq!(
+            value
+                .get("transparency_source_entry_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let window = value
+            .get("window")
+            .and_then(Value::as_object)
+            .expect("publish window");
+        assert_eq!(
+            window.get("cycle_start_unix").and_then(Value::as_u64),
+            Some(1_800_000_000)
+        );
+        assert_eq!(
+            window.get("cycle_end_unix").and_then(Value::as_u64),
+            Some(1_800_000_100)
+        );
+        let report = value
+            .get("report")
+            .and_then(Value::as_object)
+            .expect("publish report");
+        assert_eq!(report.get("session_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            report.get("access_event_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        let source_entry = value
+            .get("source_entry")
+            .and_then(Value::as_object)
+            .expect("source entry");
+        assert_eq!(
+            source_entry.get("occurred_at_unix").and_then(Value::as_u64),
+            Some(1_800_000_099)
+        );
+        assert_eq!(
+            source_entry.get("ledger_kind").and_then(Value::as_str),
+            Some("evidence_access")
+        );
+        let publication = value
+            .get("publication")
+            .and_then(Value::as_object)
+            .expect("publication summary");
+        assert_eq!(
+            publication.get("entry_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            publication.get("proof_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
+
+        let response = post_moderation_viewer_audit_report_publish_due(
+            app.clone(),
+            &auth.provider,
+            moderation_evidence_viewer_audit_report_publish_due_body(1_800_000_110, 100, 10),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect repeat viewer audit report publish-due body");
+        let value: Value = norito::json::from_slice(&body_bytes)
+            .expect("decode repeat viewer audit report publish-due body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("already_published")
+        );
+        assert_eq!(value.get("published").and_then(Value::as_bool), Some(false));
+        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn moderation_evidence_viewer_audit_report_publish_due_endpoint_uses_configured_schedule()
+    {
+        let (app, _dir, auth) =
+            sorafs_app_state_with_configured_viewer_audit_governance_publisher();
+        let payload = b"moderation evidence viewer configured publish due endpoint fixture";
+        let viewer_account = auth.provider.account.to_string();
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-viewer-configured-publish-due",
+            payload,
+            1_800_000_001,
+        )
+        .await;
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_002),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_session_body(
+                &viewer_account,
+                1_800_000_000_000,
+                1_800_000_060_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect configured viewer session body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode configured session body");
+        let session_id_hex = value
+            .get("session")
+            .and_then(|session| session.get("session_id_hex"))
+            .and_then(Value::as_str)
+            .expect("session id")
+            .to_owned();
+        let response = post_moderation_quarantine_viewer_access(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_access_body(
+                &session_id_hex,
+                &viewer_account,
+                "viewed",
+                1_800_000_010_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let response = post_moderation_viewer_audit_report_publish_due(
+            app.clone(),
+            &auth.provider,
+            moderation_evidence_viewer_audit_report_publish_due_configured_body(1_800_000_110),
+        )
+        .await;
+        let status = response.status();
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect configured viewer audit report publish-due body");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{}",
+            std::str::from_utf8(&body_bytes).expect("configured publish-due utf8")
+        );
+        let value: Value = norito::json::from_slice(&body_bytes)
+            .expect("decode configured viewer audit report publish-due body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("published")
+        );
+        assert_eq!(value.get("published").and_then(Value::as_bool), Some(true));
+        let window = value
+            .get("window")
+            .and_then(Value::as_object)
+            .expect("configured publish window");
+        assert_eq!(
+            window.get("cycle_start_unix").and_then(Value::as_u64),
+            Some(1_800_000_000)
+        );
+        assert_eq!(
+            window.get("cycle_end_unix").and_then(Value::as_u64),
+            Some(1_800_000_100)
+        );
+        let report = value
+            .get("report")
+            .and_then(Value::as_object)
+            .expect("configured publish report");
+        assert_eq!(report.get("session_count").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            report.get("access_event_count").and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_evidence_viewer_audit_scheduler_tick_publishes_configured_cycle_and_dedupes()
+     {
+        let (app, _dir, auth) =
+            sorafs_app_state_with_configured_viewer_audit_governance_publisher();
+        let viewer_account = auth.provider.account.to_string();
+        seed_moderation_evidence_viewer_access_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-viewer-scheduler-tick",
+            b"moderation evidence viewer scheduler tick fixture",
+            &viewer_account,
+            "viewed",
+        )
+        .await;
+
+        let outcome =
+            run_sorafs_moderation_evidence_viewer_audit_scheduler_tick(&app, 1_800_000_110)
+                .expect("scheduler tick publishes");
+        match outcome {
+            ModerationEvidenceViewerAuditScheduleOutcome::Published {
+                window,
+                report,
+                publication,
+                ..
+            } => {
+                assert_eq!(window.cycle_start_unix, 1_800_000_000);
+                assert_eq!(window.cycle_end_unix, 1_800_000_100);
+                assert_eq!(
+                    report.report_scope,
+                    MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_DEFAULT_SCOPE
+                );
+                assert_eq!(report.policy_digest, None);
+                assert_eq!(report.session_count, 1);
+                assert_eq!(report.access_event_count, 1);
+                assert_eq!(publication.block.entry_count, 1);
+            }
+            other => panic!("expected scheduler publication, got {other:?}"),
+        }
+        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
+
+        let repeated =
+            run_sorafs_moderation_evidence_viewer_audit_scheduler_tick(&app, 1_800_000_110)
+                .expect("scheduler repeat succeeds");
+        assert!(matches!(
+            repeated,
+            ModerationEvidenceViewerAuditScheduleOutcome::AlreadyPublished { .. }
+        ));
+        assert_eq!(app.sorafs_node.transparency_ledger_source_entry_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn moderation_evidence_viewer_audit_scheduler_tick_reports_disabled_and_no_source() {
+        let (disabled_app, _dir, _auth) = sorafs_app_state_with_moderation_operator_auth();
+        let disabled = run_sorafs_moderation_evidence_viewer_audit_scheduler_tick(
+            &disabled_app,
+            1_800_000_110,
+        )
+        .expect("disabled scheduler tick succeeds");
+        assert_eq!(
+            disabled,
+            ModerationEvidenceViewerAuditScheduleOutcome::Disabled
+        );
+        assert_eq!(
+            disabled_app
+                .sorafs_node
+                .transparency_ledger_source_entry_count(),
+            0
+        );
+
+        let (empty_app, _dir, _auth) =
+            sorafs_app_state_with_configured_viewer_audit_governance_publisher();
+        let empty =
+            run_sorafs_moderation_evidence_viewer_audit_scheduler_tick(&empty_app, 1_800_000_110)
+                .expect("empty scheduler tick succeeds");
+        match empty {
+            ModerationEvidenceViewerAuditScheduleOutcome::NoSourceEvents { window, .. } => {
+                assert_eq!(window.cycle_start_unix, 1_800_000_000);
+                assert_eq!(window.cycle_end_unix, 1_800_000_100);
+            }
+            other => panic!("expected no source events, got {other:?}"),
+        }
+        assert_eq!(
+            empty_app
+                .sorafs_node
+                .transparency_ledger_source_entry_count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_evidence_viewer_audit_report_publish_due_endpoint_reports_empty_and_bad_schedules()
+     {
+        let (disabled_app, _dir, disabled_auth) = sorafs_app_state_with_moderation_operator_auth();
+        let response = post_moderation_viewer_audit_report_publish_due(
+            disabled_app,
+            &disabled_auth.provider,
+            moderation_evidence_viewer_audit_report_publish_due_configured_body(1_800_000_110),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect disabled publish-due body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode disabled publish-due body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("disabled")
+        );
+        assert_eq!(value.get("published").and_then(Value::as_bool), Some(false));
+
+        let (empty_app, _dir, empty_auth) = sorafs_app_state_with_moderation_operator_auth();
+        let response = post_moderation_viewer_audit_report_publish_due(
+            empty_app,
+            &empty_auth.provider,
+            moderation_evidence_viewer_audit_report_publish_due_body(1_800_000_110, 100, 10),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect empty publish-due body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode empty publish-due body");
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("no_source_events")
+        );
+        assert_eq!(value.get("published").and_then(Value::as_bool), Some(false));
+
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
+        let response = post_moderation_viewer_audit_report_publish_due(
+            app.clone(),
+            &auth.provider,
+            moderation_evidence_viewer_audit_report_publish_due_body_with_schedule(
+                1_800_000_110,
+                Some(100),
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = post_moderation_viewer_audit_report_publish_due(
+            app.clone(),
+            &auth.provider,
+            moderation_evidence_viewer_audit_report_publish_due_body(1_800_000_110, 0, 10),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let payload = b"moderation evidence viewer publish due oversized fixture";
+        let viewer_account = auth.provider.account.to_string();
+        let quarantine_id_hex = seed_moderation_quarantine_for_payload(
+            app.clone(),
+            &auth.provider,
+            "bafy-viewer-publish-due-oversized",
+            payload,
+            1_800_000_001,
+        )
+        .await;
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_quarantine_object_body(payload, 1_800_000_002),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let response = post_moderation_quarantine_viewer_session(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            moderation_evidence_viewer_session_body(
+                &viewer_account,
+                1_800_000_000_000,
+                1_800_000_060_000,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let response = post_moderation_viewer_audit_report_publish_due(
+            app,
+            &auth.provider,
+            moderation_evidence_viewer_audit_report_publish_due_body(1_800_100_000, 86_401, 1),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn moderation_evidence_viewer_audit_report_endpoint_rejects_unsafe_and_invalid_windows() {
+        let (app, _dir, auth) = sorafs_app_state_with_moderation_operator_auth();
+        let unsafe_body = Bytes::from(
+            norito::json::to_vec(&ModerationEvidenceViewerAuditReportRequestDto {
+                report_scope: Some("local-daily".to_owned()),
+                window_start_unix: 1_800_000_000,
+                window_end_unix: 1_800_086_400,
+                generated_at_unix: Some(1_800_086_401),
+                policy_digest_hex: None,
+                raw_evidence_included: false,
+                raw_access_logs_included: true,
+                viewer_accounts_included: false,
+                signed_urls_included: false,
+                session_tokens_included: false,
+                response_bodies_included: false,
+            })
+            .expect("encode unsafe audit report request"),
+        );
+        let response =
+            post_moderation_viewer_audit_report(app.clone(), &auth.provider, unsafe_body).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = post_moderation_viewer_audit_report(
+            app,
+            &auth.provider,
+            moderation_evidence_viewer_audit_report_body(
+                1_800_000_000,
+                1_800_172_801,
+                1_800_172_802,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn moderation_ballot_handlers_accept_lifecycle_and_events() {
         let case_id = "case-api";
         let round_id = "round-1";
@@ -37190,6 +40235,494 @@ mod advert_tests {
                 .and_then(Value::as_str),
             Some("ballot_tallied")
         );
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_no_show_plan_endpoint_reports_closed_payload_free_plan() {
+        let case_id = "case-api-no-show-plan";
+        let round_id = "round-1";
+        let (app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+        let provider_id = auth.provider.account.to_string();
+        let buyer_id = auth.buyer.account.to_string();
+        let now_unix_ms = iroha_network_time_now_ms();
+        let commit_deadline_unix_ms = now_unix_ms.saturating_add(900);
+        let challenge_deadline_unix_ms = now_unix_ms.saturating_add(1_050);
+        let reveal_deadline_unix_ms = now_unix_ms.saturating_add(1_200);
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request_with_windows(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+                now_unix_ms.saturating_sub(500),
+                commit_deadline_unix_ms,
+                challenge_deadline_unix_ms,
+                reveal_deadline_unix_ms,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let announcement = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("announced moderation ballot")
+            .announcement;
+        let context = announcement.context;
+        let provider_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.provider,
+            SoraFsModerationVoteChoice::Uphold,
+            0x71,
+            now_unix_ms.saturating_add(1_100),
+        );
+
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.provider,
+            moderation_commit_body(
+                moderation_commit_fixture(&provider_reveal, now_unix_ms.saturating_add(50)),
+                now_unix_ms.saturating_add(50),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let uri = moderation_ballot_no_show_plan_uri(case_id, round_id);
+        assert_eq!(
+            uri.path(),
+            "/v1/sorafs/moderation/ballots/case-api-no-show-plan/round-1/no-show-plan"
+        );
+
+        let response = handle_get_sorafs_moderation_ballot_no_show_plan(
+            State(app.clone()),
+            Path((case_id.to_owned(), round_id.to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+        wait_until_after_moderation_time(reveal_deadline_unix_ms).await;
+        let response = handle_get_sorafs_moderation_ballot_no_show_plan(
+            State(app.clone()),
+            Path((case_id.to_owned(), round_id.to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect no-show plan body");
+        let body_text = std::str::from_utf8(&body_bytes).expect("no-show plan utf8");
+        for forbidden in [
+            "commitment_blake2b_256_hex",
+            "nonce_b64",
+            "accepted_commit",
+            "accepted_reveal",
+        ] {
+            assert!(
+                !body_text.contains(forbidden),
+                "payload-free no-show plan leaked {forbidden}: {body_text}"
+            );
+        }
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode no-show plan body");
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("sorafs.moderation.ballot.no_show_plan.v1")
+        );
+        assert_eq!(value.get("source").and_then(Value::as_str), Some("local"));
+        assert_eq!(value.get("case_id").and_then(Value::as_str), Some(case_id));
+        assert_eq!(value.get("round_id").and_then(Value::as_str), Some(round_id));
+        assert_eq!(value.get("quorum").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("roster_size").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            value.get("committed_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(value.get("revealed_count").and_then(Value::as_u64), Some(0));
+        assert_eq!(value.get("no_show_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(value.get("quorum_met").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            value.get("tally_finalized").and_then(Value::as_bool),
+            Some(false)
+        );
+        let missing_commit_juror_ids = value
+            .get("missing_commit_juror_ids")
+            .and_then(Value::as_array)
+            .expect("missing commit jurors");
+        assert_eq!(
+            missing_commit_juror_ids.first().and_then(Value::as_str),
+            Some(buyer_id.as_str())
+        );
+        let unrevealed_committed_juror_ids = value
+            .get("unrevealed_committed_juror_ids")
+            .and_then(Value::as_array)
+            .expect("unrevealed committed jurors");
+        assert_eq!(
+            unrevealed_committed_juror_ids
+                .first()
+                .and_then(Value::as_str),
+            Some(provider_id.as_str())
+        );
+        let no_show_juror_ids = value
+            .get("no_show_juror_ids")
+            .and_then(Value::as_array)
+            .expect("no-show jurors");
+        assert_eq!(
+            no_show_juror_ids
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>(),
+            vec![provider_id, buyer_id]
+        );
+        let digest_hex = value
+            .get("penalty_plan_digest_hex")
+            .and_then(Value::as_str)
+            .expect("penalty plan digest");
+        assert_eq!(digest_hex.len(), 64);
+        assert_ne!(digest_hex, "0".repeat(64));
+        assert_eq!(
+            app.sorafs_node.latest_moderation_ballot_event_sequence(),
+            Some(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_no_show_plan_endpoint_blocks_pending_challenge() {
+        let case_id = "case-api-no-show-plan-challenge";
+        let round_id = "round-1";
+        let (app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+        let provider_id = auth.provider.account.to_string();
+        let now_unix_ms = iroha_network_time_now_ms();
+        let commit_deadline_unix_ms = now_unix_ms.saturating_add(250);
+        let challenge_deadline_unix_ms = now_unix_ms.saturating_add(1_000);
+        let reveal_deadline_unix_ms = now_unix_ms.saturating_add(1_200);
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request_with_windows(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+                now_unix_ms.saturating_sub(500),
+                commit_deadline_unix_ms,
+                challenge_deadline_unix_ms,
+                reveal_deadline_unix_ms,
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let announcement = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("announced moderation ballot")
+            .announcement;
+        let context = announcement.context;
+        let provider_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.provider,
+            SoraFsModerationVoteChoice::Modify,
+            0x72,
+            now_unix_ms.saturating_add(1_100),
+        );
+
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.provider,
+            moderation_commit_body(
+                moderation_commit_fixture(&provider_reveal, now_unix_ms.saturating_add(50)),
+                now_unix_ms.saturating_add(50),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        wait_until_after_moderation_time(commit_deadline_unix_ms).await;
+        let response = post_moderation_challenge(
+            app.clone(),
+            &auth.provider,
+            moderation_challenge_body(
+                case_id,
+                round_id,
+                "challenge-api-no-show-plan-1",
+                &auth.provider,
+                "evidence_mismatch",
+                Some(provider_id),
+                now_unix_ms.saturating_add(400),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        wait_until_after_moderation_time(reveal_deadline_unix_ms).await;
+        let response = handle_get_sorafs_moderation_ballot_no_show_plan(
+            State(app.clone()),
+            Path((case_id.to_owned(), round_id.to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect pending challenge no-show body");
+        let body_text = std::str::from_utf8(&body_bytes).expect("pending challenge body utf8");
+        assert!(
+            body_text.contains("pending") || body_text.contains("ChallengePending"),
+            "{body_text}"
+        );
+        assert_eq!(
+            app.sorafs_node.latest_moderation_ballot_event_sequence(),
+            Some(3)
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_challenge_endpoint_blocks_until_rejected() {
+        let case_id = "case-api-challenge";
+        let round_id = "round-1";
+        let (app, _dir, auth, deposit_confirmation) =
+            sorafs_app_state_with_confirmed_appeal_deposit(case_id, round_id);
+        let now_unix_ms = iroha_network_time_now_ms();
+        let commit_deadline_unix_ms = now_unix_ms.saturating_add(600);
+        let challenge_deadline_unix_ms = now_unix_ms.saturating_add(2_000);
+
+        let response = post_moderation_announce(
+            app.clone(),
+            &auth.provider,
+            moderation_announce_body(moderation_announce_request_with_windows(
+                case_id,
+                round_id,
+                &auth,
+                Some(deposit_confirmation),
+                now_unix_ms.saturating_sub(500),
+                commit_deadline_unix_ms,
+                challenge_deadline_unix_ms,
+                now_unix_ms.saturating_add(6_000),
+            )),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let announcement = app
+            .sorafs_node
+            .moderation_ballot(case_id, round_id)
+            .expect("announced moderation ballot")
+            .announcement;
+        let context = announcement.context;
+        let provider_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.provider,
+            SoraFsModerationVoteChoice::Modify,
+            0x61,
+            now_unix_ms.saturating_add(2_500),
+        );
+        let buyer_reveal = moderation_reveal_fixture(
+            &context,
+            round_id,
+            &auth.buyer,
+            SoraFsModerationVoteChoice::Modify,
+            0x62,
+            now_unix_ms.saturating_add(2_600),
+        );
+
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.provider,
+            moderation_commit_body(
+                moderation_commit_fixture(&provider_reveal, now_unix_ms.saturating_add(100)),
+                now_unix_ms.saturating_add(100),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_commit(
+            app.clone(),
+            &auth.buyer,
+            moderation_commit_body(
+                moderation_commit_fixture(&buyer_reveal, now_unix_ms.saturating_add(101)),
+                now_unix_ms.saturating_add(101),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        wait_until_after_moderation_time(commit_deadline_unix_ms).await;
+        let response = post_moderation_challenge(
+            app.clone(),
+            &auth.provider,
+            moderation_challenge_body(
+                case_id,
+                round_id,
+                "challenge-api-1",
+                &auth.provider,
+                "evidence_mismatch",
+                None,
+                now_unix_ms.saturating_add(800),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect challenge body");
+        let value: Value = norito::json::from_slice(&body_bytes).expect("decode challenge body");
+        assert_eq!(
+            value.get("challenge_id").and_then(Value::as_str),
+            Some("challenge-api-1")
+        );
+        assert_eq!(
+            value.get("kind").and_then(Value::as_str),
+            Some("evidence_mismatch")
+        );
+        assert_eq!(value.get("decision"), Some(&Value::Null));
+
+        wait_until_after_moderation_time(challenge_deadline_unix_ms).await;
+        let response = post_moderation_reveal(
+            app.clone(),
+            &auth.provider,
+            moderation_reveal_body(provider_reveal.clone(), now_unix_ms.saturating_add(2_500)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+
+        let response = post_moderation_challenge_resolution(
+            app.clone(),
+            &auth.provider,
+            moderation_challenge_resolution_body(
+                case_id,
+                round_id,
+                "challenge-api-1",
+                &auth.provider,
+                "rejected",
+                now_unix_ms.saturating_add(2_600),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect challenge resolution body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode challenge resolution body");
+        assert_eq!(
+            value.get("decision").and_then(Value::as_str),
+            Some("rejected")
+        );
+
+        let response = handle_get_sorafs_moderation_ballot_events(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::RawQuery(Some("since=3&limit=4".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect challenge events body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode challenge events body");
+        let events = value
+            .get("events")
+            .and_then(Value::as_array)
+            .expect("challenge event array");
+        assert_eq!(
+            events
+                .iter()
+                .filter_map(|event| event.get("kind").and_then(Value::as_str))
+                .collect::<Vec<_>>(),
+            vec!["challenge_submitted", "challenge_resolved"]
+        );
+        assert_eq!(
+            events[0]
+                .get("challenge")
+                .and_then(|challenge| challenge.get("challenge_id"))
+                .and_then(Value::as_str),
+            Some("challenge-api-1")
+        );
+        assert_eq!(
+            events[1]
+                .get("challenge")
+                .and_then(|challenge| challenge.get("decision"))
+                .and_then(Value::as_str),
+            Some("rejected")
+        );
+
+        let response = post_moderation_reveal(
+            app.clone(),
+            &auth.provider,
+            moderation_reveal_body(provider_reveal, now_unix_ms.saturating_add(2_700)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_reveal(
+            app.clone(),
+            &auth.buyer,
+            moderation_reveal_body(buyer_reveal, now_unix_ms.saturating_add(2_800)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = post_moderation_tally(
+            app.clone(),
+            &auth.provider,
+            moderation_tally_body(case_id, round_id, now_unix_ms.saturating_add(6_100)),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = handle_get_sorafs_moderation_ballot(
+            State(app),
+            Path((case_id.to_owned(), round_id.to_owned())),
+            axum::extract::RawQuery(None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect challenge record body");
+        let value: Value =
+            norito::json::from_slice(&body_bytes).expect("decode challenge record body");
+        assert_eq!(
+            value.get("challenge_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        let challenges = value
+            .get("challenges")
+            .and_then(Value::as_array)
+            .expect("challenge records");
+        assert_eq!(
+            challenges[0].get("decision").and_then(Value::as_str),
+            Some("rejected")
+        );
+    }
+
+    #[tokio::test]
+    async fn moderation_ballot_challenge_endpoint_requires_challenger_auth() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let response = post_moderation_challenge(
+            app,
+            &auth.buyer,
+            moderation_challenge_body(
+                "case-api-auth",
+                "round-1",
+                "challenge-api-auth",
+                &auth.provider,
+                "evidence_mismatch",
+                None,
+                iroha_network_time_now_ms(),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

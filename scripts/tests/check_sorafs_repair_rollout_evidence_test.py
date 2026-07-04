@@ -63,8 +63,8 @@ def auditor_roster(*, auditor_count: int = 3) -> dict:
 def failure_capture() -> dict:
     failure_sources = ["por", "potr"]
     failure_events = [
-        {"name": "por-failure-00", "source": "por"},
-        {"name": "potr-failure-00", "source": "potr"},
+        {"name": "repair-failure-event-por-00", "source": "por"},
+        {"name": "repair-failure-event-potr-00", "source": "potr"},
     ]
     payload = base("sorafs.repair.failure_capture_canary.v1")
     payload.update(
@@ -90,6 +90,7 @@ def route(name: str, *, authz: bool = True, latency_ms: int = 200) -> dict:
         "name": name,
         "passed": True,
         "status_code": 200,
+        "body_blake3_hex": DIGEST,
         "latency_ms": latency_ms,
         "authz_enforced": authz,
         "signature_verified": True,
@@ -288,6 +289,70 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert observability_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
     )
+
+
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        (
+            "auditor-roster.json",
+            "auditor_roster",
+            auditor_roster,
+            ("raw_roster_included",),
+        ),
+        (
+            "failure-capture.json",
+            "failure_capture",
+            failure_capture,
+            ("raw_evidence_included",),
+        ),
+        (
+            "auditor-api.json",
+            "auditor_api",
+            auditor_api,
+            ("response_bodies_included",),
+        ),
+        (
+            "worker-lifecycle.json",
+            "worker_lifecycle",
+            worker_lifecycle,
+            ("raw_repair_payloads_included",),
+        ),
+        (
+            "event-streams.json",
+            "event_streams",
+            event_streams,
+            ("response_bodies_included",),
+        ),
+        (
+            "governance-handoff.json",
+            "governance_handoff",
+            governance_handoff,
+            ("raw_ledger_included",),
+        ),
+        (
+            "observability.json",
+            "observability",
+            observability,
+            ("critical_alerts_firing", "response_bodies_included"),
+        ),
+    )
+
+    for artifact_file, kind, make_payload, fields in cases:
+        for field in fields:
+            case_dir = tmp_path / kind / field
+            case_dir.mkdir(parents=True)
+            write_complete_evidence(case_dir)
+            payload = make_payload()
+            payload.pop(field)
+            write_json(case_dir / artifact_file, payload)
+            summary = case_dir / "summary.json"
+
+            assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            artifact = result["required"][kind]["artifacts"][0]
+            assert artifact["valid"] is False
+            assert f"{field} must be false" in artifact["errors"]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -512,6 +577,38 @@ def test_failure_events_must_use_reviewed_sources(tmp_path: Path) -> None:
     assert "failure_events source must be one of failure_sources" in artifact["errors"]
 
 
+def test_failure_events_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_events"][0]["name"] = "por-failure-00"
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert (
+        "failure_events[].name must match canonical lowercase "
+        "`repair-failure-event-name`"
+    ) in artifact["errors"]
+
+
+def test_failure_events_reject_placeholder_marker(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["failure_events"][0]["name"] = "repair-failure-event-placeholder"
+    write_json(tmp_path / "failure-capture.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["failure_capture"]["artifacts"][0]
+    assert (
+        "failure_events[0].name must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
+
+
 def test_auditor_api_without_authz_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "auditor-api.json", auditor_api(authz=False))
@@ -602,6 +699,58 @@ def test_routes_must_not_include_unknown_values_for_route_artifacts(
         result = json.loads(summary.read_text(encoding="utf-8"))
         artifact = result["required"][kind]["artifacts"][0]
         assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_route_body_hash_is_required_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("auditor_api", "auditor-api.json", auditor_api),
+        ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+        ("event_streams", "event-streams.json", event_streams),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload["routes"][0]["body_blake3_hex"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert (
+            "routes[0].body_blake3_hex must be a non-empty string"
+            in artifact["errors"]
+        )
+
+
+def test_route_latency_is_required_for_route_artifacts(tmp_path: Path) -> None:
+    route_artifacts = (
+        ("auditor_api", "auditor-api.json", auditor_api),
+        ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+        ("event_streams", "event-streams.json", event_streams),
+    )
+    for kind, filename, factory in route_artifacts:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload["routes"][0]["latency_ms"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert (
+            "routes[0].latency_ms must be a non-negative integer"
+            in artifact["errors"]
+        )
 
 
 def test_worker_lifecycle_roster_digest_must_match_roster(tmp_path: Path) -> None:
@@ -890,6 +1039,29 @@ def test_event_lag_above_threshold_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "event-streams.json", event_streams(event_lag_seconds=10_000))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_rollout_timing_evidence_must_be_integer_units(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    worker = worker_lifecycle()
+    worker["repair_latency_seconds"] = 900.5
+    worker["routes"][0]["latency_ms"] = 12.5
+    write_json(tmp_path / "worker-lifecycle.json", worker)
+    streams = event_streams()
+    streams["event_lag_seconds"] = 30.5
+    write_json(tmp_path / "event-streams.json", streams)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    worker_errors = payload["required"]["worker_lifecycle"]["artifacts"][0][
+        "errors"
+    ]
+    stream_errors = payload["required"]["event_streams"]["artifacts"][0]["errors"]
+    assert "repair_latency_seconds must be a non-negative integer" in worker_errors
+    assert "routes[0].latency_ms must be a non-negative integer" in worker_errors
+    assert "event_lag_seconds must be a non-negative integer" in stream_errors
 
 
 def test_observability_critical_alert_fails(tmp_path: Path) -> None:

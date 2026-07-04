@@ -7,10 +7,10 @@
 --now-unix 1800100000
 --contract-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --peer-count 4
---peer peer-00
---peer peer-01
---peer peer-02
---peer peer-03
+--peer orderbook-peer-00
+--peer orderbook-peer-01
+--peer orderbook-peer-02
+--peer orderbook-peer-03
 --source contract
 --source matcher
 --source torii-mirror

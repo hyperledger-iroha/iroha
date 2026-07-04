@@ -334,6 +334,10 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
+    const SMALL_ORDER_ED25519_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
 
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked RAM-LFE fixture keypair")
@@ -344,9 +348,9 @@ mod tests {
             .expect("derive checked RAM-LFE Ed25519 fixture keypair")
     }
 
-    fn with_noncanonical_ed25519_r(signature: &Signature) -> Signature {
+    fn with_malformed_ed25519_r(signature: &Signature, replacement_r: &[u8; 32]) -> Signature {
         let mut bytes = signature.payload().to_vec();
-        bytes[..NONCANONICAL_ED25519_R.len()].copy_from_slice(&NONCANONICAL_ED25519_R);
+        bytes[..replacement_r.len()].copy_from_slice(replacement_r);
         Signature::from_bytes(&bytes)
     }
 
@@ -458,22 +462,28 @@ mod tests {
     }
 
     #[test]
-    fn signed_receipt_rejects_noncanonical_ed25519_signature_r() {
+    fn signed_receipt_rejects_malformed_ed25519_signature_r() {
         let signer = checked_ed25519_keypair(0x31);
-        let mut receipt = signed_receipt(&signer, receipt_payload());
-        let signature = receipt
-            .attestation
-            .signature()
-            .expect("signed fixture carries a signature");
-        receipt.attestation =
-            RamLfeReceiptAttestation::Signed(with_noncanonical_ed25519_r(signature));
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut receipt = signed_receipt(&signer, receipt_payload());
+            let signature = receipt
+                .attestation
+                .signature()
+                .expect("signed fixture carries a signature");
+            receipt.attestation = RamLfeReceiptAttestation::Signed(with_malformed_ed25519_r(
+                signature,
+                &replacement_r,
+            ));
 
-        assert_eq!(
-            receipt
-                .verify_signature(signer.public_key())
-                .expect_err("noncanonical RAM-LFE receipt Ed25519 R must fail admission"),
-            iroha_crypto::Error::BadSignature
-        );
+            assert_eq!(
+                receipt.verify_signature(signer.public_key()).unwrap_err(),
+                iroha_crypto::Error::BadSignature,
+                "{label} RAM-LFE receipt Ed25519 R must fail admission"
+            );
+        }
     }
 
     #[test]
@@ -572,17 +582,21 @@ mod tests {
     }
 
     #[test]
-    fn output_opening_rejects_noncanonical_ed25519_signature_r() {
+    fn output_opening_rejects_malformed_ed25519_signature_r() {
         let signer = checked_ed25519_keypair(0x32);
-        let mut opening = signed_opening(&signer, opening_payload());
-        opening.signature = with_noncanonical_ed25519_r(&opening.signature);
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_R),
+            ("noncanonical", NONCANONICAL_ED25519_R),
+        ] {
+            let mut opening = signed_opening(&signer, opening_payload());
+            opening.signature = with_malformed_ed25519_r(&opening.signature, &replacement_r);
 
-        assert_eq!(
-            opening
-                .verify_signature(signer.public_key())
-                .expect_err("noncanonical RAM-LFE opening Ed25519 R must fail admission"),
-            iroha_crypto::Error::BadSignature
-        );
+            assert_eq!(
+                opening.verify_signature(signer.public_key()).unwrap_err(),
+                iroha_crypto::Error::BadSignature,
+                "{label} RAM-LFE opening Ed25519 R must fail admission"
+            );
+        }
     }
 
     #[test]

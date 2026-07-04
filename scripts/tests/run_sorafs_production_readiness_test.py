@@ -1118,7 +1118,7 @@ def test_summary_input_path_components_must_be_plan_safe(
 def test_encoded_summary_input_path_components_must_be_plan_safe(
     tmp_path: Path, capsys
 ) -> None:
-    unsafe_summary = write_json(tmp_path / "gateway_%70rivate_key_summary.json")
+    unsafe_summary = write_json(tmp_path / "gateway_private&#95;key_summary.json")
 
     exit_code = MODULE.main(
         [
@@ -1146,8 +1146,8 @@ def test_encoded_summary_input_path_components_must_be_plan_safe(
         in captured.err
     )
     assert captured.out == ""
-    assert "gateway_%70rivate_key_summary" not in captured.err
-    assert "%70rivate_key" not in captured.err
+    assert "gateway_private&#95;key_summary" not in captured.err
+    assert "&#95;" not in captured.err
     assert "private_key" not in captured.err
 
 

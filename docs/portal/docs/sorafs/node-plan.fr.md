@@ -50,12 +50,13 @@ SF-3 livre le premier crate exécutable `sorafs-node` qui transforme un processu
 
 ### C. Endpoints gateway
 
-| Endpoint | Comportement | Tâches |
-|----------|--------------|-------|
-| `POST /sorafs/pin` | Accepte `PinProposalV1`, valide les manifests, met l'ingestion en file, répond avec le CID du manifest. | Valider le profil de chunker, appliquer les quotas, streamer les données via le chunk store. |
-| `GET /sorafs/chunks/{cid}` + requête de range | Sert les bytes de chunk avec les headers `Content-Chunker` ; respecte la spécification de capacité de range. | Utiliser le scheduler + budgets de stream (lié à la capacité de range SF-2d). |
-| `POST /sorafs/por/sample` | Lance un échantillonnage PoR pour un manifest et renvoie un bundle de preuve. | Réutiliser l'échantillonnage du chunk store, répondre avec des payloads Norito JSON. |
-| `GET /sorafs/telemetry` | Résumés : capacité, succès PoR, compteurs d'erreurs de fetch. | Fournir les données pour dashboards/opérateurs. |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 La plomberie runtime relie les interactions PoR via `sorafs_node::por` : le tracker enregistre chaque `PorChallengeV1`, `PorProofV1` et `AuditVerdictV1` pour que les métriques `CapacityMeter` reflètent les verdicts de gouvernance sans logique Torii spécifique.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ Logs / événements :
 ## Critères de sortie du jalon
 
 - `cargo run -p sorafs_node --example pin_fetch` fonctionne sur des fixtures locales.
-- Torii build avec `--features sorafs-storage` et passe les tests d'intégration.
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - Documentation ([guide de stockage du nœud](node-storage.md)) mise à jour avec defaults de configuration + exemples CLI ; runbook opérateur disponible.
 - Télémétrie visible sur les dashboards de staging ; alertes configurées pour saturation de capacité et échecs PoR.
 
@@ -116,4 +117,4 @@ Logs / événements :
 
 - Mettre à jour la [référence de stockage du nœud](node-storage.md) avec les defaults de configuration, l'usage CLI et les étapes de troubleshooting.
 - Garder le [runbook d'opérations du nœud](node-operations.md) aligné avec l'implémentation au fur et à mesure de l'évolution SF-3.
-- Publier les références API pour les endpoints `/sorafs/*` dans le portail développeur et les relier au manifeste OpenAPI une fois les handlers Torii en place.
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

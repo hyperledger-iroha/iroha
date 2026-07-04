@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Sequence
@@ -21,13 +22,18 @@ from check_sorafs_reputation_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_INGEST_LAG_SECS,
     DEFAULT_MAX_SNAPSHOT_AGE_SECS,
     FORBIDDEN_PROVIDER_ID_MARKERS,
+    FORBIDDEN_TRANSPORT_EVENT_LABEL_MARKERS,
     KIND_BY_NAME,
     LoadedEvidence,
     PROVIDER_ID_ERROR,
     PROVIDER_ID_PATTERN,
     REQUIRED_METRICS,
+    SSE_EVENT_LABEL_ERROR,
+    SSE_EVENT_LABEL_PATTERN,
     SNAPSHOT_ANCHOR_KINDS,
     SNAPSHOT_BOUND_KINDS,
+    WEBSOCKET_EVENT_LABEL_ERROR,
+    WEBSOCKET_EVENT_LABEL_PATTERN,
     validate_evidence_set,
 )
 from sorafs_checker_preflight import (  # noqa: E402
@@ -181,6 +187,8 @@ def validate_reviewed_inventory(
     expected_count: int,
     option: str,
     count_option: str,
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
     errors: list[str],
 ) -> list[str]:
     """Validate reviewed unique labels and bind them to a CLI count."""
@@ -188,8 +196,24 @@ def validate_reviewed_inventory(
     items = split_csv_values(values)
     if not items:
         errors.append(f"{option} is required")
-    for item in items:
+    for index, item in enumerate(items):
         validate_canonical_string(item, label=option, errors=errors)
+        if pattern is not None and isinstance(item, str):
+            if pattern.fullmatch(item) is None:
+                errors.append(label_error or f"{option} uses an invalid label")
+            tokens = frozenset(
+                token for token in re.split(r"[^a-z0-9]+", item) if token
+            )
+            forbidden = sorted(
+                marker
+                for marker in FORBIDDEN_TRANSPORT_EVENT_LABEL_MARKERS
+                if marker in tokens
+            )
+            if forbidden:
+                errors.append(
+                    f"{option}[{index}] must not contain non-production "
+                    f"markers {forbidden}"
+                )
     if len(set(items)) != len(items):
         errors.append(f"{option} must not contain duplicates")
     if expected_count != len(set(items)):
@@ -372,6 +396,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             expected_count=args.sse_event_count,
             option="--sse-event",
             count_option="--sse-event-count",
+            pattern=SSE_EVENT_LABEL_PATTERN,
+            label_error=SSE_EVENT_LABEL_ERROR,
             errors=errors,
         )
         args.websocket_events = validate_reviewed_inventory(
@@ -379,6 +405,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             expected_count=args.websocket_event_count,
             option="--websocket-event",
             count_option="--websocket-event-count",
+            pattern=WEBSOCKET_EVENT_LABEL_PATTERN,
+            label_error=WEBSOCKET_EVENT_LABEL_ERROR,
             errors=errors,
         )
     if args.kind == "provider":

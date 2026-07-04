@@ -136,6 +136,7 @@ def dashboard_api(*, latency_ms: int = 200, passed: bool = True) -> dict:
             "name": name,
             "passed": passed,
             "status_code": 200,
+            "body_blake3_hex": DIGEST,
             "latency_ms": latency_ms,
             "publisher_identity_present": True,
             "verification_valid": True,
@@ -279,6 +280,70 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     )
 
     assert MODULE.main([f"@{args}"]) == 0
+
+
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        (
+            "ingest-service.json",
+            "ingest_service",
+            ingest_service,
+            ("payload_bytes_included",),
+        ),
+        (
+            "publisher-service.json",
+            "publisher_service",
+            publisher_service,
+            ("raw_head_included", "raw_car_included"),
+        ),
+        (
+            "mirror-datastore.json",
+            "mirror_datastore",
+            mirror_datastore,
+            ("mirror_drift_detected", "raw_blocks_included"),
+        ),
+        (
+            "operator-recovery.json",
+            "operator_recovery",
+            operator_recovery,
+            ("raw_checkpoint_included",),
+        ),
+        (
+            "dashboard-api.json",
+            "dashboard_api",
+            dashboard_api,
+            ("response_bodies_included",),
+        ),
+        (
+            "observability.json",
+            "observability",
+            observability,
+            ("critical_alerts_firing", "response_bodies_included"),
+        ),
+        (
+            "ipfs-ipns-e2e.json",
+            "ipfs_ipns_e2e",
+            ipfs_ipns_e2e,
+            ("raw_blocks_included",),
+        ),
+    )
+
+    for artifact_file, kind, make_payload, fields in cases:
+        for field in fields:
+            case_dir = tmp_path / kind / field
+            case_dir.mkdir(parents=True)
+            write_complete_evidence(case_dir)
+            payload = make_payload()
+            payload.pop(field)
+            write_json(case_dir / artifact_file, payload)
+            summary = case_dir / "summary.json"
+
+            assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            artifact = result["required"][kind]["artifacts"][0]
+            assert artifact["valid"] is False
+            assert f"{field} must be false" in artifact["errors"]
 
 
 def test_missing_publisher_service_fails(tmp_path: Path) -> None:
@@ -639,6 +704,29 @@ def test_dashboard_route_latency_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_rollout_timing_evidence_must_be_integer_units(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    publisher = publisher_service()
+    publisher["pin_lag_seconds"] = 12.5
+    publisher["head_age_seconds"] = 120.5
+    write_json(tmp_path / "publisher-service.json", publisher)
+    dashboard = dashboard_api()
+    dashboard["routes"][0]["latency_ms"] = 12.5
+    write_json(tmp_path / "dashboard-api.json", dashboard)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    publisher_errors = payload["required"]["publisher_service"]["artifacts"][0][
+        "errors"
+    ]
+    dashboard_errors = payload["required"]["dashboard_api"]["artifacts"][0]["errors"]
+    assert "pin_lag_seconds must be a non-negative integer" in publisher_errors
+    assert "head_age_seconds must be a non-negative integer" in publisher_errors
+    assert "routes[0].latency_ms must be a non-negative integer" in dashboard_errors
+
+
 def test_dashboard_route_count_must_match_unique_routes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = dashboard_api()
@@ -687,6 +775,24 @@ def test_dashboard_routes_must_not_include_unknown_values(tmp_path: Path) -> Non
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["dashboard_api"]["artifacts"][0]
     assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_dashboard_route_body_hash_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = dashboard_api()
+    del payload["routes"][0]["body_blake3_hex"]
+    write_json(tmp_path / "dashboard-api.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["dashboard_api"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "routes[0].body_blake3_hex must be a non-empty string"
+        in artifact["errors"]
+    )
 
 
 def test_mirror_drift_fails(tmp_path: Path) -> None:

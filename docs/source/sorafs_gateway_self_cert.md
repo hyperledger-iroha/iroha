@@ -85,6 +85,17 @@ completes and writes the verification summary to
 `--chunk-summary`, or `--chunk-digest-sha3` so the CLI also cross-checks chunk
 digests and metadata embedded in the bundle.
 
+## Output Path Safety
+
+`scripts/sorafs_gateway_self_cert.sh` fails before running the attestation
+harness when `--out` is a symlink, points at a non-directory target, or sits
+under a symlinked parent component. Manifest verification summaries and
+denylist diff reports are also rejected when their final path is a symlink,
+their existing target is not a regular file, or their parent chain contains a
+symlink. This keeps gateway self-cert evidence from being written through
+ambiguous filesystem aliases while still allowing the wrapper to create missing
+ordinary output directories.
+
 ## Denylist Diff Evidence (MINFO-6)
 
 When rotating SoraFS gateway denylists, governance expects a before/after trail

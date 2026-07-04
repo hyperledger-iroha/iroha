@@ -9,6 +9,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
+from html import unescape
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -175,6 +176,9 @@ SENSITIVE_KEYS = {
     "signed_transaction",
     "token",
 }
+PATH_SENSITIVE_KEY_FRAGMENTS = HIGH_RISK_SENSITIVE_KEY_FRAGMENTS - frozenset(
+    {"requestbody", "responsebody"}
+)
 
 GATE_METADATA_FIELDS: dict[str, frozenset[str]] = {
     "ai_prescreen": frozenset(
@@ -490,14 +494,24 @@ PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS: dict[str, dict[str, Any]] = {
     "valid_provider_bakes": {
         "strings": frozenset({"bake_id", "deployment_id", "environment"}),
         "positive_ints": frozenset(
-            {"completed_at_unix", "provider_count", "started_at_unix"}
+            {
+                "completed_at_unix",
+                "provider_count",
+                "scheduled_lifecycle_canary_defaulted_provider_count",
+                "scheduled_lifecycle_canary_last_tick_unix",
+                "scheduled_lifecycle_canary_tick_count",
+                "started_at_unix",
+            }
         ),
         "hex": {
             "ledger_digest_hex": 64,
             "matrix_digest_hex": 64,
             "policy_digest_hex": 64,
         },
-        "ordered_int_pairs": (("started_at_unix", "completed_at_unix"),),
+        "ordered_int_pairs": (
+            ("started_at_unix", "completed_at_unix"),
+            ("scheduled_lifecycle_canary_last_tick_unix", "completed_at_unix"),
+        ),
     },
 }
 PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS = {
@@ -1194,13 +1208,13 @@ def require_threshold_map(
 
 
 def decoded_text_variants(value: str) -> tuple[str, ...]:
-    """Return raw plus repeatedly percent-decoded text variants."""
+    """Return raw plus repeatedly percent/HTML-decoded text variants."""
 
     variants = [value]
     seen = {value}
     current = value
     for _ in range(4):
-        decoded = unquote(current)
+        decoded = unescape(unquote(current))
         if decoded == current or decoded in seen:
             break
         variants.append(decoded)
@@ -1224,6 +1238,32 @@ def path_component_has_uri_scheme_prefix(component: str) -> bool:
     return re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", head) is not None
 
 
+def path_component_has_sensitive_label(component: str) -> bool:
+    """Return whether a path component looks like runtime-only secret material."""
+
+    sensitive_key_labels = (
+        frozenset(key.lower() for key in SENSITIVE_KEYS) | COMMON_SENSITIVE_KEYS
+    )
+    normalized_sensitive_keys = frozenset(
+        normalize_sensitive_key(key) for key in sensitive_key_labels
+    )
+    for variant in decoded_text_variants(component):
+        stem = variant.rsplit(".", 1)[0]
+        normalized_values = {
+            normalize_sensitive_key(variant),
+            normalize_sensitive_key(stem),
+        }
+        if any(value in normalized_sensitive_keys for value in normalized_values):
+            return True
+        if any(
+            fragment in value
+            for value in normalized_values
+            for fragment in PATH_SENSITIVE_KEY_FRAGMENTS
+        ):
+            return True
+    return False
+
+
 def archive_path_component_is_portable(component: str) -> bool:
     """Return whether an archive path component is safe in raw or decoded form."""
 
@@ -1235,6 +1275,7 @@ def archive_path_component_is_portable(component: str) -> bool:
             or "\\" in variant
             or path_component_has_windows_drive_prefix(variant)
             or path_component_has_uri_scheme_prefix(variant)
+            or path_component_has_sensitive_label(variant)
         ):
             return False
     return True
@@ -1291,7 +1332,8 @@ def require_artifact_identity_fields(
     elif not is_archive_portable_artifact_path(artifact_path):
         errors.append(
             f"{path}.path must be archive-relative without absolute, empty, "
-            "current, parent, encoded, URI-scheme-like, or platform-specific segments"
+            "current, parent, encoded, URI-scheme-like, platform-specific, "
+            "or secret-looking segments"
         )
     sha256 = artifact.get("sha256")
     if (

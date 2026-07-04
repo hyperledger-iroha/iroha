@@ -453,6 +453,30 @@ def test_torii_url_rejects_secret_bearing_url_without_leaking(
     assert captured.out == ""
 
 
+def test_torii_url_rejects_encoded_host_tokens_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    unsafe_urls = (
+        "https://C%3A.torii.example/status",
+        "https://http%3A.torii.example/status",
+    )
+
+    for index, unsafe_url in enumerate(unsafe_urls):
+        case_dir = tmp_path / f"url-case-{index}"
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        args[args.index("--torii-url") + 1] = unsafe_url
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert "SoraFS runner URL arguments must not contain" in captured.err
+        assert unsafe_url not in captured.err
+        assert "C%3A" not in captured.err
+        assert "http%3A" not in captured.err
+        assert captured.out == ""
+
+
 def test_sorafs_cli_bin_rejects_secret_bearing_path_without_leaking(
     tmp_path: Path, capsys
 ) -> None:

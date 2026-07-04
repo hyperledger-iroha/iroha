@@ -34,6 +34,8 @@ from check_sorafs_pop_credentials_rollout_evidence import (  # noqa: E402
     ISSUER_ID_ERROR,
     ISSUER_ID_PATTERN,
     KIND_BY_NAME,
+    REVOKED_NONCE_LABEL_ERROR,
+    REVOKED_NONCE_LABEL_PATTERN,
     REQUIRED_ENROLLMENT_ROUTES,
     REQUIRED_METRICS,
     REQUIRED_VERIFIER_ROUTES,
@@ -225,11 +227,40 @@ def validate_reviewed_inventory(
     return items
 
 
+def validate_optional_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+    pattern: re.Pattern[str],
+    label_error: str,
+) -> list[str]:
+    """Return reviewed inventory labels, allowing empty input for zero counts."""
+
+    items = list(values)
+    if expected_count == 0 and not items:
+        return []
+    return validate_reviewed_inventory(
+        items,
+        expected_count=expected_count,
+        option=option,
+        kind=kind,
+        count_option=count_option,
+        errors=errors,
+        pattern=pattern,
+        label_error=label_error,
+    )
+
+
 def render_inventory_label_error(label_error: str, option: str) -> str:
     """Render checker inventory-label diagnostics against a CLI option."""
 
     return (
         label_error.replace("credentials[].name", option)
+        .replace("revoked_nonce_refs[].name", option)
         .replace("probes[].name", option)
         .replace("sortition_probes[].name", option)
         .replace("commit_reveal_probes[].name", option)
@@ -350,6 +381,7 @@ def build_route_records(args: argparse.Namespace) -> list[dict[str, Any]]:
             "name": route,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "authz_enforced": True,
             "signature_verified": True,
         }
@@ -403,6 +435,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "revocation_list_version": args.revocation_list_version,
                 "published_at_unix": args.published_at_unix,
                 "revoked_nonce_count": args.revoked_nonce_count,
+                "revoked_nonce_refs": build_inventory_records(args.revoked_nonce_refs),
             }
         )
     elif args.kind == "enrollment_portal":
@@ -519,7 +552,22 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--revoked-nonce-count", args.revoked_nonce_count),
             ),
         )
+        args.revoked_nonce_refs = validate_optional_reviewed_inventory(
+            split_csv_values(args.revoked_nonce_ref),
+            expected_count=args.revoked_nonce_count or 0,
+            option="--revoked-nonce-ref",
+            kind="revocation_registry",
+            count_option="--revoked-nonce-count",
+            errors=errors,
+            pattern=REVOKED_NONCE_LABEL_PATTERN,
+            label_error=REVOKED_NONCE_LABEL_ERROR,
+        )
     elif args.kind == "enrollment_portal":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.routes = validate_name_set(
             split_csv_values(args.route),
             allowed=REQUIRED_ENROLLMENT_ROUTES,
@@ -527,6 +575,11 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors=errors,
         )
     elif args.kind == "verifier_service":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.routes = validate_name_set(
             split_csv_values(args.route),
             allowed=REQUIRED_VERIFIER_ROUTES,
@@ -741,8 +794,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--revocation-list-version", type=positive_int_arg)
     parser.add_argument("--published-at-unix", type=positive_int_arg)
     parser.add_argument("--revoked-nonce-count", type=non_negative_int_arg)
+    parser.add_argument("--revoked-nonce-ref", action="append", default=[])
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--accepted-valid-proof-count", type=positive_int_arg)
     parser.add_argument("--rejected-invalid-proof-count", type=positive_int_arg)
     parser.add_argument("--accepted-proof-probe", action="append", default=[])

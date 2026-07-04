@@ -4,12 +4,12 @@ direction: rtl
 source: docs/source/sorafs_gateway_load_tests.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 30aa0b0bc5a2db51bd54fc3241169ead80c15721cec6bb801f15831b3a4ab0e4
-source_last_modified: "2026-07-03T11:53:08.133889+00:00"
+source_hash: 4888b8a63ddf992f4a52d72ea253efc61c836f2651d58cfd0b84da74b3d353c4
+source_last_modified: "2026-07-04T05:54:23.764215+00:00"
 translation_last_reviewed: 2026-07-03
 title: SoraFS Gateway Load Testing Plan
 summary: Deterministic load harness and follow-up tasks for the SF-5a trustless delivery profile.
-source_mtime: 2026-07-03T11:53:08.133889+00:00
+source_mtime: 2026-07-04T05:54:23.764215+00:00
 ---
 
 # SoraFS Gateway Load Testing Plan
@@ -45,16 +45,22 @@ for the actual replay harness.
 Staging-load artifacts must also keep `stream_count` and `provider_count` equal
 to the unique canonical `streams[].name` and `providers[].name` inventories, and
 duplicate stream or provider entries fail the artifact before promotion can
-report ready. Stream labels must use generated `stream-0000`-style names,
-provider names must use reviewed `provider-name` slugs without placeholder or
-test markers, `hardware_profile.name` must be a reviewed lowercase hardware
-profile slug, and `cache_state.mode` is closed to `cold-cache`, `warm-cache`, or
-`mixed-cache`. Their `gateway_version` evidence must use a concrete
+report ready. Stream labels must use generated `gateway-load-stream-0000`-style
+names, provider names must use reviewed `gateway-load-provider-*` slugs without
+placeholder or test markers, `hardware_profile.name` must use a reviewed
+`gateway-load-hardware-*` label, and `cache_state.mode` is closed to
+`cold-cache`, `warm-cache`, or `mixed-cache`. Their `gateway_version` evidence
+must use a concrete
 `iroha-gateway X.Y.Z` release label or `iroha-gateway X.Y.Z-rc.N` release
 candidate label, so placeholder or unscoped version strings cannot enter
 promotion packets. Telemetry/SLO artifacts also bind `metric_count` to the unique
 canonical `metrics` inventory and reject duplicate metric labels before
-promotion can report ready.
+promotion can report ready. Staging-load SLO values for `error_rate_bps`,
+`p95_latency_ms`, and `p99_latency_ms` must be non-negative integers before
+they can satisfy the rollout ceilings, and `success_rate_bps` must be a
+positive integer in the inclusive basis-point range up to `10000`; operator
+success/error bps thresholds and hand-written `error_rate_bps` evidence are also
+capped at `10000` so impossible basis-point rates cannot satisfy promotion.
 
 ## Objectives
 
@@ -126,13 +132,21 @@ external evidence map, evidence contract, and command steps before dry-run
 output or verifier execution. The shared runner plan guard also rejects
 non-canonical nested required-kind, threshold, external-evidence,
 evidence-contract, and command-step shapes before any live gateway-load contact.
+Gateway-load payload-safety artifacts must explicitly set
+`raw_report_included`, `private_keys_included`, `response_bodies_included`,
+`raw_payloads_included`, and `critical_alerts_firing` to `false`; transport-scope
+artifacts must also explicitly set the non-applicable HTTP/3 booleans to
+`false` before promotion can report ready.
 `scripts/build_sorafs_gateway_load_canary.py` builds individual payload-free
 evidence artifacts for local conformance, staging load, telemetry/SLO,
 transport-scope, and governance approval runs. The builder requires reviewed
 deployment context, complete deterministic scenario and metric coverage where
-applicable, reviewed staging provider names whose unique inventory matches
-`--provider-count`, reviewed hardware-profile slugs, reviewed cache-state modes,
-generated per-stream inventory labels matching `--stream-count`, suite/staging
+applicable, reviewed staging provider names using
+`gateway-load-provider-*` labels whose unique inventory matches
+`--provider-count`, reviewed `gateway-load-hardware-*` hardware-profile labels,
+reviewed cache-state modes,
+generated `gateway-load-stream-*` per-stream inventory labels matching
+`--stream-count`, suite/staging
 digest bindings, SLO threshold facts, and
 validates every generated artifact through
 `scripts/check_sorafs_gateway_load_rollout_evidence.py` before writing. Checked
@@ -143,9 +157,15 @@ duplicate or unknown scenario labels before promotion can report ready.
 They also reject unreviewed `cargo_command` values before promotion can report
 ready.
 Staging-load artifacts reject placeholder or malformed `gateway_version` labels
-before promotion can report ready, reject unknown cache-state modes, and reject
-placeholder or test markers in provider and hardware-profile labels before
-promotion can report ready.
+before promotion can report ready, reject unknown cache-state modes, require
+`providers[].name` entries to use reviewed `gateway-load-provider-*` labels,
+require `hardware_profile.name` to use reviewed `gateway-load-hardware-*`
+labels, and reject placeholder or test markers in provider and hardware-profile
+labels before promotion can report ready. The staging-load checker also rejects
+fractional or out-of-range `success_rate_bps` values plus fractional or
+out-of-range `error_rate_bps` values plus fractional or negative
+`p95_latency_ms` and `p99_latency_ms` values before those integer-unit SLO fields
+can satisfy promotion thresholds.
 Telemetry/SLO artifacts also bind `metric_count` to the unique canonical
 `metrics` inventory, require the reviewed gateway-load metrics, and reject
 duplicate or unknown metric labels before promotion can report ready. The

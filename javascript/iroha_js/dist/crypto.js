@@ -925,6 +925,21 @@ function hasKagemushaRecursiveSpendNative(native) {
   return probeKagemushaRecursiveSpendNative(native);
 }
 
+function hasKagemushaRecursiveSpendTopUpNative(native) {
+  const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
+  if (
+    !native ||
+    !Number.isInteger(abiVersion) ||
+    abiVersion < KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION ||
+    typeof native.kagemushaRecursiveSpendTopUp !== "function"
+  ) {
+    return false;
+  }
+  return expectKagemushaNativeProbeRejection(() =>
+    native.kagemushaRecursiveSpendTopUp(KAGEMUSHA_NATIVE_PROBE_ARCHIVE),
+  );
+}
+
 function hasKagemushaRecursiveCompactPaymentTokenNative(native) {
   const abiVersion = kagemushaRecursiveSpendNativeBridgeAbiVersion(native);
   if (
@@ -1142,6 +1157,7 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_comp
 export const KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 7;
+export const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 15;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
 export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT =
   "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
@@ -1181,6 +1197,8 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDI
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1 =
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME =
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
 export const KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
@@ -1701,7 +1719,6 @@ export function normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outpu
 export function isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId) {
   const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
   return (
-    normalized === "" ||
     normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
     normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1
   );
@@ -1729,10 +1746,7 @@ export function canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
     return false;
   }
   const normalized = normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
-  if (
-    normalized === "" ||
-    normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1
-  ) {
+  if (normalized === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) {
     return previousHopCount < KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS;
   }
   if (normalized === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1) {
@@ -1762,11 +1776,9 @@ export function isSupportedKagemushaRecursiveSpendAppendProofTransition(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(outputProofCircuitId);
   return (
     (previousProofCircuitId === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 &&
-      (normalizedOutput === "" ||
-        normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1)) ||
+      normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1) ||
     (isKagemushaRecursiveSpendLineageProofCircuitId(previousProofCircuitId) &&
-      (normalizedOutput === "" ||
-        normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
+      (normalizedOutput === KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 ||
         normalizedOutput === KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1))
   );
 }
@@ -1810,9 +1822,25 @@ function ensureKagemushaRecursiveSpendNative(native, operation) {
   return native;
 }
 
+function ensureKagemushaRecursiveSpendTopUpNative(native, operation) {
+  if (!hasKagemushaRecursiveSpendTopUpNative(native)) {
+    throw new Error(
+      `Kagemusha recursive spend top-up helper '${operation}' is unavailable; build iroha_js_host with recursive Kagemusha top-up support`,
+    );
+  }
+  return native;
+}
+
 function callKagemushaRecursiveSpendNative(operation, requestArchive, archiveName = "requestArchive") {
   const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName);
   const native = ensureKagemushaRecursiveSpendNative(resolveNativeBinding(), operation);
+  const result = native[operation](request);
+  return kagemushaRecursiveSpendOutputToBuffer(result, operation);
+}
+
+function callKagemushaRecursiveSpendTopUpNative(operation, requestArchive, archiveName = "requestArchive") {
+  const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName);
+  const native = ensureKagemushaRecursiveSpendTopUpNative(resolveNativeBinding(), operation);
   const result = native[operation](request);
   return kagemushaRecursiveSpendOutputToBuffer(result, operation);
 }
@@ -1911,6 +1939,14 @@ export function isKagemushaRecursiveSpendNativeAvailable() {
   }
 }
 
+export function isKagemushaRecursiveSpendTopUpNativeAvailable() {
+  try {
+    return hasKagemushaRecursiveSpendTopUpNative(resolveNativeBinding());
+  } catch {
+    return false;
+  }
+}
+
 export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable() {
   try {
     return hasKagemushaRecursiveCompactPaymentTokenNative(resolveNativeBinding());
@@ -1974,6 +2010,13 @@ export function isKagemushaPallasOpenEnvelopeBuilderNativeAvailable() {
 export function kagemushaRecursiveSpendInit(requestArchive) {
   return callKagemushaRecursiveSpendNative(
     "kagemushaRecursiveSpendInit",
+    requestArchive,
+  );
+}
+
+export function kagemushaRecursiveSpendTopUp(requestArchive) {
+  return callKagemushaRecursiveSpendTopUpNative(
+    "kagemushaRecursiveSpendTopUp",
     requestArchive,
   );
 }
@@ -2416,6 +2459,12 @@ export function decodeKagemushaRecursiveSpendBundle(archive) {
 
 export function kagemushaRecursiveSpendInitTyped(request) {
   return kagemushaRecursiveSpendInit(
+    encodeKagemushaRecursiveSpendInitRequest(request),
+  );
+}
+
+export function kagemushaRecursiveSpendTopUpTyped(request) {
+  return kagemushaRecursiveSpendTopUp(
     encodeKagemushaRecursiveSpendInitRequest(request),
   );
 }

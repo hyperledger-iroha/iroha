@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_reputation_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4334261e59bd0969217cac6fe08385201104647e8eede293f9ade0bdefeb99e9
-source_last_modified: "2026-07-03T11:59:18.567095+00:00"
+source_hash: e3d521e53e0735104ed6abd66ec429a2b2f32b5272554fef62bcbfd5fc19def5
+source_last_modified: "2026-07-04T05:02:54.944251+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T11:59:18.567095+00:00
+source_mtime: 2026-07-04T05:02:54.944251+00:00
 ---
 
 # SoraFS Provider Reputation Oracle
@@ -28,10 +28,12 @@ routing/incentive consumption evidence. The builder requires reviewed
 deployment context, snapshot id/root bindings, reviewed lowercase production
 provider IDs, provider proof inputs where applicable, reviewed provider names
 using the same `provider-*` production shape whose unique inventory matches
-`provider_count`, unique provider proof sibling hashes, snapshot-age and
-ingest-lag threshold facts, duplicate/unknown metric rejection before writes,
+`provider_count`, unique provider proof sibling hashes, non-negative integer
+snapshot-age and ingest-lag threshold facts, duplicate/unknown metric rejection before writes,
 bounded event-watch `limit`/`count` facts with duplicate-free sequence
-inventories, and validates every generated artifact through
+inventories, reviewed `reputation-sse-event-*` and
+`reputation-websocket-event-*` transport labels without non-production markers,
+and validates every generated artifact through
 `scripts/check_sorafs_reputation_rollout_evidence.py` before writing.
 Checked-in response-file examples cover provider and metrics canaries.
 
@@ -216,8 +218,9 @@ CREATE TABLE reputation_snapshots (
   snapshot anchor and requires provider, event, proof replay, metrics,
   transport, and routing/incentive consumption artifacts to bind to that
   `snapshot_id_hex`/`merkle_root_hex` tuple. It also requires bounded ingest
-  lag, provider proof coverage, proof replay, transport event delivery, and
-  downstream consumption. Snapshot binding failures are recorded on the
+  lag, non-negative integer snapshot-age and ingest-lag evidence, provider
+  proof coverage, proof replay, transport event delivery, and downstream
+  consumption. Snapshot binding failures are recorded on the
   offending artifact before required-kind validity is finalized, so the JSON
   summary matches the fail-closed rollout decision. It rejects raw snapshot/proof
   bytes, raw provider records, request or
@@ -233,19 +236,29 @@ CREATE TABLE reputation_snapshots (
   matching the provider-proof and verification `provider_id` policy. Metrics
   artifacts also bind `metric_count` to the unique canonical `metrics`
   inventory, require the reviewed reputation metrics set, and reject duplicate
-  or unknown metric entries before promotion can report ready. The summary
+  or unknown metric entries before promotion can report ready. Metrics and
+  transport artifacts must explicitly set
+  `response_bodies_included` to `false`, and routing/incentive consumption
+  artifacts must explicitly set `raw_provider_records_included` to `false`,
+  before promotion can report ready. The summary
   exports the sorted reviewed `metrics` inventory plus `metric_count_values`,
   and the aggregate production-readiness gate requires those fields to match
   the metrics artifact fingerprint before final promotion can report ready.
   Provider proof and verification artifacts must use reviewed lowercase
   `provider-*` IDs and must not contain non-production markers in
-  provider/proof/verify `provider_id` fields. Event-watch evidence
-  must carry a positive `limit`, keep `count` equal to the `events[]` length,
-  bind `count` to duplicate-free `events[].sequence` values, and reject `count`
-  values above that limit before transport evidence can report ready.
+  provider/proof/verify `provider_id` fields. Required providers must have
+  both matching provider-proof evidence and matching proof-verification
+  evidence before promotion can report ready, and the default gate requires at
+  least one provider ID to appear in both proof and verification evidence.
+  Event-watch evidence must carry a positive `limit`, keep `count` equal to the
+  `events[]` length, bind `count` to duplicate-free `events[].sequence` values,
+  and reject `count` values above that limit before transport evidence can
+  report ready.
   Transport evidence must bind `sse_event_count` and `websocket_event_count` to
   the unique canonical `sse_events[].name` and `websocket_events[].name`
-  inventories and reject duplicate transport-event entries before promotion can
+  inventories, require reviewed `reputation-sse-event-*` and
+  `reputation-websocket-event-*` labels without non-production markers, and
+  reject duplicate or malformed transport-event entries before promotion can
   report ready.
   It supports shell-style `@ARGFILE` inputs for direct replay of reviewed
   evidence directories and explicit artifacts.
@@ -407,12 +420,19 @@ Completed local foundations:
   non-production `--provider-id` values before writing. Provider proof canaries
   reject duplicate Merkle sibling hashes before writing, and the rollout
   checker enforces the same uniqueness on externally
-  supplied provider proof evidence. Event-watch canaries and externally supplied
-  event artifacts must also prove a positive polling `limit`, exact
+  supplied provider proof evidence. Required provider canary inputs are checked
+  against both provider-proof and proof-verification evidence when the full
+  rollout gate is evaluated, preventing verification-only or proof-only
+  coverage from satisfying readiness. Event-watch canaries and externally
+  supplied event artifacts must also prove a positive polling `limit`, exact
   `count`/`events[]` length agreement, duplicate-free `events[].sequence`
-  inventory binding, and `count <= limit` before readiness is reported.
-  Transport canaries also require reviewed SSE and WebSocket event labels
-  matching `sse_event_count` and `websocket_event_count` before writing.
+  inventory binding, and `count <= limit` before readiness is reported. Metrics
+  canaries and externally supplied metrics artifacts must present
+  `snapshot_age_seconds` and `ingest_lag_seconds` as non-negative integer
+  seconds before the SFM-3 freshness/lag ceilings can pass.
+  Transport canaries also require reviewed `reputation-sse-event-*` and
+  `reputation-websocket-event-*` labels without non-production markers matching
+  `sse_event_count` and `websocket_event_count` before writing.
 - Rollout evidence collection harness that publishes, reads back, watches, proof
   replays, and verifies the deployed reputation evidence bundle from one
   response-file driven operator command.

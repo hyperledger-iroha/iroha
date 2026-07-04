@@ -55,9 +55,8 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
-    require_non_negative_int,
     require_object,
     require_object_array,
     required_evidence_kind_names,
@@ -91,7 +90,14 @@ DEFAULT_MIN_AUDITORS = 3
 HEX64_LEN = 64
 AUDITOR_LABEL_PATTERN = re.compile(r"^repair-auditor-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 AUDITOR_LABEL_ERROR = (
-    "auditors[].name must match canonical lowercase `repair-auditor-name`"
+    "auditors[].name must match canonical lowercase `repair-auditor-*`"
+)
+FAILURE_EVENT_LABEL_PATTERN = re.compile(
+    r"^repair-failure-event-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+FAILURE_EVENT_LABEL_ERROR = (
+    "failure_events[].name must match canonical lowercase "
+    "`repair-failure-event-name`"
 )
 FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
     (
@@ -392,7 +398,14 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_maximum_number(
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -505,8 +518,15 @@ def validate_failure_capture(payload: dict[str, Any], errors: list[str]) -> None
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "failure_events", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "failure_events", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"failure_events[{index}].name",
+            pattern=FAILURE_EVENT_LABEL_PATTERN,
+            label_error=FAILURE_EVENT_LABEL_ERROR,
+            errors=errors,
+        )
         source = require_string(record, "source", errors)
         if source and source not in REQUIRED_FAILURE_SOURCES:
             errors.append("failure_events source must be one of failure_sources")
@@ -564,7 +584,7 @@ def validate_worker_lifecycle(
     require_bool_true(payload, "idempotency_enforced", errors)
     require_bool_true(payload, "norito_snapshot_persisted", errors)
     require_bool_true(payload, "gc_protection_verified", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "repair_latency_seconds",
         options.max_repair_latency_secs,
@@ -585,7 +605,7 @@ def validate_event_streams(
     require_bool_true(payload, "backlog_replay_verified", errors)
     require_bool_true(payload, "sse_delivery_verified", errors)
     require_bool_true(payload, "websocket_delivery_verified", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "event_lag_seconds",
         options.max_event_lag_secs,

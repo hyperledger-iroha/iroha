@@ -3120,6 +3120,8 @@ impl Actor {
         fetch: super::message::CertifiedBlockFetch,
         sender: Option<PeerId>,
     ) -> Result<()> {
+        let dedup_key = super::certified_block_fetch_dedup_key(&fetch);
+        self.release_block_payload_dedup(&dedup_key);
         match fetch {
             super::message::CertifiedBlockFetch::Request(request) => {
                 self.handle_certified_block_fetch_request(request, sender);

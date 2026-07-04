@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7f5d3c6ce428b08b88509831031ca769f58f50fe26a3120998bb813b42fad680
-source_last_modified: "2026-07-03T11:43:15.745150+00:00"
+source_hash: c6e2b71194d4fabfa2969abdc0615ab94bd1ecda0ae8ebf41333ddb78f25fa90
+source_last_modified: "2026-07-04T05:29:01.456022+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T11:43:15.745150+00:00
+source_mtime: 2026-07-04T05:29:01.456022+00:00
 ---
 
 # Gateway Compliance, Moderation & Transparency
@@ -66,11 +66,13 @@ gateway compliance can be marked ready.
   before required-kind validity is reported.
   Feed-promotion artifacts also bind `gateway_ack_count` and
   `denylist_entry_count` to the unique canonical `gateways[].name` and
-  `denylist_entries[].name` inventories and reject duplicate gateway
-  acknowledgement or denylist-entry entries before promotion can report ready.
+  `denylist_entries[].name` inventories, require reviewed
+  `gateway-compliance-gateway-*` and `gateway-denylist-entry-*` labels without
+  non-production markers, and reject duplicate gateway acknowledgement or
+  denylist-entry entries before promotion can report ready.
   Controller-runtime artifacts also require `controller_instance_id` to match a
-  reviewed lowercase `compliance-controller-*` or
-  `gateway-compliance-controller-*` label without non-production markers, bind
+  reviewed lowercase `gateway-compliance-controller-*` label without
+  non-production markers, bind
   `external_feed_count`, `fetched_feed_count`, `normalized_feed_count`, and
   `signed_feed_count` to the unique canonical `feeds[].name` inventory, require
   coverage for the reviewed `ofac`, `eu-sanctions`, `malware`, `csam-hash`,
@@ -87,17 +89,24 @@ gateway compliance can be marked ready.
   traversal, encoded separators, encoded drive prefixes, and secret-looking
   host/path components cannot enter accepted staged evidence.
   Gateway-reload artifacts also bind `reload_ack_count` to the unique canonical
-  `gateways[].name` inventory and reject duplicate gateway acknowledgement
-  entries before promotion can report ready.
+  `gateways[].name` inventory, require reviewed
+  `gateway-compliance-gateway-*` labels without non-production markers, and
+  reject duplicate gateway acknowledgement entries before promotion can report
+  ready. Gateway-reload `max_reload_latency_ms` must be positive integer-unit
+  evidence before it can satisfy the reload-latency ceiling.
   Enforcement-probe artifacts also bind `denial_reason_count` to the unique
   canonical `denial_reasons_observed` inventory and bind `route_count` and
   `passed_route_count` to the unique canonical `routes[].name` inventory,
   require the reviewed `manifest`, `cid`, and `provider` route probes, and
   reject duplicate or unknown denial-reason and route entries before promotion
-  can report ready.
+  can report ready. Enforcement route `routes[].latency_ms` values must be
+  positive integer-unit evidence before they can satisfy the route-latency
+  ceiling, and every enforcement route response must include a
+  `body_blake3_hex` digest.
   Honey-audit artifacts also bind `honey_probe_count` to the unique canonical
-  `probes[].name` inventory and reject duplicate probe entries before promotion
-  can report ready.
+  `probes[].name` inventory, require reviewed `gateway-honey-probe-*` labels
+  without non-production markers, and reject duplicate probe entries before
+  promotion can report ready.
   Observability artifacts also bind `metric_count` to the unique canonical
   `metrics` inventory, require the reviewed gateway compliance metrics
   inventory, and reject duplicate or unknown metric entries before promotion can
@@ -115,17 +124,21 @@ gateway compliance can be marked ready.
   requires every positive controller or moderation-toggle claim through explicit
   `--verified-claim` inputs, requires reviewed controller
   `--controller-instance-id` labels to match the same
-  `compliance-controller-*` or `gateway-compliance-controller-*` production
-  shape enforced by the gate, requires reviewed controller `--feed` names whose
+  `gateway-compliance-controller-*` production shape enforced by the gate,
+  requires reviewed controller `--feed` names whose
   unique inventory matches `--feed-count` and covers every required controller
   feed, requires reviewed moderation `--toggle` names whose unique inventory
   matches `--toggle-count` and covers every required toggle path, requires
+  fixed gateway, denylist-entry, and honey-probe inventories to use reviewed
+  `gateway-compliance-gateway-*`, `gateway-denylist-entry-*`, and
+  `gateway-honey-probe-*` labels without non-production markers, requires
   reviewed enforcement `--denial-reason` labels covering the required denial
   inventory, requires reviewed observability `--metric` names matching the
   required gateway compliance metrics inventory, rejects duplicate or unknown
   `--verified-claim`, `--feed`, `--toggle`, `--denial-reason`, and `--metric`
   inputs before writing, admits moderation-toggle
-  `--toggle-api-url` values only through the shared URL preflight, forces
+  `--toggle-api-url` values only through the shared URL preflight, requires
+  an explicit `--route-body-blake3-hex` digest for enforcement canaries, forces
   raw-feed, raw-catalog, raw-toggle-payload, raw-probe-response,
   raw-appeal-payload, raw-receipt, and response-body inclusion flags to
   `false`, validates every generated payload through the SFM-4 rollout gate
@@ -241,6 +254,12 @@ does not replace the missing deployed controller daemon, toggle service, live
 honey-audit target, appeal feed, transparency publication hook, or governance
 approval packet; it only standardizes reviewed promotion evidence once those
 boundaries produce deployment facts.
+Gateway compliance payload-safety artifacts must explicitly set
+`raw_feeds_included`, `feed_payloads_included`, `raw_toggle_payloads_included`,
+`raw_catalog_included`, `raw_probe_responses_included`,
+`raw_appeal_payload_included`, `raw_receipts_included`,
+`critical_alerts_firing`, and `response_bodies_included` to `false` before
+promotion can report ready.
 
 ## Enforcement Semantics
 

@@ -208,6 +208,34 @@ def validate_reviewed_inventory(
     return items
 
 
+def validate_optional_reviewed_inventory(
+    values: Iterable[str],
+    *,
+    expected_count: int,
+    option: str,
+    kind: str,
+    count_option: str,
+    errors: list[str],
+    pattern: re.Pattern[str],
+    label_error: str,
+) -> list[str]:
+    """Return reviewed inventory labels, allowing an empty list only for zero counts."""
+
+    items = list(values)
+    if expected_count == 0 and not items:
+        return []
+    return validate_reviewed_inventory(
+        items,
+        expected_count=expected_count,
+        option=option,
+        kind=kind,
+        count_option=count_option,
+        errors=errors,
+        pattern=pattern,
+        label_error=label_error,
+    )
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -268,8 +296,11 @@ def parse_artifacts(values: Sequence[str], errors: list[str]) -> list[dict[str, 
             continue
         seen_artifact_ids.add(artifact_id)
         artifacts.append({"id": artifact_id, "sha256": sha256})
-    if not artifacts:
-        errors.append("--artifact must include at least one artifact")
+    if len(artifacts) < len(REQUIRED_SDK_LANGUAGES):
+        errors.append(
+            "--artifact must include at least one distinct SDK release artifact "
+            "per reviewed language"
+        )
     return artifacts
 
 
@@ -308,6 +339,7 @@ def build_route_records(args: argparse.Namespace) -> list[dict[str, Any]]:
             "name": route,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "latency_ms": args.route_latency_ms,
             "authz_enforced": True,
             "signature_verified": True,
@@ -354,6 +386,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "matched_order_count": args.matched_order_count,
                 "matched_orders": args.matched_orders,
                 "rejected_invalid_order_count": args.rejected_invalid_order_count,
+                "rejected_invalid_orders": args.rejected_invalid_orders,
             }
         )
     elif args.kind == "settlement_service":
@@ -364,6 +397,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "settled_receipt_count": args.settled_receipt_count,
                 "settled_receipts": args.settled_receipts,
                 "settlement_backlog_count": args.settlement_backlog_count,
+                "settlement_backlog_channels": args.settlement_backlog_channels,
             }
         )
     elif args.kind == "api_gateway":
@@ -466,6 +500,16 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             errors.append("--matched-order values must also be present in --accepted-order")
         if args.rejected_invalid_order_count is None:
             args.rejected_invalid_order_count = 0
+        args.rejected_invalid_orders = validate_optional_reviewed_inventory(
+            split_csv_values(args.rejected_invalid_order),
+            expected_count=args.rejected_invalid_order_count,
+            option="--rejected-invalid-order",
+            kind="matcher_service",
+            count_option="--rejected-invalid-order-count",
+            pattern=ORDER_REF_PATTERN,
+            label_error=ORDER_REF_ERROR,
+            errors=errors,
+        )
     elif args.kind == "settlement_service":
         for option, value in (
             ("--open-channel-count", args.open_channel_count),
@@ -495,11 +539,26 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         )
         if args.settlement_backlog_count is None:
             args.settlement_backlog_count = 0
+        args.settlement_backlog_channels = validate_optional_reviewed_inventory(
+            split_csv_values(args.settlement_backlog_channel),
+            expected_count=args.settlement_backlog_count,
+            option="--settlement-backlog-channel",
+            kind="settlement_service",
+            count_option="--settlement-backlog-count",
+            pattern=CHANNEL_REF_PATTERN,
+            label_error=CHANNEL_REF_ERROR,
+            errors=errors,
+        )
     elif args.kind == "api_gateway":
         args.routes = validate_name_set(
             split_csv_values(args.route),
             allowed=REQUIRED_API_ROUTES,
             option="--route",
+            errors=errors,
+        )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
             errors=errors,
         )
     elif args.kind == "event_streams":
@@ -653,14 +712,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--matched-order-count", type=positive_int_arg)
     parser.add_argument("--matched-order", action="append", default=[])
     parser.add_argument("--rejected-invalid-order-count", type=non_negative_int_arg)
+    parser.add_argument("--rejected-invalid-order", action="append", default=[])
     parser.add_argument("--open-channel-count", type=positive_int_arg)
     parser.add_argument("--open-channel", action="append", default=[])
     parser.add_argument("--settled-receipt-count", type=positive_int_arg)
     parser.add_argument("--settled-receipt", action="append", default=[])
     parser.add_argument("--settlement-backlog-count", type=non_negative_int_arg)
+    parser.add_argument("--settlement-backlog-channel", action="append", default=[])
     parser.add_argument("--route", action="append", default=[])
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=200)
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--stream", action="append", default=[])
     parser.add_argument("--stream-lag-ms", type=non_negative_int_arg, default=250)
     parser.add_argument("--language", action="append", default=[])

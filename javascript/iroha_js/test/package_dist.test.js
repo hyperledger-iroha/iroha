@@ -38,6 +38,7 @@ import {
   KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
@@ -58,6 +59,7 @@ import {
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1,
+  KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
   KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
   KAGEMUSHA_RECURSIVE_SPEND_VERIFY_RESULT_WIRE_NAME,
   KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
@@ -221,6 +223,7 @@ import {
   buildKagemushaInstructionArchiveInstruction,
   buildKagemushaInstructionTransaction,
   buildKagemushaRecursiveRedeemTransaction,
+  buildKagemushaRecursiveTopUpTransaction,
   buildConfidentialTransferProofV2,
   buildConfidentialUnshieldProofV2,
   buildConfidentialUnshieldProofV3,
@@ -229,6 +232,7 @@ import {
   buildPrivateEndKaigiTransaction,
   buildPrivateKaigiFeeSpend,
   isKagemushaRecursiveSpendNativeAvailable,
+  isKagemushaRecursiveSpendTopUpNativeAvailable,
   isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable,
   isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable,
   kagemushaProveVerifiedCompactPaymentTokenWithRecords,
@@ -240,6 +244,7 @@ import {
   kagemushaRecursiveSpendCompactPaymentTokenFromBundle,
   kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection,
   kagemushaRecursiveSpendInit,
+  kagemushaRecursiveSpendTopUp,
   kagemushaRecursiveSpendAppend,
   kagemushaRecursiveSpendTransitionProfileInit,
   kagemushaRecursiveSpendTransitionProfileAppend,
@@ -2776,6 +2781,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
@@ -2795,6 +2801,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1",
+    "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME",
@@ -2838,6 +2845,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable",
     "isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable",
     "isKagemushaRecursiveSpendNativeAvailable",
+    "isKagemushaRecursiveSpendTopUpNativeAvailable",
     "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
     "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
     "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
@@ -2847,6 +2855,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "kagemushaRecursiveSpendCompactPaymentTokenFromBundle",
     "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection",
     "kagemushaRecursiveSpendInit",
+    "kagemushaRecursiveSpendTopUp",
     "kagemushaRecursiveSpendAppend",
     "kagemushaRecursiveSpendTransitionProfileInit",
     "kagemushaRecursiveSpendTransitionProfileAppend",
@@ -2855,6 +2864,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "kagemushaRecursiveSpendLineageWitnessAppendResult",
     "kagemushaRecursiveSpendVerify",
     "kagemushaRecursiveSpendRedeem",
+    "buildKagemushaRecursiveTopUpTransaction",
     "buildKagemushaRecursiveSpendableNoteDescriptor",
     "buildKagemushaRecursiveSpendVerifierRecordRef",
     "encodeKagemushaRecursiveSpendInitRequest",
@@ -2864,6 +2874,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "decodeKagemushaRecursiveSpendVerifyResult",
     "decodeKagemushaRecursiveSpendBundle",
     "kagemushaRecursiveSpendInitTyped",
+    "kagemushaRecursiveSpendTopUpTyped",
     "kagemushaRecursiveSpendAppendTyped",
     "kagemushaRecursiveSpendVerifyTyped",
     "kagemushaRecursiveSpendRedeemTyped",
@@ -2999,7 +3010,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       "",
     ),
-    true,
+    false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
@@ -3536,11 +3547,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     true,
   );
-  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""), true);
-  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(null), true);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""), false);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(null), false);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(undefined, 1),
-    true,
+    false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -3548,9 +3559,9 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       undefined,
       1,
     ),
-    true,
+    false,
   );
-  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), true);
+  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), false);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -3798,6 +3809,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "boolean",
   );
   assert.equal(typeof isKagemushaRecursiveSpendNativeAvailable(), "boolean");
+  assert.equal(typeof isKagemushaRecursiveSpendTopUpNativeAvailable(), "boolean");
   assert.equal(
     typeof isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(),
     "boolean",
@@ -3883,6 +3895,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   );
   for (const helper of [
     kagemushaRecursiveSpendInit,
+    kagemushaRecursiveSpendTopUp,
     kagemushaRecursiveSpendAppend,
     kagemushaRecursiveSpendTransitionProfileInit,
     kagemushaRecursiveSpendTransitionProfileAppend,
@@ -3913,11 +3926,18 @@ test("package dist Kagemusha transaction helpers copy mutable buffers before nat
     "RedeemKagemushaRecursive",
     Buffer.from([0x41, 0x42, 0x43]),
   );
+  const topUpInstructionArchive = packageDistKagemushaInstructionArchive(
+    "KagemushaTransfer",
+    Buffer.from([0x44, 0x45, 0x46]),
+  );
   const redeemRequestArchive = Buffer.from([0x51, 0x52, 0x53]);
+  const initRequestArchive = Buffer.from([0x54, 0x55, 0x56]);
   const privateKey = Buffer.alloc(32, 0x61);
   const mutableTransferArchive = new Uint8Array(transferArchive);
   const mutableRedeemInstructionArchive = new Uint8Array(redeemInstructionArchive);
   const mutableRedeemRequestArchive = new Uint8Array(redeemRequestArchive);
+  const mutableTopUpInstructionArchive = new Uint8Array(topUpInstructionArchive);
+  const mutableInitRequestArchive = new Uint8Array(initRequestArchive);
   const mutablePrivateKey = new Uint8Array(privateKey);
   const fakeResult = {
     signed_transaction: Buffer.from([0x71, 0x72]),
@@ -3930,6 +3950,13 @@ test("package dist Kagemusha transaction helpers copy mutable buffers before nat
 
   try {
     globalThis.__IROHA_NATIVE_BINDING__ = {
+      kagemushaRecursiveSpendTopUp: (requestArchive) => {
+        calls.push({
+          type: "topup",
+          requestArchive,
+        });
+        return mutableTopUpInstructionArchive;
+      },
       kagemushaRecursiveSpendRedeem: (requestArchive) => {
         calls.push({
           type: "redeem",
@@ -3975,6 +4002,12 @@ test("package dist Kagemusha transaction helpers copy mutable buffers before nat
       redeemRequestArchive: mutableRedeemRequestArchive,
       privateKey: mutablePrivateKey,
     });
+    buildKagemushaRecursiveTopUpTransaction({
+      chainId: "test-chain",
+      authority,
+      initRequestArchive: mutableInitRequestArchive,
+      privateKey: mutablePrivateKey,
+    });
   } finally {
     if (previous === undefined) {
       delete globalThis.__IROHA_NATIVE_BINDING__;
@@ -3986,6 +4019,8 @@ test("package dist Kagemusha transaction helpers copy mutable buffers before nat
   mutableTransferArchive.fill(0xa5);
   mutableRedeemInstructionArchive.fill(0xa5);
   mutableRedeemRequestArchive.fill(0xa5);
+  mutableTopUpInstructionArchive.fill(0xa5);
+  mutableInitRequestArchive.fill(0xa5);
   mutablePrivateKey.fill(0xa5);
 
   const expectedTransferInstruction = {
@@ -4008,6 +4043,17 @@ test("package dist Kagemusha transaction helpers copy mutable buffers before nat
     },
   );
   assert.deepEqual(Buffer.from(calls[2].secret), privateKey);
+  assert.deepEqual(Buffer.from(calls[3].requestArchive), initRequestArchive);
+  assert.deepEqual(
+    JSON.parse(calls[4].instructions[0]),
+    {
+      KagemushaInstructionArchive: {
+        type: "KagemushaTransfer",
+        bytes_base64: topUpInstructionArchive.toString("base64"),
+      },
+    },
+  );
+  assert.deepEqual(Buffer.from(calls[4].secret), privateKey);
 });
 
 test("package dist Kagemusha transaction helpers reject padded authority before native dispatch", () => {
@@ -5252,6 +5298,7 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         recordBundle,
         pallasOpenEnvelopes,
         currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord,
         previousProofOpenEnvelopes: syntheticPallasOpenEnvelopesArchive(),
       }),
@@ -5268,6 +5315,7 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         recordBundle,
         pallasOpenEnvelopes,
         currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord,
       }),
     kagemushaRequestCodecError(
@@ -5283,6 +5331,7 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         recordBundle,
         pallasOpenEnvelopes,
         currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: {
           verifierKeyId: "danglingPreviousLineageRecord",
           recordBytes: Buffer.from([0]),
@@ -5301,6 +5350,7 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
         recordBundle,
         pallasOpenEnvelopes,
         currentNote,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord,
         lineageKeyArtifacts: appendArtifacts,
       }),
@@ -6147,6 +6197,7 @@ test("package dist Kagemusha recursive spend typed requests reject malformed blo
           recordBundle,
           pallasOpenEnvelopes,
           currentNote,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
           previousLineageVerifierRecord,
           blockHeight,
         }),

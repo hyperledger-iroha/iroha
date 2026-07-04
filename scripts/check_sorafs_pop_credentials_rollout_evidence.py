@@ -52,7 +52,6 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_bool_true,
     require_count_equal,
     require_false,
-    require_false_or_absent,
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
@@ -93,33 +92,45 @@ DEFAULT_MAX_REVOCATION_AGE_SECS = 24 * 60 * 60
 DEFAULT_MAX_SERVICE_LAG_SECS = 15 * 60
 DEFAULT_MAX_VERIFY_LATENCY_MS = 1_000
 HEX64_LEN = 64
-ISSUER_ID_PATTERN = re.compile(r"^issuer-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-ISSUER_ID_ERROR = "issuer_id must match canonical lowercase `issuer-name`"
-CREDENTIAL_LABEL_PATTERN = re.compile(r"^credential-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+ISSUER_ID_PATTERN = re.compile(r"^pop-issuer-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+ISSUER_ID_ERROR = "issuer_id must match canonical lowercase `pop-issuer-*`"
+CREDENTIAL_LABEL_PATTERN = re.compile(r"^pop-credential-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+REVOKED_NONCE_LABEL_PATTERN = re.compile(
+    r"^pop-revoked-nonce-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
 VALID_PROOF_PROBE_LABEL_PATTERN = re.compile(
-    r"^valid-proof-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+    r"^pop-valid-proof-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 INVALID_PROOF_PROBE_LABEL_PATTERN = re.compile(
-    r"^invalid-proof-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+    r"^pop-invalid-proof-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 SORTITION_PROBE_LABEL_PATTERN = re.compile(
-    r"^sortition-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+    r"^pop-sortition-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
 COMMIT_REVEAL_PROBE_LABEL_PATTERN = re.compile(
-    r"^commit-reveal-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+    r"^pop-commit-reveal-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
 )
-CREDENTIAL_LABEL_ERROR = "credentials[].name must match canonical lowercase `credential-name`"
+CREDENTIAL_LABEL_ERROR = (
+    "credentials[].name must match canonical lowercase `pop-credential-*`"
+)
+REVOKED_NONCE_LABEL_ERROR = (
+    "revoked_nonce_refs[].name must match canonical lowercase `pop-revoked-nonce-*`"
+)
 VALID_PROOF_PROBE_LABEL_ERROR = (
-    "probes[].name must match canonical lowercase `valid-proof-name` for accepted probes"
+    "probes[].name must match canonical lowercase `pop-valid-proof-*` "
+    "for accepted probes"
 )
 INVALID_PROOF_PROBE_LABEL_ERROR = (
-    "probes[].name must match canonical lowercase `invalid-proof-name` for rejected probes"
+    "probes[].name must match canonical lowercase `pop-invalid-proof-*` "
+    "for rejected probes"
 )
 SORTITION_PROBE_LABEL_ERROR = (
-    "sortition_probes[].name must match canonical lowercase `sortition-probe-name`"
+    "sortition_probes[].name must match canonical lowercase "
+    "`pop-sortition-probe-name`"
 )
 COMMIT_REVEAL_PROBE_LABEL_ERROR = (
-    "commit_reveal_probes[].name must match canonical lowercase `commit-reveal-probe-name`"
+    "commit_reveal_probes[].name must match canonical lowercase "
+    "`pop-commit-reveal-probe-name`"
 )
 FORBIDDEN_ISSUER_ID_MARKERS = frozenset(
     (
@@ -280,6 +291,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "rollback_detected",
         "revoked_nonces_included",
         "revoked_nonce_count",
+        "revoked_nonce_refs",
     ),
     "enrollment_portal": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -426,6 +438,13 @@ def validate_routes(
             "status_code",
             errors,
             path=f"routes[{index}].status_code",
+        )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
         )
         for field in ("authz_enforced", "signature_verified"):
             require_bool_true(record, field, errors, path=f"routes[{index}].{field}")
@@ -575,6 +594,26 @@ def validate_revocation_registry(
     require_false(payload, "rollback_detected", errors)
     require_false(payload, "revoked_nonces_included", errors)
     require_non_negative_int(payload, "revoked_nonce_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "revoked_nonce_refs",
+        "revoked_nonce_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    refs = payload.get("revoked_nonce_refs")
+    if isinstance(refs, list):
+        for index, item in enumerate(refs):
+            record = require_object(item, f"revoked_nonce_refs[{index}]", errors)
+            name = require_string(record, "name", errors)
+            require_inventory_label(
+                name,
+                path=f"revoked_nonce_refs[{index}].name",
+                pattern=REVOKED_NONCE_LABEL_PATTERN,
+                label_error=REVOKED_NONCE_LABEL_ERROR,
+                errors=errors,
+            )
 
 
 def validate_enrollment_portal(payload: dict[str, Any], errors: list[str]) -> None:

@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e4c2bc2db1c326aa35ede54424c7a43528193393aba8f26dc08b0057a441329f
-source_last_modified: "2026-07-03T13:35:45.145176+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T13:35:45.145176+00:00
+source_hash: 06ca10b4cd6631331ed5c1319c392c6d978f733412466855510925b1c787e816
+source_last_modified: "2026-07-04T14:48:09.235665+00:00"
+translation_last_reviewed: 2026-07-04
+source_mtime: "2026-07-04T06:07:00.822592+00:00"
 ---
 
 # Moderation Appeals & Sortition Panels
@@ -130,7 +130,8 @@ bind:
 - moderation vote choices;
 
 The local runtime and Torii API now bind panel-size/quorum policy,
-commit/reveal windows, and eligible jurors for deterministic node-local tests.
+commit/reveal windows, eligible jurors, and payload-free no-show penalty plans
+for deterministic node-local tests.
 The production service still needs durable state that binds:
 
 - evidence access attestation;
@@ -190,15 +191,16 @@ every current parent-gate evidence kind, requires explicit `--verified-claim`
 input for positive safety claims, complete intake/operator/ballot/decision
 route, viewer role/security/event/export, commit-reveal scenario, publication
 target, outcome, and metric coverage where applicable, shared
-case/roster/tally digest bindings, and threshold-bounded route, event-lag,
-viewer-URL, panel-size, peer-count, validator-count, reviewed peer/validator
-labels. It rejects duplicate or unknown `--verified-claim`, route,
+case/roster/tally digest bindings, explicit `--route-body-blake3-hex` evidence
+for route responses, and threshold-bounded route, event-lag, viewer-URL,
+panel-size, peer-count, validator-count, reviewed peer/validator labels. It rejects duplicate or unknown `--verified-claim`, route,
 viewer-role, viewer-security-control, viewer-event-kind, viewer-export-target,
 scenario, outcome, publication-target, and metric inputs before any canary JSON
 is written. It also requires reviewed appeal-intake `--case` labels whose unique
 inventory matches `--case-count`, reviewed sortition-roster `--roster-juror`
 labels whose unique inventory matches `--panel-size`, reviewed evidence-viewer
-`--viewer-session` labels whose unique inventory matches `--session-count`,
+reviewed `moderation-viewer-session-*` `--viewer-session` labels whose unique
+inventory matches `--session-count` and rejects non-production markers,
 reviewed juror-notification
 `--notification` and `--juror` labels whose unique inventories match the
 notification and juror counts, reviewed commit/reveal `--commit` and `--reveal`
@@ -209,10 +211,19 @@ unique inventory matches `--case-count`, and reviewed end-to-end/governance
 policy-digest facts. It also derives the reviewed evidence-viewer role, security-control,
 access-event-kind, and export-target count fields, commit/reveal scenario
 count, decision outcome count, and transparency publication-target count from the
-corresponding reviewed inventories before checker prevalidation. It forces raw evidence,
+corresponding reviewed inventories before checker prevalidation, and it carries
+integer route-latency and event-lag threshold facts. It forces raw evidence,
 commit/reveal payload, decision, transaction, ledger, response body, signed URL,
 session token, private juror data, and watermark secret inclusion flags to
-`false`, prevalidates the generated artifact with
+`false`. Moderation-panel payload-safety artifacts must explicitly set
+`payloads_included`, `response_bodies_included`,
+`juror_private_data_included`, `raw_evidence_included`,
+`session_tokens_included`, `signed_urls_included`,
+`watermark_secrets_included`, `message_bodies_included`,
+`commit_payloads_included`, `reveal_payloads_included`,
+`raw_decision_included`, `signed_transaction_included`,
+`raw_ledger_included`, and `critical_alerts_firing` to `false` before
+promotion can report ready. It prevalidates the generated artifact with
 `check_sorafs_moderation_panel_rollout_evidence.py`, and writes the JSON
 atomically without following output symlinks. Example argfiles are checked in
 for the appeal-intake anchor, commit/reveal tally, and end-to-end panel
@@ -236,9 +247,10 @@ transparency/reputation handoff, end-to-end panel runs, metrics/alerts, and
 governance approval. It reports `ready` only when every required kind is
 present, every recognized artifact is valid, raw evidence payloads, private
 commit/reveal payloads, message bodies, response bodies, signed transactions,
-secrets, and raw ledgers are absent, route latency and event lag stay under
-configured thresholds, panel size and end-to-end peer count meet the configured
-minimums, governance is bound to `iroha_config`, every case-bound artifact
+secrets, and raw ledgers are absent, route latency and event lag are
+integer-unit evidence under configured thresholds, panel size and end-to-end
+peer count meet the configured minimums, governance is bound to `iroha_config`,
+every case-bound artifact
 shares the valid appeal-intake `case_digest_hex`, every roster-bound artifact
 shares a valid case-bound sortition `case_digest_hex`/`roster_hash_hex` pair,
 and every tally-bound artifact shares a valid roster-bound commit/reveal
@@ -258,7 +270,8 @@ duplicate roster juror entries before promotion can report ready.
 Appeal-intake, operator-workflow, commit/reveal, and decision-publication
 artifacts also bind `route_count` to the unique canonical `routes[].name`
 inventory and reject duplicate or unknown route entries before promotion can
-report ready.
+report ready, and require every route response to carry a lowercase
+`body_blake3_hex` digest.
 Evidence-viewer artifacts also bind `session_count` to the unique canonical
 `sessions[].name` inventory, require `attested_session_count` and
 `logged_session_count` to match the `sessions[].attested` and

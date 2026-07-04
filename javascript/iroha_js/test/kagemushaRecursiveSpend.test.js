@@ -14,6 +14,7 @@ import {
   KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
@@ -35,6 +36,7 @@ import {
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1,
   KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME,
   KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+  KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESS_WIRE_NAME,
   KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_WIRE_NAME,
   KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME,
@@ -68,6 +70,7 @@ import {
   isKagemushaRecursiveSpendLineageProofCircuitId,
   isKagemushaRecursiveSpendLineageAppendOutputCircuitId,
   isKagemushaRecursiveSpendNativeAvailable,
+  isKagemushaRecursiveSpendTopUpNativeAvailable,
   isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId,
   isSupportedKagemushaRecursiveSpendAppendProofTransition,
   isSupportedKagemushaRecursiveSpendPreviousProofCircuitId,
@@ -81,6 +84,7 @@ import {
   kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection,
   kagemushaRecursiveSpendAppend,
   kagemushaRecursiveSpendInit,
+  kagemushaRecursiveSpendTopUp,
   kagemushaRecursiveSpendLineageKeyArtifactsForAppend,
   kagemushaRecursiveSpendLineageKeyArtifactsForInit,
   kagemushaRecursiveSpendLineageAppendBoundary,
@@ -89,6 +93,7 @@ import {
   kagemushaRecursiveSpendRedeem,
   kagemushaRecursiveSpendAppendTyped,
   kagemushaRecursiveSpendInitTyped,
+  kagemushaRecursiveSpendTopUpTyped,
   kagemushaRecursiveSpendRedeemTyped,
   kagemushaRecursiveSpendTransitionProfileAppend,
   kagemushaRecursiveSpendTransitionProfileInit,
@@ -146,7 +151,7 @@ function kagemushaRequestCodecError(kind, field, messagePattern) {
 function completeRecursiveSpendBinding(overrides = {}) {
   return {
     connectNoritoBridgeAbiVersion() {
-      return KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION + 1;
+      return KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
     },
     kagemushaRecursiveSpendInit(request) {
       rejectMalformedProbe("init", request);
@@ -183,6 +188,10 @@ function completeRecursiveSpendBinding(overrides = {}) {
     kagemushaRecursiveSpendRedeem(request) {
       rejectMalformedProbe("redeem", request);
       return kagemushaNoritoFrameWithPayload(0x36);
+    },
+    kagemushaRecursiveSpendTopUp(request) {
+      rejectMalformedProbe("topup", request);
+      return kagemushaNoritoFrameWithPayload(0x3a);
     },
     ...overrides,
   };
@@ -1403,6 +1412,10 @@ test("Kagemusha recursive spend helpers reject empty request archives before nat
     );
     assert.throws(
       () => kagemushaRecursiveSpendAppend(Buffer.alloc(0)),
+      /requestArchive must not be empty/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendTopUp(Buffer.alloc(0)),
       /requestArchive must not be empty/,
     );
     assert.throws(
@@ -3254,6 +3267,7 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
       recordBundle,
       pallasOpenEnvelopes,
       currentNote: note,
+      outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       previousLineageVerifierRecord: verifierRecord,
       blockHeight: 8,
     }),
@@ -3265,7 +3279,14 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
     appendFields[1],
     assertKagemushaArchiveSchema(recordBundle, KAGEMUSHA_RECURSIVE_SPEND_RECORD_BUNDLE_WIRE_NAME),
   );
-  assert.deepEqual(appendFields[4], Buffer.from([0]));
+  const aggregationOutputSelector = Buffer.from(
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+    "utf8",
+  );
+  assert.deepEqual(
+    appendFields[4],
+    Buffer.concat([Buffer.from([aggregationOutputSelector.length]), aggregationOutputSelector]),
+  );
   assert.equal(appendFields[5][0], 1);
   assert.equal(appendFields[6].readBigUInt64LE(0), 0n);
 
@@ -3759,6 +3780,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           recordBundle,
           pallasOpenEnvelopes,
           currentNote: note,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
           previousLineageVerifierRecord: verifierRecord,
           blockHeight,
         }),
@@ -4042,6 +4064,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       }),
     kagemushaRequestCodecError("field", "previousLineageVerifierRecord", null),
   );
@@ -4079,6 +4102,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: recursiveSpendVerifierRecord(),
       }),
     kagemushaRequestCodecError(
@@ -4094,6 +4118,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: {
           verifierKeyId: "danglingPreviousLineageRecord",
           recordBytes: Buffer.from([0]),
@@ -4112,6 +4137,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: recursiveSpendVerifierRecord(),
         previousProofOpenEnvelopes,
       }),
@@ -4128,6 +4154,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: {
           verifierKeyId: "malformedPreviousLineageRecordBeforeOpenings",
           recordBytes: Buffer.from([0]),
@@ -4295,6 +4322,7 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
           recordBundle,
           pallasOpenEnvelopes,
           currentNote: note,
+          outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
           previousLineageVerifierRecord: verifierRecord,
           ...lineageKeyFields,
         }),
@@ -4454,6 +4482,11 @@ test("Kagemusha recursive spend typed helpers delegate encoded requests", () => 
       calls.push(["init", Buffer.from(request)]);
       return kagemushaNoritoFrameWithPayload(0x31);
     },
+    kagemushaRecursiveSpendTopUp(request) {
+      rejectMalformedProbe("topup", request);
+      calls.push(["topup", Buffer.from(request)]);
+      return kagemushaNoritoFrameWithPayload(0x3a);
+    },
     kagemushaRecursiveSpendAppend(request) {
       rejectMalformedProbe("append", request);
       calls.push(["append", Buffer.from(request)]);
@@ -4501,11 +4534,27 @@ test("Kagemusha recursive spend typed helpers delegate encoded requests", () => 
     );
 
     assert.ok(
+      kagemushaRecursiveSpendTopUpTyped({
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote: note,
+        lineageVerifierKey: initLineageVerifierKey,
+        lineageProvingKeyArchive: initLineageProvingKeyArchive,
+      }).subarray(0, 4).equals(Buffer.from("NRT0", "ascii")),
+    );
+    assert.equal(calls.at(-1)[0], "topup");
+    assertKagemushaArchiveSchema(
+      calls.at(-1)[1],
+      KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+    );
+
+    assert.ok(
       kagemushaRecursiveSpendAppendTyped({
         previousBundle: sharedRecursiveSpendArchive("init_bundle"),
         recordBundle,
         pallasOpenEnvelopes,
         currentNote: note,
+        outputProofCircuitId: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         previousLineageVerifierRecord: verifierRecord,
       }).subarray(0, 4).equals(Buffer.from("NRT0", "ascii")),
     );
@@ -5541,6 +5590,11 @@ test("Kagemusha Pallas open-envelope JS builders probe availability and validate
 
 test("Kagemusha recursive spend exports stable proof circuit ids", () => {
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 6);
+  assert.equal(KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION, 15);
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+    KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
+  );
   assert.equal(
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     "kagemusha-recursive-aggregation-v1",
@@ -6274,7 +6328,7 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
       "",
     ),
-    true,
+    false,
   );
   assert.equal(
     isSupportedKagemushaRecursiveSpendAppendProofTransition(
@@ -6425,11 +6479,11 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     ),
     true,
   );
-  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""), true);
-  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(null), true);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(""), false);
+  assert.equal(isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId(null), false);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(undefined, 1),
-    true,
+    false,
   );
   assert.equal(
     canSelectKagemushaRecursiveSpendAppendOutputProofCircuitId(
@@ -6437,9 +6491,9 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
       undefined,
       1,
     ),
-    true,
+    false,
   );
-  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), true);
+  assert.equal(canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(null, 1), false);
   assert.equal(
     canProveKagemushaRecursiveSpendAppendOutputProofCircuitId(
       KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
@@ -6805,6 +6859,63 @@ test("Kagemusha recursive spend helpers probe native availability and return Buf
     ["verify", verifyRequest],
     ["redeem", redeemRequest],
   ]);
+});
+
+test("Kagemusha recursive spend top-up availability requires ABI 15 and native symbol", () => {
+  const request = kagemushaInputArchive(0x6d);
+  const transferArchive = kagemushaNoritoFrameWithPayload(0x3a);
+  const calls = [];
+
+  withNativeBinding(
+    completeRecursiveSpendBinding({
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION - 1;
+      },
+    }),
+    () => {
+      assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true);
+      assert.equal(isKagemushaRecursiveSpendTopUpNativeAvailable(), false);
+      assert.throws(
+        () => kagemushaRecursiveSpendTopUp(request),
+        /Kagemusha recursive spend top-up helper 'kagemushaRecursiveSpendTopUp' is unavailable/u,
+      );
+    },
+  );
+
+  const missingSymbol = completeRecursiveSpendBinding({
+    connectNoritoBridgeAbiVersion() {
+      return KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+    },
+  });
+  delete missingSymbol.kagemushaRecursiveSpendTopUp;
+  withNativeBinding(missingSymbol, () => {
+    assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true);
+    assert.equal(isKagemushaRecursiveSpendTopUpNativeAvailable(), false);
+    assert.throws(
+      () => kagemushaRecursiveSpendTopUp(request),
+      /Kagemusha recursive spend top-up helper 'kagemushaRecursiveSpendTopUp' is unavailable/u,
+    );
+  });
+
+  withNativeBinding(
+    completeRecursiveSpendBinding({
+      connectNoritoBridgeAbiVersion() {
+        return KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
+      },
+      kagemushaRecursiveSpendTopUp(archive) {
+        rejectMalformedProbe("topup", archive);
+        calls.push(Buffer.from(archive));
+        return transferArchive;
+      },
+    }),
+    () => {
+      assert.equal(isKagemushaRecursiveSpendNativeAvailable(), true);
+      assert.equal(isKagemushaRecursiveSpendTopUpNativeAvailable(), true);
+      assert.deepEqual(kagemushaRecursiveSpendTopUp(request), transferArchive);
+    },
+  );
+
+  assert.deepEqual(calls, [request]);
 });
 
 test("Kagemusha recursive spend lineage helpers pass owned archive copies to native", () => {

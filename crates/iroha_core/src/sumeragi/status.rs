@@ -287,6 +287,7 @@ static LOCKED_QC_VIEW: AtomicU64 = AtomicU64::new(0);
 // Optional subject block hash for the current HighestQC (best-effort).
 static HIGHEST_QC_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 static LOCKED_QC_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
+static CANONICAL_PENDING_FINALITY_HASH: OnceLock<Mutex<Option<UntypedHash>>> = OnceLock::new();
 
 static RBC_ABORT_TOTAL: AtomicU64 = AtomicU64::new(0);
 static RBC_ABORT_LAST_HEIGHT: AtomicU64 = AtomicU64::new(0);
@@ -1767,6 +1768,21 @@ fn set_locked_qc_hash(hash: Option<HashOf<BlockHeader>>) {
 fn locked_qc_hash() -> Option<HashOf<BlockHeader>> {
     let slot = LOCKED_QC_HASH.get_or_init(|| Mutex::new(None));
     lock_operator_status_slot(slot, "locked QC hash")
+        .as_ref()
+        .cloned()
+        .map(HashOf::<BlockHeader>::from_untyped_unchecked)
+}
+
+/// Publish the canonical frontier block that is waiting for final commit evidence.
+pub fn set_canonical_pending_finality(hash: Option<HashOf<BlockHeader>>) {
+    let slot = CANONICAL_PENDING_FINALITY_HASH.get_or_init(|| Mutex::new(None));
+    *lock_operator_status_slot(slot, "canonical pending finality hash") =
+        hash.map(UntypedHash::from);
+}
+
+fn canonical_pending_finality_hash() -> Option<HashOf<BlockHeader>> {
+    let slot = CANONICAL_PENDING_FINALITY_HASH.get_or_init(|| Mutex::new(None));
+    lock_operator_status_slot(slot, "canonical pending finality hash")
         .as_ref()
         .cloned()
         .map(HashOf::<BlockHeader>::from_untyped_unchecked)
@@ -3931,6 +3947,8 @@ pub struct StatusSnapshot {
     pub highest_qc_subject: Option<HashOf<BlockHeader>>,
     /// Optional `LockedQC` subject block hash (best-effort).
     pub locked_qc_subject: Option<HashOf<BlockHeader>>,
+    /// Frontier block hash currently waiting for final commit evidence (best-effort).
+    pub canonical_pending_finality: Option<HashOf<BlockHeader>>,
     /// Latest commit certificate summary (best-effort).
     pub commit_qc: QcSnapshot,
     /// Latest commit quorum signature tally (best-effort).
@@ -4374,6 +4392,7 @@ pub fn record_commit_qc(cert: Qc) {
     #[cfg(test)]
     let _guard = commit_history_test_guard();
     clear_active_view_change_cause_after_commit();
+    set_canonical_pending_finality(None);
     promote_observable_qc_from_commit(&cert);
     let mut guard =
         lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
@@ -4985,6 +5004,7 @@ pub fn snapshot() -> StatusSnapshot {
         locked_qc_view,
         highest_qc_subject,
         locked_qc_subject,
+        canonical_pending_finality: canonical_pending_finality_hash(),
         commit_qc,
         commit_quorum: commit_quorum_snapshot(),
         settlement: settlement_snapshot(),
@@ -10034,6 +10054,25 @@ mod tests {
         assert_eq!(snapshot.validator_set_hash, Some(second.validator_set_hash));
         assert_eq!(snapshot.validator_set_len, 2);
         assert_eq!(snapshot.signatures_total, 0);
+    }
+
+    #[test]
+    fn canonical_pending_finality_snapshot_tracks_publication_and_commit_clear() {
+        let _guard = super::commit_history_test_guard();
+        super::reset_commit_certs_for_tests();
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xCF; UntypedHash::LENGTH],
+        ));
+        super::set_canonical_pending_finality(None);
+
+        super::set_canonical_pending_finality(Some(block_hash));
+        assert_eq!(
+            super::snapshot().canonical_pending_finality,
+            Some(block_hash)
+        );
+
+        super::record_commit_qc(commit_qc_fixture(7, 1, 0xA7));
+        assert_eq!(super::snapshot().canonical_pending_finality, None);
     }
 
     #[test]

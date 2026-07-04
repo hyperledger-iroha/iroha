@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_hedging_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c74e7dc6bd61508113a51be942b130892452a36fc24068538e55aea25f6101b2
-source_last_modified: "2026-07-03T13:01:52.121236+00:00"
+source_hash: 4e04661f0ef614c52908aab6714a93a6ac618c4abd27b78ddb32c798f65aee94
+source_last_modified: "2026-07-04T06:21:28.261425+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T13:01:52.121236+00:00
+source_mtime: "2026-07-04T06:21:28.261425+00:00"
 ---
 
 # SoraFS XOR Hedging & Billing
@@ -39,13 +39,18 @@ before reporting `ready`. Feed-collector and reference-price artifacts also
 bind `feed_count` to the unique canonical `feeds[].name` inventory, require
 `accepted_feed_count` to equal `feed_count`, require coverage for the reviewed
 `feed-primary`, `feed-secondary`, and `feed-tertiary` price feeds, and reject
-duplicate or unknown feed entries before promotion can report ready. Billing-cycle evidence must bind each cycle
+duplicate or unknown feed entries before promotion can report ready.
+Feed-collector `feed_lag_seconds` and reference-price `divergence_bps` and
+`decision_lag_seconds` must be non-negative integer-unit evidence before they
+can satisfy rollout ceilings; `divergence_bps` and the operator
+`--max-divergence-bps` threshold are also capped at `10000`, so impossible
+basis-point rates cannot satisfy promotion. Billing-cycle evidence must bind each cycle
 to a valid reference-price decision id from the same rollout bundle and carry only
 payload-free line-item roots, statement-bundle digests,
 reconciliation digests, and per-statement digest arrays whose length matches
 the signed statement count, plus `policy_digest_hex` for the billing policy
 that priced the staged cycle. Billing-cycle artifacts also require `cycle_id`
-to match a reviewed lowercase `cycle-*` label without non-production markers,
+to match a reviewed lowercase `billing-cycle-*` label without non-production markers,
 bind `statement_count` to the unique canonical `statements[].name` inventory
 using reviewed `billing-statement-*` labels without non-production markers,
 and bind `line_item_count` to the unique canonical `line_items[].name`
@@ -59,15 +64,23 @@ staged billing cycle in the same rollout bundle, and governance approval
 `policy_digest_hex` must match a valid billing-cycle policy digest.
 Statement-publication artifacts also bind `route_count` to the unique canonical
 `routes[].name` inventory and reject duplicate or unknown route entries before promotion
-    can report ready. Reconciliation artifacts also bind `source_count` to the
+can report ready, require every route response to carry a lowercase
+`body_blake3_hex` digest, and bind `acknowledgement_probe_count` to the
+unique canonical `acknowledgement_probes` inventory using reviewed
+`billing-ack-probe-*` labels without non-production markers. Reconciliation
+artifacts also bind `source_count` to the
     unique canonical `sources[].name` inventory and `line_item_count` to the
     unique canonical `line_items[].name` inventory using reviewed
     `billing-line-item-*` labels without non-production markers, rejecting
     duplicate or unknown source entries and duplicate line-item entries before
     promotion can report ready. Native-bridge release
     artifacts also bind
-`artifact_count` to the unique canonical `artifacts[].id` inventory and reject
-duplicate artifact entries before promotion can report ready. Metrics/alert
+`artifact_count` to the unique canonical `artifacts[].id` inventory, require
+reviewed `hedging-native-artifact-*` labels without non-production markers, and
+reject duplicate artifact entries before promotion can report ready. They also
+require at least two distinct reviewed native artifacts before promotion can
+report ready, matching the Swift XCFramework plus JNI bridge release evidence
+shape used by the checked-in canary fixtures. Metrics/alert
 artifacts also bind `metric_count` to the unique canonical `metrics` inventory
 and reject duplicate or unknown metric entries before promotion can report ready.
 The summary exports the sorted reviewed `metrics` inventory plus
@@ -102,12 +115,15 @@ requires every positive proof claim and required
 feed/line-item/route/source/metric coverage explicitly, rejects duplicate or
 unknown `--verified-claim`, feed, route, source, and metric closed-set inputs
 before writing, forces raw feed, statement, financial-record, response-body, and
-debug-artifact inclusion flags to `false`, rejects duplicate `--artifact` ids
-for native-bridge release canaries, emits `metric_count` matching the canonical
+debug-artifact inclusion flags to `false`, rejects malformed,
+non-production, or duplicate `--artifact` ids for native-bridge release
+canaries, rejects native-bridge release canaries with fewer than two distinct
+artifact ids, requires statement-publication canaries to take explicit
+`--route-body-blake3-hex` response digest evidence, emits `metric_count` matching the canonical
 `metrics` inventory, rejects ungoverned hedge-execution enablement, validates
 each generated artifact through the hedging/billing rollout gate, and writes
 atomically without following output symlinks. Billing-cycle canaries require
-reviewed `--cycle-id` labels to match the same `cycle-*` production shape
+reviewed `--cycle-id` labels to match the same `billing-cycle-*` production shape
 enforced by the gate. Billing-cycle and governance-approval canaries require
 reviewed `--policy-digest-hex` input, and billing-cycle canaries require
 reviewed `--statement` labels in the `billing-statement-*` family whose unique
@@ -284,11 +300,18 @@ Required before rollout:
   reviewed `feeds[].name` inventory, require `accepted_feed_count` to match,
   and require the reviewed `feed-primary`, `feed-secondary`, and `feed-tertiary`
   price feeds while rejecting unknown feed names.
+  Hedging/billing payload-safety artifacts must explicitly set
+  `payload_bytes_included`, `response_bodies_included`, `degraded`,
+  `statement_bodies_included`, `raw_financial_records_included`,
+  `critical_alerts_firing`, and `debug_artifacts` to `false` before promotion
+  can report ready.
   Statement-publication canaries bind `route_count` to reviewed
-  `routes[].name` inventory and reject unknown route names.
+  `routes[].name` inventory, reject unknown route names, and require each
+  generated route record to carry the reviewed `--route-body-blake3-hex`
+  response digest.
   Statement-publication canaries bind `acknowledgement_probe_count` to reviewed
-  `acknowledgement_probes` inventory and reject duplicate acknowledgement
-  probes.
+  `billing-ack-probe-*` `acknowledgement_probes` inventory and reject duplicate
+  or non-production acknowledgement probes.
   Reconciliation canaries bind both `source_count` to reviewed `sources[].name`
   inventory and `line_item_count` to reviewed `line_items[].name` inventory
   using `billing-line-item-*` labels without non-production markers, rejecting
@@ -302,8 +325,10 @@ Required before rollout:
   `scripts/build_sorafs_hedging_canary.py
   @scripts/examples/sorafs_hedging_reference_price_canary.args.example` and
   `scripts/build_sorafs_hedging_canary.py
-  @scripts/examples/sorafs_billing_cycle_canary.args.example` before passing the
-  generated evidence files to the rollout gate; production promotion still
+  @scripts/examples/sorafs_billing_cycle_canary.args.example` and
+  `scripts/build_sorafs_hedging_canary.py
+  @scripts/examples/sorafs_statement_publication_canary.args.example` before
+  passing the generated evidence files to the rollout gate; production promotion still
   requires at least two distinct billing-cycle artifacts.
 
 ## Rollout Status

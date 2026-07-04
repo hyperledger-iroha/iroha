@@ -45,6 +45,7 @@ def route(name: str) -> dict:
         "name": name,
         "passed": True,
         "status_code": 200,
+        "body_blake3_hex": DIGEST_2,
         "authz_enforced": True,
         "signature_verified": True,
         "latency_ms": 40,
@@ -513,6 +514,136 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert len(payload["valid_e2e_runs"]) == 1
 
 
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        ("appeal_intake", "appeal-intake.json", appeal_intake, "payloads_included"),
+        (
+            "appeal_intake",
+            "appeal-intake.json",
+            appeal_intake,
+            "response_bodies_included",
+        ),
+        (
+            "sortition_roster",
+            "sortition-roster.json",
+            sortition_roster,
+            "juror_private_data_included",
+        ),
+        (
+            "evidence_viewer",
+            "evidence-viewer.json",
+            evidence_viewer,
+            "raw_evidence_included",
+        ),
+        (
+            "evidence_viewer",
+            "evidence-viewer.json",
+            evidence_viewer,
+            "session_tokens_included",
+        ),
+        (
+            "evidence_viewer",
+            "evidence-viewer.json",
+            evidence_viewer,
+            "signed_urls_included",
+        ),
+        (
+            "evidence_viewer",
+            "evidence-viewer.json",
+            evidence_viewer,
+            "watermark_secrets_included",
+        ),
+        (
+            "evidence_viewer",
+            "evidence-viewer.json",
+            evidence_viewer,
+            "response_bodies_included",
+        ),
+        (
+            "operator_workflow",
+            "operator-workflow.json",
+            operator_workflow,
+            "response_bodies_included",
+        ),
+        (
+            "juror_notifications",
+            "juror-notifications.json",
+            juror_notifications,
+            "message_bodies_included",
+        ),
+        (
+            "juror_notifications",
+            "juror-notifications.json",
+            juror_notifications,
+            "response_bodies_included",
+        ),
+        (
+            "commit_reveal",
+            "commit-reveal.json",
+            commit_reveal,
+            "commit_payloads_included",
+        ),
+        (
+            "commit_reveal",
+            "commit-reveal.json",
+            commit_reveal,
+            "reveal_payloads_included",
+        ),
+        (
+            "decision_publication",
+            "decision-publication.json",
+            decision_publication,
+            "raw_decision_included",
+        ),
+        (
+            "settlement_integration",
+            "settlement-integration.json",
+            settlement_integration,
+            "signed_transaction_included",
+        ),
+        (
+            "settlement_integration",
+            "settlement-integration.json",
+            settlement_integration,
+            "raw_ledger_included",
+        ),
+        (
+            "transparency_reputation",
+            "transparency-reputation.json",
+            transparency_reputation,
+            "payloads_included",
+        ),
+        ("e2e_panel", "e2e-panel.json", e2e_panel, "raw_evidence_included"),
+        (
+            "metrics_alerts",
+            "metrics-alerts.json",
+            metrics_alerts,
+            "critical_alerts_firing",
+        ),
+        (
+            "metrics_alerts",
+            "metrics-alerts.json",
+            metrics_alerts,
+            "response_bodies_included",
+        ),
+    )
+    for kind, filename, factory, field in cases:
+        root = tmp_path / f"{kind}-{field}"
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload[field]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be false" in artifact["errors"]
+
+
 def test_deployment_context_is_required(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = appeal_intake()
@@ -727,6 +858,29 @@ def test_routes_must_not_include_unknown_values_for_route_artifacts(
         assert "routes must not include unknown values" in artifact["errors"]
 
 
+def test_route_body_hash_is_required_for_route_artifacts(tmp_path: Path) -> None:
+    cases = (
+        ("appeal_intake", "appeal-intake.json", appeal_intake),
+        ("operator_workflow", "operator-workflow.json", operator_workflow),
+        ("commit_reveal", "commit-reveal.json", commit_reveal),
+        ("decision_publication", "decision-publication.json", decision_publication),
+    )
+    for kind, filename, factory in cases:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload["routes"][0]["body_blake3_hex"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert "routes[0].body_blake3_hex must be a non-empty string" in artifact["errors"]
+
+
 def test_appeal_intake_case_count_must_match_unique_cases(
     tmp_path: Path,
 ) -> None:
@@ -773,7 +927,7 @@ def test_appeal_intake_cases_must_use_reviewed_labels(tmp_path: Path) -> None:
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["appeal_intake"]["artifacts"][0]
     assert (
-        "cases[].name must match canonical lowercase `moderation-appeal-case-name`"
+        "cases[].name must match canonical lowercase `moderation-appeal-case-*`"
         in artifact["errors"]
     )
 
@@ -832,6 +986,50 @@ def test_payload_leakage_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "commit-reveal.json", payload)
 
     assert run_gate(tmp_path) == 1
+
+
+def test_route_latency_must_be_integer(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_intake()
+    payload["routes"][0]["latency_ms"] = 12.5
+    write_json(tmp_path / "appeal-intake.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["appeal_intake"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "routes[0].latency_ms must be a non-negative integer"
+        in artifact["errors"]
+    )
+
+
+def test_route_latency_is_required_for_route_artifacts(tmp_path: Path) -> None:
+    cases = (
+        ("appeal_intake", "appeal-intake.json", appeal_intake),
+        ("operator_workflow", "operator-workflow.json", operator_workflow),
+        ("commit_reveal", "commit-reveal.json", commit_reveal),
+        ("decision_publication", "decision-publication.json", decision_publication),
+    )
+    for kind, filename, factory in cases:
+        root = tmp_path / kind
+        root.mkdir()
+        write_complete_evidence(root)
+        payload = factory()
+        del payload["routes"][0]["latency_ms"]
+        write_json(root / filename, payload)
+        summary = root / "summary.json"
+
+        assert run_gate(root, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"][kind]["artifacts"][0]
+        assert (
+            "routes[0].latency_ms must be a non-negative integer"
+            in artifact["errors"]
+        )
 
 
 def test_evidence_viewer_rejects_long_lived_urls(tmp_path: Path) -> None:
@@ -914,7 +1112,7 @@ def test_evidence_viewer_sessions_must_use_reviewed_labels(tmp_path: Path) -> No
     artifact = result["required"]["evidence_viewer"]["artifacts"][0]
     assert (
         "sessions[].name must match canonical lowercase "
-        "`moderation-viewer-session-name`"
+        "`moderation-viewer-session-*`"
     ) in artifact["errors"]
 
 
@@ -1130,6 +1328,40 @@ def test_evidence_viewer_rejects_signed_url_leakage(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_evidence_viewer_rejects_token_alias_leakage_without_leaking(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = evidence_viewer()
+    aliases = {
+        "idToken": "runtime-id-token",
+        "jwt": "runtime-jwt",
+        "oauthToken": "runtime-oauth-token",
+        "refreshToken": "runtime-refresh-token",
+        "setCookie": "runtime-cookie",
+    }
+    payload["runtime_context"] = aliases
+    write_json(tmp_path / "evidence-viewer.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    captured = capsys.readouterr()
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["evidence_viewer"]["artifacts"][0]
+    result_text = json.dumps(result, sort_keys=True)
+    assert (
+        artifact["errors"].count(
+            "runtime_context.<sensitive-key> must not be present in rollout evidence"
+        )
+        == len(aliases)
+    )
+    for unsafe in (*aliases.keys(), *aliases.values()):
+        assert unsafe not in captured.err
+        assert unsafe not in result_text
+
+
 def test_juror_notification_count_must_match_unique_notifications(
     tmp_path: Path,
 ) -> None:
@@ -1181,7 +1413,7 @@ def test_juror_notifications_must_use_reviewed_labels(tmp_path: Path) -> None:
     artifact = result["required"]["juror_notifications"]["artifacts"][0]
     assert (
         "notifications[].name must match canonical lowercase "
-        "`moderation-notification-name`"
+        "`moderation-notification-*`"
     ) in artifact["errors"]
 
 
@@ -1277,7 +1509,7 @@ def test_jurors_must_use_reviewed_moderation_labels(tmp_path: Path) -> None:
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["juror_notifications"]["artifacts"][0]
     assert (
-        "jurors[].name must match canonical lowercase `moderation-juror-name`"
+        "jurors[].name must match canonical lowercase `moderation-juror-*`"
         in artifact["errors"]
     )
 
@@ -1350,7 +1582,7 @@ def test_sortition_roster_jurors_must_use_reviewed_labels(tmp_path: Path) -> Non
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["sortition_roster"]["artifacts"][0]
     assert (
-        "jurors[].name must match canonical lowercase `moderation-roster-juror-name`"
+        "jurors[].name must match canonical lowercase `moderation-roster-juror-*`"
         in artifact["errors"]
     )
 
@@ -1603,6 +1835,22 @@ def test_high_event_lag_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_event_lag_must_be_integer(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(tmp_path / "commit-reveal.json", commit_reveal(lag=12.5))
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["commit_reveal"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "max_event_lag_seconds must be a non-negative integer"
+        in artifact["errors"]
+    )
+
+
 def test_commit_reveal_requires_mismatched_reveal_rejection(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = commit_reveal()
@@ -1665,7 +1913,7 @@ def test_commit_reveal_commits_must_use_reviewed_labels(tmp_path: Path) -> None:
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["commit_reveal"]["artifacts"][0]
     assert (
-        "commits[].name must match canonical lowercase `moderation-commit-name`"
+        "commits[].name must match canonical lowercase `moderation-commit-*`"
         in artifact["errors"]
     )
 
@@ -1763,7 +2011,7 @@ def test_commit_reveal_reveals_must_use_reviewed_labels(tmp_path: Path) -> None:
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["commit_reveal"]["artifacts"][0]
     assert (
-        "reveals[].name must match canonical lowercase `moderation-reveal-name`"
+        "reveals[].name must match canonical lowercase `moderation-reveal-*`"
         in artifact["errors"]
     )
 
@@ -1856,7 +2104,7 @@ def test_settlement_integration_settlements_must_use_reviewed_labels(
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["settlement_integration"]["artifacts"][0]
     assert (
-        "settlements[].name must match canonical lowercase `moderation-settlement-name`"
+        "settlements[].name must match canonical lowercase `moderation-settlement-*`"
         in artifact["errors"]
     )
 
@@ -1959,7 +2207,7 @@ def test_e2e_peers_must_use_reviewed_labels(tmp_path: Path) -> None:
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["e2e_panel"]["artifacts"][0]
     assert (
-        "peers[].name must match canonical lowercase `moderation-peer-name`"
+        "peers[].name must match canonical lowercase `moderation-peer-*`"
         in artifact["errors"]
     )
 
@@ -2007,7 +2255,7 @@ def test_e2e_validators_must_use_reviewed_labels(tmp_path: Path) -> None:
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["e2e_panel"]["artifacts"][0]
     assert (
-        "validators[].name must match canonical lowercase `moderation-validator-name`"
+        "validators[].name must match canonical lowercase `moderation-validator-*`"
         in artifact["errors"]
     )
 
@@ -2055,7 +2303,7 @@ def test_e2e_cases_must_use_reviewed_labels(tmp_path: Path) -> None:
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["e2e_panel"]["artifacts"][0]
     assert (
-        "cases[].name must match canonical lowercase `moderation-case-name`"
+        "cases[].name must match canonical lowercase `moderation-case-*`"
         in artifact["errors"]
     )
 

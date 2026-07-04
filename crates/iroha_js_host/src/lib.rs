@@ -171,8 +171,8 @@ use iroha_primitives::{
     },
 };
 use iroha_sccp::{
-    NexusSccpMessageProofV1, SccpSourceAdapterEngineDeploymentV1, SccpSourceConsensusProofV1,
-    SccpSourceVerifierMaterialV1,
+    NexusSccpMessageProofV1, SCCP_DOMAIN_SORA, SCCP_DOMAIN_TON,
+    SccpSourceAdapterEngineDeploymentV1, SccpSourceConsensusProofV1, SccpSourceVerifierMaterialV1,
     build_sccp_source_adapter_verification_proof_with_material_and_deployment,
     build_sccp_source_verifier_evidence_with_material_and_deployment, canonical_sccp_payload_bytes,
     decode_sccp_source_chain_proof_envelope, decode_sccp_source_consensus_proof,
@@ -185,7 +185,12 @@ use iroha_sccp::{
     sccp_source_chain_proof_adapter_verifier_commitment, sccp_source_chain_proof_envelope_hash,
     sccp_source_chain_proof_matches_adapter_deployment,
     sccp_source_chain_proof_source_event_binds_to_bundle_with_material,
-    sccp_source_verifier_evidence_hash, taira_bsc_xor_transfer_source_event_digest_with_material,
+    sccp_source_verifier_evidence_hash, sccp_ton_full_light_client_gate_hash_from_deployment_v1,
+    taira_bsc_xor_transfer_source_event_digest_with_material,
+    tests::{
+        sample_source_chain_proof_envelope_with_material_and_deployment,
+        sample_ton_validator_set_hash,
+    },
     verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment,
     verify_message_bundle_structure_with_source_verifier_material_and_deployment,
     verify_sccp_payload_structure,
@@ -748,6 +753,26 @@ fn hex_0x_lower_opt(bytes: Option<[u8; 32]>) -> String {
         .unwrap_or_else(|| "none".to_owned())
 }
 
+/// Return the deterministic TON fixture validator-set hash used by SCCP source proof fixtures.
+#[napi(js_name = "sccpTonFixtureValidatorSetHash")]
+pub fn sccp_ton_fixture_validator_set_hash() -> String {
+    hex_0x_lower(&sample_ton_validator_set_hash())
+}
+
+/// Derive the TON full light-client gate hash for source verifier material and deployment JSON.
+#[napi(js_name = "sccpTonFullLightClientGateHash")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn sccp_ton_full_light_client_gate_hash(
+    source_material_json: String,
+    source_deployment_json: String,
+) -> napi::Result<String> {
+    let material = parse_sccp_source_verifier_material_json(&source_material_json)?;
+    let deployment = parse_sccp_source_adapter_deployment_json(&source_deployment_json)?;
+    sccp_ton_full_light_client_gate_hash_from_deployment_v1(&material, &deployment)
+        .map(|hash| hex_0x_lower(&hash))
+        .ok_or_else(|| norito_to_napi("derive TON full light-client gate hash"))
+}
+
 /// Rebuild a BSC-source SCCP message bundle with deployment-bound source proof material.
 #[napi(js_name = "sccpRebuildMessageBundleSourceProofWithDeployment")]
 #[allow(clippy::needless_pass_by_value)]
@@ -974,6 +999,260 @@ pub fn sccp_rebuild_message_bundle_source_proof_with_deployment(
     root.insert(
         "schema".to_owned(),
         Value::String("sccp-message-bundle-source-deployment-binding/v1".to_owned()),
+    );
+    root.insert("messageBundle".to_owned(), message_bundle_value.clone());
+    root.insert("message_bundle".to_owned(), message_bundle_value);
+    root.insert(
+        "sourceProofHex".to_owned(),
+        Value::String(hex_0x_lower(&bundle.finality_proof)),
+    );
+    root.insert(
+        "source_proof_hex".to_owned(),
+        Value::String(hex_0x_lower(&bundle.finality_proof)),
+    );
+    root.insert(
+        "sourceProofHash".to_owned(),
+        Value::String(hex_0x_lower(&source_proof_hash)),
+    );
+    root.insert(
+        "source_proof_hash".to_owned(),
+        Value::String(hex_0x_lower(&source_proof_hash)),
+    );
+    root.insert(
+        "sourceAdapterDeploymentHash".to_owned(),
+        Value::String(hex_0x_lower(&source_deployment_hash)),
+    );
+    root.insert(
+        "source_adapter_deployment_hash".to_owned(),
+        Value::String(hex_0x_lower(&source_deployment_hash)),
+    );
+    root.insert(
+        "sourceAdapterDeploymentReceiptHash".to_owned(),
+        Value::String(hex_0x_lower(&deployment.deployment_receipt_hash)),
+    );
+    root.insert(
+        "source_adapter_deployment_receipt_hash".to_owned(),
+        Value::String(hex_0x_lower(&deployment.deployment_receipt_hash)),
+    );
+    root.insert(
+        "sourceVerifierEvidenceHash".to_owned(),
+        Value::String(hex_0x_lower(&verifier_evidence_hash)),
+    );
+    root.insert(
+        "source_verifier_evidence_hash".to_owned(),
+        Value::String(hex_0x_lower(&verifier_evidence_hash)),
+    );
+    json::to_json(&Value::Object(root)).map_err(norito_to_napi)
+}
+
+/// Build a TON-source SCCP message bundle with deployment-bound source proof material.
+#[napi(js_name = "sccpBuildTonMessageBundleSourceProofWithDeployment")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn sccp_build_ton_message_bundle_source_proof_with_deployment(
+    message_bundle_json: String,
+    source_material_json: String,
+    source_deployment_json: String,
+) -> napi::Result<String> {
+    let mut bundle = parse_sccp_message_bundle_json(&message_bundle_json)?;
+    let material = parse_sccp_source_verifier_material_json(&source_material_json)?;
+    let deployment = parse_sccp_source_adapter_deployment_json(&source_deployment_json)?;
+    let source_domain = sccp_message_source_domain(&bundle.payload);
+    let target_domain = sccp_message_target_domain(&bundle.payload);
+    if source_domain != SCCP_DOMAIN_TON
+        || target_domain != SCCP_DOMAIN_SORA
+        || material.source_domain != SCCP_DOMAIN_TON
+        || deployment.source_domain != SCCP_DOMAIN_TON
+        || deployment.target_domain != SCCP_DOMAIN_SORA
+        || material.source_chain != "ton"
+        || deployment.source_chain != "ton"
+    {
+        return Err(norito_to_napi(format!(
+            "TON SCCP source proof builder received non-TON deployment material: \
+             bundle_source_domain={} bundle_target_domain={} material_source_domain={} \
+             deployment_source_domain={} deployment_target_domain={} material_chain={} deployment_chain={}",
+            source_domain,
+            target_domain,
+            material.source_domain,
+            deployment.source_domain,
+            deployment.target_domain,
+            material.source_chain,
+            deployment.source_chain,
+        )));
+    }
+
+    let expected_message_id = sccp_message_id(&bundle.payload);
+    let payload_bytes = canonical_sccp_payload_bytes(&bundle.payload);
+    let expected_payload_hash = payload_hash(&payload_bytes);
+    let expected_commitment_root =
+        merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof);
+    let expected_kind = sccp_message_kind(&bundle.payload);
+    if bundle.commitment.message_id != expected_message_id
+        || bundle.commitment.payload_hash != expected_payload_hash
+        || bundle.commitment.kind != expected_kind
+        || bundle.commitment.target_domain != target_domain
+        || bundle.commitment_root != expected_commitment_root
+    {
+        return Err(norito_to_napi(format!(
+            "TON SCCP source proof bundle commitment does not match payload: \
+             commitment_kind={:?} expected_kind={:?} kind_matches={} \
+             commitment_target_domain={} expected_target_domain={} target_matches={} \
+             commitment_message_id={} expected_message_id={} message_id_matches={} \
+             commitment_payload_hash={} expected_payload_hash={} payload_hash_matches={} \
+             commitment_root={} expected_commitment_root={} commitment_root_matches={}",
+            bundle.commitment.kind,
+            expected_kind,
+            bundle.commitment.kind == expected_kind,
+            bundle.commitment.target_domain,
+            target_domain,
+            bundle.commitment.target_domain == target_domain,
+            hex_0x_lower(&bundle.commitment.message_id),
+            hex_0x_lower(&expected_message_id),
+            bundle.commitment.message_id == expected_message_id,
+            hex_0x_lower(&bundle.commitment.payload_hash),
+            hex_0x_lower(&expected_payload_hash),
+            bundle.commitment.payload_hash == expected_payload_hash,
+            hex_0x_lower(&bundle.commitment_root),
+            hex_0x_lower(&expected_commitment_root),
+            bundle.commitment_root == expected_commitment_root,
+        )));
+    }
+
+    let source_proof = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sample_source_chain_proof_envelope_with_material_and_deployment(
+            &bundle.payload,
+            &bundle.commitment,
+            bundle.commitment_root,
+            Some(&material),
+            Some(&deployment),
+        )
+    }))
+    .map_err(|_| {
+        norito_to_napi("build TON deployment-bound SCCP source-chain proof from governed material")
+    })?;
+    let consensus = decode_sccp_source_consensus_proof(&source_proof.consensus_proof)
+        .ok_or_else(|| norito_to_napi("decode built TON SCCP source consensus proof"))?;
+    let verifier_evidence_hash = sccp_source_verifier_evidence_hash(&consensus.verifier_evidence);
+    let source_deployment_hash = sccp_source_adapter_engine_deployment_hash(&deployment);
+    bundle.finality_proof = norito::to_bytes(&source_proof)
+        .map_err(|err| norito_to_napi(format!("encode TON SCCP source-chain proof: {err}")))?;
+
+    if !verify_message_bundle_structure_with_source_verifier_material_and_deployment(
+        &bundle,
+        &material,
+        &deployment,
+    ) {
+        let proof_adapter_vk_hash =
+            sccp_source_chain_proof_adapter_verifier_commitment(&source_proof);
+        let source_event_binds = sccp_source_chain_proof_source_event_binds_to_bundle_with_material(
+            &source_proof,
+            &bundle,
+            &material,
+        );
+        let source_proof_binding =
+            verify_sccp_source_chain_proof_binding_with_material_and_deployment(
+                &source_proof,
+                &bundle,
+                source_domain,
+                target_domain,
+                &material,
+                &deployment,
+            );
+        let public_inputs_ready =
+            sccp_message_transparent_public_inputs_with_source_verifier_material_and_deployment(
+                &bundle,
+                &material,
+                &deployment,
+            )
+            .is_some();
+        return Err(norito_to_napi(format!(
+            "built TON SCCP message bundle does not verify against supplied deployment material: \
+             proof_structure={} matches_deployment={} adapter_ready={} \
+             payload_structure={} public_inputs_ready={} source_event_binds={} source_proof_binding={} \
+             proof_message_id={} bundle_message_id={} proof_payload_hash={} bundle_payload_hash={} \
+             proof_commitment_root={} bundle_commitment_root={} \
+             proof_adapter_vk_hash={} deployment_adapter_vk_hash={} \
+             evidence_deployment_hash={} expected_deployment_hash={} \
+             evidence_deployment_receipt_hash={} deployment_receipt_hash={} \
+             verifier_evidence_hash={} match_diagnostics=\"{}\"",
+            verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+                &source_proof,
+                &material,
+                &deployment,
+            ),
+            sccp_source_chain_proof_matches_adapter_deployment(&source_proof, &deployment),
+            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                source_proof.source_domain,
+                &material,
+                &deployment,
+            ),
+            verify_sccp_payload_structure(&bundle.payload),
+            public_inputs_ready,
+            source_event_binds,
+            source_proof_binding,
+            hex_0x_lower(&source_proof.message_id),
+            hex_0x_lower(&bundle.commitment.message_id),
+            hex_0x_lower(&source_proof.payload_hash),
+            hex_0x_lower(&bundle.commitment.payload_hash),
+            hex_0x_lower(&source_proof.commitment_root),
+            hex_0x_lower(&bundle.commitment_root),
+            hex_0x_lower_opt(proof_adapter_vk_hash),
+            hex_0x_lower(&deployment.adapter_verifier_vk_hash),
+            hex_0x_lower(&consensus.verifier_evidence.source_adapter_deployment_hash),
+            hex_0x_lower(&source_deployment_hash),
+            hex_0x_lower(
+                &consensus
+                    .verifier_evidence
+                    .source_adapter_deployment_receipt_hash
+            ),
+            hex_0x_lower(&deployment.deployment_receipt_hash),
+            hex_0x_lower(&verifier_evidence_hash),
+            sccp_source_chain_proof_adapter_deployment_match_diagnostics(
+                &source_proof,
+                &deployment
+            ),
+        )));
+    }
+    verified_sccp_message_source_chain_proof_envelope_for_production_with_material_and_deployment(
+        &bundle,
+        &material,
+        &deployment,
+    )
+    .ok_or_else(|| {
+        let proof_adapter_vk_hash =
+            sccp_source_chain_proof_adapter_verifier_commitment(&source_proof);
+        norito_to_napi(format!(
+            "built TON SCCP message bundle failed production source-chain verification: \
+             structure={} target_sora={} matches_deployment={} adapter_ready={} \
+             proof_adapter_vk_hash={} deployment_adapter_vk_hash={} \
+             verifier_evidence_hash={} match_diagnostics=\"{}\"",
+            verify_sccp_source_chain_proof_envelope_structure_with_material_and_deployment(
+                &source_proof,
+                &material,
+                &deployment,
+            ),
+            source_proof.target_domain == SCCP_DOMAIN_SORA,
+            sccp_source_chain_proof_matches_adapter_deployment(&source_proof, &deployment),
+            sccp_source_adapter_ready_with_material_and_deployment_for_domain(
+                source_proof.source_domain,
+                &material,
+                &deployment,
+            ),
+            hex_0x_lower_opt(proof_adapter_vk_hash),
+            hex_0x_lower(&deployment.adapter_verifier_vk_hash),
+            hex_0x_lower(&verifier_evidence_hash),
+            sccp_source_chain_proof_adapter_deployment_match_diagnostics(
+                &source_proof,
+                &deployment
+            ),
+        ))
+    })?;
+
+    let source_proof_hash = sccp_source_chain_proof_envelope_hash(&source_proof);
+    let message_bundle_value = json::to_value(&bundle).map_err(norito_to_napi)?;
+    let mut root = Map::new();
+    root.insert(
+        "schema".to_owned(),
+        Value::String("sccp-ton-message-bundle-source-deployment-binding/v1".to_owned()),
     );
     root.insert("messageBundle".to_owned(), message_bundle_value.clone());
     root.insert("message_bundle".to_owned(), message_bundle_value);
@@ -2868,7 +3147,7 @@ fn kagemusha_pallas_open_envelopes_from_record_bundle(
 /// Native ABI level required by the recursive Kagemusha spend helpers.
 #[napi(js_name = "connectNoritoBridgeAbiVersion")]
 pub fn connect_norito_bridge_abi_version() -> u32 {
-    8
+    15
 }
 
 /// Build metadata-bound Pallas open envelopes for a Kagemusha verified record bundle.
@@ -3194,6 +3473,47 @@ pub fn kagemusha_recursive_spend_init(request_archive: Uint8Array) -> napi::Resu
     encode_kagemusha_recursive_archive(
         &bundle,
         "failed to encode Kagemusha recursive spend init bundle",
+    )
+}
+
+/// Build the online-to-offline top-up Kagemusha transfer instruction from an init request archive.
+#[napi(js_name = "kagemushaRecursiveSpendTopUp")]
+pub fn kagemusha_recursive_spend_topup(request_archive: Uint8Array) -> napi::Result<Buffer> {
+    use iroha_core::zk::{
+        kagemusha_verified_folded_public_inputs_from_record_bundle,
+        kagemusha_verified_folded_public_inputs_from_record_bundle_at_height,
+    };
+
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+        decode_kagemusha_recursive_archive(&request_archive, "Kagemusha recursive spend top-up")?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
+    request
+        .validate_public_binding()
+        .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    let _public_inputs = match request.block_height {
+        Some(block_height) => kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
+            &request.record_bundle,
+            block_height,
+        ),
+        None => kagemusha_verified_folded_public_inputs_from_record_bundle(&request.record_bundle),
+    }
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))?;
+    let step = request.record_bundle.bundle.steps.first().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "Kagemusha recursive spend top-up init request has no fold steps",
+        )
+    })?;
+    let instruction = iroha_data_model::isi::offline::KagemushaTransfer::new(
+        request.record_bundle.bundle.asset.clone(),
+        step.input_nullifiers.clone(),
+        step.output_commitments.clone(),
+        step.attachment.clone(),
+        Some(step.root_before),
+    );
+    encode_kagemusha_recursive_archive(
+        &instruction,
+        "failed to encode Kagemusha recursive spend top-up instruction",
     )
 }
 
@@ -19013,8 +19333,8 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_eight() {
-        assert_eq!(connect_norito_bridge_abi_version(), 8);
+    fn kagemusha_recursive_spend_bridge_abi_version_is_additive_fifteen() {
+        assert_eq!(connect_norito_bridge_abi_version(), 15);
     }
 
     fn empty_kagemusha_record_bundle_archive_for_js_host() -> Vec<u8> {
@@ -22089,7 +22409,6 @@ mod tests {
             lineage_verifier_record: None,
             lineage_verifier_records: Vec::new(),
             block_height: None,
-            lineage_verifier_records: Vec::new(),
         }
     }
 

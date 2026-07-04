@@ -82,12 +82,12 @@ def feed_promotion() -> dict:
         "update_history_persisted": True,
         "gateway_ack_count": CHECKER.DEFAULT_MIN_GATEWAYS,
         "gateways": [
-            {"name": f"gateway-{index}"}
+            {"name": f"gateway-compliance-gateway-{index:02d}"}
             for index in range(CHECKER.DEFAULT_MIN_GATEWAYS)
         ],
         "denylist_entry_count": CHECKER.DEFAULT_MIN_DENYLIST_ENTRIES,
         "denylist_entries": [
-            {"name": f"denylist-entry-{index}"}
+            {"name": f"gateway-denylist-entry-{index:02d}"}
             for index in range(CHECKER.DEFAULT_MIN_DENYLIST_ENTRIES)
         ],
         "bundle_digest_hex": DIGEST,
@@ -114,7 +114,7 @@ def controller_args(tmp_path: Path) -> list[str]:
         "--bundle-digest-hex",
         DIGEST,
         "--controller-instance-id",
-        "compliance-controller-prod-a",
+        "gateway-compliance-controller-prod-a",
         "--feed-count",
         "7",
     ]
@@ -195,6 +195,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     if kind in {"feed_promotion", "governance_approval"}:
         args.extend(["--policy-digest-hex", POLICY_DIGEST])
     if kind == "enforcement_probe":
+        args.extend(["--route-body-blake3-hex", DIGEST])
         for reason in MODULE.REQUIRED_DENIAL_REASONS:
             args.extend(["--denial-reason", reason])
     elif kind == "honey_audit":
@@ -297,7 +298,24 @@ def test_controller_instance_id_must_be_canonical(tmp_path: Path, capsys) -> Non
     captured = capsys.readouterr()
     assert (
         "--controller-instance-id must match canonical lowercase "
-        "`compliance-controller-name` or `gateway-compliance-controller-name`"
+        "`gateway-compliance-controller-name`"
+    ) in captured.err
+    assert not (tmp_path / "controller-runtime.json").exists()
+
+
+def test_controller_instance_id_rejects_generic_controller_family(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = controller_args(tmp_path)
+    args[args.index("--controller-instance-id") + 1] = "compliance-controller-prod-a"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--controller-instance-id must match canonical lowercase "
+        "`gateway-compliance-controller-name`"
     ) in captured.err
     assert not (tmp_path / "controller-runtime.json").exists()
 
@@ -308,7 +326,7 @@ def test_controller_instance_id_rejects_non_production_markers(
 ) -> None:
     args = controller_args(tmp_path)
     args[args.index("--controller-instance-id") + 1] = (
-        "compliance-controller-prod-placeholder"
+        "gateway-compliance-controller-prod-placeholder"
     )
 
     assert MODULE.main(args) == 2
@@ -409,6 +427,21 @@ def test_builds_payload_free_observability_canary(tmp_path: Path) -> None:
     assert errors == []
 
 
+def test_enforcement_probe_requires_route_body_digest(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("enforcement_probe", tmp_path)
+    index = args.index("--route-body-blake3-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not (tmp_path / "enforcement_probe.json").exists()
+
+
 def test_toggle_api_url_rejects_encoded_or_secret_bearing_values_without_leaking(
     tmp_path: Path,
     capsys,
@@ -418,6 +451,8 @@ def test_toggle_api_url_rejects_encoded_or_secret_bearing_values_without_leaking
         "https://gateway-compliance.internal/%2e%2e/toggles",
         "https://gateway-compliance.internal/bad%2Ftoggle",
         "https://gateway-compliance.internal/C%3A/toggles",
+        "https://C%3A.gateway-compliance.internal/toggles",
+        "https://http%3A.gateway-compliance.internal/toggles",
         "https://gateway-compliance.internal/toggles?token=secret",
     )
 
@@ -456,6 +491,124 @@ def test_generated_canaries_pass_full_gateway_gate(tmp_path: Path) -> None:
         assert payload["required"][kind]["artifacts"][0]["valid"] is True
 
 
+@pytest.mark.parametrize(
+    ("kind", "constant_name", "replacement", "expected_error"),
+    (
+        (
+            "feed_promotion",
+            "DEFAULT_GATEWAYS",
+            ("gateway-a", "gateway-compliance-gateway-b", "gateway-compliance-gateway-c"),
+            "DEFAULT_GATEWAYS must match canonical lowercase "
+            "`gateway-compliance-gateway-name`",
+        ),
+        (
+            "feed_promotion",
+            "DEFAULT_DENYLIST_ENTRIES",
+            (
+                "ofac",
+                "gateway-denylist-entry-eu-sanctions",
+                "gateway-denylist-entry-malware",
+                "gateway-denylist-entry-csam-hash",
+                "gateway-denylist-entry-legal-hold",
+            ),
+            "DEFAULT_DENYLIST_ENTRIES must match canonical lowercase "
+            "`gateway-denylist-entry-name`",
+        ),
+        (
+            "honey_audit",
+            "DEFAULT_HONEY_PROBES",
+            (
+                "honey-probe-00",
+                "gateway-honey-probe-01",
+                "gateway-honey-probe-02",
+                "gateway-honey-probe-03",
+            ),
+            "DEFAULT_HONEY_PROBES must match canonical lowercase "
+            "`gateway-honey-probe-*`",
+        ),
+    ),
+)
+def test_fixed_inventory_labels_must_use_production_family_before_write(
+    kind: str,
+    constant_name: str,
+    replacement: tuple[str, ...],
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(MODULE, constant_name, replacement)
+
+    assert_rejected_without_artifact(
+        args_for(kind, tmp_path),
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=expected_error,
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "constant_name", "replacement", "expected_error"),
+    (
+        (
+            "feed_promotion",
+            "DEFAULT_GATEWAYS",
+            (
+                "gateway-compliance-gateway-placeholder",
+                "gateway-compliance-gateway-b",
+                "gateway-compliance-gateway-c",
+            ),
+            "DEFAULT_GATEWAYS must not contain non-production markers "
+            "['placeholder']",
+        ),
+        (
+            "feed_promotion",
+            "DEFAULT_DENYLIST_ENTRIES",
+            (
+                "gateway-denylist-entry-placeholder",
+                "gateway-denylist-entry-eu-sanctions",
+                "gateway-denylist-entry-malware",
+                "gateway-denylist-entry-csam-hash",
+                "gateway-denylist-entry-legal-hold",
+            ),
+            "DEFAULT_DENYLIST_ENTRIES must not contain non-production markers "
+            "['placeholder']",
+        ),
+        (
+            "honey_audit",
+            "DEFAULT_HONEY_PROBES",
+            (
+                "gateway-honey-probe-placeholder",
+                "gateway-honey-probe-01",
+                "gateway-honey-probe-02",
+                "gateway-honey-probe-03",
+            ),
+            "DEFAULT_HONEY_PROBES must not contain non-production markers "
+            "['placeholder']",
+        ),
+    ),
+)
+def test_fixed_inventory_labels_reject_non_production_markers_before_write(
+    kind: str,
+    constant_name: str,
+    replacement: tuple[str, ...],
+    expected_error: str,
+    tmp_path: Path,
+    capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(MODULE, constant_name, replacement)
+
+    assert_rejected_without_artifact(
+        args_for(kind, tmp_path),
+        kind=kind,
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=expected_error,
+    )
+
+
 def test_response_file_can_build_controller_canary(tmp_path: Path) -> None:
     args_file = tmp_path / "controller.args"
     args_file.write_text("\n".join(controller_args(tmp_path)), encoding="utf-8")
@@ -463,7 +616,7 @@ def test_response_file_can_build_controller_canary(tmp_path: Path) -> None:
     assert MODULE.main([f"@{args_file}"]) == 0
 
     payload = json.loads((tmp_path / "controller-runtime.json").read_text("utf-8"))
-    assert payload["controller_instance_id"] == "compliance-controller-prod-a"
+    assert payload["controller_instance_id"] == "gateway-compliance-controller-prod-a"
 
 
 def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:

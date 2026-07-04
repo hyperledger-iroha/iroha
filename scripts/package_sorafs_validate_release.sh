@@ -40,6 +40,109 @@ abs_path() {
   fi
 }
 
+require_option_value() {
+  local option="$1"
+  local value="${2-}"
+  if [[ -z "$value" || "$value" == --* ]]; then
+    echo "error: ${option} requires a value" >&2
+    exit 1
+  fi
+}
+
+reject_symlinked_path_parent() {
+  local label="$1"
+  local target="$2"
+  local parent
+  parent="$(dirname "$target")"
+  local current="/"
+  local rest="${parent#/}"
+  local component
+  IFS='/' read -r -a components <<< "$rest"
+  for component in "${components[@]}"; do
+    [[ -z "$component" || "$component" == "." ]] && continue
+    if [[ "$component" == ".." ]]; then
+      echo "error: ${label} parent must not contain parent-directory segments" >&2
+      exit 1
+    fi
+    if [[ "$current" == "/" ]]; then
+      current="/${component}"
+    else
+      current="${current}/${component}"
+    fi
+    if [[ -L "$current" ]]; then
+      echo "error: ${label} parent must not be a symlink: ${current}" >&2
+      exit 1
+    fi
+    if [[ -e "$current" && ! -d "$current" ]]; then
+      echo "error: ${label} parent component must be a directory: ${current}" >&2
+      exit 1
+    fi
+    if [[ ! -e "$current" ]]; then
+      break
+    fi
+  done
+}
+
+validate_existing_file_path() {
+  local label="$1"
+  local target="$2"
+  if [[ -z "$target" ]]; then
+    echo "error: ${label} path must not be empty" >&2
+    exit 1
+  fi
+  if [[ -L "$target" ]]; then
+    echo "error: ${label} must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  reject_symlinked_path_parent "$label" "$target"
+  if [[ ! -e "$target" ]]; then
+    echo "error: ${label} not found at $target" >&2
+    exit 1
+  fi
+  if [[ ! -f "$target" ]]; then
+    echo "error: ${label} must be a regular file: $target" >&2
+    exit 1
+  fi
+}
+
+validate_existing_executable_file_path() {
+  local label="$1"
+  local target="$2"
+  validate_existing_file_path "$label" "$target"
+  if [[ ! -x "$target" ]]; then
+    echo "error: ${label} not executable at $target" >&2
+    exit 1
+  fi
+}
+
+prepare_output_directory_path() {
+  local label="$1"
+  local target="$2"
+  if [[ -z "$target" ]]; then
+    echo "error: ${label} path must not be empty" >&2
+    exit 1
+  fi
+  if [[ -L "$target" ]]; then
+    echo "error: ${label} must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  reject_symlinked_path_parent "$label" "$target"
+  if [[ -e "$target" && ! -d "$target" ]]; then
+    echo "error: ${label} must be a directory path: ${target}" >&2
+    exit 1
+  fi
+  mkdir -p "$target"
+  if [[ -L "$target" ]]; then
+    echo "error: ${label} must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  reject_symlinked_path_parent "$label" "$target"
+  if [[ ! -d "$target" ]]; then
+    echo "error: ${label} must be a directory path: ${target}" >&2
+    exit 1
+  fi
+}
+
 sha256_file() {
   local path="$1"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -79,42 +182,52 @@ skip_smoke=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --workspace)
+      require_option_value "$1" "${2-}"
       workspace="$(abs_path "$2")"
       shift 2
       ;;
     --out-dir)
+      require_option_value "$1" "${2-}"
       out_dir="$(abs_path "$2")"
       shift 2
       ;;
     --target)
+      require_option_value "$1" "${2-}"
       target="$2"
       shift 2
       ;;
     --profile)
+      require_option_value "$1" "${2-}"
       profile="$2"
       shift 2
       ;;
     --binary)
+      require_option_value "$1" "${2-}"
       binary_path="$(abs_path "$2")"
       shift 2
       ;;
     --target-dir)
+      require_option_value "$1" "${2-}"
       target_dir="$(abs_path "$2")"
       shift 2
       ;;
     --version)
+      require_option_value "$1" "${2-}"
       version="$2"
       shift 2
       ;;
     --manifest-signing-key)
+      require_option_value "$1" "${2-}"
       manifest_signing_key="$(abs_path "$2")"
       shift 2
       ;;
     --manifest-public-key)
+      require_option_value "$1" "${2-}"
       manifest_public_key="$(abs_path "$2")"
       shift 2
       ;;
     --manifest-signature-out)
+      require_option_value "$1" "${2-}"
       manifest_signature_path="$(abs_path "$2")"
       shift 2
       ;;
@@ -139,18 +252,14 @@ if [[ -n "$manifest_public_key" && -z "$manifest_signing_key" ]]; then
   exit 1
 fi
 if [[ -n "$manifest_signing_key" ]]; then
-  if [[ ! -f "$manifest_signing_key" ]]; then
-    echo "error: manifest signing key not found at $manifest_signing_key" >&2
-    exit 1
-  fi
+  validate_existing_file_path "manifest signing key" "$manifest_signing_key"
   if ! command -v openssl >/dev/null 2>&1; then
     echo "error: openssl is required for --manifest-signing-key" >&2
     exit 1
   fi
 fi
-if [[ -n "$manifest_public_key" && ! -f "$manifest_public_key" ]]; then
-  echo "error: manifest public key not found at $manifest_public_key" >&2
-  exit 1
+if [[ -n "$manifest_public_key" ]]; then
+  validate_existing_file_path "manifest public key" "$manifest_public_key"
 fi
 
 workspace="$(abs_path "$workspace")"
@@ -184,12 +293,9 @@ if [[ -z "$binary_path" ]]; then
 fi
 
 binary_path="$(abs_path "$binary_path")"
-if [[ ! -x "$binary_path" ]]; then
-  echo "error: sorafs-validate binary not executable at $binary_path" >&2
-  exit 1
-fi
+validate_existing_executable_file_path "sorafs-validate binary" "$binary_path"
 
-mkdir -p "$out_dir"
+prepare_output_directory_path "release output directory" "$out_dir"
 safe_version="${version//[^A-Za-z0-9._-]/_}"
 safe_target="${target//[^A-Za-z0-9._-]/_}"
 package_name="sorafs-validate-${safe_version}-${safe_target}"
@@ -235,10 +341,7 @@ except OSError as error:
 PY
 }
 
-if [[ ! -f "$header_path" ]]; then
-  echo "error: SoraFS reference FFI header not found at $header_path" >&2
-  exit 1
-fi
+validate_existing_file_path "SoraFS reference FFI header" "$header_path"
 
 rm -rf "$stage_dir" "$archive_path" "$manifest_path" "$manifest_sha_path" \
   "$binary_sha_path" "$archive_sha_path"

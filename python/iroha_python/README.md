@@ -248,6 +248,12 @@ also decode `KagemushaRecursiveSpendVerifyResultV1` and summarize
 `KagemushaRecursiveSpendBundleV1`, while rejecting malformed nested Norito
 archives, noncanonical note amounts, negative block heights, missing lineage
 records, and invalid append-output transitions before native dispatch.
+`KagemushaRecursiveSpendAppendRequest` requires an explicit
+`output_proof_circuit_id`: use
+`KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1` for semantic output or
+`KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1` for
+Reserved-lineage append output. Missing, empty, and unsupported selectors are
+rejected before native dispatch.
 
 `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is currently `64`,
 and `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_TRANSITION_CIRCUIT_WIRED_V1` is

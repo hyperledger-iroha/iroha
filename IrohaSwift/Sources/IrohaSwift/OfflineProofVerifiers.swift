@@ -86,7 +86,7 @@ public struct CounterpartyOfflineProofVerifier: CounterpartyOfflineProofVerifyin
             throw error
         }
         switch value {
-        case "ios", "android":
+        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:
             return value
         default:
             throw error
@@ -131,9 +131,6 @@ public struct IosOfflineProofVerifier {
         }
         #endif
 
-        guard Self.isSupportedPlatform(binding.platform) else {
-            throw OfflineProofVerifierError.invalidBinding("Unsupported offline device binding platform.")
-        }
         guard !accountId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw OfflineProofVerifierError.invalidBinding("Offline device binding account id is invalid.")
         }
@@ -201,9 +198,6 @@ public struct IosOfflineProofVerifier {
         }
         #endif
 
-        guard Self.isSupportedPlatform(proof.platform) else {
-            throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
-        }
         let metadata = try requireMetadata(binding)
         let bindingKeyId = try OfflineProofVerifierSupport.decodeCanonicalBase64(
             binding.attestationKeyId,
@@ -810,8 +804,10 @@ public struct AndroidOfflineProofVerifier {
         binding: ToriiOfflineDeviceBinding,
         proof: ToriiOfflineDeviceProof
     ) throws {
-        guard Self.isSupportedPlatform(binding.platform),
-              Self.isSupportedPlatform(proof.platform) else {
+        guard binding.platform == Self.platform else {
+            throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
+        }
+        guard proof.platform == Self.platform else {
             throw OfflineProofVerifierError.invalidProof("Unsupported offline device proof platform.")
         }
         guard binding.platform == proof.platform,
@@ -979,12 +975,7 @@ public struct AndroidOfflineProofVerifier {
     private static let securityLevelStrongBox = 2
 
     private static func isSupportedPlatform(_ platform: String) -> Bool {
-        switch platform {
-        case Self.platform:
-            return true
-        default:
-            return false
-        }
+        platform == Self.platform
     }
     private static let androidKeyAttestationRootCAPEM = """
     -----BEGIN CERTIFICATE-----

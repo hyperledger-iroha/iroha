@@ -825,12 +825,18 @@ mod tests {
         0, 0,
     ];
 
+    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn signature_with_malformed_ed25519_r(
         signature: &SignatureOf<ValidationFeePolicySigningPayloadV1>,
+        replacement_r: &[u8; 32],
     ) -> SignatureOf<ValidationFeePolicySigningPayloadV1> {
         let mut payload = signature.payload().to_vec();
-        payload[..SMALL_ORDER_ED25519_SIGNATURE_R.len()]
-            .copy_from_slice(&SMALL_ORDER_ED25519_SIGNATURE_R);
+        payload[..replacement_r.len()].copy_from_slice(replacement_r);
         SignatureOf::from_signature(Signature::from_bytes(&payload))
     }
 
@@ -1002,14 +1008,22 @@ mod tests {
     fn signed_policy_rejects_malformed_ed25519_signature_r() {
         let first = key_pair(21);
         let keyset = keyset(&[&first], 1);
-        let mut signed = signed_policy(policy(), &[&first]);
-        signed.signatures[0].signature =
-            signature_with_malformed_ed25519_r(&signed.signatures[0].signature);
+        let signed = signed_policy(policy(), &[&first]);
 
-        assert_eq!(
-            signed.verify_against_keyset(&keyset),
-            Err(ValidationFeePolicySignatureError::InvalidSignature)
-        );
+        for (label, replacement_r) in [
+            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
+            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
+        ] {
+            let mut invalid_signed = signed.clone();
+            invalid_signed.signatures[0].signature =
+                signature_with_malformed_ed25519_r(&signed.signatures[0].signature, &replacement_r);
+
+            assert_eq!(
+                invalid_signed.verify_against_keyset(&keyset),
+                Err(ValidationFeePolicySignatureError::InvalidSignature),
+                "{label} validation-fee policy signature R was not rejected"
+            );
+        }
     }
 
     #[test]

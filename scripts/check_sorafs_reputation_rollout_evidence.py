@@ -46,12 +46,12 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_advancing_int_pair,
     require_bool_true,
     require_count_length_match,
-    require_false_or_absent,
+    require_false,
     require_hex,
     require_hex_string_array,
     require_int_range,
     require_minimum_int,
-    require_maximum_number,
+    require_maximum_int,
     require_object,
     require_object_array,
     require_passed_status,
@@ -106,8 +106,37 @@ EXPLICIT_KIND_SCHEMA_MISMATCH_DIAGNOSTIC = (
 )
 INFER_KIND_DIAGNOSTIC = "cannot infer evidence kind"
 PROVIDER_ID_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
-PROVIDER_ID_ERROR = "provider_id must match canonical lowercase `provider-name`"
+PROVIDER_ID_ERROR = "provider_id must match canonical lowercase `provider-*`"
+SSE_EVENT_LABEL_PATTERN = re.compile(
+    r"^reputation-sse-event-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+SSE_EVENT_LABEL_ERROR = (
+    "sse_events[].name must match canonical lowercase `reputation-sse-event-*`"
+)
+WEBSOCKET_EVENT_LABEL_PATTERN = re.compile(
+    r"^reputation-websocket-event-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+WEBSOCKET_EVENT_LABEL_ERROR = (
+    "websocket_events[].name must match canonical lowercase "
+    "`reputation-websocket-event-name`"
+)
 FORBIDDEN_PROVIDER_ID_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_TRANSPORT_EVENT_LABEL_MARKERS = frozenset(
     (
         "debug",
         "dev",
@@ -547,6 +576,37 @@ def validate_provider_id_value(
     return provider_id
 
 
+def require_transport_event_label(
+    record: dict[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    path: str,
+) -> str:
+    """Require a reviewed production transport event label."""
+
+    label = require_string(record, field, errors)
+    if not label:
+        return ""
+    if pattern.fullmatch(label) is None:
+        errors.append(label_error)
+        return ""
+    label_tokens = frozenset(
+        token for token in re.split(r"[^a-z0-9]+", label) if token
+    )
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_TRANSPORT_EVENT_LABEL_MARKERS
+        if marker in label_tokens
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return label
+
+
 def require_provider_id(
     payload: dict[str, Any], errors: list[str], *, path: str = "provider_id"
 ) -> str:
@@ -667,7 +727,7 @@ def validate_metrics(
     )
     require_passed_status(payload, errors, path="metrics.status")
     require_bool_true(payload, "metrics_scrape_success", errors)
-    require_false_or_absent(payload, "response_bodies_included", errors)
+    require_false(payload, "response_bodies_included", errors)
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     provider_count = require_minimum_int(payload, "provider_count", 1, errors)
@@ -676,13 +736,13 @@ def validate_metrics(
     require_positive_int(payload, "metric_count", errors)
     require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "snapshot_age_seconds",
         max_snapshot_age_secs,
         errors,
     )
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "ingest_lag_seconds",
         max_ingest_lag_secs,
@@ -704,7 +764,7 @@ def validate_transport(evidence: LoadedEvidence, errors: list[str]) -> tuple[str
     require_passed_status(payload, errors, path="transport.status")
     require_bool_true(payload, "sse_connected", errors)
     require_bool_true(payload, "websocket_connected", errors)
-    require_false_or_absent(payload, "response_bodies_included", errors)
+    require_false(payload, "response_bodies_included", errors)
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     sse_count = require_positive_int(payload, "sse_event_count", errors)
@@ -716,8 +776,15 @@ def validate_transport(evidence: LoadedEvidence, errors: list[str]) -> tuple[str
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "sse_events", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "sse_events", errors):
+        require_transport_event_label(
+            record,
+            "name",
+            errors,
+            pattern=SSE_EVENT_LABEL_PATTERN,
+            label_error=SSE_EVENT_LABEL_ERROR,
+            path=f"sse_events[{index}].name",
+        )
     websocket_count = require_positive_int(payload, "websocket_event_count", errors)
     require_string_inventory_count_match(
         payload,
@@ -727,8 +794,15 @@ def validate_transport(evidence: LoadedEvidence, errors: list[str]) -> tuple[str
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "websocket_events", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "websocket_events", errors):
+        require_transport_event_label(
+            record,
+            "name",
+            errors,
+            pattern=WEBSOCKET_EVENT_LABEL_PATTERN,
+            label_error=WEBSOCKET_EVENT_LABEL_ERROR,
+            path=f"websocket_events[{index}].name",
+        )
     return snapshot_id, merkle_root, sse_count, websocket_count
 
 
@@ -746,7 +820,7 @@ def validate_consumption(evidence: LoadedEvidence, errors: list[str]) -> tuple[s
     require_bool_true(payload, "routing_score_consumed", errors)
     require_bool_true(payload, "routing_weight_changed", errors)
     require_bool_true(payload, "incentive_score_consumed", errors)
-    require_false_or_absent(payload, "raw_provider_records_included", errors)
+    require_false(payload, "raw_provider_records_included", errors)
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
     provider_count = require_minimum_int(payload, "provider_count", 1, errors)
@@ -772,6 +846,8 @@ def validate_evidence_set(
     valid_snapshot_bindings: set[tuple[str, str]] = set()
     snapshot_bound_artifacts: list[dict[str, Any]] = []
     provider_ids: set[str] = set()
+    provider_proof_ids: set[str] = set()
+    verified_provider_ids: set[str] = set()
     provider_counts: set[int] = set()
     metric_counts: set[int] = set()
     metric_names: set[str] = set()
@@ -804,11 +880,13 @@ def validate_evidence_set(
         elif evidence.kind == "provider":
             snapshot_id, merkle_root, provider_id = validate_provider(evidence, errors)
             record_observed_evidence_value(provider_ids, provider_id)
+            record_observed_evidence_value(provider_proof_ids, provider_id)
         elif evidence.kind == "events":
             snapshot_id, merkle_root, _sequence = validate_events(evidence, errors)
         elif evidence.kind == "verify":
             snapshot_id, merkle_root, provider_id = validate_verify(evidence, errors)
             record_observed_evidence_value(provider_ids, provider_id)
+            record_observed_evidence_value(verified_provider_ids, provider_id)
         elif evidence.kind == "metrics":
             snapshot_id, merkle_root, provider_count = validate_metrics(
                 evidence,
@@ -884,21 +962,37 @@ def validate_evidence_set(
 
     finalize_custom_required_evidence_rows(required, evidence_label="evidence")
 
-    record_missing_required_evidence_value_errors(
-        required,
-        "provider",
-        required_providers,
-        provider_ids,
-        lambda _provider_id: "missing provider/proof evidence for required provider",
-    )
+    if "provider" in required:
+        record_missing_required_evidence_value_errors(
+            required,
+            "provider",
+            required_providers,
+            provider_proof_ids,
+            lambda _provider_id: (
+                "missing provider/proof evidence for required provider"
+            ),
+        )
 
-    record_missing_required_or_observed_evidence_error(
-        required,
-        "provider",
-        required_providers,
-        provider_ids,
-        "at least one provider proof must be verified",
-    )
+    if "verify" in required:
+        record_missing_required_evidence_value_errors(
+            required,
+            "verify",
+            required_providers,
+            verified_provider_ids,
+            lambda _provider_id: (
+                "missing proof verification evidence for required provider"
+            ),
+        )
+
+    if "provider" in required and "verify" in required:
+        verified_provider_proof_ids = provider_proof_ids & verified_provider_ids
+        record_missing_required_or_observed_evidence_error(
+            required,
+            "provider",
+            required_providers,
+            verified_provider_proof_ids,
+            "at least one provider proof must be verified",
+        )
 
     record_inconsistent_evidence_values_error(
         required,
@@ -1004,7 +1098,10 @@ def build_parser() -> EvidenceArgumentParser:
         "--require-provider",
         action="append",
         default=[],
-        help="Provider id that must have provider/proof evidence.",
+        help=(
+            "Provider id that must have provider/proof evidence, and matching "
+            "verification evidence when verify artifacts are required."
+        ),
     )
     parser.add_argument(
         "--now-unix",

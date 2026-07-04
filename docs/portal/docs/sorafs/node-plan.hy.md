@@ -47,12 +47,12 @@ SF-3-ը տրամադրում է առաջին գործարկվող `sorafs-node` 
 
 ### Գ. Դարպասի վերջնակետեր
 
-| Վերջնակետ | Վարքագիծ | Առաջադրանքներ |
+| Endpoint | Behaviour | Tasks |
 |----------|-----------|-------|
-| `POST /sorafs/pin` | Ընդունեք `PinProposalV1`-ը, վավերացրեք մանիֆեստները, հերթագրեք մուտքը, պատասխանեք մանիֆեստի CID-ով: | Վավերացրեք կտորի պրոֆիլը, կիրառեք քվոտաներ, հոսքային տվյալները chunk store-ի միջոցով: |
-| `GET /sorafs/chunks/{cid}` + միջակայքի հարցում | Ծառայել բայթերի բայթ `Content-Chunker` վերնագրերով; հարգել տիրույթի հնարավորությունների մասն. | Օգտագործեք ժամանակացույց + հոսքային բյուջեներ (կապել SF-2d միջակայքի հնարավորության հետ): |
-| `POST /sorafs/por/sample` | Գործարկեք PoR նմուշառումը մանիֆեստի և վերադարձի ապացույցների փաթեթի համար: | Կրկին օգտագործեք պահեստի նմուշառումը, պատասխանեք Norito JSON ծանրաբեռնվածությամբ: |
-| `GET /sorafs/telemetry` | Ամփոփումներ՝ հզորություն, PoR-ի հաջողություն, առբերման սխալների հաշվարկ: | Տրամադրել տվյալներ վահանակների/օպերատորների համար: |
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
 
 Աշխատաժամանակի սանտեխնիկական թելերը փոխազդում են PoR-ի միջոցով `sorafs_node::por`-ի միջոցով. որոնիչը գրանցում է յուրաքանչյուր `PorChallengeV1`, `PorProofV1` և `AuditVerdictV1`, այնպես որ I18NI0000000058X-ը արտացոլում է I18NI000000059X-ը: Torii տրամաբանություն.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +108,7 @@ SF-3-ը տրամադրում է առաջին գործարկվող `sorafs-node` 
 ## Milestone ելքի չափանիշներ
 
 - `cargo run -p sorafs_node --example pin_fetch`-ն աշխատում է տեղական հարմարանքների դեմ:  
-- Torii-ը կառուցում է `--features sorafs-storage`-ով և անցնում ինտեգրման թեստեր:  
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - Փաստաթղթեր ([հանգույցի պահպանման ուղեցույց](node-storage.md)) թարմացվել է կազմաձևման լռելյայններով + CLI օրինակներով; հասանելի է օպերատորի աշխատատեղերը:  
 - Հեռուստաչափություն տեսանելի բեմական վահանակներում; ազդանշանները կազմաձևված են հզորության հագեցվածության և PoR խափանումների համար:
 
@@ -116,4 +116,4 @@ SF-3-ը տրամադրում է առաջին գործարկվող `sorafs-node` 
 
 - Թարմացրեք [հանգույցի պահպանման հղումը] (node-storage.md)՝ կազմաձևման լռելյայններով, CLI-ի օգտագործման և անսարքությունների վերացման քայլերով:  
 - Պահպանեք [node operations runbook] (node-operations.md) իրագործման հետ համահունչ SF-3-ի զարգացում:  
-- Հրապարակեք API հղումներ `/sorafs/*` վերջնակետերի համար ծրագրավորողների պորտալի ներսում և դրանք միացրեք OpenAPI մանիֆեստում, երբ Torii մշակողները վայրէջք կատարեն:
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

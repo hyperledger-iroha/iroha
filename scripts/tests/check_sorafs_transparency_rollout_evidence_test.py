@@ -74,7 +74,7 @@ def source_entry_evidence() -> dict:
 def publication_evidence(*, publisher_identity: bool = True) -> dict:
     cycle_detail_probes = [
         {
-            "name": "cycle_detail_readback",
+            "name": MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES[0],
             "status_code": 200,
             "body_blake3_hex": "3" * 64,
             "anchor_metadata_present": True,
@@ -808,6 +808,47 @@ def test_publication_cycle_detail_probes_must_not_include_unknown_values(
     ]
 
 
+def test_publication_cycle_detail_probe_names_must_use_production_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    payload["cycle_detail_probes"][0]["name"] = "cycle_detail_readback"
+    write_json(tmp_path / "publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        == 1
+    )
+
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = summary_payload["required"]["publication"]["artifacts"][0]
+    assert MODULE.CYCLE_DETAIL_PROBE_LABEL_ERROR in artifact["errors"]
+
+
+def test_publication_cycle_detail_probe_names_reject_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    payload["cycle_detail_probes"][0]["name"] = "transparency-cycle-detail-placeholder"
+    write_json(tmp_path / "publication.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(["--evidence-dir", str(tmp_path), "--summary-out", str(summary)])
+        == 1
+    )
+
+    summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = summary_payload["required"]["publication"]["artifacts"][0]
+    assert (
+        "cycle_detail_probes[0].name must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
+
+
 def test_publication_requires_cycle_detail_probe_coverage(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = publication_evidence()
@@ -823,7 +864,7 @@ def test_publication_requires_cycle_detail_probe_coverage(tmp_path: Path) -> Non
     summary_payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = summary_payload["required"]["publication"]["artifacts"][0]
     assert (
-        "cycle_detail_probes must include name `cycle_detail_readback`"
+        "cycle_detail_probes must include name `transparency-cycle-detail-readback`"
         in artifact["errors"]
     )
     assert (

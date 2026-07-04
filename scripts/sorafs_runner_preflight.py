@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from html import unescape
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -32,11 +33,15 @@ PLAN_RENDERED_PATH_ERROR = (
 )
 RUNNER_URL_ARG_ERROR = (
     "SoraFS runner URL arguments must not contain userinfo, query strings, "
-    "fragments, control characters, or secret-looking host/path components"
+    "fragments, control characters, encoded separators, drive prefixes, "
+    "URI-scheme-like host/path tokens, or secret-looking host/path components"
 )
 RUNNER_PASSTHROUGH_ARG_ERROR = (
     "SoraFS runner passthrough arguments must not contain secret-looking "
     "option names, values, paths, URLs, or control characters"
+)
+PATH_SENSITIVE_KEY_FRAGMENTS = HIGH_RISK_SENSITIVE_KEY_FRAGMENTS - frozenset(
+    {"requestbody", "responsebody"}
 )
 
 
@@ -130,13 +135,13 @@ def is_payload_free_sensitive_reference(normalized_key: str) -> bool:
 
 
 def _decoded_text_variants(value: str) -> tuple[str, ...]:
-    """Return raw plus repeatedly percent-decoded text variants."""
+    """Return raw plus repeatedly percent/HTML-decoded text variants."""
 
     variants = [value]
     seen = {value}
     current = value
     for _ in range(4):
-        decoded = unquote(current)
+        decoded = unescape(unquote(current))
         if decoded == current or decoded in seen:
             break
         variants.append(decoded)
@@ -182,9 +187,26 @@ def is_sensitive_path_component(component: str) -> bool:
             or any(
                 fragment in normalized_component
                 and not is_payload_free_sensitive_reference(normalized_component)
-                for fragment in HIGH_RISK_SENSITIVE_KEY_FRAGMENTS
+                for fragment in PATH_SENSITIVE_KEY_FRAGMENTS
             )
         ):
+            return True
+    return False
+
+
+def _path_like_value_has_sensitive_component(value: Any) -> bool:
+    """Return whether a Path or path-like string contains secret-looking text."""
+
+    if isinstance(value, Path):
+        path = value
+    elif isinstance(value, str) and value:
+        path = Path(value)
+    else:
+        return False
+    for component in path.parts:
+        if component in {path.anchor, "/", ""}:
+            continue
+        if is_sensitive_path_component(component):
             return True
     return False
 
@@ -214,6 +236,8 @@ def _url_host_component_is_plan_safe(component: str) -> bool:
             variant in {".", "..", ""}
             or "/" in variant
             or "\\" in variant
+            or _path_component_has_windows_drive_prefix(variant)
+            or _path_component_has_uri_scheme_prefix(variant)
             or any(ord(character) < 32 or ord(character) == 127 for character in variant)
             or is_sensitive_path_component(variant)
         ):
@@ -222,7 +246,7 @@ def _url_host_component_is_plan_safe(component: str) -> bool:
 
 
 def _value_variants_are_passthrough_safe(value: str) -> bool:
-    """Return whether raw or percent-decoded passthrough values are safe."""
+    """Return whether raw or percent/HTML-decoded passthrough values are safe."""
 
     for variant in _decoded_text_variants(value):
         if variant.startswith(("http://", "https://")):
@@ -242,7 +266,7 @@ def _value_variants_are_passthrough_safe(value: str) -> bool:
 
 
 def _key_variants_are_passthrough_safe(value: str) -> bool:
-    """Return whether raw or percent-decoded passthrough key names are safe."""
+    """Return whether raw or percent/HTML-decoded passthrough key names are safe."""
 
     return all(
         not is_sensitive_path_component(variant)
@@ -251,7 +275,7 @@ def _key_variants_are_passthrough_safe(value: str) -> bool:
 
 
 def _option_variants_are_passthrough_safe(value: str) -> bool:
-    """Return whether raw or percent-decoded option names are safe."""
+    """Return whether raw or percent/HTML-decoded option names are safe."""
 
     return all(
         not is_sensitive_path_component(variant.lstrip("-").replace("-", "_"))
@@ -1028,10 +1052,14 @@ def validate_command_plan_step_shapes(plan: Any) -> list[str]:
             step_label = f"command-plan step {index}"
         artifact = getattr(step, "artifact", None)
         if artifact is not None and not isinstance(artifact, Path):
-            errors.append(
-                f"{step_label} artifact `{path_diagnostic_label(artifact)}` "
-                "must be a path"
-            )
+            if _path_like_value_has_sensitive_component(artifact):
+                if PLAN_RENDERED_PATH_ERROR not in errors:
+                    errors.append(PLAN_RENDERED_PATH_ERROR)
+            else:
+                errors.append(
+                    f"{step_label} artifact `{path_diagnostic_label(artifact)}` "
+                    "must be a path"
+                )
         command = getattr(step, "command", None)
         errors.extend(_command_vector_errors(step_label, command))
     return errors
@@ -2150,6 +2178,22 @@ def validate_command_plan_artifacts(
         errors,
     )
     if reserved_output_items is None:
+        return errors
+    if any(_path_like_value_has_sensitive_component(path) for path in reserved_output_items):
+        errors.append(PLAN_RENDERED_PATH_ERROR)
+        return errors
+    validate_plan_rendered_paths(
+        (
+            *(path for path in reserved_output_items if isinstance(path, Path)),
+            *(
+                getattr(step, "artifact", None)
+                for step in steps
+                if isinstance(getattr(step, "artifact", None), Path)
+            ),
+        ),
+        errors,
+    )
+    if errors:
         return errors
     for path in reserved_output_items:
         if not isinstance(path, Path):

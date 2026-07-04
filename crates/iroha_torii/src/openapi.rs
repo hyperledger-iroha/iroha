@@ -4769,11 +4769,46 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch a local moderation ballot no-show plan.",
+            "Fetch the payload-free local no-show penalty plan for a closed SoraFS moderation ballot. The route uses server-side network time, rejects open reveal windows and unresolved or accepted challenges, and returns only counts, juror identifiers, and the penalty-plan digest.",
+            "#/components/schemas/JsonValue",
+            vec![
+                string_path_param("case_id", "Moderation or appeal case identifier."),
+                string_path_param("round_id", "Moderation ballot round identifier."),
+            ],
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/moderation/ballots/commits".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
             "Submit a moderation ballot commitment.",
             "Submit a base64 Norito SoraFsModerationBallotCommitV1 payload. The canonical request signer must match the canonical juror account id in the commitment.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/challenges".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Raise a local moderation ballot challenge.",
+            "Raise a payload-free local SoraFS moderation ballot challenge during the post-commit challenge window. The canonical request signer must match challenger_id, the evidence digest must be a non-zero 32-byte hex value, and pending or accepted challenges block local reveal and tally progress.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/challenges/resolve".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Resolve a local moderation ballot challenge.",
+            "Resolve a local SoraFS moderation ballot challenge before reveal progress. The canonical request signer must match resolved_by; rejected challenges unblock local reveal and tally progress, while accepted challenges keep the ballot blocked for higher-level dispute handling.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -4806,7 +4841,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_get_operation(
             "SoraFS",
             "Fetch local moderation ballot events.",
-            "Fetch sequenced local SoraFS moderation ballot events with optional since and limit filters and ETag cache validation.",
+            "Fetch sequenced local SoraFS moderation ballot lifecycle and challenge events with optional since and limit filters and ETag cache validation.",
             "#/components/schemas/JsonValue",
             vec![
                 integer_query_param("since", "Return events with sequence greater than this value.", Some("uint64")),
@@ -4995,6 +5030,56 @@ fn sorafs_paths() -> Map {
     paths.insert(
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object".to_owned(),
         Value::Object(quarantine_object),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Issue a payload-free local moderation evidence viewer session record.",
+            "Create or return one short-lived, payload-free local SFM-4b3 evidence viewer session record for an existing encrypted quarantine object. The request binds viewer, role, attestation digest, watermark metadata digest, nonce digest, legal-hold metadata, object id, and evidence digest, rejects raw evidence, signed URLs, runtime session tokens, and watermark secrets, persists the local evidence-viewer checkpoint when storage is enabled, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role. This endpoint does not issue streaming URLs or return evidence bytes.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "quarantine_id_hex",
+                "16-byte local quarantine id encoded as hexadecimal.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Append a payload-free local moderation evidence viewer access event.",
+            "Append one payload-free local SFM-4b3 evidence viewer access-log event for a session bound to the requested quarantine record. The request logs view, seek, pause, screenshot-attempt, download-attempt, annotation, session-expiry, and attestation-failure metadata by digest, rejects raw evidence, signed URLs, runtime session tokens, response bodies, and raw access logs, persists the local evidence-viewer checkpoint when storage is enabled, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "quarantine_id_hex",
+                "16-byte local quarantine id encoded as hexadecimal.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/viewer-audit-reports".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Record a payload-free local moderation evidence viewer audit report.",
+            "Derive one closed-window, payload-free local SFM-4b3 evidence viewer audit report from local session/access records and record it as an EvidenceAccess transparency source entry for later ledger/Governance DAG publication. The request accepts a report window and optional policy digest, rejects raw evidence, raw access logs, viewer accounts, signed URLs, runtime session tokens, and response bodies, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role. This endpoint does not issue streaming URLs, return evidence bytes, or expose raw viewer identities.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/viewer-audit-reports/publish-due".to_owned(),
+        Value::Object(json_post_operation(
+            "SoraFS",
+            "Publish a due payload-free moderation evidence viewer audit report cycle.",
+            "Trigger one scheduler tick for local SFM-4b3 evidence viewer audit reports. The endpoint uses the configured sorafs.storage.evidence_viewer_audits cadence when request cadence fields are omitted, derives the oldest due closed window from local payload-free session/access records, records the report as an EvidenceAccess transparency source entry, publishes the matching transparency ledger cycle through the configured Governance DAG publisher when present, suppresses duplicate cycle publication, and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
     );
     paths.insert(
         "/v1/sorafs/providers".to_owned(),
@@ -13646,7 +13731,14 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/transparency/tokens/verify"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}"));
+        assert!(
+            paths.contains_key(
+                "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan"
+            )
+        );
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/commits"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/challenges"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/challenges/resolve"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/reveals"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/tally"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/events"));
@@ -13672,6 +13764,17 @@ mod tests {
             )
         );
         assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object"));
+        assert!(
+            paths.contains_key(
+                "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions"
+            )
+        );
+        assert!(
+            paths
+                .contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access")
+        );
+        assert!(paths.contains_key("/v1/sorafs/moderation/viewer-audit-reports"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/viewer-audit-reports/publish-due"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
         assert!(paths.contains_key("/v1/sns/names"));
