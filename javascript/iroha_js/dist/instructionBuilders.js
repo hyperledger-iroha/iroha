@@ -11431,6 +11431,26 @@ export function buildProposeDeployContractInstruction(options) {
 }
 
 /**
+ * Build a `ProposeSccpRouteManifest` instruction payload.
+ * @param {object} options
+ * @returns {{ProposeSccpRouteManifest: object}}
+ */
+export function buildProposeSccpRouteManifestInstruction(options) {
+  const source = assertPlainObject(options, "proposeSccpRouteManifest");
+  const manifest = assertPlainObject(
+    source.manifest ?? source.routeManifest ?? source.route_manifest,
+    "proposeSccpRouteManifest.manifest",
+  );
+  return {
+    ProposeSccpRouteManifest: {
+      manifest: { ...manifest },
+      window: normalizeAtWindow(source.window, "window"),
+      mode: normalizeVotingMode(source.votingMode ?? source.mode, "votingMode"),
+    },
+  };
+}
+
+/**
  * Build a `CastZkBallot` instruction payload.
  * @param {object} options
  * @returns {{CastZkBallot: object}}

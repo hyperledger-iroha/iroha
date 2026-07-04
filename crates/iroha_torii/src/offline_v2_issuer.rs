@@ -15,10 +15,10 @@ use iroha_data_model::{
     ValidationFail,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    isi::{InstructionBox, offline::RedeemKagemushaRecursive},
+    isi::{InstructionBox, offline::IssueOfflineNote, offline::RedeemKagemushaRecursive},
     offline::{
         KagemushaRecursiveSpendRedeemRequestV1, OFFLINE_NOTE_KEY_CERTIFICATE_VERSION,
-        OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
+        OfflineNoteIssue, OfflineNoteKeyCertificate, OfflineNoteRecursiveProof, OfflineNoteRedeem,
     },
     proof::{ProofBox, VerifyingKeyId},
     transaction::{SignedTransaction, TransactionBuilder},
@@ -288,11 +288,155 @@ pub(crate) async fn handle_notes_issue(
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<AxResponse, Error> {
-    let _ = (app, method, uri, headers, body);
-    Err(validation(
-        "OFFLINE_V2_NOTE_ISSUE_RETIRED",
-        "Offline Notes V2 issue transactions are retired; use Kagemusha online-to-offline top-up flows.",
-    ))
+    let issuer = require_issuer(&app)?;
+    let parsed = parse_and_authorize(
+        app.as_ref(),
+        method,
+        uri,
+        headers,
+        body.as_ref(),
+        ENDPOINT_NOTES_ISSUE,
+    )?;
+    let lineage_id = required_string(&parsed.value, "lineage_id")?;
+    let amount = parse_positive_amount(required_string(&parsed.value, "amount")?, "amount")?;
+    if amount > issuer.max_tx_value.clone() {
+        return Err(validation(
+            "OFFLINE_AMOUNT_EXCEEDS_LIMIT",
+            "Offline note amount exceeds issuer policy.",
+        ));
+    }
+    let now_ms = now_ms();
+    let attestation = verify_device_attestation(&issuer, &parsed, now_ms)?;
+    let lineage_state = verify_lineage_state(&issuer, &parsed, lineage_id, now_ms)?;
+    let pre_balance = lineage_state.balance;
+    if let Some(local_balance) = optional_string(&parsed.value, "local_balance") {
+        let local_balance = parse_amount(local_balance, "local_balance")?;
+        if local_balance != pre_balance {
+            return Err(validation(
+                "OFFLINE_V2_LINEAGE_BALANCE_MISMATCH",
+                "Offline Notes V2 local_balance does not match signed lineage state.",
+            ));
+        }
+    }
+    let post_balance = pre_balance
+        .clone()
+        .checked_add(amount.clone())
+        .ok_or_else(|| {
+            validation(
+                "OFFLINE_BALANCE_OVERFLOW",
+                "Offline note balance overflowed issuer policy arithmetic.",
+            )
+        })?;
+    if post_balance > issuer.max_balance.clone() {
+        return Err(validation(
+            "OFFLINE_BALANCE_EXCEEDS_LIMIT",
+            "Offline note balance exceeds issuer policy.",
+        ));
+    }
+
+    if let Some(local_revision) = parsed.value.get("local_revision").and_then(Value::as_u64)
+        && local_revision != lineage_state.revision
+    {
+        return Err(validation(
+            "OFFLINE_V2_LINEAGE_REVISION_MISMATCH",
+            "Offline Notes V2 local_revision does not match signed lineage state.",
+        ));
+    }
+    let local_revision = lineage_state.revision.checked_add(1).ok_or_else(|| {
+        validation(
+            "OFFLINE_V2_LINEAGE_REVISION_OVERFLOW",
+            "Offline Notes V2 lineage revision overflowed.",
+        )
+    })?;
+    let entry_hash = settlement_entry_hash(
+        &parsed.operation_id,
+        lineage_id,
+        &parsed.account_literal,
+        &parsed.device_id,
+        &parsed.offline_public_key,
+        &parsed.asset_definition_literal,
+        &amount.to_string(),
+        &pre_balance.to_string(),
+        &post_balance.to_string(),
+        local_revision,
+    )?;
+    let certificate = build_key_certificate(&issuer, &parsed, &attestation, now_ms)?;
+    let chain_certificate = build_chain_certificate(&issuer, &parsed, &attestation)?;
+    let note_commitment = parse_hash_field(&parsed.value, "note_commitment")?;
+    let issue = IssueOfflineNote::new(OfflineNoteIssue {
+        note_commitment: note_commitment.clone(),
+        key_certificate: chain_certificate,
+        asset: AssetId::new(
+            parsed.asset_definition_id.clone(),
+            parsed.account_id.clone(),
+        ),
+        amount: amount.clone(),
+    });
+    let tx = issuer.sign_transaction(
+        TransactionBuilder::new((*app.chain_id).clone(), issuer.authority.clone().into())
+            .with_instructions([InstructionBox::from(issue)]),
+        "offline_v2_note_issue_transaction",
+    )?;
+    let tx_hash = tx.hash().to_string();
+    routing::handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        app.telemetry.clone(),
+        PATH_NOTES_ISSUE,
+    )
+    .await?;
+
+    let settlement = build_settlement(
+        &issuer,
+        &parsed,
+        "load",
+        &pre_balance.to_string(),
+        &post_balance.to_string(),
+        amount.to_string(),
+        &entry_hash,
+        &tx_hash,
+        now_ms,
+    )?;
+    let lineage_state = build_lineage_state(
+        &issuer,
+        &parsed,
+        lineage_id,
+        &post_balance.to_string(),
+        "0",
+        local_revision,
+        now_ms,
+        Some(certificate.clone()),
+    )?;
+
+    json_ok(json_object(vec![
+        ("operation_id", string_value(parsed.operation_id)),
+        ("settlement", settlement),
+        ("lineage_state", lineage_state),
+        ("local_balance", string_value(post_balance.to_string())),
+        ("locked_balance", string_value("0")),
+        ("local_revision", number_value(local_revision)),
+        (
+            "local_state_hash",
+            string_value(lineage_state_hash(
+                &parsed.account_literal,
+                lineage_id,
+                &parsed.device_id,
+                &parsed.offline_public_key,
+                &parsed.asset_definition_literal,
+                &post_balance.to_string(),
+                "0",
+                local_revision,
+            )?),
+        ),
+        (
+            "issued_note_commitment",
+            string_value(note_commitment.to_string()),
+        ),
+        ("key_certificate", certificate.clone()),
+        ("key_certificates", Value::Array(vec![certificate])),
+    ]))
 }
 
 pub(crate) async fn handle_notes_redeem(

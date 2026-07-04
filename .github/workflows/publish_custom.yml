@@ -27,6 +27,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_taira_smoke:
+        description: "Skip the local Taira smoke image build before publishing"
+        required: false
+        type: boolean
+        default: false
 
 env:
   DEFAULTS_DIR: defaults
@@ -219,6 +224,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Build local Taira smoke image
+        if: ${{ !inputs.skip_taira_smoke }}
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -234,6 +240,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Smoke Taira image default entrypoint
+        if: ${{ !inputs.skip_taira_smoke }}
         shell: bash
         run: bash scripts/taira_image_smoke.sh --image local/taira-validator:smoke --timeout 120
 

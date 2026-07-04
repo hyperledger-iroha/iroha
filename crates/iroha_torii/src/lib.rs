@@ -4124,6 +4124,31 @@ async fn handler_gov_propose_deploy(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_gov_propose_sccp_route_manifest(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: crate::utils::extractors::NoritoJson<crate::gov::ProposeSccpRouteManifestDto>,
+) -> Result<JsonBody<crate::gov::ProposeSccpRouteManifestResponse>, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/gov/proposals/sccp-route-manifest",
+    )
+    .await?;
+    crate::gov::handle_gov_propose_sccp_route_manifest(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        body,
+    )
+    .await
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_gov_protected_set(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -40354,6 +40379,10 @@ impl Torii {
                     .route(
                         iroha_torii_shared::uri::GOV_PROPOSE_DEPLOY,
                         post(handler_gov_propose_deploy),
+                    )
+                    .route(
+                        iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_MANIFEST,
+                        post(handler_gov_propose_sccp_route_manifest),
                     )
                     // Read endpoints: proposal/referendum/locks/tally
                     .route(

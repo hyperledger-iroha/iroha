@@ -2017,6 +2017,9 @@ fn nexus_staking_snapshot_value(staking: &sumeragi::status::NexusStakingSnapshot
 }
 
 fn sumeragi_v1_pending_finality(snap: &sumeragi::StatusSnapshot) -> Option<HashOf<BlockHeader>> {
+    if let Some(block_hash) = snap.canonical_pending_finality {
+        return Some(block_hash);
+    }
     let settled = snap
         .qc_deferred_resolved_total
         .saturating_add(snap.qc_deferred_expired_total);
@@ -5026,6 +5029,40 @@ mod status_tests {
             Some("permissioned_count")
         );
         assert_eq!(quorum.get("validators").and_then(Value::as_u64), Some(4));
+    }
+
+    #[test]
+    fn status_snapshot_json_uses_canonical_pending_finality_snapshot() {
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; 32]));
+        let snap = sumeragi::StatusSnapshot {
+            membership_height: 13,
+            membership_view: 5,
+            canonical_pending_finality: Some(block_hash),
+            commit_qc: status::QcSnapshot {
+                height: 12,
+                view: 4,
+                validator_set_len: 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let canonical = payload
+            .get("canonical")
+            .and_then(Value::as_object)
+            .expect("canonical v1 status");
+        assert_eq!(canonical.get("height").and_then(Value::as_u64), Some(13));
+        assert_eq!(canonical.get("view").and_then(Value::as_u64), Some(5));
+        assert_eq!(
+            canonical.get("phase").and_then(Value::as_str),
+            Some("pending_finality")
+        );
+        let expected_block_hash = format!("{block_hash}");
+        assert_eq!(
+            canonical.get("pending_finality").and_then(Value::as_str),
+            Some(expected_block_hash.as_str())
+        );
     }
 
     #[test]

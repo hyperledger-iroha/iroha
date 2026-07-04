@@ -121,7 +121,10 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
             deviceId: container.decode(String.self, forKey: .deviceId),
             offlinePublicKey: container.decode(String.self, forKey: .offlinePublicKey),
             assertionPublicKey: container.decodeIfPresent(String.self, forKey: .assertionPublicKey),
-            attestationReportBase64: container.decode(String.self, forKey: .attestationReportBase64),
+            attestationReportBase64: container.decodeIfPresent(
+                String.self,
+                forKey: .attestationReportBase64
+            ) ?? "",
             attestationReceipt: container.decodeIfPresent(
                 ToriiOfflineAttestationReceipt.self,
                 forKey: .attestationReceipt
@@ -139,7 +142,9 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         try container.encode(deviceId, forKey: .deviceId)
         try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
         try container.encodeIfPresent(assertionPublicKey, forKey: .assertionPublicKey)
-        try container.encode(attestationReportBase64, forKey: .attestationReportBase64)
+        if !attestationReportBase64.isEmpty {
+            try container.encode(attestationReportBase64, forKey: .attestationReportBase64)
+        }
         try container.encodeIfPresent(attestationReceipt, forKey: .attestationReceipt)
         try container.encodeIfPresent(iosTeamId, forKey: .iosTeamId)
         try container.encodeIfPresent(iosBundleId, forKey: .iosBundleId)
@@ -148,6 +153,7 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
 
     private static let supportedFirstReleasePlatforms: Set<String> = [
         OfflineNoteV2Constants.iosPlatform,
+        OfflineNoteV2Constants.iosAppAttestPlatform,
         OfflineNoteV2Constants.androidPlatform,
     ]
 
@@ -251,6 +257,7 @@ public struct ToriiOfflineDeviceProof: Codable, Sendable, Equatable {
 
     private static let supportedFirstReleasePlatforms: Set<String> = [
         OfflineNoteV2Constants.iosPlatform,
+        OfflineNoteV2Constants.iosAppAttestPlatform,
         OfflineNoteV2Constants.androidPlatform,
     ]
 

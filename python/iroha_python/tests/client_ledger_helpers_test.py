@@ -1818,7 +1818,7 @@ def test_permission_grant_and_revoke_helpers_build_one_instruction() -> None:
     assert revoke_kwargs["wait"] is True
 
 
-def test_permission_grant_accepts_configured_chain_discriminant_account_ids() -> None:
+def test_permission_grant_normalizes_configured_chain_discriminant_for_transaction_draft() -> None:
     client = ToriiClient(
         "http://torii.example",
         session=FakeSession([]),
@@ -1827,6 +1827,7 @@ def test_permission_grant_accepts_configured_chain_discriminant_account_ids() ->
     )
     captured: dict[str, object] = {}
     account = account_address(0x45, 0x0171)
+    fixed_account = account_address(0x45)
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
         captured["draft"] = draft
@@ -1846,12 +1847,12 @@ def test_permission_grant_accepts_configured_chain_discriminant_account_ids() ->
     ) == {"hash": "permission-taira"}
 
     draft = captured["draft"]
-    assert draft.config.authority == account
+    assert draft.config.authority == fixed_account
     assert len(draft) == 1
     assert captured["kwargs"]["private_key_hex"] == "11" * 32
 
 
-def test_transfer_helper_accepts_configured_chain_discriminant_account_ids() -> None:
+def test_transfer_helper_normalizes_configured_chain_discriminant_for_transaction_draft() -> None:
     client = ToriiClient(
         "http://torii.example",
         session=FakeSession([]),
@@ -1861,6 +1862,7 @@ def test_transfer_helper_accepts_configured_chain_discriminant_account_ids() -> 
     captured: dict[str, object] = {}
     source = account_address(0x46, 0x0171)
     destination = account_address(0x47, 0x0171)
+    fixed_source = account_address(0x46)
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
@@ -1881,7 +1883,7 @@ def test_transfer_helper_accepts_configured_chain_discriminant_account_ids() -> 
     ) == {"hash": "transfer-taira"}
 
     draft = captured["draft"]
-    assert draft.config.authority == source
+    assert draft.config.authority == fixed_source
     assert len(draft) == 1
     assert captured["kwargs"]["private_key_hex"] == "22" * 32
 
@@ -1896,6 +1898,7 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     captured: dict[str, object] = {}
     source = account_address(0x48, 0x0171)
     destination = account_address(0x49, 0x0171)
+    fixed_source = account_address(0x48)
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
     scope = "dataspace:6647857470246403404"
 
@@ -1917,12 +1920,12 @@ def test_transfer_helper_normalizes_scoped_asset_id_account_segment() -> None:
     ) == {"hash": "transfer-taira-scoped"}
 
     draft = captured["draft"]
-    assert draft.config.authority == source
+    assert draft.config.authority == fixed_source
     assert len(draft) == 1
     assert captured["kwargs"]["private_key_hex"] == "23" * 32
 
 
-def test_zk_ace_transfer_helper_preserves_configured_chain_discriminant_account_ids(
+def test_zk_ace_transfer_helper_normalizes_configured_chain_discriminant_for_transaction_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = ToriiClient(
@@ -1934,6 +1937,8 @@ def test_zk_ace_transfer_helper_preserves_configured_chain_discriminant_account_
     captured: dict[str, object] = {}
     source = account_address(0x50, 0x0171)
     destination = account_address(0x51, 0x0171)
+    fixed_source = account_address(0x50)
+    fixed_destination = account_address(0x51)
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
@@ -1984,9 +1989,9 @@ def test_zk_ace_transfer_helper_preserves_configured_chain_discriminant_account_
     }
 
     draft = captured["draft"]
-    assert draft.config.authority == source
-    assert captured["zk_ace_kwargs"]["from_account_id"] == source
-    assert captured["zk_ace_kwargs"]["to_account_id"] == destination
+    assert draft.config.authority == fixed_source
+    assert captured["zk_ace_kwargs"]["from_account_id"] == fixed_source
+    assert captured["zk_ace_kwargs"]["to_account_id"] == fixed_destination
     assert captured["kwargs"]["private_key_hex"] == "24" * 32
 
 

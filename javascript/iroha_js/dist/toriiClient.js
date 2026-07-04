@@ -6439,6 +6439,42 @@ export class ToriiClient {
   }
 
   /**
+   * Draft a governance SCCP route-manifest proposal (`POST /v1/gov/proposals/sccp-route-manifest`).
+   * @param {Record<string, unknown>} payload
+   * @returns {Promise<ToriiGovernanceDraftResponse>}
+   */
+  async governanceProposeSccpRouteManifest(payload, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "governanceProposeSccpRouteManifest",
+    );
+    const body = JSON.stringify(
+      normalizeGovernanceSccpRouteManifestProposalPayload(payload),
+    );
+    const response = await this._request(
+      "POST",
+      "/v1/gov/proposals/sccp-route-manifest",
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body,
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const draft = await this._maybeJson(response);
+    if (!draft) {
+      throw new Error("governance SCCP route-manifest endpoint returned no payload");
+    }
+    return normalizeGovernanceDraftResponse(
+      draft,
+      "governance SCCP route-manifest response",
+    );
+  }
+
+  /**
    * Submit a plain governance ballot (`POST /v1/gov/ballots/plain`).
    * @param {Record<string, unknown>} payload
    * @returns {Promise<ToriiGovernanceBallotResponse>}
@@ -14014,15 +14050,25 @@ function parseGovernanceProposalKind(payload, context) {
   const [variantRaw, details] = entries[0];
   const variant = requireNonEmptyString(variantRaw, `${context}.variant`);
   let deployContract = null;
+  let sccpRouteManifest = null;
   if (variant === "DeployContract") {
     if (!isPlainObject(details)) {
       throw new TypeError("DeployContract proposal kind expects an object payload");
     }
     deployContract = parseGovernanceDeployContract(details, `${context}.DeployContract`);
+  } else if (variant === "SccpRouteManifest") {
+    if (!isPlainObject(details)) {
+      throw new TypeError("SccpRouteManifest proposal kind expects an object payload");
+    }
+    sccpRouteManifest = parseGovernanceSccpRouteManifest(
+      details,
+      `${context}.SccpRouteManifest`,
+    );
   }
   return {
     variant,
     deploy_contract: deployContract,
+    sccp_route_manifest: sccpRouteManifest,
     raw: cloneGovernanceKindRaw(details),
   };
 }
@@ -14037,6 +14083,16 @@ function parseGovernanceDeployContract(payload, context) {
     code_hash_hex: requireNonEmptyString(record.code_hash_hex, `${context}.code_hash_hex`),
     abi_hash_hex: requireNonEmptyString(record.abi_hash_hex, `${context}.abi_hash_hex`),
     abi_version: requireNonEmptyString(record.abi_version, `${context}.abi_version`),
+  };
+}
+
+function parseGovernanceSccpRouteManifest(payload, context) {
+  const record = ensureRecord(payload, context);
+  return {
+    manifest: cloneJsonValue(
+      ensureRecord(record.manifest, `${context}.manifest`),
+      `${context}.manifest`,
+    ),
   };
 }
 
@@ -21259,6 +21315,45 @@ function normalizeGovernanceDeployContractProposalPayload(input) {
     payload.limits = cloneJsonValue(
       record.limits,
       "governanceProposeDeployContract.limits",
+    );
+  }
+  return payload;
+}
+
+function normalizeGovernanceSccpRouteManifestProposalPayload(input) {
+  const record = ensureRecord(
+    input,
+    "governanceProposeSccpRouteManifest payload",
+  );
+  const manifestValue =
+    record.manifest ?? record.routeManifest ?? record.route_manifest;
+  const payload = {
+    manifest: cloneJsonValue(
+      ensureRecord(
+        manifestValue,
+        "governanceProposeSccpRouteManifest.manifest",
+      ),
+      "governanceProposeSccpRouteManifest.manifest",
+    ),
+  };
+  const windowValue = record.window;
+  if (windowValue !== undefined && windowValue !== null) {
+    payload.window = normalizeGovernanceWindow(
+      windowValue,
+      "governanceProposeSccpRouteManifest.window",
+    );
+  }
+  const modeValue = record.mode;
+  if (modeValue !== undefined && modeValue !== null) {
+    payload.mode = normalizeGovernanceVotingMode(
+      modeValue,
+      "governanceProposeSccpRouteManifest.mode",
+    );
+  }
+  if (record.authority !== undefined && record.authority !== null) {
+    payload.authority = ToriiClient._normalizeAccountId(
+      record.authority,
+      "governanceProposeSccpRouteManifest.authority",
     );
   }
   return payload;

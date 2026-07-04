@@ -269,6 +269,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
         let canonicalAssertion = Data("assertion".utf8).base64EncodedString()
         XCTAssertEqual(try Self.proof().challengeHashHex, canonicalChallenge)
         XCTAssertEqual(try Self.proof(platform: "android").platform, "android")
+        XCTAssertEqual(try Self.proof(platform: "ios-appattest").platform, "ios-appattest")
 
         func assertInvalidProof(
             platform: String = OfflineNoteV2Constants.iosPlatform,
@@ -315,7 +316,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             }
         }
 
-        for invalidPlatform in ["ios-appattest", "android-keymint", "android-keymint ", "Android"] {
+        for invalidPlatform in ["android-keymint", "android-keymint ", "Android"] {
             try assertInvalidProof(platform: invalidPlatform, expectedField: "platform")
         }
         for invalidKeyId in ["", " attest-key", "attest-key\n"] {
@@ -338,6 +339,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
     func testDeviceBindingRejectsNonCanonicalIdentityFields() throws {
         XCTAssertEqual(try Self.binding().offlinePublicKey, "offline-public-key")
         XCTAssertEqual(try Self.binding(platform: "android").platform, "android")
+        XCTAssertEqual(try Self.binding(platform: "ios-appattest").platform, "ios-appattest")
         XCTAssertEqual(
             try Self.binding(platform: OfflineNoteV2Constants.iosPlatform, iosEnvironment: "production").iosEnvironment,
             "production"
@@ -414,7 +416,7 @@ final class ToriiOfflineCashAPIModelsTests: XCTestCase {
             }
         }
 
-        for invalidPlatform in ["ios-appattest", "ios-app-attest", "android-keymint", "android-keymint ", "Android"] {
+        for invalidPlatform in ["ios-app-attest", "android-keymint", "android-keymint ", "Android"] {
             try assertInvalidBinding(platform: invalidPlatform, expectedField: "platform")
         }
         for (field, expectedField, applyInvalid) in [

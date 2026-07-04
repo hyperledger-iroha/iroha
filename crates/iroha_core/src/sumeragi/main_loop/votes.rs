@@ -1397,7 +1397,7 @@ impl Actor {
         }
     }
 
-    fn maybe_follow_future_new_view_quorum(
+    pub(super) fn maybe_follow_future_new_view_quorum(
         &mut self,
         height: u64,
         view: u64,
@@ -1487,6 +1487,36 @@ impl Actor {
             });
         if support < required {
             return emitted;
+        }
+
+        if let Some((block_hash, dwell, repair_window, attempts)) =
+            self.known_block_commit_qc_repair_should_defer_new_view_install(height, local_view, now)
+        {
+            let targets =
+                self.known_block_commit_qc_recovery_targets(block_hash, height, local_view, &[]);
+            let retried = self.maybe_request_known_block_commit_qc_recovery(
+                block_hash,
+                height,
+                local_view,
+                &targets,
+                None,
+                "future_new_view_install_deferred_for_commit_qc_repair",
+            );
+            self.publish_canonical_pending_finality_status(now);
+            debug!(
+                height,
+                view,
+                local_view,
+                block = %block_hash,
+                support,
+                required,
+                attempts,
+                retried,
+                repair_dwell_ms = dwell.as_millis(),
+                repair_window_ms = repair_window.as_millis(),
+                "deferring higher NEW_VIEW install while known-block commit-QC repair owns the active frontier view"
+            );
+            return emitted || retried;
         }
 
         // Moving the local round has side effects: it prunes stale slot state and can retire an

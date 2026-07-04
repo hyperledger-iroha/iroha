@@ -921,6 +921,9 @@ READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_EXCLUDED_MARKERS = (
     "Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`",
     "truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence",
     "Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping",
+    "TRX XML metadata percent decoding is bounded and fail-closed",
+    "sensitive metadata hidden behind nested percent encoding",
+    "values still percent-decodable after eight rounds remain forged evidence",
 )
 READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_MARKERS = tuple(
     marker
@@ -955,6 +958,14 @@ READINESS_MARKDOWN_STANDALONE_REQUIRED_EVIDENCE_LINES = (
         (
             "Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`",
             "truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence",
+        ),
+    ),
+    (
+        "- TRX XML metadata percent decoding",
+        (
+            "TRX XML metadata percent decoding is bounded and fail-closed",
+            "sensitive metadata hidden behind nested percent encoding",
+            "values still percent-decodable after eight rounds remain forged evidence",
         ),
     ),
 )
@@ -19483,13 +19494,14 @@ def _all_lanes_not_ready_nested_schema_errors(
                 ALL_LANES_SOURCE_RECORD_HASH_KEYS,
             )
         )
-        errors.extend(
-            _all_lanes_missing_key_errors(
-                source_hashes_label,
-                source_hashes,
-                ALL_LANES_SOURCE_RECORD_HASH_KEYS,
+        if source_hashes:
+            errors.extend(
+                _all_lanes_missing_key_errors(
+                    source_hashes_label,
+                    source_hashes,
+                    ALL_LANES_SOURCE_RECORD_HASH_KEYS,
+                )
             )
-        )
         for field in ALL_LANES_SOURCE_RECORD_HASH_KEYS:
             errors.extend(
                 _nonzero_fixed_hex_field_errors(
@@ -19511,13 +19523,14 @@ def _all_lanes_not_ready_nested_schema_errors(
                 ALL_LANES_SOURCE_ADAPTER_GATE_KEYS,
             )
         )
-        errors.extend(
-            _all_lanes_missing_key_errors(
-                source_gate_label,
-                source_gate,
-                ALL_LANES_SOURCE_ADAPTER_GATE_KEYS,
+        if source_gate:
+            errors.extend(
+                _all_lanes_missing_key_errors(
+                    source_gate_label,
+                    source_gate,
+                    ALL_LANES_SOURCE_ADAPTER_GATE_KEYS,
+                )
             )
-        )
         for field in ("required", "ready"):
             errors.extend(_boolean_field_errors(source_gate_label, source_gate, field))
         errors.extend(
@@ -19581,13 +19594,14 @@ def _all_lanes_not_ready_nested_schema_errors(
                 ALL_LANES_EVM_LIVE_METADATA_KEYS,
             )
         )
-        errors.extend(
-            _all_lanes_missing_key_errors(
-                metadata_label,
-                evm_metadata,
-                ALL_LANES_EVM_LIVE_METADATA_KEYS,
+        if evm_metadata:
+            errors.extend(
+                _all_lanes_missing_key_errors(
+                    metadata_label,
+                    evm_metadata,
+                    ALL_LANES_EVM_LIVE_METADATA_KEYS,
+                )
             )
-        )
         for field in ("required", "ready"):
             errors.extend(_boolean_field_errors(metadata_label, evm_metadata, field))
         for field in (
@@ -19622,13 +19636,14 @@ def _all_lanes_not_ready_nested_schema_errors(
             )
         elif domain == SCCP_DOMAIN_TRON:
             required_destination_keys.add("destination_network_id")
-        errors.extend(
-            _all_lanes_missing_key_errors(
-                destination_label,
-                destination_binding,
-                required_destination_keys,
+        if destination_binding:
+            errors.extend(
+                _all_lanes_missing_key_errors(
+                    destination_label,
+                    destination_binding,
+                    required_destination_keys,
+                )
             )
-        )
         for field in (
             "destination_binding_hash",
             "expected_destination_binding_hash",
@@ -19709,13 +19724,14 @@ def _all_lanes_not_ready_nested_schema_errors(
                 ALL_LANES_ROUTE_ALLOWLIST_KEYS,
             )
         )
-        errors.extend(
-            _all_lanes_missing_key_errors(
-                route_label,
-                route_allowlist,
-                ALL_LANES_ROUTE_ALLOWLIST_KEYS,
+        if route_allowlist:
+            errors.extend(
+                _all_lanes_missing_key_errors(
+                    route_label,
+                    route_allowlist,
+                    ALL_LANES_ROUTE_ALLOWLIST_KEYS,
+                )
             )
-        )
         for field in ("route_allowlist_hash", "expected_route_allowlist_hash"):
             errors.extend(
                 _nonzero_fixed_hex_field_errors(

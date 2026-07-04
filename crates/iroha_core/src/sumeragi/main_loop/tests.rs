@@ -39868,6 +39868,92 @@ async fn retry_known_block_commit_qc_requests_waits_for_commit_quorum_new_view_s
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn future_new_view_quorum_defers_install_while_commit_qc_repair_owns_frontier() {
+    super::status::set_canonical_pending_finality(None);
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let committed_qc = actor
+        .latest_committed_qc()
+        .expect("genesis commit QC should be available");
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let higher_view = view.saturating_add(1);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    insert_validated_pending(actor, block);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending block tracked")
+        .note_local_commit_vote_emitted();
+
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    let last_requested = now.checked_sub(Duration::from_millis(10)).unwrap_or(now);
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(1),
+            view_change_window: Some(Duration::from_secs(60)),
+            first_seen: now,
+            last_requested,
+            last_dependency_progress: now,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 1,
+        },
+    );
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let highest_qc = QcHeaderRef {
+        phase: committed_qc.phase,
+        subject_block_hash: committed_qc.subject_block_hash,
+        height: committed_qc.height,
+        view: committed_qc.view,
+        epoch: committed_qc.epoch,
+    };
+    for peer in topology.as_ref() {
+        actor.subsystems.propose.new_view_tracker.record(
+            height,
+            higher_view,
+            peer.clone(),
+            highest_qc,
+        );
+    }
+
+    let _ =
+        actor.maybe_follow_future_new_view_quorum(height, higher_view, highest_qc, &topology, now);
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view),
+        "owned commit-QC repair should keep the old view installed"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "future NEW_VIEW quorum must not prune the active known-block commit-QC repair"
+    );
+    assert_eq!(
+        super::status::snapshot().canonical_pending_finality,
+        Some(block_hash),
+        "deferred NEW_VIEW install should publish pending finality for the repairing block"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retry_known_block_commit_qc_requests_uses_cached_new_view_qc_after_tracker_pruned() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -198393,6 +198479,7 @@ async fn known_block_commit_evidence_rebroadcasts_frontier_body_to_recovery_targ
 async fn commit_pipeline_arms_missing_commit_qc_recovery_for_stalled_local_vote() {
     let _guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
+    super::status::set_canonical_pending_finality(None);
 
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -198443,6 +198530,11 @@ async fn commit_pipeline_arms_missing_commit_qc_recovery_for_stalled_local_vote(
     assert!(
         after.missing_block_fetch_last_targets > 0,
         "commit-QC repair should target remote commit peers"
+    );
+    assert_eq!(
+        after.canonical_pending_finality,
+        Some(block_hash),
+        "known-block commit-QC repair should publish the frontier pending-finality hash"
     );
 
     harness.shutdown.send();

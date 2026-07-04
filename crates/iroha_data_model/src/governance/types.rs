@@ -24,7 +24,7 @@ use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 use crate::{
     account::AccountId,
     asset::AssetId,
-    isi::governance::CouncilDerivationKind,
+    isi::{bridge::SccpRouteManifest, governance::CouncilDerivationKind},
     runtime::RuntimeUpgradeManifest,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
 };
@@ -404,6 +404,8 @@ pub enum ProposalKind {
     DeployContract(DeployContractProposal),
     /// Schedule a runtime upgrade manifest through governance.
     RuntimeUpgrade(RuntimeUpgradeProposal),
+    /// Publish or replace a SCCP route manifest through governance.
+    SccpRouteManifest(SccpRouteManifestProposal),
 }
 
 /// Proposal payload for deploying an IVM contract via governance.
@@ -435,6 +437,17 @@ pub struct DeployContractProposal {
 pub struct RuntimeUpgradeProposal {
     /// Canonical runtime-upgrade manifest payload.
     pub manifest: RuntimeUpgradeManifest,
+}
+
+/// Proposal payload for publishing an SCCP route manifest through governance.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SccpRouteManifestProposal {
+    /// Canonical SCCP route manifest payload to publish on enactment.
+    pub manifest: SccpRouteManifest,
 }
 
 /// Inclusive execution window for enactment certificates.
@@ -1003,6 +1016,9 @@ mod tests {
                 );
             }
             ProposalKind::RuntimeUpgrade(_) => panic!("unexpected runtime-upgrade proposal"),
+            ProposalKind::SccpRouteManifest(_) => {
+                panic!("unexpected sccp-route-manifest proposal")
+            }
         }
     }
 
@@ -1031,6 +1047,9 @@ mod tests {
                 assert_eq!(inner.manifest.start_height, 42);
             }
             ProposalKind::DeployContract(_) => panic!("unexpected deploy-contract proposal"),
+            ProposalKind::SccpRouteManifest(_) => {
+                panic!("unexpected sccp-route-manifest proposal")
+            }
         }
     }
 
