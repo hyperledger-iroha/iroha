@@ -481,7 +481,7 @@ fn accepted_work_by_lane(
     routing_decisions: &[RoutingDecision],
     schedule: &ProposalBatchSchedule,
 ) -> Result<BTreeMap<LaneId, LaneAcceptedWork>, LaneConsensusDomainError> {
-    let mut accepted_work = BTreeMap::new();
+    let mut accepted_work: BTreeMap<LaneId, LaneAcceptedWork> = BTreeMap::new();
     for action in &schedule.actions {
         let ProposalBatchAction::Accept { index, .. } = *action else {
             continue;

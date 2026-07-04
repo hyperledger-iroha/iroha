@@ -9,7 +9,7 @@ SORASWAP_CLIENT_CONFIG="${SORASWAP_CLIENT_CONFIG:-}"
 PUBLIC_TORII_ROOT="${PUBLIC_TORII_ROOT:-}"
 LOCAL_TORII_ROOT="${LOCAL_TORII_ROOT:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
-WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-/run/secrets/taira-canary-client.toml}"
+WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-}"
 IROHA_BIN="${IROHA_BIN:-}"
 EXPECTED_TAIRA_GIT_SHA="${EXPECTED_TAIRA_GIT_SHA:-}"
 TRADER_APP_API_PROBE_ATTEMPTS="${TRADER_APP_API_PROBE_ATTEMPTS:-6}"
@@ -26,7 +26,7 @@ SKIP_TRADER_APP_API_CHECK=0
 
 usage() {
   cat <<'EOF'
-Usage: verify_soraswap_rollout.sh --public-root URL --write-config PATH
+Usage: verify_soraswap_rollout.sh --public-root URL [--write-config PATH]
                                   [--local-root URL]
                                   [--soraswap-root PATH]
                                   [--soraswap-client-config PATH]
@@ -331,8 +331,10 @@ if [[ $SKIP_MCP_CHECK -ne 1 ]]; then
   mcp_cmd=(
     "${SCRIPT_DIR}/check_mcp_rollout.sh"
     --public-root "$PUBLIC_TORII_ROOT"
-    --write-config "$WRITE_CONFIG"
   )
+  if [[ -n "$WRITE_CONFIG" ]]; then
+    mcp_cmd+=(--write-config "$WRITE_CONFIG")
+  fi
   if [[ -n "$LOCAL_TORII_ROOT" ]]; then
     mcp_cmd+=(--local-root "$LOCAL_TORII_ROOT")
   else
@@ -351,8 +353,10 @@ if [[ $SKIP_SORAFS_CHECK -ne 1 ]]; then
   sorafs_cmd=(
     "${SCRIPT_DIR}/check_sorafs_rollout.sh"
     --public-root "$PUBLIC_TORII_ROOT"
-    --write-config "$WRITE_CONFIG"
   )
+  if [[ -n "$WRITE_CONFIG" ]]; then
+    sorafs_cmd+=(--write-config "$WRITE_CONFIG")
+  fi
   if [[ -n "$IROHA_BIN" ]]; then
     sorafs_cmd+=(--iroha-bin "$IROHA_BIN")
   fi
