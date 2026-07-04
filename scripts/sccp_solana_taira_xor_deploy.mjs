@@ -130,6 +130,22 @@ const normalizeRequiredString = (value, label) => {
   return text;
 };
 
+const requireProductionReadyTrue = (value) => {
+  const hasSnake = Object.hasOwn(value, "production_ready");
+  const hasCamel = Object.hasOwn(value, "productionReady");
+  if (hasSnake && hasCamel) {
+    throw new Error("production_ready must not use multiple aliases");
+  }
+  if (!hasSnake && !hasCamel) {
+    throw new Error("production_ready must be the boolean true");
+  }
+  const ready = hasSnake ? value.production_ready : value.productionReady;
+  if (ready !== true) {
+    throw new Error("production_ready must be the boolean true");
+  }
+  return true;
+};
+
 const normalizeBrowserProver = (value, label) => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
@@ -203,9 +219,7 @@ const normalizeManifest = (template, evidence) => {
     manifest.verifier_target ?? manifest.verifierTarget ?? "SolanaProgram",
     "verifier_target",
   );
-  manifest.production_ready = Boolean(
-    manifest.production_ready ?? manifest.productionReady,
-  );
+  manifest.production_ready = requireProductionReadyTrue(template);
   manifest.network_id_hex = normalizeRequiredString(
     manifest.network_id_hex ?? manifest.networkIdHex ?? SOLANA_TESTNET_CHAIN_ID_HEX,
     "network_id_hex",

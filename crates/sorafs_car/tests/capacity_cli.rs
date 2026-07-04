@@ -141,6 +141,96 @@ fn capacity_declaration_cli_writes_request_payload() {
     assert_eq!(entry.get("value").and_then(Value::as_str), Some("global"));
 }
 
+#[test]
+fn capacity_declaration_cli_reads_private_key_from_file() {
+    let temp = tempdir().expect("tempdir");
+    let spec_path = temp.path().join("declaration_spec.json");
+    fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
+
+    let request_out = temp.path().join("declaration_request.json");
+    let private_key_path = temp.path().join("capacity-private-key.txt");
+    let authority_str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    let private_key_str = "ed25519:filedeadbeefcafebabe";
+    fs::write(&private_key_path, format!("  {private_key_str}\n")).expect("write key");
+
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    cmd.arg("capacity")
+        .arg("declaration")
+        .arg(format!("--spec={}", spec_path.display()))
+        .arg(format!("--request-out={}", request_out.display()))
+        .arg(format!("--authority={authority_str}"))
+        .arg(format!("--private-key-file={}", private_key_path.display()))
+        .arg("--quiet");
+    cmd.assert().success();
+
+    let request_bytes = fs::read(&request_out).expect("read request");
+    let request_value: Value = json::from_slice(&request_bytes).expect("parse request json");
+    let request_obj = request_value.as_object().expect("request must be object");
+    assert_eq!(
+        request_obj.get("private_key").and_then(Value::as_str),
+        Some(private_key_str)
+    );
+}
+
+#[test]
+fn capacity_declaration_cli_rejects_ambiguous_private_key_sources() {
+    let temp = tempdir().expect("tempdir");
+    let spec_path = temp.path().join("declaration_spec.json");
+    fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
+
+    let request_out = temp.path().join("declaration_request.json");
+    let private_key_path = temp.path().join("capacity-private-key.txt");
+    fs::write(&private_key_path, "ed25519:filekey").expect("write key");
+
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let output = cmd
+        .arg("capacity")
+        .arg("declaration")
+        .arg(format!("--spec={}", spec_path.display()))
+        .arg(format!("--request-out={}", request_out.display()))
+        .arg("--authority=authority@capacity")
+        .arg("--private-key=ed25519:argvkey")
+        .arg(format!("--private-key-file={}", private_key_path.display()))
+        .arg("--quiet")
+        .output()
+        .expect("run command");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--private-key and --private-key-file are mutually exclusive"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn capacity_declaration_cli_rejects_empty_private_key_file() {
+    let temp = tempdir().expect("tempdir");
+    let spec_path = temp.path().join("declaration_spec.json");
+    fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
+
+    let request_out = temp.path().join("declaration_request.json");
+    let private_key_path = temp.path().join("capacity-private-key.txt");
+    fs::write(&private_key_path, "\n\t ").expect("write empty key");
+
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let output = cmd
+        .arg("capacity")
+        .arg("declaration")
+        .arg(format!("--spec={}", spec_path.display()))
+        .arg(format!("--request-out={}", request_out.display()))
+        .arg("--authority=authority@capacity")
+        .arg(format!("--private-key-file={}", private_key_path.display()))
+        .arg("--quiet")
+        .output()
+        .expect("run command");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("must not be empty"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
 const SPEC_JSON: &str = r#"
 {
   "provider_id_hex": "1111111111111111111111111111111111111111111111111111111111111111",

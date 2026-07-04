@@ -2174,12 +2174,7 @@ mod tests {
                     MultisigPropose::new(
                         multisig.clone(),
                         vec![
-                            transfer(
-                                &multisig,
-                                &fee_asset,
-                                Numeric::new(1u64, 0),
-                                &recipient,
-                            ),
+                            transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
                             transfer(&multisig, &fee_asset, minor_units(observed), &treasury),
                         ],
                         None,
