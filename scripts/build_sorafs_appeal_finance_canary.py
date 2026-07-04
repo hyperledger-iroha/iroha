@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import secrets
 import sys
 from collections.abc import Iterable, Sequence
@@ -18,28 +19,56 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_appeal_finance_rollout_evidence import (  # noqa: E402
+    CONFIG_VERSION_ERROR,
+    CONFIG_VERSION_PATTERN,
     DEFAULT_MAX_CANARY_AGE_SECS,
     DEFAULT_MAX_DASHBOARD_AGE_SECS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
     DEFAULT_MAX_SETTLEMENT_LAG_SECS,
     DEFAULT_MIN_PEERS,
+    DEPOSIT_PROBE_LABEL_ERROR,
+    DEPOSIT_PROBE_LABEL_PATTERN,
+    FORBIDDEN_CONFIG_VERSION_MARKERS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
+    GOVERNANCE_REPORT_LABEL_ERROR,
+    GOVERNANCE_REPORT_LABEL_PATTERN,
+    GOVERNANCE_SETTLEMENT_RECEIPT_LABEL_ERROR,
+    GOVERNANCE_SETTLEMENT_RECEIPT_LABEL_PATTERN,
+    GOVERNANCE_WEEKLY_ROLLUP_LABEL_ERROR,
+    GOVERNANCE_WEEKLY_ROLLUP_LABEL_PATTERN,
     KIND_BY_NAME,
+    PEER_LABEL_ERROR,
+    PEER_LABEL_PATTERN,
     REQUIRED_APPEAL_CLASSES,
     REQUIRED_DEPOSIT_ROUTES,
     REQUIRED_METRICS,
     REQUIRED_OUTCOMES,
     REQUIRED_PAYLOAD_KINDS,
+    REQUIRED_QUOTE_API_QUOTES,
     REQUIRED_QUOTE_ROUTES,
     REQUIRED_RECONCILIATION_STATUSES,
+    REQUIRED_SETTLEMENT_INSTRUCTION_STEPS,
     REQUIRED_SETTLEMENT_ROUTES,
     REQUIRED_URGENCIES,
+    RECONCILIATION_CASE_LABEL_ERROR,
+    RECONCILIATION_CASE_LABEL_PATTERN,
+    SUBMITTER_SIGNER_LABEL_ERROR,
+    SUBMITTER_SIGNER_LABEL_PATTERN,
+    SUBMITTER_STEP_LABEL_ERROR,
+    SUBMITTER_STEP_LABEL_PATTERN,
+    VALIDATOR_LABEL_ERROR,
+    VALIDATOR_LABEL_PATTERN,
     ValidationOptions,
+    WORKER_BALLOT_LABEL_ERROR,
+    WORKER_BALLOT_LABEL_PATTERN,
     validate_evidence_payload,
 )
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -207,6 +236,27 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_config_version_arg(value: str | None, *, errors: list[str]) -> None:
+    """Require a reviewed lowercase appeal-finance config version label."""
+
+    validate_canonical_string(value, label="--config-version", errors=errors)
+    if not isinstance(value, str):
+        return
+    if CONFIG_VERSION_PATTERN.fullmatch(value) is None:
+        errors.append(CONFIG_VERSION_ERROR.replace("config_version", "--config-version"))
+        return
+    name = value[: value.rfind("-v")]
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_CONFIG_VERSION_MARKERS
+        if marker in name.split("-")
+    )
+    if forbidden:
+        errors.append(
+            f"--config-version must not contain non-production markers {forbidden}"
+        )
+
+
 def validate_reviewed_inventory(
     values: Iterable[str],
     *,
@@ -215,6 +265,8 @@ def validate_reviewed_inventory(
     kind: str,
     count_option: str,
     errors: list[str],
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
 
@@ -223,6 +275,21 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required for {kind}")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if pattern is None:
+            continue
+        if pattern.fullmatch(item) is None:
+            if label_error is None:
+                errors.append(f"{option} has malformed inventory label")
+            else:
+                errors.append(render_inventory_label_error(label_error, option))
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in item.split("-")
+        )
+        if forbidden:
+            errors.append(f"{option} must not contain non-production markers {forbidden}")
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
@@ -239,6 +306,8 @@ def validate_optional_reviewed_inventory(
     kind: str,
     count_option: str,
     errors: list[str],
+    pattern: re.Pattern[str] | None = None,
+    label_error: str | None = None,
 ) -> list[str]:
     """Return reviewed inventory labels, allowing an empty zero-count inventory."""
 
@@ -252,6 +321,25 @@ def validate_optional_reviewed_inventory(
         kind=kind,
         count_option=count_option,
         errors=errors,
+        pattern=pattern,
+        label_error=label_error,
+    )
+
+
+def render_inventory_label_error(label_error: str, option: str) -> str:
+    """Render checker inventory-label diagnostics against a CLI option."""
+
+    return (
+        label_error.replace("deposit_probes[].name", option)
+        .replace("signers[].name", option)
+        .replace("steps[].name", option)
+        .replace("ballots[].name", option)
+        .replace("reports[].name", option)
+        .replace("weekly_rollups[].name", option)
+        .replace("settlement_receipts[].name", option)
+        .replace("peers[].name", option)
+        .replace("validators[].name", option)
+        .replace("cases[].name", option)
     )
 
 
@@ -346,6 +434,7 @@ def build_route_records(
             "name": route,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "authz_enforced": authz_enforced,
             "signature_verified": True,
             "latency_ms": args.route_latency_ms,
@@ -402,6 +491,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "config_source": "iroha_config",
                 "policy_digest_hex": args.policy_digest_hex,
                 "class_count": args.class_count,
+                "classes": args.appeal_classes,
             }
         )
     elif args.kind == "quote_api":
@@ -440,6 +530,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "routes": routes,
                 "settlement_probe_count": args.settlement_probe_count,
                 "instruction_step_count": args.instruction_step_count,
+                "instruction_steps": args.instruction_steps,
                 "outcomes": args.outcomes,
                 "reconciliation_statuses": args.reconciliation_statuses,
             }
@@ -459,6 +550,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "ballot_replay_count": args.ballot_replay_count,
+                "ballots": build_inventory_records(args.replayed_ballots),
                 "max_settlement_lag_seconds": args.max_settlement_lag_seconds,
             }
         )
@@ -473,6 +565,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "settlement_receipts": build_inventory_records(
                     args.settlement_receipts
                 ),
+                "payload_kind_count": len(args.payload_kinds),
                 "payload_kinds": args.payload_kinds,
             }
         )
@@ -480,6 +573,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "metrics": args.metrics,
+                "metric_count": len(args.metrics),
+                "payload_kind_count": len(args.payload_kinds),
                 "payload_kinds": args.payload_kinds,
             }
         )
@@ -543,7 +638,19 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--class-count", args.class_count),
             ),
         )
-        validate_canonical_string(args.config_version, label="--config-version", errors=errors)
+        args.appeal_classes = validate_name_set(
+            split_csv_values(args.appeal_class),
+            allowed=REQUIRED_APPEAL_CLASSES,
+            option="--appeal-class",
+            errors=errors,
+        )
+        if (
+            args.class_count is not None
+            and args.appeal_classes
+            and args.class_count != len(args.appeal_classes)
+        ):
+            errors.append("--class-count must match --appeal-class inventory")
+        validate_config_version_arg(args.config_version, errors=errors)
     elif args.kind == "quote_api":
         require_kind_options(
             args,
@@ -559,6 +666,11 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--quote-route",
             errors=errors,
         )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.appeal_classes = validate_name_set(
             split_csv_values(args.appeal_class),
             allowed=REQUIRED_APPEAL_CLASSES,
@@ -571,6 +683,11 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--urgency",
             errors=errors,
         )
+        if (
+            args.quote_count is not None
+            and args.quote_count != REQUIRED_QUOTE_API_QUOTES
+        ):
+            errors.append("--quote-count must match required class/urgency product")
     elif args.kind == "deposit_lifecycle":
         require_kind_options(
             args,
@@ -587,6 +704,11 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--deposit-route",
             errors=errors,
         )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.confirmed_deposit_probes = validate_reviewed_inventory(
             split_csv_values(args.confirmed_deposit_probe),
             expected_count=args.confirmed_deposit_count or 0,
@@ -594,6 +716,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="deposit_lifecycle",
             count_option="--confirmed-deposit-count",
             errors=errors,
+            pattern=DEPOSIT_PROBE_LABEL_PATTERN,
+            label_error=DEPOSIT_PROBE_LABEL_ERROR,
         )
         unconfirmed_probe_count = 0
         if args.deposit_probe_count is not None and args.confirmed_deposit_count is not None:
@@ -612,6 +736,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="deposit_lifecycle",
             count_option="--deposit-probe-count",
             errors=errors,
+            pattern=DEPOSIT_PROBE_LABEL_PATTERN,
+            label_error=DEPOSIT_PROBE_LABEL_ERROR,
         )
         deposit_probe_names = (
             args.confirmed_deposit_probes + args.unconfirmed_deposit_probes
@@ -636,10 +762,21 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--settlement-route",
             errors=errors,
         )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.outcomes = validate_name_set(
             split_csv_values(args.outcome),
             allowed=REQUIRED_OUTCOMES,
             option="--outcome",
+            errors=errors,
+        )
+        args.instruction_steps = validate_name_set(
+            split_csv_values(args.instruction_step),
+            allowed=REQUIRED_SETTLEMENT_INSTRUCTION_STEPS,
+            option="--instruction-step",
             errors=errors,
         )
         args.reconciliation_statuses = validate_name_set(
@@ -666,6 +803,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="settlement_submitter",
             count_option="--configured-signer-count",
             errors=errors,
+            pattern=SUBMITTER_SIGNER_LABEL_PATTERN,
+            label_error=SUBMITTER_SIGNER_LABEL_ERROR,
         )
         args.submitted_steps = validate_reviewed_inventory(
             split_csv_values(args.submitted_step),
@@ -674,6 +813,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="settlement_submitter",
             count_option="--submitted-step-count",
             errors=errors,
+            pattern=SUBMITTER_STEP_LABEL_PATTERN,
+            label_error=SUBMITTER_STEP_LABEL_ERROR,
         )
         queued_only_step_count = 0
         if args.queued_step_count is not None and args.submitted_step_count is not None:
@@ -688,6 +829,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="settlement_submitter",
             count_option="--queued-step-count",
             errors=errors,
+            pattern=SUBMITTER_STEP_LABEL_PATTERN,
+            label_error=SUBMITTER_STEP_LABEL_ERROR,
         )
         step_names = args.submitted_steps + args.queued_only_steps
         if len(set(step_names)) != len(step_names):
@@ -700,6 +843,16 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--ballot-replay-count", args.ballot_replay_count),
                 ("--max-settlement-lag-seconds", args.max_settlement_lag_seconds),
             ),
+        )
+        args.replayed_ballots = validate_reviewed_inventory(
+            split_csv_values(args.replayed_ballot),
+            expected_count=args.ballot_replay_count or 0,
+            option="--replayed-ballot",
+            kind="moderation_worker",
+            count_option="--ballot-replay-count",
+            errors=errors,
+            pattern=WORKER_BALLOT_LABEL_PATTERN,
+            label_error=WORKER_BALLOT_LABEL_ERROR,
         )
     elif args.kind == "governance_dag_publication":
         require_kind_options(
@@ -718,6 +871,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="governance_dag_publication",
             count_option="--report-count",
             errors=errors,
+            pattern=GOVERNANCE_REPORT_LABEL_PATTERN,
+            label_error=GOVERNANCE_REPORT_LABEL_ERROR,
         )
         args.weekly_rollups = validate_reviewed_inventory(
             split_csv_values(args.weekly_rollup),
@@ -726,6 +881,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="governance_dag_publication",
             count_option="--weekly-rollup-count",
             errors=errors,
+            pattern=GOVERNANCE_WEEKLY_ROLLUP_LABEL_PATTERN,
+            label_error=GOVERNANCE_WEEKLY_ROLLUP_LABEL_ERROR,
         )
         args.settlement_receipts = validate_reviewed_inventory(
             split_csv_values(args.settlement_receipt),
@@ -734,6 +891,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             kind="governance_dag_publication",
             count_option="--settlement-receipt-count",
             errors=errors,
+            pattern=GOVERNANCE_SETTLEMENT_RECEIPT_LABEL_PATTERN,
+            label_error=GOVERNANCE_SETTLEMENT_RECEIPT_LABEL_ERROR,
         )
         args.payload_kinds = validate_name_set(
             split_csv_values(args.payload_kind),
@@ -774,6 +933,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--peer",
             kind="multi_peer_reconciliation",
             count_option="--peer-count",
+            pattern=PEER_LABEL_PATTERN,
+            label_error=PEER_LABEL_ERROR,
             errors=errors,
         )
         args.validators = validate_reviewed_inventory(
@@ -782,6 +943,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--validator",
             kind="multi_peer_reconciliation",
             count_option="--validator-count",
+            pattern=VALIDATOR_LABEL_PATTERN,
+            label_error=VALIDATOR_LABEL_ERROR,
             errors=errors,
         )
         args.reconciliation_cases = validate_reviewed_inventory(
@@ -790,6 +953,8 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--reconciliation-case",
             kind="multi_peer_reconciliation",
             count_option="--case-count",
+            pattern=RECONCILIATION_CASE_LABEL_PATTERN,
+            label_error=RECONCILIATION_CASE_LABEL_ERROR,
             errors=errors,
         )
     if args.kind in POLICY_DIGEST_KINDS:
@@ -858,12 +1023,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -906,10 +1073,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--settlement-route", action="append", default=[])
     parser.add_argument("--settlement-probe-count", type=positive_int_arg)
     parser.add_argument("--instruction-step-count", type=positive_int_arg)
+    parser.add_argument("--instruction-step", action="append", default=[])
     parser.add_argument("--outcome", action="append", default=[])
     parser.add_argument("--reconciliation-status", action="append", default=[])
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=30)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--max-route-latency-ms", type=positive_int_arg)
     parser.add_argument("--configured-signer-count", type=positive_int_arg)
     parser.add_argument("--signer", action="append", default=[])
@@ -919,6 +1088,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--submitted-step-count", type=positive_int_arg)
     parser.add_argument("--max-settlement-lag-seconds", type=non_negative_int_arg)
     parser.add_argument("--ballot-replay-count", type=positive_int_arg)
+    parser.add_argument("--replayed-ballot", action="append", default=[])
     parser.add_argument("--report-count", type=positive_int_arg)
     parser.add_argument("--report", action="append", default=[])
     parser.add_argument("--weekly-rollup-count", type=positive_int_arg)

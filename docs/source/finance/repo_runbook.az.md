@@ -161,7 +161,7 @@ iroha --config client.toml --output \
 * CLI çağırışları bu gün boş təlimat metadatasını yayır; məskunlaşma səviyyəsində olduqda Python köməkçilərindən istifadə edin
   metadata əlavə edilməlidir.
 * ISO 20022 sahə xəritəsi üçün [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) baxın
-  bu təlimatları dəstəkləyir (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
+  bu təlimatları dəstəkləyir (`sese.023`, `sese.025`, `colr.012`, `pacs.009`, `camt.054`).
 * CLI-nin Norito ilə yanaşı kanonik XML önizləməsini yayması üçün `--iso-xml-out <path>` keçin
   təlimat; fayl yuxarıdakı xəritələşdirməni izləyir (DvP üçün `sese.023`, PvP` üçün `sese.025`). cütləşdirin
   `--iso-reference-crosswalk <path>` ilə işarələyin, beləliklə CLI `--delivery-instrument-id`-i təsdiqləyir

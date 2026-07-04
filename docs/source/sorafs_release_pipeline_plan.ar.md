@@ -4,9 +4,9 @@ direction: rtl
 source: docs/source/sorafs_release_pipeline_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 226cff418c5c50cfe095d28d310b2d94d11160062e3c53c3edfe971ba284195b
-source_last_modified: "2026-07-01T21:09:57.142415+00:00"
-translation_last_reviewed: 2026-07-02
+source_hash: f256aaf61e64742a07cbc567fc5cef49e9028602037cdf80a4afd486e9ba9cf3
+source_last_modified: "2026-07-03T17:29:04.185345+00:00"
+translation_last_reviewed: 2026-07-03
 ---
 # SoraFS CLI/SDK Release & Testing Pipeline
 
@@ -77,6 +77,10 @@ translation_last_reviewed: 2026-07-02
 - `scripts/release_sorafs_cli.sh` wraps `sorafs_cli manifest sign` and
   `manifest verify-signature`, producing signing/verification summaries so the
   release job fails fast if bundle metadata drifts before artefacts publish.
+  The wrapper rejects symlinked or non-regular bundle, signature, sign-summary,
+  and verify-summary targets, plus symlinked output-parent components, before
+  invoking the signing CLI so release evidence cannot be written through
+  ambiguous filesystem aliases.
 - `scripts/package_sorafs_validate_release.sh` builds or packages
   `sorafs-validate` into `dist/sorafs-validate-release/`, stages the checked
   `include/sorafs_reference.h` C FFI header for downstream SDK bindings,
@@ -112,7 +116,8 @@ translation_last_reviewed: 2026-07-02
   before aggregate promotion, validate governance public-head identifiers as
   lowercase hex list metadata before aggregate promotion, validate exact
   object-list metadata shapes before aggregate promotion, reject exact duplicate
-  object-list metadata entries while preserving artifact order, require every
+  object-list metadata entries while preserving artifact order, reject
+  domain-duplicate object-list metadata identities before aggregate promotion, require every
   object-list metadata field to declare its owning required artifact kind before
   its detail rows can be matched to recognized artifact fingerprints, validate exact
   object metadata shapes before aggregate
@@ -122,7 +127,10 @@ translation_last_reviewed: 2026-07-02
   require required-row and artifact schema labels to match the owning checker
   evidence schemas, reject extra required-row fields outside the schema-closed
   payload-free required-row contract, require canonical unique artifact paths
-  and lowercase SHA-256 digests, reject explicit artifact `status` labels
+  whose raw or repeatedly percent-decoded components do not contain traversal,
+  hidden separators, drive prefixes, URI-scheme-like path tokens, or
+  secret-looking labels, require
+  lowercase SHA-256 digests, reject explicit artifact `status` labels
   outside successful states such as `passed` or `verified`, reject
   extra artifact-row fields
   outside the schema-closed payload-free

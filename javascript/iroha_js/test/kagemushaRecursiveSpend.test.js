@@ -3290,6 +3290,23 @@ test("Kagemusha recursive spend typed encoders write request schemas and compact
   assert.equal(appendFields[5][0], 1);
   assert.equal(appendFields[6].readBigUInt64LE(0), 0n);
 
+  const appendSnakeAliasPayload = assertKagemushaArchiveSchema(
+    encodeKagemushaRecursiveSpendAppendRequest({
+      previousBundle: sharedRecursiveSpendArchive("init_bundle"),
+      recordBundle,
+      pallasOpenEnvelopes,
+      currentNote: note,
+      output_proof_circuit_id: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+      previousLineageVerifierRecord: verifierRecord,
+    }),
+    KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME,
+  );
+  const appendSnakeAliasFields = kagemushaReadAllFields(appendSnakeAliasPayload);
+  assert.deepEqual(
+    appendSnakeAliasFields[4],
+    Buffer.concat([Buffer.from([aggregationOutputSelector.length]), aggregationOutputSelector]),
+  );
+
   const appendWithArtifactsPayload = assertKagemushaArchiveSchema(
     encodeKagemushaRecursiveSpendAppendRequest({
       previousBundle: sharedRecursiveSpendArchive("init_bundle"),
@@ -3425,6 +3442,25 @@ test("Kagemusha recursive spend typed codecs reject malformed inputs before nati
   const verifierRecord = recursiveSpendVerifierRecord();
   const redeemProof = syntheticKagemushaArchive(KAGEMUSHA_PROOF_ATTACHMENT_WIRE_NAME, 0x77);
   const lineageWitness = sharedRecursiveSpendArchive("lineage_witness_append_result");
+  const appendRequestWithoutSelector = {
+    previousBundle: sharedRecursiveSpendArchive("init_bundle"),
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote: note,
+    previousLineageVerifierRecord: verifierRecord,
+  };
+  for (const request of [
+    appendRequestWithoutSelector,
+    { ...appendRequestWithoutSelector, outputProofCircuitId: undefined },
+    { ...appendRequestWithoutSelector, outputProofCircuitId: null },
+    { ...appendRequestWithoutSelector, outputProofCircuitId: "" },
+    { ...appendRequestWithoutSelector, output_proof_circuit_id: "" },
+  ]) {
+    assert.throws(
+      () => encodeKagemushaRecursiveSpendAppendRequest(request),
+      kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+    );
+  }
   const invalidPublicAmounts = [
     "",
     "0",
@@ -5646,15 +5682,15 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1,
     "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1",
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(),
     undefined,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(null),
     null,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
     "",
   );

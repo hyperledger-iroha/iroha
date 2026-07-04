@@ -31,7 +31,7 @@ policy, and the capacity marketplace roadmap.
 | Task | Owner(s) | Notes |
 |------|----------|-------|
 | Create `crates/sorafs_node` with modules: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Re-export reusable types for Torii integration. |
-| Implement `StorageConfig` mapped from `SoraFsStorage` (actual/default/user). | Storage Team / Config WG | Ensure serde/Norito parity and environment overrides. |
+| Implement `StorageConfig` mapped from `SoraFsStorage` (actual/default/user). | Storage Team / Config WG | Ensure Norito/config snapshot parity without production environment overrides. |
 | Provide `NodeHandle` facade that Torii uses to submit pins/fetches. | Storage Team | Encapsulate storage internals. |
 
 ### B. Persistent Chunk Store
@@ -46,10 +46,10 @@ policy, and the capacity marketplace roadmap.
 
 | Endpoint | Behaviour | Tasks |
 |----------|-----------|-------|
-| `POST /sorafs/pin` | Accept `PinProposalV1`, validate manifests, queue ingestion, respond with manifest CID. | Validate chunk profile, enforce quotas, stream data via chunk store. |
-| `GET /sorafs/chunks/{cid}` + range query | Serve chunk bytes with `Content-Chunker` headers; respect range capability spec. | Use scheduler + stream budgets (tie-in to SF-2d). |
-| `POST /sorafs/por/sample` | Run PoR sampling for a manifest and return proof bundle. | Reuse chunk store sampling, respond with Norito JSON. |
-| `GET /sorafs/telemetry` | Summaries: capacity, PoR success, fetch error counts. | Provide data for dashboards/operators. |
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
 
 The runtime now threads these PoR interactions through `sorafs_node::por`: the tracker records every `PorChallengeV1`, `PorProofV1`, and `AuditVerdictV1` so the `CapacityMeter` and scheduler metrics reflect governance verdicts without bespoke plumbing in Torii.
 
@@ -108,7 +108,8 @@ Logs / events:
 ### Milestone Exit Criteria
 
 - `cargo run -p sorafs_node --example pin_fetch` works against local fixtures.
-- Torii builds with `--features sorafs-storage` and passes integration tests.
+- Torii exposes the documented `/v1/sorafs/pin*` and
+  `/v1/sorafs/storage/*` routes and passes integration tests.
 - Documentation (`sorafs_node_storage.md`) updated to match implementation; operator guide drafted.
 - Telemetry visible in staging dashboards; alerts configured for capacity saturation and PoR failures.
 
@@ -142,6 +143,7 @@ evidence and hosted governance archive hand-offs remain tracked in `roadmap.md`.
 
 - Update `docs/source/sorafs/sorafs_node_storage.md` with configuration defaults, CLI examples.
 - Create operator runbook (`docs/source/sorafs/runbooks/sorafs_node_ops.md`) covering deployment, monitoring, troubleshooting.
-- Publish API reference for the new endpoints under the docs portal.
+- Keep the API reference for the `/v1/sorafs/pin*` and
+  `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.
 
 Progress should be reflected in the roadmap by checking off the items in the SF-3 section as features land.

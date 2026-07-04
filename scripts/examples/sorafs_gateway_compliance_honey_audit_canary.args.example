@@ -1,0 +1,9 @@
+# Reviewed honey-audit canary inputs for the SFM-4 gateway compliance gate.
+--kind honey_audit
+--out artifacts/sorafs_gateway/honey-audit-canary.json
+--deployment-id sorafs-gateway-prod-20260701
+--environment production
+--generated-at-unix 1800100000
+--now-unix 1800100000
+--bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+--audit-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

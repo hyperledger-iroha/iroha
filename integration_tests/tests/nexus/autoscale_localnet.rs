@@ -216,6 +216,7 @@ struct ExpandContractCycleOutcome {
     peers_with_scale_out_after_expansion: usize,
     peers_with_scale_in_after_expansion: usize,
     peers_with_scale_in_since_cycle_start: usize,
+    scale_in_transition_required: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -682,13 +683,14 @@ impl AutoscaleSoakReporter {
             "autoscale soak cycle {cycle_index} attempt {attempt}: fresh scale-out transition quorum miss ({}/{TOTAL_PEERS}; required {quorum_required}) must fail the soak instead of being summarized as success",
             cycle_outcome.peers_with_scale_out_after_expansion,
         );
+        let scale_in_transition_quorum_met = scale_in_transition_quorum_satisfied(
+            cycle_outcome.peers_with_scale_in_after_expansion,
+            Some(cycle_outcome.peers_with_scale_in_since_cycle_start),
+            quorum_required,
+        );
         ensure!(
-            scale_in_transition_quorum_satisfied(
-                cycle_outcome.peers_with_scale_in_after_expansion,
-                Some(cycle_outcome.peers_with_scale_in_since_cycle_start),
-                quorum_required,
-            ),
-            "autoscale soak cycle {cycle_index} attempt {attempt}: scale-in transition quorum miss after contraction (after expansion: {}/{TOTAL_PEERS}; since cycle start: {}/{TOTAL_PEERS}; required {quorum_required}) must fail the soak instead of being summarized as success",
+            !cycle_outcome.scale_in_transition_required || scale_in_transition_quorum_met,
+            "autoscale soak cycle {cycle_index} attempt {attempt}: required scale-in transition quorum miss after contraction (after expansion: {}/{TOTAL_PEERS}; since cycle start: {}/{TOTAL_PEERS}; required {quorum_required}) must fail the soak instead of being summarized as success",
             cycle_outcome.peers_with_scale_in_after_expansion,
             cycle_outcome.peers_with_scale_in_since_cycle_start,
         );
@@ -701,11 +703,7 @@ impl AutoscaleSoakReporter {
             self.scale_out_quorum_misses_total =
                 self.scale_out_quorum_misses_total.saturating_add(1);
         }
-        if !scale_in_transition_quorum_satisfied(
-            cycle_outcome.peers_with_scale_in_after_expansion,
-            Some(cycle_outcome.peers_with_scale_in_since_cycle_start),
-            quorum_required,
-        ) {
+        if cycle_outcome.scale_in_transition_required && !scale_in_transition_quorum_met {
             self.scale_in_post_expansion_quorum_misses_total = self
                 .scale_in_post_expansion_quorum_misses_total
                 .saturating_add(1);
@@ -1384,7 +1382,75 @@ struct LaneValidatorSnapshot {
     max_activation_height: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Default)]
+struct ProposalGateSnapshot {
+    height: u64,
+    view: u64,
+    queue_len: u64,
+    pending_blocks_total: u64,
+    pending_blocks_blocking: u64,
+    active_pending_for_tip: u64,
+    queue_saturated: bool,
+    active_pending: bool,
+    rbc_backlog: bool,
+    relay_backpressure: bool,
+    consensus_queue_backpressure: bool,
+    should_defer: bool,
+    only_pacing_backpressure: bool,
+    commit_inflight_active: bool,
+    cached_proposal_present: bool,
+    cached_proposal_hint_present: bool,
+    round_liveness_present: bool,
+    frontier_owner_present: bool,
+    missing_qc_liveness_active: bool,
+    last_pacemaker_attempt_age_ms: u64,
+    last_successful_proposal_age_ms: u64,
+}
+
+impl std::fmt::Debug for ProposalGateSnapshot {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt.debug_struct("ProposalGateSnapshot")
+            .field("height", &self.height)
+            .field("view", &self.view)
+            .field("queue_len", &self.queue_len)
+            .field("pending_blocks_total", &self.pending_blocks_total)
+            .field("pending_blocks_blocking", &self.pending_blocks_blocking)
+            .field("active_pending_for_tip", &self.active_pending_for_tip)
+            .field("queue_saturated", &self.queue_saturated)
+            .field("active_pending", &self.active_pending)
+            .field("rbc_backlog", &self.rbc_backlog)
+            .field("relay_backpressure", &self.relay_backpressure)
+            .field(
+                "consensus_queue_backpressure",
+                &self.consensus_queue_backpressure,
+            )
+            .field("should_defer", &self.should_defer)
+            .field("only_pacing_backpressure", &self.only_pacing_backpressure)
+            .field("commit_inflight_active", &self.commit_inflight_active)
+            .field("cached_proposal_present", &self.cached_proposal_present)
+            .field(
+                "cached_proposal_hint_present",
+                &self.cached_proposal_hint_present,
+            )
+            .field("round_liveness_present", &self.round_liveness_present)
+            .field("frontier_owner_present", &self.frontier_owner_present)
+            .field(
+                "missing_qc_liveness_active",
+                &self.missing_qc_liveness_active,
+            )
+            .field(
+                "last_pacemaker_attempt_age_ms",
+                &self.last_pacemaker_attempt_age_ms,
+            )
+            .field(
+                "last_successful_proposal_age_ms",
+                &self.last_successful_proposal_age_ms,
+            )
+            .finish()
+    }
+}
+
+#[derive(Clone, Default)]
 struct PeerStatusSnapshot {
     lanes: Vec<LaneStatusSnapshot>,
     lane_commitments: Vec<LaneCommitmentSnapshot>,
@@ -1393,9 +1459,80 @@ struct PeerStatusSnapshot {
     lane_validators: Vec<LaneValidatorSnapshot>,
     commit_signatures_required: u64,
     commit_qc_validator_set_len: u64,
+    tx_queue_depth: u64,
+    tx_queue_capacity: u64,
+    tx_queue_saturated: bool,
+    tx_queue_saturated_by_count: bool,
+    tx_queue_saturated_by_bytes: bool,
+    tx_queue_saturated_by_age: bool,
+    tx_queue_oldest_queued_age_ms: u64,
+    commit_inflight_active: bool,
+    commit_inflight_height: u64,
+    commit_inflight_view: u64,
+    commit_inflight_elapsed_ms: u64,
+    commit_inflight_timeout_total: u64,
+    pending_rbc_entries: u64,
+    pacemaker_backpressure_deferrals_total: u64,
+    proposal_gate: ProposalGateSnapshot,
     txs_approved: u64,
     txs_rejected: u64,
     blocks_non_empty: u64,
+}
+
+impl std::fmt::Debug for PeerStatusSnapshot {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt.debug_struct("PeerStatusSnapshot")
+            .field("lanes", &self.lanes)
+            .field("lane_commitments", &self.lane_commitments)
+            .field("lane_governance_ids", &self.lane_governance_ids)
+            .field("lane_relay", &self.lane_relay)
+            .field("lane_validators", &self.lane_validators)
+            .field(
+                "commit_signatures_required",
+                &self.commit_signatures_required,
+            )
+            .field(
+                "commit_qc_validator_set_len",
+                &self.commit_qc_validator_set_len,
+            )
+            .field("tx_queue_depth", &self.tx_queue_depth)
+            .field("tx_queue_capacity", &self.tx_queue_capacity)
+            .field("tx_queue_saturated", &self.tx_queue_saturated)
+            .field(
+                "tx_queue_saturated_by_count",
+                &self.tx_queue_saturated_by_count,
+            )
+            .field(
+                "tx_queue_saturated_by_bytes",
+                &self.tx_queue_saturated_by_bytes,
+            )
+            .field("tx_queue_saturated_by_age", &self.tx_queue_saturated_by_age)
+            .field(
+                "tx_queue_oldest_queued_age_ms",
+                &self.tx_queue_oldest_queued_age_ms,
+            )
+            .field("commit_inflight_active", &self.commit_inflight_active)
+            .field("commit_inflight_height", &self.commit_inflight_height)
+            .field("commit_inflight_view", &self.commit_inflight_view)
+            .field(
+                "commit_inflight_elapsed_ms",
+                &self.commit_inflight_elapsed_ms,
+            )
+            .field(
+                "commit_inflight_timeout_total",
+                &self.commit_inflight_timeout_total,
+            )
+            .field("pending_rbc_entries", &self.pending_rbc_entries)
+            .field(
+                "pacemaker_backpressure_deferrals_total",
+                &self.pacemaker_backpressure_deferrals_total,
+            )
+            .field("proposal_gate", &self.proposal_gate)
+            .field("txs_approved", &self.txs_approved)
+            .field("txs_rejected", &self.txs_rejected)
+            .field("blocks_non_empty", &self.blocks_non_empty)
+            .finish()
+    }
 }
 
 fn decode_lane_validator_snapshot(
@@ -1507,35 +1644,123 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                     committed: lane.committed,
                 })
                 .collect::<Vec<_>>();
-            let (lane_commitments, lane_governance_ids, lane_relay) =
-                match client.get_sumeragi_status() {
-                    Ok(sumeragi_status) => (
-                        sumeragi_status
-                            .lane_commitments
-                            .into_iter()
-                            .map(|lane| LaneCommitmentSnapshot {
-                                lane_id: lane.lane_id.as_u32(),
-                                block_height: lane.block_height,
-                                tx_count: lane.tx_count,
-                                teu_total: lane.teu_total,
-                            })
-                            .collect::<Vec<_>>(),
-                        sumeragi_status
-                            .lane_governance
-                            .into_iter()
-                            .map(|lane| lane.lane_id.as_u32())
-                            .collect::<Vec<_>>(),
-                        sumeragi_status
-                            .lane_relay_envelopes
-                            .into_iter()
-                            .map(|lane| LaneRelaySnapshot {
-                                lane_id: lane.lane_id.as_u32(),
-                                block_height: lane.block_height,
-                            })
-                            .collect::<Vec<_>>(),
-                    ),
-                    Err(_) => (Vec::new(), Vec::new(), Vec::new()),
-                };
+            let sumeragi_status = client.get_sumeragi_status().ok();
+            let lane_commitments = sumeragi_status
+                .as_ref()
+                .map(|sumeragi_status| {
+                    sumeragi_status
+                        .lane_commitments
+                        .iter()
+                        .map(|lane| LaneCommitmentSnapshot {
+                            lane_id: lane.lane_id.as_u32(),
+                            block_height: lane.block_height,
+                            tx_count: lane.tx_count,
+                            teu_total: lane.teu_total,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let lane_governance_ids = sumeragi_status
+                .as_ref()
+                .map(|sumeragi_status| {
+                    sumeragi_status
+                        .lane_governance
+                        .iter()
+                        .map(|lane| lane.lane_id.as_u32())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let lane_relay = sumeragi_status
+                .as_ref()
+                .map(|sumeragi_status| {
+                    sumeragi_status
+                        .lane_relay_envelopes
+                        .iter()
+                        .map(|lane| LaneRelaySnapshot {
+                            lane_id: lane.lane_id.as_u32(),
+                            block_height: lane.block_height,
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let (
+                tx_queue_depth,
+                tx_queue_capacity,
+                tx_queue_saturated,
+                tx_queue_saturated_by_count,
+                tx_queue_saturated_by_bytes,
+                tx_queue_saturated_by_age,
+                tx_queue_oldest_queued_age_ms,
+                commit_inflight_active,
+                commit_inflight_height,
+                commit_inflight_view,
+                commit_inflight_elapsed_ms,
+                commit_inflight_timeout_total,
+                pending_rbc_entries,
+                pacemaker_backpressure_deferrals_total,
+                proposal_gate,
+            ) = sumeragi_status
+                .as_ref()
+                .map(|sumeragi_status| {
+                    let gate = sumeragi_status.proposal_gate;
+                    (
+                        sumeragi_status.tx_queue_depth,
+                        sumeragi_status.tx_queue_capacity,
+                        sumeragi_status.tx_queue_saturated,
+                        sumeragi_status.tx_queue_saturated_by_count,
+                        sumeragi_status.tx_queue_saturated_by_bytes,
+                        sumeragi_status.tx_queue_saturated_by_age,
+                        sumeragi_status.tx_queue_oldest_queued_age_ms,
+                        sumeragi_status.commit_inflight.active,
+                        sumeragi_status.commit_inflight.height,
+                        sumeragi_status.commit_inflight.view,
+                        sumeragi_status.commit_inflight.elapsed_ms,
+                        sumeragi_status.commit_inflight.timeout_total,
+                        u64::try_from(sumeragi_status.pending_rbc.entries.len())
+                            .unwrap_or(u64::MAX),
+                        sumeragi_status.pacemaker_backpressure_deferrals_total,
+                        ProposalGateSnapshot {
+                            height: gate.height,
+                            view: gate.view,
+                            queue_len: gate.queue_len,
+                            pending_blocks_total: gate.pending_blocks_total,
+                            pending_blocks_blocking: gate.pending_blocks_blocking,
+                            active_pending_for_tip: gate.active_pending_for_tip,
+                            queue_saturated: gate.queue_saturated,
+                            active_pending: gate.active_pending,
+                            rbc_backlog: gate.rbc_backlog,
+                            relay_backpressure: gate.relay_backpressure,
+                            consensus_queue_backpressure: gate.consensus_queue_backpressure,
+                            should_defer: gate.should_defer,
+                            only_pacing_backpressure: gate.only_pacing_backpressure,
+                            commit_inflight_active: gate.commit_inflight_active,
+                            cached_proposal_present: gate.cached_proposal_present,
+                            cached_proposal_hint_present: gate.cached_proposal_hint_present,
+                            round_liveness_present: gate.round_liveness_present,
+                            frontier_owner_present: gate.frontier_owner_present,
+                            missing_qc_liveness_active: gate.missing_qc_liveness_active,
+                            last_pacemaker_attempt_age_ms: gate.last_pacemaker_attempt_age_ms,
+                            last_successful_proposal_age_ms: gate.last_successful_proposal_age_ms,
+                        },
+                    )
+                })
+                .unwrap_or((
+                    0,
+                    0,
+                    false,
+                    false,
+                    false,
+                    false,
+                    0,
+                    false,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    ProposalGateSnapshot::default(),
+                ));
             let lane_validators = OBSERVED_AUTOSCALE_LANE_IDS
                 .iter()
                 .filter_map(|lane_id| fetch_lane_validator_snapshot(&client, *lane_id))
@@ -1559,6 +1784,21 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                 lane_validators,
                 commit_signatures_required,
                 commit_qc_validator_set_len,
+                tx_queue_depth,
+                tx_queue_capacity,
+                tx_queue_saturated,
+                tx_queue_saturated_by_count,
+                tx_queue_saturated_by_bytes,
+                tx_queue_saturated_by_age,
+                tx_queue_oldest_queued_age_ms,
+                commit_inflight_active,
+                commit_inflight_height,
+                commit_inflight_view,
+                commit_inflight_elapsed_ms,
+                commit_inflight_timeout_total,
+                pending_rbc_entries,
+                pacemaker_backpressure_deferrals_total,
+                proposal_gate,
                 txs_approved: status.txs_approved,
                 txs_rejected: status.txs_rejected,
                 blocks_non_empty: status.blocks_non_empty,
@@ -2851,7 +3091,7 @@ fn wait_for_chain_progress_with_heartbeat(
 
 fn wait_for_contracted_lanes(
     network: &sandbox::SerializedNetwork,
-    heartbeat_client: Option<&Client>,
+    heartbeat_clients: &[Client],
     heartbeat_prefix: &str,
     base_lane_count: usize,
     elastic_lane_id: u32,
@@ -2879,15 +3119,12 @@ fn wait_for_contracted_lanes(
             Ok(snapshot) => snapshot,
             Err(err) => {
                 last_status_error = Some(err.to_string());
-                if let Some(client) = heartbeat_client {
-                    if let Err(heartbeat_err) = client.submit(Log::new(
-                        Level::INFO,
-                        format!("{heartbeat_prefix}-{heartbeat_seq}"),
-                    )) {
-                        last_heartbeat_error = Some(heartbeat_err.to_string());
-                    }
-                    heartbeat_seq = heartbeat_seq.saturating_add(1);
+                if let Err(heartbeat_err) =
+                    submit_rotating_heartbeat(heartbeat_clients, heartbeat_prefix, heartbeat_seq)
+                {
+                    last_heartbeat_error = Some(heartbeat_err);
                 }
+                heartbeat_seq = heartbeat_seq.saturating_add(1);
                 thread::sleep(heartbeat_interval);
                 continue;
             }
@@ -2936,15 +3173,12 @@ fn wait_for_contracted_lanes(
 
         last_status_snapshot = status_snapshot;
         last_storage_snapshot = lane_snapshot(network).unwrap_or_default();
-        if let Some(client) = heartbeat_client {
-            if let Err(heartbeat_err) = client.submit(Log::new(
-                Level::INFO,
-                format!("{heartbeat_prefix}-{heartbeat_seq}"),
-            )) {
-                last_heartbeat_error = Some(heartbeat_err.to_string());
-            }
-            heartbeat_seq = heartbeat_seq.saturating_add(1);
+        if let Err(heartbeat_err) =
+            submit_rotating_heartbeat(heartbeat_clients, heartbeat_prefix, heartbeat_seq)
+        {
+            last_heartbeat_error = Some(heartbeat_err);
         }
+        heartbeat_seq = heartbeat_seq.saturating_add(1);
         thread::sleep(heartbeat_interval);
     }
 
@@ -2959,6 +3193,21 @@ fn wait_for_contracted_lanes(
             ""
         }
     ))
+}
+
+fn submit_rotating_heartbeat(
+    clients: &[Client],
+    prefix: &str,
+    sequence: u64,
+) -> Result<(), String> {
+    let Some(client) = clients.get(usize::try_from(sequence).unwrap_or(0) % clients.len().max(1))
+    else {
+        return Ok(());
+    };
+    client
+        .submit(Log::new(Level::INFO, format!("{prefix}-{sequence}")))
+        .map(|_| ())
+        .map_err(|err| err.to_string())
 }
 
 fn run_expand_contract_cycle(
@@ -2976,10 +3225,9 @@ fn run_expand_contract_cycle(
     load_tx_count: usize,
 ) -> Result<ExpandContractCycleOutcome> {
     let pre_contraction_context = format!("autoscale contraction pre-check cycle {cycle_index}");
-    let pre_contraction_heartbeat_client = peer_client_with_timeout(network.peer());
     wait_for_contracted_lanes(
         network,
-        Some(&pre_contraction_heartbeat_client),
+        submitters,
         &format!("autoscale-precheck-heartbeat-cycle-{cycle_index}"),
         initial_provisioned_lanes,
         elastic_lane_id,
@@ -3015,10 +3263,9 @@ fn run_expand_contract_cycle(
         )?;
         let post_cooldown_context =
             format!("autoscale post-cooldown contraction check cycle {cycle_index}");
-        let post_cooldown_heartbeat_client = peer_client_with_timeout(network.peer());
         wait_for_contracted_lanes(
             network,
-            Some(&post_cooldown_heartbeat_client),
+            submitters,
             &format!("autoscale-post-cooldown-heartbeat-cycle-{cycle_index}"),
             initial_provisioned_lanes,
             elastic_lane_id,
@@ -3149,7 +3396,6 @@ fn run_expand_contract_cycle(
         );
     }
 
-    let contraction_heartbeat_client = peer_client_with_timeout(network.peer());
     let contraction_heartbeat_interval = if require_scale_in_transition_this_cycle {
         STRICT_CONTRACTION_HEARTBEAT_INTERVAL
     } else {
@@ -3160,7 +3406,7 @@ fn run_expand_contract_cycle(
     let contraction_prefix = format!("autoscale-heartbeat-cycle-{cycle_index}");
     wait_for_contracted_lanes(
         network,
-        Some(&contraction_heartbeat_client),
+        submitters,
         &contraction_prefix,
         initial_provisioned_lanes,
         elastic_lane_id,
@@ -3251,6 +3497,7 @@ fn run_expand_contract_cycle(
         peers_with_scale_out_after_expansion: peers_with_scale_out,
         peers_with_scale_in_after_expansion,
         peers_with_scale_in_since_cycle_start,
+        scale_in_transition_required: require_scale_in_transition_this_cycle,
     })
 }
 
@@ -3877,6 +4124,7 @@ mod tests {
             txs_approved: 10,
             txs_rejected: 0,
             blocks_non_empty: 10,
+            ..PeerStatusSnapshot::default()
         }
     }
 
@@ -4729,6 +4977,7 @@ mod tests {
             peers_with_scale_out_after_expansion: 1,
             peers_with_scale_in_after_expansion: 4,
             peers_with_scale_in_since_cycle_start: 4,
+            scale_in_transition_required: true,
         };
 
         let err = reporter
@@ -4755,12 +5004,39 @@ mod tests {
             peers_with_scale_out_after_expansion: 3,
             peers_with_scale_in_after_expansion: 2,
             peers_with_scale_in_since_cycle_start: 2,
+            scale_in_transition_required: true,
         };
 
         let err = reporter
             .record_cycle_success(17, 1, 3, &missing_scale_in_outcome)
             .expect_err("missing scale-in quorum must not be summarized as success");
-        assert!(err.to_string().contains("scale-in transition quorum miss"));
+        assert!(
+            err.to_string()
+                .contains("required scale-in transition quorum miss")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn soak_reporter_accepts_optional_cycle_without_scale_in_quorum() -> Result<()> {
+        let dir = tempdir()?;
+        let mut reporter = AutoscaleSoakReporter::new_for_paths(
+            dir.path().join("summary.json"),
+            dir.path().join("events.jsonl"),
+            "strict-soak-regression",
+        )?;
+        let optional_scale_in_outcome = ExpandContractCycleOutcome {
+            expansion_time_s: 0.001,
+            contraction_time_s: 0.1,
+            peers_with_scale_out_after_expansion: 3,
+            peers_with_scale_in_after_expansion: 0,
+            peers_with_scale_in_since_cycle_start: 0,
+            scale_in_transition_required: false,
+        };
+
+        reporter.record_cycle_success(17, 1, 3, &optional_scale_in_outcome)?;
+        assert_eq!(reporter.cycles_completed, 1);
+        assert_eq!(reporter.scale_in_post_expansion_quorum_misses_total, 0);
         Ok(())
     }
 
@@ -4854,6 +5130,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             };
             4
         ];
@@ -4899,6 +5176,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             };
             4
         ];
@@ -5680,6 +5958,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -5696,6 +5975,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -5712,6 +5992,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -5728,6 +6009,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
         ];
         let baseline_transitions = vec![AutoscaleTransitionStats::default(); 4];
@@ -5798,6 +6080,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![
@@ -5821,6 +6104,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![
@@ -5844,6 +6128,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -5860,6 +6145,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
         ];
 
@@ -5943,6 +6229,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![
@@ -5971,6 +6258,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![
@@ -5999,6 +6287,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6015,6 +6304,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
         ];
 
@@ -6065,6 +6355,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6081,6 +6372,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6097,6 +6389,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6113,6 +6406,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
         ];
 
@@ -6132,6 +6426,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6148,6 +6443,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6164,6 +6460,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6180,6 +6477,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
         ];
 
@@ -6225,6 +6523,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![
@@ -6253,6 +6552,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![
@@ -6281,6 +6581,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![
@@ -6309,6 +6610,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
         ];
 
@@ -6329,6 +6631,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[1].lanes.clone(),
@@ -6346,6 +6649,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[2].lanes.clone(),
@@ -6363,6 +6667,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[3].lanes.clone(),
@@ -6375,6 +6680,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
         ];
 
@@ -6417,6 +6723,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6442,6 +6749,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6467,6 +6775,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6492,6 +6801,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
         ];
 
@@ -6516,6 +6826,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[1].lanes.clone(),
@@ -6537,6 +6848,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[2].lanes.clone(),
@@ -6558,6 +6870,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: baseline_snapshot[3].lanes.clone(),
@@ -6570,6 +6883,7 @@ mod tests {
                 txs_approved: 11,
                 txs_rejected: 0,
                 blocks_non_empty: 11,
+                ..PeerStatusSnapshot::default()
             },
         ];
 
@@ -6711,6 +7025,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6727,6 +7042,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
             PeerStatusSnapshot {
                 lanes: vec![LaneStatusSnapshot {
@@ -6743,6 +7059,7 @@ mod tests {
                 txs_approved: 10,
                 txs_rejected: 0,
                 blocks_non_empty: 10,
+                ..PeerStatusSnapshot::default()
             },
         ];
         assert!(contraction_observed_on_quorum_peers(&absent_elastic, 3));
@@ -6770,6 +7087,7 @@ mod tests {
             txs_approved: 10,
             txs_rejected: 0,
             blocks_non_empty: 10,
+            ..PeerStatusSnapshot::default()
         }];
         assert!(contraction_observed_on_quorum_peers(
             &inert_elastic_status_row,
@@ -6798,6 +7116,7 @@ mod tests {
             txs_approved: 10,
             txs_rejected: 0,
             blocks_non_empty: 10,
+            ..PeerStatusSnapshot::default()
         }];
         assert!(!contraction_observed_on_quorum_peers(
             &elastic_still_declared_in_governance,
@@ -6826,6 +7145,7 @@ mod tests {
             txs_approved: 10,
             txs_rejected: 0,
             blocks_non_empty: 10,
+            ..PeerStatusSnapshot::default()
         }];
         assert!(!contraction_observed_on_quorum_peers(
             &elastic_still_active,

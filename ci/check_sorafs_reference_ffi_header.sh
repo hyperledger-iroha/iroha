@@ -353,6 +353,25 @@ def write_open_flags() -> int:
 def fail(path: pathlib.Path, path_label: str, message: str) -> None:
     sys.exit(f"[sorafs-reference-header] {path_label} {message}: {path}")
 
+def write_all(fd: int, chunk: bytes) -> None:
+    view = memoryview(chunk)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write SoraFS reference header artifact")
+        view = view[written:]
+
+def sync_output_parent(path: pathlib.Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 if source.is_symlink():
     fail(source, f"{label} source", "must not be a symlink")
 try:
@@ -377,11 +396,13 @@ try:
         chunk = os.read(read_fd, 1024 * 1024)
         if not chunk:
             break
-        os.write(write_fd, chunk)
+        write_all(write_fd, chunk)
+    os.fsync(write_fd)
 finally:
     os.close(read_fd)
     if write_fd >= 0:
         os.close(write_fd)
+sync_output_parent(target)
 PY
 }
 

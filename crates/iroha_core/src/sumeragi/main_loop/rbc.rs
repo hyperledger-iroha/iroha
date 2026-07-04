@@ -181,6 +181,11 @@ pub(super) enum RbcError {
         current: u64,
         added: u64,
     },
+    AllocationInputLengthMismatch {
+        transactions: usize,
+        routing: usize,
+        tx_sizes: usize,
+    },
     SessionInit(RbcSessionError),
 }
 
@@ -236,6 +241,14 @@ impl std::fmt::Display for RbcError {
                     "RBC allocation counter `{field}` overflowed while adding {added} to {current}"
                 )
             }
+            Self::AllocationInputLengthMismatch {
+                transactions,
+                routing,
+                tx_sizes,
+            } => write!(
+                f,
+                "RBC allocation input lengths differ: transactions={transactions}, routing={routing}, tx_sizes={tx_sizes}"
+            ),
             Self::SessionInit(err) => write!(f, "RBC session init failed: {err}"),
         }
     }
@@ -2591,6 +2604,15 @@ impl Actor {
         total_chunks: u32,
     ) -> Result<(Vec<LaneAllocation>, Vec<DataspaceAllocation>)> {
         use std::collections::BTreeMap as StdBTreeMap;
+
+        if transactions.len() != routing.len() || transactions.len() != tx_sizes.len() {
+            return Err(RbcError::AllocationInputLengthMismatch {
+                transactions: transactions.len(),
+                routing: routing.len(),
+                tx_sizes: tx_sizes.len(),
+            }
+            .into());
+        }
 
         let mut lane_map: StdBTreeMap<LaneId, LaneAllocation> = StdBTreeMap::new();
         let mut dataspace_map: StdBTreeMap<(LaneId, DataSpaceId), DataspaceAllocation> =

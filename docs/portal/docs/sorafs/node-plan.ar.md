@@ -50,12 +50,13 @@ description: تحويل خارطة طريق تخزين SF-3 إلى عمل هند
 
 ### C. نقاط نهاية البوابة
 
-| نقطة النهاية | السلوك | المهام |
-|-------------|---------|-------|
-| `POST /sorafs/pin` | قبول `PinProposalV1` والتحقق من manifests ووضع الإدخال في الطابور والرد بـ CID الخاص بالـ manifest. | التحقق من ملف تعريف الـ chunker وفرض الحصص وبث البيانات عبر مخزن القطع. |
-| `GET /sorafs/chunks/{cid}` + استعلام range | تقديم بايتات القطع مع ترويسات `Content-Chunker` واحترام مواصفة نطاق القدرات. | استخدام المجدول مع ميزانيات البث (ربطها بقدرات النطاق SF-2d). |
-| `POST /sorafs/por/sample` | تنفيذ أخذ عينات PoR لملف manifest وإرجاع حزمة إثبات. | إعادة استخدام أخذ العينات من مخزن القطع والرد عبر Norito JSON. |
-| `GET /sorafs/telemetry` | ملخصات: السعة ونجاح PoR وعدّادات أخطاء fetch. | توفير البيانات للوحة المراقبة/المشغلين. |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 تقوم الوصلات في وقت التشغيل بتمرير تفاعلات PoR عبر `sorafs_node::por`، حيث يسجل المتتبع كل `PorChallengeV1` و`PorProofV1` و`AuditVerdictV1` لكي تعكس مقاييس `CapacityMeter` أحكام الحوكمة من دون منطق Torii مخصص.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ description: تحويل خارطة طريق تخزين SF-3 إلى عمل هند
 ## معايير إغلاق المرحلة
 
 - `cargo run -p sorafs_node --example pin_fetch` يعمل مع fixtures محلية.
-- بناء Torii مع `--features sorafs-storage` واجتياز اختبارات التكامل.
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - تحديث الوثائق ([دليل تخزين العقدة](node-storage.md)) مع افتراضيات الإعداد وأمثلة CLI؛ وتوفر runbook للمشغلين.
 - ظهور التليمترية في لوحات staging وضبط التنبيهات لتشبع السعة وإخفاقات PoR.
 
@@ -116,4 +117,4 @@ description: تحويل خارطة طريق تخزين SF-3 إلى عمل هند
 
 - تحديث [مرجع تخزين العقدة](node-storage.md) مع افتراضيات الإعداد، استخدام CLI، وخطوات الاستكشاف.
 - إبقاء [runbook عمليات العقدة](node-operations.md) متوافقا مع التنفيذ مع تطور SF-3.
-- نشر مراجع API لنقاط النهاية `/sorafs/*` داخل بوابة المطورين وربطها بملف OpenAPI عند وصول معالجات Torii.
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

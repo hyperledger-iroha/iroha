@@ -18,17 +18,45 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_reserve_rent_rollout_evidence import (  # noqa: E402
+    APPEAL_CYCLE_LABEL_ERROR,
+    APPEAL_CYCLE_LABEL_PATTERN,
+    BAKE_ID_ERROR,
+    BAKE_ID_PATTERN,
     DEFAULT_MAX_BAKE_AGE_SECS,
     DEFAULT_MAX_LEDGER_AGE_SECS,
     DEFAULT_MAX_LIFECYCLE_LAG_SECS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
+    DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_ERROR,
+    DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_PATTERN,
+    FORBIDDEN_BAKE_ID_MARKERS,
+    FORBIDDEN_CYCLE_LABEL_MARKERS,
+    FORBIDDEN_PROVIDER_LABEL_MARKERS,
+    INSTRUCTION_REF_LABEL_ERROR,
+    INSTRUCTION_REF_LABEL_PATTERN,
     KIND_BY_NAME,
+    LEDGER_REF_LABEL_ERROR,
+    LEDGER_REF_LABEL_PATTERN,
+    PERSISTED_STAGE_LABEL_ERROR,
+    PERSISTED_STAGE_LABEL_PATTERN,
+    PROVIDER_LABEL_ERROR,
+    PROVIDER_LABEL_PATTERN,
+    RENT_CYCLE_LABEL_ERROR,
+    RENT_CYCLE_LABEL_PATTERN,
+    REQUIRED_APPEAL_POLICY_PROBES,
+    REQUIRED_CREDIT_LINE_ACCRUAL_CYCLES,
+    REQUIRED_CREDIT_LINE_MUTATIONS,
     REQUIRED_DURATIONS,
     REQUIRED_LIFECYCLE_ROUTES,
     REQUIRED_METRICS,
+    REQUIRED_QUOTE_MATRIX_SCENARIOS,
+    REQUIRED_RESERVE_MOVEMENT_ACTIONS,
     REQUIRED_SIGNED_ROUTES,
     REQUIRED_STORAGE_CLASSES,
     REQUIRED_TIERS,
+    SCHEDULED_LIFECYCLE_TICK_LABEL_ERROR,
+    SCHEDULED_LIFECYCLE_TICK_LABEL_PATTERN,
+    TOP_UP_CYCLE_LABEL_ERROR,
+    TOP_UP_CYCLE_LABEL_PATTERN,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -36,6 +64,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -194,6 +224,36 @@ def validate_name_set(
     return [name for name in allowed if name in value_set]
 
 
+def validate_unique_values(
+    values: Iterable[str],
+    *,
+    option: str,
+    errors: list[str],
+) -> list[str]:
+    """Return canonical non-duplicate reviewed values in input order."""
+
+    values = tuple(values)
+    if not values:
+        errors.append(f"{option} must include at least one value")
+        return []
+    seen: set[str] = set()
+    unique: list[str] = []
+    duplicate = False
+    for value in values:
+        before = len(errors)
+        validate_canonical_string(value, label=option, errors=errors)
+        if len(errors) != before:
+            continue
+        if value in seen:
+            duplicate = True
+            continue
+        seen.add(value)
+        unique.append(value)
+    if duplicate:
+        errors.append(f"{option} must not contain duplicates")
+    return unique
+
+
 def validate_output_path(path: Path, errors: list[str]) -> None:
     """Reject unsafe output targets before writing a canary artifact."""
 
@@ -235,6 +295,99 @@ def validate_canonical_string(value: str | None, *, label: str, errors: list[str
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
         errors.append(f"{label} must be a non-empty canonical string")
+
+
+def validate_bake_id_arg(value: str | None, *, errors: list[str]) -> None:
+    """Require a reviewed lowercase reserve provider-bake identifier."""
+
+    validate_canonical_string(value, label="--bake-id", errors=errors)
+    if not isinstance(value, str):
+        return
+    if BAKE_ID_PATTERN.fullmatch(value) is None:
+        errors.append(BAKE_ID_ERROR.replace("bake_id", "--bake-id"))
+        return
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_BAKE_ID_MARKERS if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"--bake-id must not contain non-production markers {forbidden}")
+
+
+def validate_provider_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production provider inventory label."""
+
+    if not isinstance(value, str):
+        return
+    if PROVIDER_LABEL_PATTERN.fullmatch(value) is None:
+        errors.append(PROVIDER_LABEL_ERROR.replace("providers[].name", option))
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def validate_cycle_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    pattern,
+    label_error: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production provider-bake cycle label."""
+
+    if not isinstance(value, str):
+        return
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error.replace(option_to_payload_path(option), option))
+        return
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_CYCLE_LABEL_MARKERS if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def validate_inventory_label_arg(
+    value: str | None,
+    *,
+    option: str,
+    pattern,
+    label_error: str,
+    payload_path: str,
+    errors: list[str],
+) -> None:
+    """Require a reviewed lowercase production inventory label."""
+
+    if not isinstance(value, str):
+        return
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error.replace(payload_path, option))
+        return
+    forbidden = sorted(
+        marker for marker in FORBIDDEN_CYCLE_LABEL_MARKERS if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def option_to_payload_path(option: str) -> str:
+    """Map provider-bake cycle CLI options to payload diagnostic paths."""
+
+    return {
+        "--rent-cycle": "rent_cycles[].name",
+        "--top-up-cycle": "top_up_cycles[].name",
+        "--appeal-cycle": "appeal_cycles[].name",
+    }[option]
 
 
 def require_kind_options(
@@ -285,12 +438,89 @@ def build_route_records(args: argparse.Namespace, routes: Sequence[str]) -> list
             "name": route,
             "passed": True,
             "status_code": args.route_status_code,
+            "body_blake3_hex": args.route_body_blake3_hex,
             "authz_enforced": True,
             "signature_verified": True,
             "latency_ms": args.route_latency_ms,
         }
         for route in routes
     ]
+
+
+def build_movement_records(actions: Sequence[str]) -> list[dict[str, Any]]:
+    """Build payload-free reserve movement inventory records."""
+
+    return [
+        {
+            "action": action,
+            "accepted": True,
+            "chain_submitted": True,
+            "finality_confirmed": True,
+            "custody_reconciled": True,
+        }
+        for action in actions
+    ]
+
+
+def build_appeal_probe_records(probes: Sequence[str]) -> list[dict[str, Any]]:
+    """Build payload-free appeal policy probe inventory records."""
+
+    return [
+        {
+            "name": probe,
+            "outcome": "approved" if probe.startswith("approved_") else "rejected",
+            "governance_recorded": True,
+            "policy_digest_bound": True,
+        }
+        for probe in probes
+    ]
+
+
+def build_credit_line_mutation_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build payload-free credit-line mutation inventory records."""
+
+    return [{"name": name, "verified": True} for name in names]
+
+
+def build_accrual_cycle_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build payload-free credit-line accrual inventory records."""
+
+    return [
+        {
+            "name": name,
+            "posted_to_account_state": True,
+        }
+        for name in names
+    ]
+
+
+def build_provider_records(
+    names: Sequence[str],
+    defaulted_count: int,
+) -> list[dict[str, Any]]:
+    """Build payload-free provider bake inventory records."""
+
+    return [
+        {
+            "name": name,
+            "completed": True,
+            "defaulted": index < defaulted_count,
+            "scheduler_tick_observed": True,
+        }
+        for index, name in enumerate(names)
+    ]
+
+
+def build_cycle_records(names: Sequence[str], proof_field: str) -> list[dict[str, Any]]:
+    """Build payload-free provider-bake cycle inventory records."""
+
+    return [{"name": name, proof_field: True} for name in names]
+
+
+def build_inventory_records(names: Sequence[str]) -> list[dict[str, Any]]:
+    """Build payload-free named inventory records."""
+
+    return [{"name": name} for name in names]
 
 
 def build_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -322,7 +552,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "ledger_count": args.ledger_count,
+                "ledgers": build_inventory_records(args.ledgers),
                 "instruction_count": args.instruction_count,
+                "instructions": build_inventory_records(args.instructions),
             }
         )
     elif args.kind == "lifecycle_service":
@@ -334,6 +566,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "routes": routes,
                 "max_lifecycle_lag_seconds": args.max_lifecycle_lag_seconds,
                 "persisted_stage_count": args.persisted_stage_count,
+                "persisted_stages": build_inventory_records(args.persisted_stages),
             }
         )
     elif args.kind == "signed_routes":
@@ -347,12 +580,14 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             }
         )
     elif args.kind == "reserve_movement":
+        movements = build_movement_records(args.movement_actions)
         payload.update(
             {
                 "movement_count": args.movement_count,
                 "accepted_movement_count": args.movement_count,
                 "failed_movement_count": 0,
                 "unexpected_failure_count": 0,
+                "movements": movements,
                 "chain_submission_count": args.chain_submission_count,
                 "finality_poll_attempt_count": args.finality_poll_attempt_count,
             }
@@ -361,20 +596,31 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "credit_line_mutation_count": args.credit_line_mutation_count,
+                "credit_line_mutations": build_credit_line_mutation_records(
+                    args.credit_line_mutations
+                ),
                 "accrual_cycle_count": args.accrual_cycle_count,
+                "accrual_cycles": build_accrual_cycle_records(args.accrual_cycles),
                 "unexpected_failure_count": 0,
             }
         )
     elif args.kind == "appeal_policy":
+        appeal_probes = build_appeal_probe_records(args.appeal_probes)
         payload.update(
             {
                 "appeal_probe_count": args.appeal_probe_count,
                 "approved_appeal_count": args.approved_appeal_count,
                 "rejected_appeal_count": args.rejected_appeal_count,
+                "appeal_probes": appeal_probes,
             }
         )
     elif args.kind == "metrics_alerts":
-        payload["metrics"] = args.metrics
+        payload.update(
+            {
+                "metrics": args.metrics,
+                "metric_count": len(args.metrics),
+            }
+        )
     elif args.kind == "provider_bake":
         payload.update(
             {
@@ -382,16 +628,29 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "started_at_unix": args.started_at_unix,
                 "completed_at_unix": args.completed_at_unix,
                 "provider_count": args.provider_count,
+                "providers": build_provider_records(
+                    args.providers,
+                    args.scheduled_lifecycle_canary_defaulted_provider_count,
+                ),
                 "completed_provider_count": args.provider_count,
                 "failure_count": 0,
                 "rent_cycle_count": args.rent_cycle_count,
+                "rent_cycles": build_cycle_records(args.rent_cycles, "settled"),
                 "top_up_cycle_count": args.top_up_cycle_count,
+                "top_up_cycles": build_cycle_records(
+                    args.top_up_cycles,
+                    "reconciled",
+                ),
                 "appeal_cycle_count": args.appeal_cycle_count,
+                "appeal_cycles": build_cycle_records(args.appeal_cycles, "reviewed"),
                 "scheduled_lifecycle_canary_last_tick_unix": (
                     args.scheduled_lifecycle_canary_last_tick_unix
                 ),
                 "scheduled_lifecycle_canary_tick_count": (
                     args.scheduled_lifecycle_canary_tick_count
+                ),
+                "scheduled_lifecycle_canary_ticks": build_inventory_records(
+                    args.scheduled_lifecycle_canary_ticks
                 ),
                 "scheduled_lifecycle_canary_defaulted_provider_count": (
                     args.scheduled_lifecycle_canary_defaulted_provider_count
@@ -403,6 +662,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "downstream_compliance_consumer_count": (
                     args.downstream_compliance_consumer_count
+                ),
+                "downstream_compliance_consumers": build_inventory_records(
+                    args.downstream_compliance_consumers
                 ),
                 "config_source": "iroha_config",
             }
@@ -454,6 +716,11 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--duration",
             errors=errors,
         )
+        if (
+            args.scenario_count is not None
+            and args.scenario_count != REQUIRED_QUOTE_MATRIX_SCENARIOS
+        ):
+            errors.append("--scenario-count must match required quote-matrix product")
     elif args.kind == "ledger_digest":
         require_kind_options(
             args,
@@ -463,6 +730,48 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--instruction-count", args.instruction_count),
             ),
         )
+        args.ledgers = validate_unique_values(
+            split_csv_values(args.ledger_ref),
+            option="--ledger-ref",
+            errors=errors,
+        )
+        for ledger in args.ledgers:
+            validate_inventory_label_arg(
+                ledger,
+                option="--ledger-ref",
+                pattern=LEDGER_REF_LABEL_PATTERN,
+                label_error=LEDGER_REF_LABEL_ERROR,
+                payload_path="ledgers[].name",
+                errors=errors,
+            )
+        args.instructions = validate_unique_values(
+            split_csv_values(args.instruction_ref),
+            option="--instruction-ref",
+            errors=errors,
+        )
+        for instruction in args.instructions:
+            validate_inventory_label_arg(
+                instruction,
+                option="--instruction-ref",
+                pattern=INSTRUCTION_REF_LABEL_PATTERN,
+                label_error=INSTRUCTION_REF_LABEL_ERROR,
+                payload_path="instructions[].name",
+                errors=errors,
+            )
+        if (
+            args.ledger_count is not None
+            and args.ledgers
+            and args.ledger_count != len(args.ledgers)
+        ):
+            errors.append("--ledger-count must match --ledger-ref inventory")
+        if (
+            args.instruction_count is not None
+            and args.instructions
+            and args.instruction_count != len(args.instructions)
+        ):
+            errors.append(
+                "--instruction-count must match --instruction-ref inventory"
+            )
     elif args.kind == "lifecycle_service":
         require_kind_options(
             args,
@@ -472,17 +781,49 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--persisted-stage-count", args.persisted_stage_count),
             ),
         )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
         args.lifecycle_routes = validate_name_set(
             split_csv_values(args.lifecycle_route),
             allowed=REQUIRED_LIFECYCLE_ROUTES,
             option="--lifecycle-route",
             errors=errors,
         )
+        args.persisted_stages = validate_unique_values(
+            split_csv_values(args.persisted_stage),
+            option="--persisted-stage",
+            errors=errors,
+        )
+        for stage in args.persisted_stages:
+            validate_inventory_label_arg(
+                stage,
+                option="--persisted-stage",
+                pattern=PERSISTED_STAGE_LABEL_PATTERN,
+                label_error=PERSISTED_STAGE_LABEL_ERROR,
+                payload_path="persisted_stages[].name",
+                errors=errors,
+            )
+        if (
+            args.persisted_stage_count is not None
+            and args.persisted_stages
+            and args.persisted_stage_count != len(args.persisted_stages)
+        ):
+            errors.append(
+                "--persisted-stage-count must match --persisted-stage inventory"
+            )
     elif args.kind == "signed_routes":
         require_kind_options(
             args,
             errors,
             (("--max-route-latency-ms", args.max_route_latency_ms),),
+        )
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
         )
         args.signed_routes = validate_name_set(
             split_csv_values(args.signed_route),
@@ -500,6 +841,18 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--finality-poll-attempt-count", args.finality_poll_attempt_count),
             ),
         )
+        args.movement_actions = validate_name_set(
+            split_csv_values(args.movement_action),
+            allowed=REQUIRED_RESERVE_MOVEMENT_ACTIONS,
+            option="--movement-action",
+            errors=errors,
+        )
+        if (
+            args.movement_count is not None
+            and args.movement_actions
+            and args.movement_count != len(args.movement_actions)
+        ):
+            errors.append("--movement-count must match --movement-action inventory")
     elif args.kind == "credit_line":
         require_kind_options(
             args,
@@ -509,6 +862,33 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--accrual-cycle-count", args.accrual_cycle_count),
             ),
         )
+        args.credit_line_mutations = validate_name_set(
+            split_csv_values(args.credit_line_mutation),
+            allowed=REQUIRED_CREDIT_LINE_MUTATIONS,
+            option="--credit-line-mutation",
+            errors=errors,
+        )
+        args.accrual_cycles = validate_name_set(
+            split_csv_values(args.accrual_cycle),
+            allowed=REQUIRED_CREDIT_LINE_ACCRUAL_CYCLES,
+            option="--accrual-cycle",
+            errors=errors,
+        )
+        if (
+            args.credit_line_mutation_count is not None
+            and args.credit_line_mutations
+            and args.credit_line_mutation_count != len(args.credit_line_mutations)
+        ):
+            errors.append(
+                "--credit-line-mutation-count must match "
+                "--credit-line-mutation inventory"
+            )
+        if (
+            args.accrual_cycle_count is not None
+            and args.accrual_cycles
+            and args.accrual_cycle_count != len(args.accrual_cycles)
+        ):
+            errors.append("--accrual-cycle-count must match --accrual-cycle inventory")
     elif args.kind == "appeal_policy":
         require_kind_options(
             args,
@@ -519,6 +899,27 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--rejected-appeal-count", args.rejected_appeal_count),
             ),
         )
+        args.appeal_probes = validate_name_set(
+            split_csv_values(args.appeal_probe),
+            allowed=REQUIRED_APPEAL_POLICY_PROBES,
+            option="--appeal-probe",
+            errors=errors,
+        )
+        if args.appeal_probes:
+            approved_count = sum(
+                1 for probe in args.appeal_probes if probe.startswith("approved_")
+            )
+            rejected_count = len(args.appeal_probes) - approved_count
+            if args.appeal_probe_count != len(args.appeal_probes):
+                errors.append("--appeal-probe-count must match --appeal-probe inventory")
+            if args.approved_appeal_count != approved_count:
+                errors.append(
+                    "--approved-appeal-count must match approved --appeal-probe inventory"
+                )
+            if args.rejected_appeal_count != rejected_count:
+                errors.append(
+                    "--rejected-appeal-count must match rejected --appeal-probe inventory"
+                )
     elif args.kind == "metrics_alerts":
         args.metrics = validate_name_set(
             split_csv_values(args.metric),
@@ -552,7 +953,111 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ),
             ),
         )
-        validate_canonical_string(args.bake_id, label="--bake-id", errors=errors)
+        validate_bake_id_arg(args.bake_id, errors=errors)
+        args.providers = validate_unique_values(
+            split_csv_values(args.provider),
+            option="--provider",
+            errors=errors,
+        )
+        for provider in args.providers:
+            validate_provider_label_arg(provider, option="--provider", errors=errors)
+        args.rent_cycles = validate_unique_values(
+            split_csv_values(args.rent_cycle),
+            option="--rent-cycle",
+            errors=errors,
+        )
+        for cycle in args.rent_cycles:
+            validate_cycle_label_arg(
+                cycle,
+                option="--rent-cycle",
+                pattern=RENT_CYCLE_LABEL_PATTERN,
+                label_error=RENT_CYCLE_LABEL_ERROR,
+                errors=errors,
+            )
+        args.top_up_cycles = validate_unique_values(
+            split_csv_values(args.top_up_cycle),
+            option="--top-up-cycle",
+            errors=errors,
+        )
+        for cycle in args.top_up_cycles:
+            validate_cycle_label_arg(
+                cycle,
+                option="--top-up-cycle",
+                pattern=TOP_UP_CYCLE_LABEL_PATTERN,
+                label_error=TOP_UP_CYCLE_LABEL_ERROR,
+                errors=errors,
+            )
+        args.appeal_cycles = validate_unique_values(
+            split_csv_values(args.appeal_cycle),
+            option="--appeal-cycle",
+            errors=errors,
+        )
+        for cycle in args.appeal_cycles:
+            validate_cycle_label_arg(
+                cycle,
+                option="--appeal-cycle",
+                pattern=APPEAL_CYCLE_LABEL_PATTERN,
+                label_error=APPEAL_CYCLE_LABEL_ERROR,
+                errors=errors,
+            )
+        args.scheduled_lifecycle_canary_ticks = validate_unique_values(
+            split_csv_values(args.scheduled_lifecycle_canary_tick),
+            option="--scheduled-lifecycle-canary-tick",
+            errors=errors,
+        )
+        for tick in args.scheduled_lifecycle_canary_ticks:
+            validate_inventory_label_arg(
+                tick,
+                option="--scheduled-lifecycle-canary-tick",
+                pattern=SCHEDULED_LIFECYCLE_TICK_LABEL_PATTERN,
+                label_error=SCHEDULED_LIFECYCLE_TICK_LABEL_ERROR,
+                payload_path="scheduled_lifecycle_canary_ticks[].name",
+                errors=errors,
+            )
+        if (
+            args.provider_count is not None
+            and args.providers
+            and args.provider_count != len(args.providers)
+        ):
+            errors.append("--provider-count must match --provider inventory")
+        if (
+            args.scheduled_lifecycle_canary_defaulted_provider_count is not None
+            and args.providers
+            and args.scheduled_lifecycle_canary_defaulted_provider_count
+            > len(args.providers)
+        ):
+            errors.append(
+                "--scheduled-lifecycle-canary-defaulted-provider-count must "
+                "not exceed --provider inventory"
+            )
+        if (
+            args.rent_cycle_count is not None
+            and args.rent_cycles
+            and args.rent_cycle_count != len(args.rent_cycles)
+        ):
+            errors.append("--rent-cycle-count must match --rent-cycle inventory")
+        if (
+            args.top_up_cycle_count is not None
+            and args.top_up_cycles
+            and args.top_up_cycle_count != len(args.top_up_cycles)
+        ):
+            errors.append("--top-up-cycle-count must match --top-up-cycle inventory")
+        if (
+            args.appeal_cycle_count is not None
+            and args.appeal_cycles
+            and args.appeal_cycle_count != len(args.appeal_cycles)
+        ):
+            errors.append("--appeal-cycle-count must match --appeal-cycle inventory")
+        if (
+            args.scheduled_lifecycle_canary_tick_count is not None
+            and args.scheduled_lifecycle_canary_ticks
+            and args.scheduled_lifecycle_canary_tick_count
+            != len(args.scheduled_lifecycle_canary_ticks)
+        ):
+            errors.append(
+                "--scheduled-lifecycle-canary-tick-count must match "
+                "--scheduled-lifecycle-canary-tick inventory"
+            )
     elif args.kind == "governance_approval":
         require_kind_options(
             args,
@@ -564,6 +1069,30 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ),
             ),
         )
+        args.downstream_compliance_consumers = validate_unique_values(
+            split_csv_values(args.downstream_compliance_consumer),
+            option="--downstream-compliance-consumer",
+            errors=errors,
+        )
+        for consumer in args.downstream_compliance_consumers:
+            validate_inventory_label_arg(
+                consumer,
+                option="--downstream-compliance-consumer",
+                pattern=DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_PATTERN,
+                label_error=DOWNSTREAM_COMPLIANCE_CONSUMER_LABEL_ERROR,
+                payload_path="downstream_compliance_consumers[].name",
+                errors=errors,
+            )
+        if (
+            args.downstream_compliance_consumer_count is not None
+            and args.downstream_compliance_consumers
+            and args.downstream_compliance_consumer_count
+            != len(args.downstream_compliance_consumers)
+        ):
+            errors.append(
+                "--downstream-compliance-consumer-count must match "
+                "--downstream-compliance-consumer inventory"
+            )
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
@@ -635,12 +1164,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -680,20 +1211,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tier", action="append", default=[])
     parser.add_argument("--duration", action="append", default=[])
     parser.add_argument("--ledger-count", type=positive_int_arg)
+    parser.add_argument("--ledger-ref", action="append", default=[])
     parser.add_argument("--instruction-count", type=positive_int_arg)
+    parser.add_argument("--instruction-ref", action="append", default=[])
     parser.add_argument("--lifecycle-route", action="append", default=[])
     parser.add_argument("--max-lifecycle-lag-seconds", type=non_negative_int_arg)
     parser.add_argument("--persisted-stage-count", type=positive_int_arg)
+    parser.add_argument("--persisted-stage", action="append", default=[])
     parser.add_argument("--signed-route", action="append", default=[])
     parser.add_argument("--max-route-latency-ms", type=positive_int_arg)
+    parser.add_argument("--route-body-blake3-hex")
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--route-latency-ms", type=non_negative_int_arg, default=25)
     parser.add_argument("--movement-count", type=positive_int_arg)
+    parser.add_argument("--movement-action", action="append", default=[])
     parser.add_argument("--chain-submission-count", type=positive_int_arg)
     parser.add_argument("--finality-poll-attempt-count", type=positive_int_arg)
     parser.add_argument("--credit-line-mutation-count", type=positive_int_arg)
+    parser.add_argument("--credit-line-mutation", action="append", default=[])
     parser.add_argument("--accrual-cycle-count", type=positive_int_arg)
+    parser.add_argument("--accrual-cycle", action="append", default=[])
     parser.add_argument("--appeal-probe-count", type=positive_int_arg)
+    parser.add_argument("--appeal-probe", action="append", default=[])
     parser.add_argument("--approved-appeal-count", type=non_negative_int_arg)
     parser.add_argument("--rejected-appeal-count", type=non_negative_int_arg)
     parser.add_argument("--metric", action="append", default=[])
@@ -701,19 +1240,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--started-at-unix", type=positive_int_arg)
     parser.add_argument("--completed-at-unix", type=positive_int_arg)
     parser.add_argument("--provider-count", type=positive_int_arg)
+    parser.add_argument("--provider", action="append", default=[])
     parser.add_argument("--rent-cycle-count", type=positive_int_arg)
+    parser.add_argument("--rent-cycle", action="append", default=[])
     parser.add_argument("--top-up-cycle-count", type=positive_int_arg)
+    parser.add_argument("--top-up-cycle", action="append", default=[])
     parser.add_argument("--appeal-cycle-count", type=positive_int_arg)
+    parser.add_argument("--appeal-cycle", action="append", default=[])
     parser.add_argument(
         "--scheduled-lifecycle-canary-last-tick-unix",
         type=positive_int_arg,
     )
     parser.add_argument("--scheduled-lifecycle-canary-tick-count", type=positive_int_arg)
+    parser.add_argument("--scheduled-lifecycle-canary-tick", action="append", default=[])
     parser.add_argument(
         "--scheduled-lifecycle-canary-defaulted-provider-count",
         type=positive_int_arg,
     )
     parser.add_argument("--downstream-compliance-consumer-count", type=positive_int_arg)
+    parser.add_argument("--downstream-compliance-consumer", action="append", default=[])
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)

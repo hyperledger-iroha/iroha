@@ -22696,7 +22696,7 @@ pub struct IsoBridge {
 }
 
 /// User-level ISO bridge rail profile override.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone)]
 pub struct IsoBridgeProfile {
     /// Stable profile identifier.
     pub id: String,
@@ -22705,41 +22705,26 @@ pub struct IsoBridgeProfile {
     /// Optional profile-level embedded XML signature policy.
     pub embedded_signature_policy: Option<String>,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// SHA-256 pins for accepted XMLDSig signer public-key bytes.
     pub signature_public_key_sha256_pins: Vec<String>,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// SHA-256 pins for accepted X.509 trust-anchor certificate DER bytes.
     pub x509_trust_anchor_sha256_pins: Vec<String>,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// Certificate-policy OIDs required on accepted X.509 signer certificates.
     pub x509_required_certificate_policy_oids: Vec<String>,
     #[config(default = "false")]
-    #[norito(default)]
     /// Whether X.509 signer certificates must be covered by a fresh verified CRL.
     pub x509_require_crl_revocation_check: bool,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// Base64 DER CRLs accepted as rail-profile revocation material.
     pub x509_crl_der_base64: Vec<String>,
     #[config(default = "false")]
-    #[norito(default)]
     /// Whether X.509 signer certificates must be covered by a fresh verified OCSP response.
     pub x509_require_ocsp_revocation_check: bool,
     #[config(default = "Vec::new()")]
-    #[norito(default)]
     /// Base64 DER OCSP responses accepted as rail-profile revocation material.
     pub x509_ocsp_response_der_base64: Vec<String>,
-    #[config(default = "Vec::new()")]
-    #[norito(default)]
-    /// Backward-compatible SHA-256 pins of raw XMLDSig public keys accepted by this profile.
-    pub trusted_public_key_sha256: Vec<String>,
-    #[config(default = "Vec::new()")]
-    #[norito(default)]
-    /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
-    pub trusted_certificate_sha256: Vec<String>,
     #[config(default = "Vec::new()")]
     /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
     pub revoked_certificate_sha256: Vec<String>,
@@ -22749,6 +22734,152 @@ pub struct IsoBridgeProfile {
     #[config(default = "Vec::new()")]
     /// Message profiles owned by this rail profile.
     pub message_profiles: Vec<IsoMessageProfile>,
+}
+
+impl json::JsonDeserialize for IsoBridgeProfile {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        let mut visitor = json::MapVisitor::new(parser)?;
+        let mut id: Option<String> = None;
+        let mut rail: Option<String> = None;
+        let mut embedded_signature_policy: Option<Option<String>> = None;
+        let mut signature_public_key_sha256_pins: Option<Vec<String>> = None;
+        let mut x509_trust_anchor_sha256_pins: Option<Vec<String>> = None;
+        let mut x509_required_certificate_policy_oids: Option<Vec<String>> = None;
+        let mut x509_require_crl_revocation_check: Option<bool> = None;
+        let mut x509_crl_der_base64: Option<Vec<String>> = None;
+        let mut x509_require_ocsp_revocation_check: Option<bool> = None;
+        let mut x509_ocsp_response_der_base64: Option<Vec<String>> = None;
+        let mut revoked_certificate_sha256: Option<Vec<String>> = None;
+        let mut required_reference_datasets: Option<Vec<String>> = None;
+        let mut message_profiles: Option<Vec<IsoMessageProfile>> = None;
+
+        while let Some(key) = visitor.next_key()? {
+            match key.as_str() {
+                "id" => {
+                    if id.is_some() {
+                        return Err(json::MapVisitor::duplicate_field("id"));
+                    }
+                    id = Some(visitor.parse_value::<String>()?);
+                }
+                "rail" => {
+                    if rail.is_some() {
+                        return Err(json::MapVisitor::duplicate_field("rail"));
+                    }
+                    rail = Some(visitor.parse_value::<String>()?);
+                }
+                "embedded_signature_policy" => {
+                    if embedded_signature_policy.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "embedded_signature_policy",
+                        ));
+                    }
+                    embedded_signature_policy = Some(visitor.parse_value::<Option<String>>()?);
+                }
+                "signature_public_key_sha256_pins" => {
+                    if signature_public_key_sha256_pins.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "signature_public_key_sha256_pins",
+                        ));
+                    }
+                    signature_public_key_sha256_pins = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "x509_trust_anchor_sha256_pins" => {
+                    if x509_trust_anchor_sha256_pins.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_trust_anchor_sha256_pins",
+                        ));
+                    }
+                    x509_trust_anchor_sha256_pins = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "x509_required_certificate_policy_oids" => {
+                    if x509_required_certificate_policy_oids.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_required_certificate_policy_oids",
+                        ));
+                    }
+                    x509_required_certificate_policy_oids =
+                        Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "x509_require_crl_revocation_check" => {
+                    if x509_require_crl_revocation_check.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_require_crl_revocation_check",
+                        ));
+                    }
+                    x509_require_crl_revocation_check = Some(visitor.parse_value::<bool>()?);
+                }
+                "x509_crl_der_base64" => {
+                    if x509_crl_der_base64.is_some() {
+                        return Err(json::MapVisitor::duplicate_field("x509_crl_der_base64"));
+                    }
+                    x509_crl_der_base64 = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "x509_require_ocsp_revocation_check" => {
+                    if x509_require_ocsp_revocation_check.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_require_ocsp_revocation_check",
+                        ));
+                    }
+                    x509_require_ocsp_revocation_check = Some(visitor.parse_value::<bool>()?);
+                }
+                "x509_ocsp_response_der_base64" => {
+                    if x509_ocsp_response_der_base64.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "x509_ocsp_response_der_base64",
+                        ));
+                    }
+                    x509_ocsp_response_der_base64 = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "revoked_certificate_sha256" => {
+                    if revoked_certificate_sha256.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "revoked_certificate_sha256",
+                        ));
+                    }
+                    revoked_certificate_sha256 = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "required_reference_datasets" => {
+                    if required_reference_datasets.is_some() {
+                        return Err(json::MapVisitor::duplicate_field(
+                            "required_reference_datasets",
+                        ));
+                    }
+                    required_reference_datasets = Some(visitor.parse_value::<Vec<String>>()?);
+                }
+                "message_profiles" => {
+                    if message_profiles.is_some() {
+                        return Err(json::MapVisitor::duplicate_field("message_profiles"));
+                    }
+                    message_profiles = Some(visitor.parse_value::<Vec<IsoMessageProfile>>()?);
+                }
+                other => return Err(json::MapVisitor::unknown_field(other)),
+            }
+        }
+
+        visitor.finish()?;
+
+        Ok(Self {
+            id: id.ok_or_else(|| json::MapVisitor::missing_field("id"))?,
+            rail: rail.ok_or_else(|| json::MapVisitor::missing_field("rail"))?,
+            embedded_signature_policy: embedded_signature_policy.unwrap_or(None),
+            signature_public_key_sha256_pins: signature_public_key_sha256_pins.unwrap_or_default(),
+            x509_trust_anchor_sha256_pins: x509_trust_anchor_sha256_pins.unwrap_or_default(),
+            x509_required_certificate_policy_oids: x509_required_certificate_policy_oids
+                .unwrap_or_default(),
+            x509_require_crl_revocation_check: x509_require_crl_revocation_check.unwrap_or(false),
+            x509_crl_der_base64: x509_crl_der_base64.unwrap_or_default(),
+            x509_require_ocsp_revocation_check: x509_require_ocsp_revocation_check.unwrap_or(false),
+            x509_ocsp_response_der_base64: x509_ocsp_response_der_base64.unwrap_or_default(),
+            revoked_certificate_sha256: revoked_certificate_sha256
+                .ok_or_else(|| json::MapVisitor::missing_field("revoked_certificate_sha256"))?,
+            required_reference_datasets: required_reference_datasets
+                .ok_or_else(|| json::MapVisitor::missing_field("required_reference_datasets"))?,
+            message_profiles: message_profiles
+                .ok_or_else(|| json::MapVisitor::missing_field("message_profiles"))?,
+        })
+    }
 }
 
 /// User-level message-specific ISO bridge profile override.
@@ -23399,6 +23530,9 @@ pub struct SorafsStorage {
     /// Local SFM-4c privacy aggregate publication scheduler.
     #[config(nested)]
     pub privacy_aggregates: SorafsPrivacyAggregateScheduleConfig,
+    /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
+    #[config(nested)]
+    pub evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig,
     /// Local SFM-6 reserve lifecycle advancement scheduler.
     #[config(nested)]
     pub reserve_lifecycle: SorafsReserveLifecycleScheduleConfig,
@@ -23430,6 +23564,7 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsStreamTokenConfig::default(),
             orderbook: SorafsOrderbookConfig::default(),
             privacy_aggregates: SorafsPrivacyAggregateScheduleConfig::default(),
+            evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig::default(),
             reserve_lifecycle: SorafsReserveLifecycleScheduleConfig::default(),
             pin: SorafsStoragePin::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
@@ -23455,6 +23590,7 @@ impl SorafsStorage {
             stream_tokens: self.stream_tokens.parse(),
             orderbook: self.orderbook.parse(),
             privacy_aggregates: self.privacy_aggregates.parse(),
+            evidence_viewer_audits: self.evidence_viewer_audits.parse(),
             reserve_lifecycle: self.reserve_lifecycle.parse(),
             pin: self.pin.parse(),
             governance_dag_dir: self.governance_dag_dir,
@@ -23521,6 +23657,41 @@ impl Default for SorafsPrivacyAggregateScheduleConfig {
 impl SorafsPrivacyAggregateScheduleConfig {
     fn parse(self) -> actual::SorafsPrivacyAggregateSchedule {
         actual::SorafsPrivacyAggregateSchedule {
+            enabled: self.enabled,
+            cycle_seconds: self.cycle_seconds.max(1),
+            publish_delay_seconds: self.publish_delay_seconds,
+        }
+    }
+}
+
+/// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsEvidenceViewerAuditScheduleConfig {
+    /// Whether config-backed due-cycle publication is enabled.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer_audits::ENABLED")]
+    pub enabled: bool,
+    /// Width of each evidence-viewer audit-report cycle, in seconds.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer_audits::CYCLE_SECONDS")]
+    pub cycle_seconds: u64,
+    /// Delay after a cycle closes before publication, in seconds.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer_audits::PUBLISH_DELAY_SECONDS")]
+    pub publish_delay_seconds: u64,
+}
+
+impl Default for SorafsEvidenceViewerAuditScheduleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::evidence_viewer_audits::ENABLED,
+            cycle_seconds: defaults::sorafs::storage::evidence_viewer_audits::CYCLE_SECONDS,
+            publish_delay_seconds:
+                defaults::sorafs::storage::evidence_viewer_audits::PUBLISH_DELAY_SECONDS,
+        }
+    }
+}
+
+impl SorafsEvidenceViewerAuditScheduleConfig {
+    fn parse(self) -> actual::SorafsEvidenceViewerAuditSchedule {
+        actual::SorafsEvidenceViewerAuditSchedule {
             enabled: self.enabled,
             cycle_seconds: self.cycle_seconds.max(1),
             publish_delay_seconds: self.publish_delay_seconds,
@@ -24723,8 +24894,6 @@ impl IsoBridgeProfile {
             x509_crl_der_base64: self.x509_crl_der_base64,
             x509_require_ocsp_revocation_check: self.x509_require_ocsp_revocation_check,
             x509_ocsp_response_der_base64: self.x509_ocsp_response_der_base64,
-            trusted_public_key_sha256: self.trusted_public_key_sha256,
-            trusted_certificate_sha256: self.trusted_certificate_sha256,
             revoked_certificate_sha256: self.revoked_certificate_sha256,
             required_reference_datasets: self.required_reference_datasets,
             message_profiles: self
@@ -25118,10 +25287,10 @@ mod offline_cfg_tests {
                     "id": "swift-cbpr-plus",
                     "rail": "swift-cbpr-plus",
                     "embedded_signature_policy": "reject-unsupported",
-                    "trusted_public_key_sha256": [
+                    "signature_public_key_sha256_pins": [
                         "1111111111111111111111111111111111111111111111111111111111111111"
                     ],
-                    "trusted_certificate_sha256": [
+                    "x509_trust_anchor_sha256_pins": [
                         "2222222222222222222222222222222222222222222222222222222222222222"
                     ],
                     "revoked_certificate_sha256": [
@@ -25203,6 +25372,68 @@ mod offline_cfg_tests {
         assert!(parsed.reference_data.csd_venue_path.is_none());
         assert!(parsed.reference_data.securities_account_path.is_none());
         assert!(parsed.reference_data.cash_leg_path.is_none());
+    }
+
+    #[test]
+    fn iso_bridge_json_rejects_legacy_xml_signature_pin_aliases() {
+        for legacy_field in ["trusted_public_key_sha256", "trusted_certificate_sha256"] {
+            let json = format!(
+                r#"{{
+                    "enabled": false,
+                    "dedupe_ttl_secs": 120,
+                    "default_profile": "generic-iso20022",
+                    "profiles": [
+                        {{
+                            "id": "legacy-pins",
+                            "rail": "generic-iso20022",
+                            "revoked_certificate_sha256": [],
+                            "required_reference_datasets": [],
+                            "message_profiles": [
+                                {{
+                                    "message_type": "pacs.008",
+                                    "direction": "inbound",
+                                    "versions": ["pacs.008.001.08"],
+                                    "business_services": [],
+                                    "require_app_header": false,
+                                    "require_business_service": false,
+                                    "require_uetr": false,
+                                    "structured_address_mode": "permissive",
+                                    "supplementary_data_max_bytes": 4096,
+                                    "amount_minor_units": []
+                                }}
+                            ],
+                            "{legacy_field}": [
+                                "1111111111111111111111111111111111111111111111111111111111111111"
+                            ]
+                        }}
+                    ],
+                    "store_dir": null,
+                    "store_retention_secs": 86400,
+                    "store_max_records": 1000,
+                    "audit_export_dir": null,
+                    "embedded_signature_policy": null,
+                    "signer": null,
+                    "account_aliases": [],
+                    "currency_assets": [],
+                    "reference_data": {{
+                        "refresh_interval_secs": 3600,
+                        "isin_crosswalk_path": null,
+                        "bic_lei_path": null,
+                        "mic_directory_path": null,
+                        "csd_venue_path": null,
+                        "securities_account_path": null,
+                        "cash_leg_path": null
+                    }}
+                }}"#
+            );
+
+            let err = norito::json::from_json::<IsoBridge>(&json)
+                .expect_err("legacy XML signature pin aliases must be rejected");
+            assert!(
+                err.to_string().contains(legacy_field),
+                "unexpected legacy alias error for {legacy_field}: {err}"
+            );
+        }
     }
 
     #[test]
@@ -25814,6 +26045,27 @@ publish_delay_seconds = 17
 
         let actual = load_root(table);
         let schedule = actual.torii.sorafs_storage.privacy_aggregates;
+        assert!(schedule.enabled);
+        assert_eq!(schedule.cycle_seconds, 1);
+        assert_eq!(schedule.publish_delay_seconds, 17);
+    }
+
+    #[test]
+    fn sorafs_storage_evidence_viewer_audit_schedule_parses_and_clamps_cycle() {
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(
+            r"
+[storage.evidence_viewer_audits]
+enabled = true
+cycle_seconds = 0
+publish_delay_seconds = 17
+",
+        )
+        .expect("parse sorafs evidence viewer audit schedule");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let actual = load_root(table);
+        let schedule = actual.torii.sorafs_storage.evidence_viewer_audits;
         assert!(schedule.enabled);
         assert_eq!(schedule.cycle_seconds, 1);
         assert_eq!(schedule.publish_delay_seconds, 17);

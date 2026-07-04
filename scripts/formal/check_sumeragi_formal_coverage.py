@@ -1391,6 +1391,10 @@ FORMAL_WORKFLOW_HEADER_KEY_CONTRACTS = (
     (PR_WORKFLOW, "PR formal workflow", ("name", "on", "concurrency", "env")),
     (NIGHTLY_WORKFLOW, "nightly formal workflow", ("name", "on", "concurrency")),
 )
+FORMAL_WORKFLOW_TOP_LEVEL_KEY_CONTRACTS = (
+    (PR_WORKFLOW, "PR formal workflow", ("name", "on", "concurrency", "env", "jobs")),
+    (NIGHTLY_WORKFLOW, "nightly formal workflow", ("name", "on", "concurrency", "jobs")),
+)
 FORMAL_WORKFLOW_PROOF_COMMAND_FRAGMENTS = (
     FORMAL_APALACHE_VERSION_COMMAND,
     FORMAL_BASELINE_COMMAND,
@@ -1703,6 +1707,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Formal workflow triggers must keep the checked PR and scheduled/manual surfaces",
     "Formal workflow names must stay exact",
     "Formal workflow header key inventories must stay exact",
+    "Formal workflow full top-level key inventories must stay exact",
     "Formal workflow trigger event inventories must stay exact",
     "Formal workflow path filters must keep the reviewed ignored-path set",
     "Formal workflow concurrency must keep reviewed cancellation behavior",
@@ -22075,6 +22080,17 @@ def workflow_header_top_level_key_lines(path: Path) -> list[tuple[int, str]]:
     return keys
 
 
+def workflow_top_level_key_lines(path: Path) -> list[tuple[int, str]]:
+    """Return all top-level workflow mapping keys in file order."""
+
+    keys: list[tuple[int, str]] = []
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        key = workflow_mapping_key(line, 0)
+        if key is not None:
+            keys.append((line_number, key))
+    return keys
+
+
 def workflow_header_on_lines(path: Path) -> list[tuple[int, str]]:
     """Return non-comment lines from top-level workflow trigger blocks."""
 
@@ -22848,6 +22864,36 @@ def formal_workflow_header_key_errors(
         expected_summary = "\n" + format_items(list(expected_keys))
         errors.append(
             f"{owner} {display_path(path)} must keep exact top-level header keys:"
+            f"{expected_summary}; found:{actual_summary}"
+        )
+    return errors
+
+
+def formal_workflow_top_level_key_errors(
+    contracts: tuple[
+        tuple[Path, str, tuple[str, ...]],
+        ...,
+    ] = FORMAL_WORKFLOW_TOP_LEVEL_KEY_CONTRACTS,
+) -> list[str]:
+    """Return errors when formal workflow full-file top-level keys drift."""
+
+    errors: list[str] = []
+    for path, owner, expected_keys in contracts:
+        key_lines = workflow_top_level_key_lines(path)
+        actual_keys = tuple(key for _, key in key_lines)
+        if actual_keys == expected_keys:
+            continue
+        actual_summary = (
+            "\n"
+            + format_items(
+                [f"{line_number}: {key}" for line_number, key in key_lines]
+            )
+            if key_lines
+            else " no top-level keys"
+        )
+        expected_summary = "\n" + format_items(list(expected_keys))
+        errors.append(
+            f"{owner} {display_path(path)} must keep exact full top-level keys:"
             f"{expected_summary}; found:{actual_summary}"
         )
     return errors
@@ -26083,6 +26129,9 @@ def main() -> int:
     )
     formal_workflow_name_mismatches = formal_workflow_name_errors()
     formal_workflow_header_key_mismatches = formal_workflow_header_key_errors()
+    formal_workflow_top_level_key_mismatches = (
+        formal_workflow_top_level_key_errors()
+    )
     formal_workflow_trigger_mismatches = formal_workflow_trigger_errors()
     formal_workflow_on_event_mismatches = formal_workflow_on_event_errors()
     formal_workflow_paths_ignore_mismatches = formal_workflow_paths_ignore_errors()
@@ -26724,6 +26773,11 @@ def main() -> int:
         errors.append(
             "Sumeragi formal workflow header key inventory drifted:\n"
             + format_items(formal_workflow_header_key_mismatches)
+        )
+    if formal_workflow_top_level_key_mismatches:
+        errors.append(
+            "Sumeragi formal workflow full top-level key inventory drifted:\n"
+            + format_items(formal_workflow_top_level_key_mismatches)
         )
     if formal_workflow_trigger_mismatches:
         errors.append(

@@ -228,14 +228,15 @@ use iroha_data_model::{
         SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
         SumeragiMissingBlockFetchStatus, SumeragiNposRepairCoverageStatus,
         SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
-        SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
-        SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
-        SumeragiRbcStoreStatus, SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook,
-        SumeragiStatusWire, SumeragiV1StatusWire, SumeragiValidationRejectStatus,
-        SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
-        SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
-        SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-        SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals,
+        SumeragiPendingRbcStatus, SumeragiProposalGateStatus, SumeragiQcEntry, SumeragiQcSnapshot,
+        SumeragiQcStatus, SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry,
+        SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiRoundGapStatus,
+        SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiV1StatusWire,
+        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
+        SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
+        SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
+        SumeragiWorkerQueueTotals,
     },
     domain::DomainId,
     events::{
@@ -5560,6 +5561,8 @@ pub struct ZkMerklePathGetResponseDto {
     pub frontier_len: u32,
     /// Fixed confidential-v2 tree depth.
     pub tree_depth: u32,
+    /// Inclusion path for the next padded zero leaf at `frontier_len`.
+    pub next_zero_path: Option<ZkMerklePathDto>,
     /// Paths returned in the same order as the request commitments.
     pub paths: Vec<ZkMerklePathDto>,
 }
@@ -16291,10 +16294,43 @@ pub async fn handle_v1_zk_merkle_path(
     })?;
     let tree_depth = u32::try_from(iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2)
         .map_err(|_| zk_query_conversion_error("tree depth does not fit in the response schema"))?;
+    let next_zero_path = if st.commitments.len()
+        < iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_CAPACITY_V2
+    {
+        let leaf_index = st.commitments.len();
+        let path = iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(
+            &st.commitments,
+            leaf_index,
+        )
+        .map_err(|err| {
+            zk_query_conversion_error(format!(
+                "failed to compute next zero-leaf path at index {leaf_index}: {err}"
+            ))
+        })?;
+        if path.root != root {
+            return Err(zk_query_conversion_error(
+                "computed next zero-leaf path root does not match current frontier root",
+            ));
+        }
+        let leaf_index = u32::try_from(leaf_index).map_err(|_| {
+            zk_query_conversion_error("next zero-leaf index does not fit in the response schema")
+        })?;
+        Some(ZkMerklePathDto {
+            commitment: hex::encode([0u8; 32]),
+            leaf_index,
+            siblings: path.siblings.iter().map(hex::encode).collect(),
+            directions: path.directions.clone(),
+            witness_nodes: path.witness_nodes.iter().map(hex::encode).collect(),
+            root: hex::encode(path.root),
+        })
+    } else {
+        None
+    };
     let resp = ZkMerklePathGetResponseDto {
         root: hex::encode(root),
         frontier_len,
         tree_depth,
+        next_zero_path,
         paths,
     };
     let format = match crate::utils::negotiate_json_preferred_response_format(accept.as_ref()) {
@@ -17678,6 +17714,18 @@ mod zk_roots_selector_tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(payload.paths[0].root, hex::encode(expected.root));
+        let next_zero_path = payload
+            .next_zero_path
+            .as_ref()
+            .expect("next zero path should be present");
+        assert_eq!(next_zero_path.commitment, hex::encode([0u8; 32]));
+        assert_eq!(next_zero_path.leaf_index, commitments.len() as u32);
+        let expected_zero = iroha_core::zk::confidential_v2::compute_confidential_merkle_path_v2(
+            &commitments,
+            commitments.len(),
+        )
+        .expect("expected next zero path");
+        assert_eq!(next_zero_path.root, hex::encode(expected_zero.root));
     }
 
     #[tokio::test]
@@ -17722,6 +17770,14 @@ mod zk_roots_selector_tests {
         assert_eq!(payload.frontier_len, 1);
         assert_eq!(payload.paths.len(), 1);
         assert_eq!(payload.paths[0].leaf_index, 0);
+        assert_eq!(
+            payload
+                .next_zero_path
+                .as_ref()
+                .expect("next zero path")
+                .leaf_index,
+            1
+        );
     }
 
     #[tokio::test]
@@ -17757,6 +17813,14 @@ mod zk_roots_selector_tests {
             norito::json::from_slice(&bytes).expect("json response payload");
         assert_eq!(payload.root, hex::encode(root));
         assert!(payload.paths.is_empty());
+        assert_eq!(
+            payload
+                .next_zero_path
+                .as_ref()
+                .expect("next zero path")
+                .leaf_index,
+            commitments.len() as u32
+        );
     }
 
     #[tokio::test]
@@ -58832,6 +58896,75 @@ fn sumeragi_v1_status_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Val
     ])
 }
 
+fn proposal_gate_status(
+    gate: sumeragi::status::ProposalGateSnapshot,
+) -> SumeragiProposalGateStatus {
+    SumeragiProposalGateStatus {
+        height: gate.height,
+        view: gate.view,
+        queue_len: gate.queue_len,
+        pending_blocks_total: gate.pending_blocks_total,
+        pending_blocks_blocking: gate.pending_blocks_blocking,
+        active_pending_for_tip: gate.active_pending_for_tip,
+        queue_saturated: gate.queue_saturated,
+        active_pending: gate.active_pending,
+        rbc_backlog: gate.rbc_backlog,
+        relay_backpressure: gate.relay_backpressure,
+        consensus_queue_backpressure: gate.consensus_queue_backpressure,
+        should_defer: gate.should_defer,
+        only_pacing_backpressure: gate.only_pacing_backpressure,
+        commit_inflight_active: gate.commit_inflight_active,
+        cached_proposal_present: gate.cached_proposal_present,
+        cached_proposal_hint_present: gate.cached_proposal_hint_present,
+        round_liveness_present: gate.round_liveness_present,
+        frontier_owner_present: gate.frontier_owner_present,
+        missing_qc_liveness_active: gate.missing_qc_liveness_active,
+        last_pacemaker_attempt_age_ms: gate.last_pacemaker_attempt_age_ms,
+        last_successful_proposal_age_ms: gate.last_successful_proposal_age_ms,
+    }
+}
+
+fn proposal_gate_json(gate: sumeragi::status::ProposalGateSnapshot) -> norito::json::Value {
+    json_object(vec![
+        json_entry("height", gate.height),
+        json_entry("view", gate.view),
+        json_entry("queue_len", gate.queue_len),
+        json_entry("pending_blocks_total", gate.pending_blocks_total),
+        json_entry("pending_blocks_blocking", gate.pending_blocks_blocking),
+        json_entry("active_pending_for_tip", gate.active_pending_for_tip),
+        json_entry("queue_saturated", gate.queue_saturated),
+        json_entry("active_pending", gate.active_pending),
+        json_entry("rbc_backlog", gate.rbc_backlog),
+        json_entry("relay_backpressure", gate.relay_backpressure),
+        json_entry(
+            "consensus_queue_backpressure",
+            gate.consensus_queue_backpressure,
+        ),
+        json_entry("should_defer", gate.should_defer),
+        json_entry("only_pacing_backpressure", gate.only_pacing_backpressure),
+        json_entry("commit_inflight_active", gate.commit_inflight_active),
+        json_entry("cached_proposal_present", gate.cached_proposal_present),
+        json_entry(
+            "cached_proposal_hint_present",
+            gate.cached_proposal_hint_present,
+        ),
+        json_entry("round_liveness_present", gate.round_liveness_present),
+        json_entry("frontier_owner_present", gate.frontier_owner_present),
+        json_entry(
+            "missing_qc_liveness_active",
+            gate.missing_qc_liveness_active,
+        ),
+        json_entry(
+            "last_pacemaker_attempt_age_ms",
+            gate.last_pacemaker_attempt_age_ms,
+        ),
+        json_entry(
+            "last_successful_proposal_age_ms",
+            gate.last_successful_proposal_age_ms,
+        ),
+    ])
+}
+
 fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value {
     let highest_qc = json_object(vec![
         json_entry("height", snap.highest_qc_height),
@@ -60394,6 +60527,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "pacemaker_backpressure_deferrals_total",
             snap.pacemaker_backpressure_deferrals_total,
         ),
+        json_entry("proposal_gate", proposal_gate_json(snap.proposal_gate)),
         json_entry(
             "commit_pipeline_tick_total",
             snap.commit_pipeline_tick_total,
@@ -62721,6 +62855,7 @@ pub async fn handle_v1_sumeragi_status(
                     .drop_unsolicited_share_blocks_total,
             },
             pacemaker_backpressure_deferrals_total: snap.pacemaker_backpressure_deferrals_total,
+            proposal_gate: proposal_gate_status(snap.proposal_gate),
             commit_pipeline_tick_total: snap.commit_pipeline_tick_total,
             da_reschedule_total: snap.da_reschedule_total,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {

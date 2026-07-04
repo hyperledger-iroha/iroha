@@ -11,9 +11,7 @@
   },
   "embedded_signature_policy": "require-verified",
   "signature_public_key_sha256_pins": [],
-  "trusted_public_key_sha256": [],
   "x509_trust_anchor_sha256_pins": [],
-  "trusted_certificate_sha256": [],
   "x509_trust_anchors": [
     {
       "label": "replace-with-csd-terminal-ca",

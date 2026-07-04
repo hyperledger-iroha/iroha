@@ -24,18 +24,23 @@ from check_sorafs_moderation_panel_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_VIEWER_URL_TTL_SECS,
     DEFAULT_MIN_PANEL_SIZE,
     DEFAULT_MIN_PEERS,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
     KIND_BY_NAME,
     REQUIRED_VIEWER_EVENT_KINDS,
     REQUIRED_VIEWER_EXPORT_TARGETS,
     REQUIRED_VIEWER_ROLES,
     REQUIRED_VIEWER_SECURITY_CONTROLS,
     ValidationOptions,
+    VIEWER_SESSION_LABEL_ERROR,
+    VIEWER_SESSION_LABEL_PATTERN,
     validate_evidence_payload,
 )
 from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -171,6 +176,8 @@ def validate_reviewed_inventory(
     option: str,
     count_option: str,
     errors: list[str],
+    pattern=None,
+    label_error: str | None = None,
 ) -> list[str]:
     """Return reviewed unique inventory labels whose count matches a CLI count."""
 
@@ -179,6 +186,25 @@ def validate_reviewed_inventory(
         errors.append(f"{option} is required")
     for index, item in enumerate(items):
         validate_canonical_string(item, label=f"{option}[{index}]", errors=errors)
+        if pattern is None or not isinstance(item, str):
+            continue
+        if pattern.fullmatch(item) is None:
+            errors.append(
+                (label_error or f"{option} uses an invalid label").replace(
+                    "sessions[].name",
+                    option,
+                )
+            )
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in item.split("-")
+        )
+        if forbidden:
+            errors.append(
+                f"{option}[{index}] must not contain non-production markers {forbidden}"
+            )
     unique_items = set(items)
     if len(unique_items) != len(items):
         errors.append(f"{option} must not contain duplicates")
@@ -210,9 +236,13 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         "logged_session_count": args.session_count,
         "sessions": build_session_records(args.viewer_sessions),
         "max_url_ttl_secs": args.max_url_ttl_secs,
+        "role_count": len(args.roles),
         "roles_tested": args.roles,
+        "security_control_count": len(args.security_controls),
         "viewer_security_controls": args.security_controls,
+        "access_event_kind_count": len(args.access_event_kinds),
         "access_event_kinds": args.access_event_kinds,
+        "export_target_count": len(args.export_targets),
         "export_targets": args.export_targets,
     }
     for claim in VERIFIED_TRUE_CLAIMS:
@@ -276,6 +306,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         expected_count=args.session_count,
         option="--viewer-session",
         count_option="--session-count",
+        pattern=VIEWER_SESSION_LABEL_PATTERN,
+        label_error=VIEWER_SESSION_LABEL_ERROR,
         errors=errors,
     )
     if args.max_url_ttl_secs > DEFAULT_MAX_VIEWER_URL_TTL_SECS:
@@ -329,12 +361,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:

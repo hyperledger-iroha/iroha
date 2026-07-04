@@ -560,6 +560,57 @@ def test_deployment_context_write_retries_short_os_write(
     assert payload["deployment_context_reviewed"] is True
 
 
+def test_deployment_context_write_fsyncs_descriptor_before_close(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    original_fsync = os.fsync
+    fsynced: list[int] = []
+
+    def fsync(fd: int) -> None:
+        fsynced.append(fd)
+        original_fsync(fd)
+
+    monkeypatch.setattr(MODULE.os, "fsync", fsync)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == []
+    assert len(fsynced) == 2
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["deployment_context_reviewed"] is True
+
+
+def test_deployment_context_parent_fsync_error_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "bad\nartifact.json")
+    bad_message = "parent fsync denied\nsecret"
+
+    def fail_parent_sync(_path: Path, *, label: str) -> list[str]:
+        assert label == "deployment-context artifact"
+        return [bad_message]
+
+    monkeypatch.setattr(MODULE, "load_evidence_json", lambda _path, _max_bytes: {})
+    monkeypatch.setattr(MODULE, "fsync_checker_output_parent", fail_parent_sync)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == ["deployment context cannot be written into generated artifact"]
+    assert str(artifact) not in "\n".join(errors)
+    assert bad_message not in "\n".join(errors)
+
+
 def test_deployment_context_write_error_is_sanitized(
     tmp_path: Path,
     monkeypatch,
@@ -575,6 +626,30 @@ def test_deployment_context_write_error_is_sanitized(
 
     monkeypatch.setattr(MODULE, "load_evidence_json", lambda _path, _max_bytes: {})
     monkeypatch.setattr(MODULE.os, "open", open_raises)
+
+    errors = MODULE.annotate_evidence_artifact(
+        artifact,
+        deployment_id="transparency-staging-a",
+        environment="staging",
+    )
+
+    assert errors == ["deployment context cannot be written into generated artifact"]
+    assert str(artifact) not in "\n".join(errors)
+    assert bad_message not in "\n".join(errors)
+
+
+def test_deployment_context_fsync_error_is_sanitized(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifact = write_payload(tmp_path / "artifact.json")
+    bad_message = "fsync denied\nsecret"
+
+    def fsync(_fd: int) -> None:
+        raise OSError(bad_message)
+
+    monkeypatch.setattr(MODULE, "load_evidence_json", lambda _path, _max_bytes: {})
+    monkeypatch.setattr(MODULE.os, "fsync", fsync)
 
     errors = MODULE.annotate_evidence_artifact(
         artifact,
@@ -689,6 +764,30 @@ def test_torii_url_rejects_secret_bearing_url_without_leaking(
     assert "bearer_token" not in captured.err
     assert "bearer_token=secret" not in captured.err
     assert captured.out == ""
+
+
+def test_torii_url_rejects_encoded_host_tokens_without_leaking(
+    tmp_path: Path, capsys
+) -> None:
+    unsafe_urls = (
+        "https://C%3A.torii.example/status",
+        "https://http%3A.torii.example/status",
+    )
+
+    for index, unsafe_url in enumerate(unsafe_urls):
+        case_dir = tmp_path / f"url-case-{index}"
+        case_dir.mkdir()
+        args = complete_args(case_dir)
+        args[args.index("--torii-url") + 1] = unsafe_url
+
+        assert MODULE.main([*args, "--dry-run"]) == 2
+
+        captured = capsys.readouterr()
+        assert "SoraFS runner URL arguments must not contain" in captured.err
+        assert unsafe_url not in captured.err
+        assert "C%3A" not in captured.err
+        assert "http%3A" not in captured.err
+        assert captured.out == ""
 
 
 def test_iroha_arg_rejects_secret_bearing_value_without_leaking(

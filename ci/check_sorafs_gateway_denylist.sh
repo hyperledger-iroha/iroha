@@ -93,6 +93,17 @@ def write_all(fd: int, chunk: bytes) -> None:
             raise OSError("short write")
         view = view[written:]
 
+def sync_output_parent(path: pathlib.Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def require_regular_file(path: pathlib.Path, path_label: str) -> None:
     validate_path(path, path_label)
     try:
@@ -118,10 +129,12 @@ try:
         if not chunk:
             break
         write_all(write_fd, chunk)
+    os.fsync(write_fd)
 finally:
     os.close(read_fd)
     if write_fd >= 0:
         os.close(write_fd)
+sync_output_parent(target)
 PY
 }
 
@@ -253,6 +266,17 @@ def write_all(fd: int, chunk: bytes) -> None:
             raise OSError("short write")
         view = view[written:]
 
+def sync_output_parent(path: pathlib.Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def read_json(path: pathlib.Path):
     validate_path(path, "sample denylist")
     if not stat.S_ISREG(path.lstat().st_mode):
@@ -276,9 +300,11 @@ def write_json(path: pathlib.Path, payload) -> None:
     fd = os.open(path, write_open_flags(), 0o666)
     try:
         write_all(fd, rendered)
+        os.fsync(fd)
     finally:
         if fd >= 0:
             os.close(fd)
+    sync_output_parent(path)
 
 data = read_json(src)
 if len(data) < 2:

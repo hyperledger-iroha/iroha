@@ -3044,15 +3044,15 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     ),
     false,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(),
     undefined,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(null),
     null,
   );
-  assert.equal(
+  assert.strictEqual(
     normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId(""),
     "",
   );
@@ -5281,6 +5281,37 @@ test("package dist Kagemusha recursive spend typed requests bind lineage key art
     ),
   );
   const previousLineageVerifierRecord = recursiveSpendVerifierRecord();
+  assert.ok(
+    Buffer.isBuffer(
+      encodeKagemushaRecursiveSpendAppendRequest({
+        previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+        recordBundle,
+        pallasOpenEnvelopes,
+        currentNote,
+        output_proof_circuit_id: KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
+        previousLineageVerifierRecord,
+      }),
+    ),
+  );
+  const appendRequestWithoutSelector = {
+    previousBundle: sharedRecursiveSpendAbi6Archive("init_bundle"),
+    recordBundle,
+    pallasOpenEnvelopes,
+    currentNote,
+    previousLineageVerifierRecord,
+  };
+  for (const request of [
+    appendRequestWithoutSelector,
+    { ...appendRequestWithoutSelector, outputProofCircuitId: undefined },
+    { ...appendRequestWithoutSelector, outputProofCircuitId: null },
+    { ...appendRequestWithoutSelector, outputProofCircuitId: "" },
+    { ...appendRequestWithoutSelector, output_proof_circuit_id: "" },
+  ]) {
+    assert.throws(
+      () => encodeKagemushaRecursiveSpendAppendRequest(request),
+      kagemushaRequestCodecError("field", "outputProofCircuitId", null),
+    );
+  }
   assert.throws(
     () =>
       encodeKagemushaRecursiveSpendAppendRequest({
@@ -10487,6 +10518,33 @@ test("package declarations mark Kagemusha lineage key artifacts readonly", () =>
   assert.match(artifacts, /readonly lineageProvingKeyArchive: Buffer;/);
   assert.match(artifacts, /readonly isInitArtifact: boolean;/);
   assert.match(artifacts, /readonly isAppendArtifact: boolean;/);
+});
+
+test("package declarations require Kagemusha append output selector", () => {
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export interface KagemushaRecursiveSpendAppendRequestBaseInput\s*\{/u,
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /export type KagemushaRecursiveSpendAppendRequestInput =\s*KagemushaRecursiveSpendAppendRequestBaseInput &\s*\(\s*\|\s*\{\s*readonly outputProofCircuitId: string;\s*readonly output_proof_circuit_id\?: never;\s*\}\s*\|\s*\{\s*readonly outputProofCircuitId\?: never;\s*readonly output_proof_circuit_id: string;\s*\}\s*\);/u,
+    "append request input must require exactly one output selector alias",
+  );
+  assert.doesNotMatch(
+    DECLARATIONS_TEXT,
+    /readonly output(?:ProofCircuitId|_proof_circuit_id)\?: string \| null/u,
+    "append output selector must not be optional or nullable",
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId\(\s*outputProofCircuitId: string,\s*\): string;/u,
+    "append selector normalizer declaration must require a string selector",
+  );
+  assert.match(
+    DECLARATIONS_TEXT,
+    /canProveKagemushaRecursiveSpendAppendOutputProofCircuitId\(\s*outputProofCircuitId: string,\s*previousHopCount: number,\s*\): boolean;/u,
+    "append selector prover preflight declaration must require a string selector",
+  );
 });
 
 test("package declarations expose recursive compact key-package signatures", () => {

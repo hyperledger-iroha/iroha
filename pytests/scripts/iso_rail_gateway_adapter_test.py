@@ -1234,7 +1234,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     xml_path,
                     max_payload_bytes=len(SAMPLE_XML) + 1,
                     allow_default_profile=False,
-                    allow_legacy_colr007=False,
                 )
             finally:
                 ADAPTER._load_json = original_load_json
@@ -1267,7 +1266,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         xml_path,
                         max_payload_bytes=len(SAMPLE_XML) + 1,
                         allow_default_profile=True,
-                        allow_legacy_colr007=False,
                     )
                 finally:
                     ADAPTER._load_json = original_load_json
@@ -2300,7 +2298,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     xml_path,
                     max_payload_bytes=1024,
                     allow_default_profile=False,
-                    allow_legacy_colr007=False,
                 )
 
             message = str(caught.exception)
@@ -2782,7 +2779,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 "max_payload_bytes": 1024,
                 "allow_insecure_http": False,
                 "allow_default_profile": False,
-                "allow_legacy_colr007": False,
                 "dry_run": True,
             }
             values.update(overrides)
@@ -2885,7 +2881,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         max_payload_bytes=1024,
                         allow_insecure_http=False,
                         allow_default_profile=False,
-                        allow_legacy_colr007=False,
                         dry_run=True,
                     )
                     setattr(args, field, value)
@@ -2934,7 +2929,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         max_payload_bytes=1024,
                         allow_insecure_http=False,
                         allow_default_profile=False,
-                        allow_legacy_colr007=False,
                         dry_run=True,
                     )
 
@@ -2969,7 +2963,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         max_payload_bytes=1024,
                         allow_insecure_http=False,
                         allow_default_profile=False,
-                        allow_legacy_colr007=False,
                         dry_run=True,
                     )
                     if name == "message omitted":
@@ -2988,7 +2981,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("dry_run", "--dry-run", "true"),
             ("allow_insecure_http", "--allow-insecure-http", 1),
             ("allow_default_profile", "--allow-default-profile", None),
-            ("allow_legacy_colr007", "--allow-legacy-colr007", []),
         )
         for attr, label, value in cases:
             with self.subTest(flag=label):
@@ -3005,7 +2997,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         max_payload_bytes=1024,
                         allow_insecure_http=False,
                         allow_default_profile=False,
-                        allow_legacy_colr007=False,
                         dry_run=True,
                     )
                     setattr(args, attr, value)
@@ -3039,7 +3030,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         max_payload_bytes=1024,
                         allow_insecure_http=False,
                         allow_default_profile=False,
-                        allow_legacy_colr007=False,
                         dry_run=True,
                     )
                     delattr(args, field)
@@ -3066,7 +3056,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 max_payload_bytes=1024,
                 allow_insecure_http=False,
                 allow_default_profile=False,
-                allow_legacy_colr007=False,
                 dry_run=True,
             )
 
@@ -3456,7 +3445,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(requests[0]["path"], "/v1/iso20022/colr012")
             self.assertEqual(requests[0]["headers"]["X-Iroha-Iso-Profile"], "securities-csd")
 
-    def test_colr007_legacy_submission_requires_explicit_local_override(self):
+    def test_colr007_submission_is_unsupported(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
             write_message(
@@ -3477,25 +3466,33 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 )
 
             self.assertEqual(rc, 2)
-            self.assertIn("legacy message_type", stderr)
+            self.assertIn("unsupported message_type", stderr)
             self.assertNotIn("colr.007", stderr)
             self.assertEqual(requests, [])
 
+    def test_removed_colr007_override_flag_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
             with capture_server() as (base_url, requests):
-                rc, _stdout, stderr = run_main(
-                    [
-                        "--inbox-dir",
-                        str(inbox),
-                        "--torii-base-url",
-                        base_url,
-                        "--allow-insecure-http",
-                        "--allow-legacy-colr007",
-                    ]
-                )
+                stderr_buffer = io.StringIO()
+                with contextlib.redirect_stderr(stderr_buffer):
+                    with self.assertRaises(SystemExit) as caught:
+                        ADAPTER.main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                                "--allow-legacy-colr007",
+                            ]
+                        )
 
-            self.assertEqual(rc, 0, stderr)
-            self.assertEqual(len(requests), 1)
-            self.assertEqual(requests[0]["path"], "/v1/iso20022/colr007")
+            self.assertEqual(caught.exception.code, 2)
+            stderr = stderr_buffer.getvalue()
+            self.assertIn("unrecognized arguments: --allow-legacy-colr007", stderr)
+            self.assertEqual(requests, [])
 
     def test_unused_local_overrides_are_rejected(self):
         cases = (
@@ -3506,10 +3503,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             (
                 "--allow-default-profile",
                 "--allow-default-profile requires at least one sidecar without profile",
-            ),
-            (
-                "--allow-legacy-colr007",
-                "--allow-legacy-colr007 requires at least one legacy colr.007 message",
             ),
         )
         for flag, message in cases:
@@ -3577,10 +3570,6 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             (
                 "--allow-default-profile",
                 "--allow-default-profile requires at least one sidecar without profile",
-            ),
-            (
-                "--allow-legacy-colr007",
-                "--allow-legacy-colr007 requires at least one legacy colr.007 message",
             ),
         )
         for flag, message in cases:

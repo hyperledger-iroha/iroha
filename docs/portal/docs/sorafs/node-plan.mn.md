@@ -47,12 +47,13 @@ SF-3 нь Iroha/Torii процессыг SoraFS хадгалах үйлчилг�
 
 ### C. Гарцын төгсгөлийн цэгүүд
 
-| Төгсгөлийн цэг | Зан төлөв | Даалгавар |
-|----------|----------|-------|
-| `POST /sorafs/pin` | `PinProposalV1`-г хүлээн зөвшөөрч, манифестуудыг баталгаажуулж, залгихад дараалалд орж, манифест CID-ээр хариулаарай. | Бөөгнүүдийн профайлыг баталгаажуулах, квотыг хэрэгжүүлэх, өгөгдлийг бөөгнөрөл дэлгүүрээр дамжуулах. |
-| `GET /sorafs/chunks/{cid}` + хүрээний асуулга | `Content-Chunker` толгойтой хэсэг байтуудад үйлчлэх; хүрээний чадавхийг хүндэтгэх. | Хуваарьлагч + урсгалын төсвийг ашиглана уу (SF-2d хүрээний чадамжтай холбох). |
-| `POST /sorafs/por/sample` | Манифест болон буцаах баталгааны багцыг авахын тулд PoR дээжийг ажиллуул. | Дэлгүүрийн түүврийг дахин ашиглах, Norito JSON ачааллаар хариулах. |
-| `GET /sorafs/telemetry` | Дүгнэлт: хүчин чадал, PoR амжилт, татах алдааны тоо. | Хяналтын самбар/операторуудад өгөгдөл өгөх. |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 `sorafs_node::por`-ээр дамжуулан ажиллах үеийн сантехникийн утаснууд PoR-ийн харилцан үйлчлэлийг дамжуулдаг: мөрдөгч нь `PorChallengeV1`, `PorProofV1`, `AuditVerdictV1` бүрийг бүртгэдэг тул `CapacityMeter`-ийн үзүүлэлтүүд ямар ч сайн тусгалгүй байдаг. Torii логик.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ SF-3 нь Iroha/Torii процессыг SoraFS хадгалах үйлчилг�
 ## Чухал цэгээс гарах шалгуур
 
 - `cargo run -p sorafs_node --example pin_fetch` нь орон нутгийн бэхэлгээний эсрэг ажилладаг.  
-- Torii нь `--features sorafs-storage`-ээр бүтээгдэж, интеграцийн туршилтыг давдаг.  
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - Баримт бичиг ([зангилаа хадгалах гарын авлага](node-storage.md)) тохиргооны өгөгдмөл + CLI жишээнүүдээр шинэчлэгдсэн; Operator runbook боломжтой.  
 - Тайлбарын хяналтын самбарт харагдах телеметр; хүчин чадлын ханалт болон PoR алдааны тохируулсан анхааруулга.
 
@@ -116,4 +117,4 @@ SF-3 нь Iroha/Torii процессыг SoraFS хадгалах үйлчилг�
 
 - [Зангилаа хадгалах лавлагаа](node-storage.md) тохиргооны өгөгдмөл, CLI ашиглалт болон алдааг олж засварлах алхмуудыг шинэчил.  
 - SF-3 хувьсан өөрчлөгдөхийн хэрээр [зангилааны үйл ажиллагааны runbook](node-operations.md)-г хэрэгжилттэй зэрэгцүүлэн байлгаарай.  
-- Хөгжүүлэгчийн портал доторх `/sorafs/*` төгсгөлийн цэгүүдийн API лавлагааг нийтэлж, Torii зохицуулагч газардсаны дараа тэдгээрийг OpenAPI манифест руу холбоно уу.
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

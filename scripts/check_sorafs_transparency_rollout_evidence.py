@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,6 +77,32 @@ from sorafs_response_args import (  # noqa: E402
 SUMMARY_SCHEMA = "sorafs.transparency.rollout_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 HEX64_LEN = 64
+CYCLE_DETAIL_PROBE_LABEL_PATTERN = re.compile(
+    r"^transparency-cycle-detail-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+CYCLE_DETAIL_PROBE_LABEL_ERROR = (
+    "cycle_detail_probes[].name must match canonical lowercase "
+    "`transparency-cycle-detail-name`"
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "local",
+        "mock",
+        "placeholder",
+        "private",
+        "sample",
+        "sandbox",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -148,6 +175,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "route_count",
         "passed_route_count",
         "cycle_detail_probe_count",
+        "cycle_detail_probes",
         "publisher_identity_required",
         "payload_bytes_included",
         "publication_bodies_included",
@@ -197,12 +225,14 @@ DEFAULT_REQUIRED_SOURCE_KINDS = (
     "evidence-access-summary",
 )
 REQUIRED_PUBLICATION_ROUTES = ("cycles_list", "cycle_publication")
+REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES = ("transparency-cycle-detail-readback",)
 REQUIRED_EXPLORER_ROUTES = (
     "explorer_snapshot",
     "browser_ui",
     "proof_token_issuance_index",
 )
 REQUIRED_PRIVACY_AGGREGATE_ACTIONS = ("source_event", "publish_due")
+REQUIRED_PROOF_TOKEN_ISSUANCE_ACTIONS = ("proof_token_issuance",)
 SOURCE_BOUND_KINDS = ("publication",)
 CYCLE_BOUND_KINDS = (
     "privacy_aggregate",
@@ -230,6 +260,62 @@ SENSITIVE_KEYS = {
     "token",
     "token_b64",
 }
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
+def require_inventory_label(
+    record: dict[str, Any],
+    field: str,
+    errors: list[str],
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    path: str,
+) -> str:
+    """Require a reviewed production inventory label with the expected family."""
+
+    label = require_string(record, field, errors)
+    if not label:
+        return ""
+    if pattern.fullmatch(label) is None:
+        errors.append(label_error)
+        return ""
+    label_tokens = frozenset(
+        token for token in re.split(r"[^a-z0-9]+", label) if token
+    )
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in label_tokens
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return label
 
 
 
@@ -366,6 +452,7 @@ def validate_route_inventory(
         allow_scalar_items=False,
         trim_values=False,
     )
+    require_only_required_values(payload, "routes", "name", required_routes, errors)
     require_string_inventory_count_match(
         payload,
         "routes",
@@ -395,6 +482,21 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             allow_scalar_items=False,
             trim_values=False,
         )
+        require_only_required_values(
+            payload,
+            "probes",
+            "source_kind",
+            DEFAULT_REQUIRED_SOURCE_KINDS,
+            errors,
+        )
+        require_string_inventory_count_match(
+            payload,
+            "probes",
+            "source_entry_probe_count",
+            errors,
+            field="source_kind",
+            allow_scalar_items=False,
+        )
         probe_records = validate_probe_array(
             payload,
             "probes",
@@ -413,6 +515,74 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
         require_hex(payload, "source_batch_digest_hex", HEX64_LEN, errors)
         require_hex(payload, "cycle_digest_hex", HEX64_LEN, errors)
         require_positive_int(payload, "cycle_detail_probe_count", errors)
+        require_string_coverage(
+            payload,
+            "cycle_detail_probes",
+            "name",
+            REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES,
+            errors,
+            allow_scalar_items=False,
+            trim_values=False,
+        )
+        require_only_required_values(
+            payload,
+            "cycle_detail_probes",
+            "name",
+            REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES,
+            errors,
+        )
+        require_string_inventory_count_match(
+            payload,
+            "cycle_detail_probes",
+            "cycle_detail_probe_count",
+            errors,
+            field="name",
+            allow_scalar_items=False,
+        )
+        for index, record in require_object_array(
+            payload,
+            "cycle_detail_probes",
+            errors,
+        ):
+            require_inventory_label(
+                record,
+                "name",
+                errors,
+                pattern=CYCLE_DETAIL_PROBE_LABEL_PATTERN,
+                label_error=CYCLE_DETAIL_PROBE_LABEL_ERROR,
+                path=f"cycle_detail_probes[{index}].name",
+            )
+            require_2xx_status(
+                record,
+                "status_code",
+                errors,
+                path=f"cycle_detail_probes[{index}].status_code",
+            )
+            require_hex(
+                record,
+                "body_blake3_hex",
+                HEX64_LEN,
+                errors,
+                path=f"cycle_detail_probes[{index}].body_blake3_hex",
+            )
+            require_bool_true(
+                record,
+                "anchor_metadata_present",
+                errors,
+                path=f"cycle_detail_probes[{index}].anchor_metadata_present",
+            )
+            require_bool_true(
+                record,
+                "publisher_identity_present",
+                errors,
+                path=f"cycle_detail_probes[{index}].publisher_identity_present",
+            )
+            require_bool_true(
+                record,
+                "verification_valid",
+                errors,
+                path=f"cycle_detail_probes[{index}].verification_valid",
+            )
         validate_route_inventory(
             payload,
             REQUIRED_PUBLICATION_ROUTES,
@@ -438,6 +608,21 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             errors,
             allow_scalar_items=False,
             trim_values=False,
+        )
+        require_only_required_values(
+            payload,
+            "probes",
+            "action",
+            REQUIRED_PRIVACY_AGGREGATE_ACTIONS,
+            errors,
+        )
+        require_string_inventory_count_match(
+            payload,
+            "probes",
+            "probe_count",
+            errors,
+            field="action",
+            allow_scalar_items=False,
         )
         probe_records = validate_probe_array(
             payload,
@@ -475,6 +660,38 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
         require_hex(payload, "cycle_digest_hex", HEX64_LEN, errors)
         require_count_match(payload, "probe_count", "passed_probe_count", errors)
         require_positive_int(payload, "issuance_probe_count", errors)
+        require_string_coverage(
+            payload,
+            "probes",
+            "action",
+            REQUIRED_PROOF_TOKEN_ISSUANCE_ACTIONS,
+            errors,
+            allow_scalar_items=False,
+            trim_values=False,
+        )
+        require_only_required_values(
+            payload,
+            "probes",
+            "action",
+            REQUIRED_PROOF_TOKEN_ISSUANCE_ACTIONS,
+            errors,
+        )
+        require_string_inventory_count_match(
+            payload,
+            "probes",
+            "probe_count",
+            errors,
+            field="action",
+            allow_scalar_items=False,
+        )
+        require_string_inventory_count_match(
+            payload,
+            "probes",
+            "issuance_probe_count",
+            errors,
+            field="action",
+            allow_scalar_items=False,
+        )
         probe_records = validate_probe_array(
             payload,
             "probes",

@@ -956,6 +956,164 @@ pub fn compute_confidential_merkle_path_v2(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn derive_confidential_next_zero_path_v2(
+    previous_leaf_commitment: [u8; 32],
+    previous_leaf_index: usize,
+    previous_path: &ConfidentialMerklePathV2,
+    root_hint: [u8; 32],
+) -> Result<ConfidentialMerklePathV2, String> {
+    let next_leaf_index = previous_leaf_index
+        .checked_add(1)
+        .ok_or_else(|| "next zero leaf_index overflowed usize".to_owned())?;
+    if next_leaf_index >= CONFIDENTIAL_TREE_CAPACITY_V2 {
+        return Err(format!(
+            "next zero leaf_index must be < {CONFIDENTIAL_TREE_CAPACITY_V2}"
+        ));
+    }
+    let previous_path = normalize_supplied_confidential_merkle_path_v2(
+        previous_leaf_commitment,
+        Some(previous_leaf_index),
+        previous_path,
+        root_hint,
+        "previous latest confidential path",
+    )?;
+    let mut zero_subtrees = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    let mut zero_node = Scalar::ZERO;
+    for _ in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        zero_subtrees.push(zero_node);
+        zero_node = poseidon_pair(zero_node, zero_node);
+    }
+
+    let mut node = Scalar::ZERO;
+    let mut previous_node = leaf_scalar_from_commitment(previous_leaf_commitment);
+    let mut siblings = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    let mut directions = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    let mut witness_nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+
+    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        let previous_subtree_index = previous_leaf_index >> level;
+        let next_subtree_index = next_leaf_index >> level;
+        let direction = if next_subtree_index.is_multiple_of(2) {
+            0
+        } else {
+            1
+        };
+        let sibling = if next_subtree_index == previous_subtree_index {
+            scalar_from_repr(previous_path.siblings[level]).ok_or_else(|| {
+                format!(
+                    "previous latest confidential path sibling[{level}] must be a canonical Pasta scalar"
+                )
+            })?
+        } else if direction == 1 && next_subtree_index == previous_subtree_index + 1 {
+            previous_node
+        } else {
+            zero_subtrees[level]
+        };
+        node = if direction == 0 {
+            poseidon_pair(node, sibling)
+        } else {
+            poseidon_pair(sibling, node)
+        };
+        siblings.push(scalar_to_repr_bytes(sibling));
+        directions.push(direction);
+        witness_nodes.push(scalar_to_repr_bytes(node));
+        previous_node = scalar_from_repr(previous_path.witness_nodes[level]).ok_or_else(|| {
+            format!(
+                "previous latest confidential path witness_nodes[{level}] must be a canonical Pasta scalar"
+            )
+        })?;
+    }
+    let computed_root = scalar_to_repr_bytes(node);
+    if computed_root != root_hint {
+        return Err("derived next zero confidential path does not prove root_hint".to_owned());
+    }
+    Ok(ConfidentialMerklePathV2 {
+        siblings,
+        directions,
+        witness_nodes,
+        root: computed_root,
+    })
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn normalize_supplied_confidential_merkle_path_v2(
+    leaf_commitment: [u8; 32],
+    leaf_index: Option<usize>,
+    path: &ConfidentialMerklePathV2,
+    root_hint: [u8; 32],
+    context: &str,
+) -> Result<ConfidentialMerklePathV2, String> {
+    if let Some(index) = leaf_index
+        && index >= CONFIDENTIAL_TREE_CAPACITY_V2
+    {
+        return Err(format!(
+            "{context} leaf_index must be < {CONFIDENTIAL_TREE_CAPACITY_V2}"
+        ));
+    }
+    if path.siblings.len() != CONFIDENTIAL_TREE_DEPTH_V2 {
+        return Err(format!(
+            "{context} must contain exactly {CONFIDENTIAL_TREE_DEPTH_V2} siblings"
+        ));
+    }
+    if path.directions.len() != CONFIDENTIAL_TREE_DEPTH_V2 {
+        return Err(format!(
+            "{context} must contain exactly {CONFIDENTIAL_TREE_DEPTH_V2} directions"
+        ));
+    }
+    if !path.witness_nodes.is_empty() && path.witness_nodes.len() != CONFIDENTIAL_TREE_DEPTH_V2 {
+        return Err(format!(
+            "{context} witness_nodes must be empty or contain exactly {CONFIDENTIAL_TREE_DEPTH_V2} nodes"
+        ));
+    }
+    if path.root != root_hint {
+        return Err(format!("{context} root does not match root_hint"));
+    }
+
+    let mut current_index = leaf_index;
+    let mut node = leaf_scalar_from_commitment(leaf_commitment);
+    let mut witness_nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        let direction = path.directions[level];
+        if direction > 1 {
+            return Err(format!("{context} direction[{level}] must be 0 or 1"));
+        }
+        if let Some(index) = current_index.as_mut() {
+            let expected = if index.is_multiple_of(2) { 0 } else { 1 };
+            if direction != expected {
+                return Err(format!(
+                    "{context} direction[{level}] does not match leaf_index"
+                ));
+            }
+            *index /= 2;
+        }
+        let sibling = scalar_from_repr(path.siblings[level]).ok_or_else(|| {
+            format!("{context} sibling[{level}] must be a canonical Pasta scalar")
+        })?;
+        node = if direction == 0 {
+            poseidon_pair(node, sibling)
+        } else {
+            poseidon_pair(sibling, node)
+        };
+        witness_nodes.push(scalar_to_repr_bytes(node));
+    }
+    let computed_root = scalar_to_repr_bytes(node);
+    if computed_root != root_hint {
+        return Err(format!("{context} does not prove the supplied root_hint"));
+    }
+    if !path.witness_nodes.is_empty() && path.witness_nodes != witness_nodes {
+        return Err(format!(
+            "{context} witness_nodes do not match the recomputed path"
+        ));
+    }
+    Ok(ConfidentialMerklePathV2 {
+        siblings: path.siblings.clone(),
+        directions: path.directions.clone(),
+        witness_nodes,
+        root: computed_root,
+    })
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[derive(Clone, Debug)]
 struct ConfidentialTransferWitnessV2 {
     include_input_1: bool,
@@ -3016,26 +3174,31 @@ pub fn build_asset_hidden_transfer_proof_v1(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub fn build_confidential_transfer_proof_v2(
+#[allow(clippy::too_many_arguments)]
+fn build_confidential_transfer_proof_v2_resolved_paths(
     chain_id: &ChainId,
     asset_definition_id: &str,
     spend_key: &[u8],
-    tree_commitments: &[[u8; 32]],
     inputs: &[ConfidentialTransferInputV2],
     outputs: &[ConfidentialTransferOutputV2],
     root_hint: [u8; 32],
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
+    resolve_input_paths: impl FnOnce(
+        &ConfidentialTransferInputV2,
+        Option<&ConfidentialTransferInputV2>,
+        [u8; 32],
+        [u8; 32],
+    ) -> Result<
+        (ConfidentialMerklePathV2, ConfidentialMerklePathV2),
+        String,
+    >,
 ) -> Result<ConfidentialTransferProofV2, String> {
     if inputs.is_empty() || inputs.len() > 2 {
         return Err("confidential transfer v2 supports one or two inputs".to_owned());
     }
     if outputs.is_empty() || outputs.len() > 2 {
         return Err("confidential transfer v2 supports one or two outputs".to_owned());
-    }
-    let computed_root = compute_confidential_root_v2(tree_commitments)?;
-    if computed_root != root_hint {
-        return Err("tree commitments do not match the supplied root_hint".to_owned());
     }
     let (params, parsed_vk) = parse_vk_for_transfer(circuit_id, vk_box)?;
     let spend_scalar = hash_to_scalar(b"iroha.confidential.v2.spend_scalar", &[spend_key]);
@@ -3067,33 +3230,12 @@ pub fn build_confidential_transfer_proof_v2(
     } else {
         [0u8; 32]
     };
-    if tree_commitments
-        .get(input_0.leaf_index)
-        .copied()
-        .unwrap_or_default()
-        != input_0_commitment
-    {
-        return Err("transfer input 0 does not match the current confidential tree".to_owned());
-    }
-    if let Some(note) = input_1.as_ref()
-        && tree_commitments
-            .get(note.leaf_index)
-            .copied()
-            .unwrap_or_default()
-            != input_1_commitment
-    {
-        return Err("transfer input 1 does not match the current confidential tree".to_owned());
-    }
-    let input_0_path = compute_confidential_merkle_path_v2(tree_commitments, input_0.leaf_index)?;
-    let input_1_path = compute_confidential_merkle_path_v2(
-        tree_commitments,
-        input_1
-            .as_ref()
-            .map_or(tree_commitments.len(), |note| note.leaf_index),
+    let (input_0_path, input_1_path) = resolve_input_paths(
+        &input_0,
+        input_1.as_ref(),
+        input_0_commitment,
+        input_1_commitment,
     )?;
-    if input_0_path.root != root_hint || input_1_path.root != root_hint {
-        return Err("computed confidential Merkle path does not match root_hint".to_owned());
-    }
     let output_0_commitment = derive_confidential_note_v2(
         asset_definition_id,
         output_0.amount,
@@ -3217,6 +3359,126 @@ pub fn build_confidential_transfer_proof_v2(
         root: root_hint,
         proof,
     })
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn build_confidential_transfer_proof_v2(
+    chain_id: &ChainId,
+    asset_definition_id: &str,
+    spend_key: &[u8],
+    tree_commitments: &[[u8; 32]],
+    inputs: &[ConfidentialTransferInputV2],
+    outputs: &[ConfidentialTransferOutputV2],
+    root_hint: [u8; 32],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<ConfidentialTransferProofV2, String> {
+    let computed_root = compute_confidential_root_v2(tree_commitments)?;
+    if computed_root != root_hint {
+        return Err("tree commitments do not match the supplied root_hint".to_owned());
+    }
+    build_confidential_transfer_proof_v2_resolved_paths(
+        chain_id,
+        asset_definition_id,
+        spend_key,
+        inputs,
+        outputs,
+        root_hint,
+        circuit_id,
+        vk_box,
+        |input_0, input_1, input_0_commitment, input_1_commitment| {
+            if tree_commitments
+                .get(input_0.leaf_index)
+                .copied()
+                .unwrap_or_default()
+                != input_0_commitment
+            {
+                return Err(
+                    "transfer input 0 does not match the current confidential tree".to_owned(),
+                );
+            }
+            if let Some(note) = input_1
+                && tree_commitments
+                    .get(note.leaf_index)
+                    .copied()
+                    .unwrap_or_default()
+                    != input_1_commitment
+            {
+                return Err(
+                    "transfer input 1 does not match the current confidential tree".to_owned(),
+                );
+            }
+            let input_0_path =
+                compute_confidential_merkle_path_v2(tree_commitments, input_0.leaf_index)?;
+            let input_1_path = compute_confidential_merkle_path_v2(
+                tree_commitments,
+                input_1
+                    .as_ref()
+                    .map_or(tree_commitments.len(), |note| note.leaf_index),
+            )?;
+            if input_0_path.root != root_hint || input_1_path.root != root_hint {
+                return Err("computed confidential Merkle path does not match root_hint".to_owned());
+            }
+            Ok((input_0_path, input_1_path))
+        },
+    )
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn build_confidential_transfer_proof_v2_with_paths(
+    chain_id: &ChainId,
+    asset_definition_id: &str,
+    spend_key: &[u8],
+    input_paths: &[ConfidentialMerklePathV2],
+    inputs: &[ConfidentialTransferInputV2],
+    outputs: &[ConfidentialTransferOutputV2],
+    root_hint: [u8; 32],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<ConfidentialTransferProofV2, String> {
+    build_confidential_transfer_proof_v2_resolved_paths(
+        chain_id,
+        asset_definition_id,
+        spend_key,
+        inputs,
+        outputs,
+        root_hint,
+        circuit_id,
+        vk_box,
+        |input_0, input_1, input_0_commitment, input_1_commitment| {
+            let expected_paths = 2;
+            if input_paths.len() != expected_paths {
+                return Err(format!(
+                    "confidential transfer v2 path mode requires exactly {expected_paths} input paths"
+                ));
+            }
+            let input_0_path = normalize_supplied_confidential_merkle_path_v2(
+                input_0_commitment,
+                Some(input_0.leaf_index),
+                &input_paths[0],
+                root_hint,
+                "transfer input 0 path",
+            )?;
+            let input_1_path = if let Some(note) = input_1 {
+                normalize_supplied_confidential_merkle_path_v2(
+                    input_1_commitment,
+                    Some(note.leaf_index),
+                    &input_paths[1],
+                    root_hint,
+                    "transfer input 1 path",
+                )?
+            } else {
+                normalize_supplied_confidential_merkle_path_v2(
+                    [0u8; 32],
+                    None,
+                    &input_paths[1],
+                    root_hint,
+                    "transfer dummy input 1 path",
+                )?
+            };
+            Ok((input_0_path, input_1_path))
+        },
+    )
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -3378,17 +3640,26 @@ pub fn build_confidential_unshield_proof_v2(
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-pub fn build_confidential_unshield_proof_v3(
+#[allow(clippy::too_many_arguments)]
+fn build_confidential_unshield_proof_v3_resolved_paths(
     chain_id: &ChainId,
     asset_definition_id: &str,
     spend_key: &[u8],
-    tree_commitments: &[[u8; 32]],
     inputs: &[ConfidentialUnshieldInputV2],
     outputs: &[ConfidentialUnshieldOutputV3],
     public_amount: u128,
     root_hint: [u8; 32],
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
+    resolve_input_paths: impl FnOnce(
+        &ConfidentialUnshieldInputV2,
+        Option<&ConfidentialUnshieldInputV2>,
+        [u8; 32],
+        [u8; 32],
+    ) -> Result<
+        (ConfidentialMerklePathV2, ConfidentialMerklePathV2),
+        String,
+    >,
 ) -> Result<ConfidentialUnshieldProofV3, String> {
     if inputs.is_empty() || inputs.len() > 2 {
         return Err("confidential unshield v3 supports one or two inputs".to_owned());
@@ -3397,10 +3668,6 @@ pub fn build_confidential_unshield_proof_v3(
         return Err(
             "confidential unshield v3 supports at most one private change output".to_owned(),
         );
-    }
-    let computed_root = compute_confidential_root_v2(tree_commitments)?;
-    if computed_root != root_hint {
-        return Err("tree commitments do not match the supplied root_hint".to_owned());
     }
     let (params, parsed_vk) = parse_vk_for_unshield_v3(circuit_id, vk_box)?;
     let change_owner_tag = derive_confidential_owner_tag_v2(spend_key);
@@ -3429,33 +3696,12 @@ pub fn build_confidential_unshield_proof_v3(
     } else {
         [0u8; 32]
     };
-    if tree_commitments
-        .get(input_0.leaf_index)
-        .copied()
-        .unwrap_or_default()
-        != input_0_commitment
-    {
-        return Err("unshield input 0 does not match the current confidential tree".to_owned());
-    }
-    if let Some(note) = input_1.as_ref()
-        && tree_commitments
-            .get(note.leaf_index)
-            .copied()
-            .unwrap_or_default()
-            != input_1_commitment
-    {
-        return Err("unshield input 1 does not match the current confidential tree".to_owned());
-    }
-    let input_0_path = compute_confidential_merkle_path_v2(tree_commitments, input_0.leaf_index)?;
-    let input_1_path = compute_confidential_merkle_path_v2(
-        tree_commitments,
-        input_1
-            .as_ref()
-            .map_or(tree_commitments.len(), |note| note.leaf_index),
+    let (input_0_path, input_1_path) = resolve_input_paths(
+        &input_0,
+        input_1.as_ref(),
+        input_0_commitment,
+        input_1_commitment,
     )?;
-    if input_0_path.root != root_hint || input_1_path.root != root_hint {
-        return Err("computed confidential Merkle path does not match root_hint".to_owned());
-    }
     let total_input_amount = input_0
         .amount
         .checked_add(input_1.as_ref().map_or(0, |note| note.amount))
@@ -3569,6 +3815,130 @@ pub fn build_confidential_unshield_proof_v3(
     })
 }
 
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn build_confidential_unshield_proof_v3(
+    chain_id: &ChainId,
+    asset_definition_id: &str,
+    spend_key: &[u8],
+    tree_commitments: &[[u8; 32]],
+    inputs: &[ConfidentialUnshieldInputV2],
+    outputs: &[ConfidentialUnshieldOutputV3],
+    public_amount: u128,
+    root_hint: [u8; 32],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<ConfidentialUnshieldProofV3, String> {
+    let computed_root = compute_confidential_root_v2(tree_commitments)?;
+    if computed_root != root_hint {
+        return Err("tree commitments do not match the supplied root_hint".to_owned());
+    }
+    build_confidential_unshield_proof_v3_resolved_paths(
+        chain_id,
+        asset_definition_id,
+        spend_key,
+        inputs,
+        outputs,
+        public_amount,
+        root_hint,
+        circuit_id,
+        vk_box,
+        |input_0, input_1, input_0_commitment, input_1_commitment| {
+            if tree_commitments
+                .get(input_0.leaf_index)
+                .copied()
+                .unwrap_or_default()
+                != input_0_commitment
+            {
+                return Err(
+                    "unshield input 0 does not match the current confidential tree".to_owned(),
+                );
+            }
+            if let Some(note) = input_1
+                && tree_commitments
+                    .get(note.leaf_index)
+                    .copied()
+                    .unwrap_or_default()
+                    != input_1_commitment
+            {
+                return Err(
+                    "unshield input 1 does not match the current confidential tree".to_owned(),
+                );
+            }
+            let input_0_path =
+                compute_confidential_merkle_path_v2(tree_commitments, input_0.leaf_index)?;
+            let input_1_path = compute_confidential_merkle_path_v2(
+                tree_commitments,
+                input_1
+                    .as_ref()
+                    .map_or(tree_commitments.len(), |note| note.leaf_index),
+            )?;
+            if input_0_path.root != root_hint || input_1_path.root != root_hint {
+                return Err("computed confidential Merkle path does not match root_hint".to_owned());
+            }
+            Ok((input_0_path, input_1_path))
+        },
+    )
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn build_confidential_unshield_proof_v3_with_paths(
+    chain_id: &ChainId,
+    asset_definition_id: &str,
+    spend_key: &[u8],
+    input_paths: &[ConfidentialMerklePathV2],
+    inputs: &[ConfidentialUnshieldInputV2],
+    outputs: &[ConfidentialUnshieldOutputV3],
+    public_amount: u128,
+    root_hint: [u8; 32],
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+) -> Result<ConfidentialUnshieldProofV3, String> {
+    build_confidential_unshield_proof_v3_resolved_paths(
+        chain_id,
+        asset_definition_id,
+        spend_key,
+        inputs,
+        outputs,
+        public_amount,
+        root_hint,
+        circuit_id,
+        vk_box,
+        |input_0, input_1, input_0_commitment, input_1_commitment| {
+            let expected_paths = 2;
+            if input_paths.len() != expected_paths {
+                return Err(format!(
+                    "confidential unshield v3 path mode requires exactly {expected_paths} input paths"
+                ));
+            }
+            let input_0_path = normalize_supplied_confidential_merkle_path_v2(
+                input_0_commitment,
+                Some(input_0.leaf_index),
+                &input_paths[0],
+                root_hint,
+                "unshield input 0 path",
+            )?;
+            let input_1_path = if let Some(note) = input_1 {
+                normalize_supplied_confidential_merkle_path_v2(
+                    input_1_commitment,
+                    Some(note.leaf_index),
+                    &input_paths[1],
+                    root_hint,
+                    "unshield input 1 path",
+                )?
+            } else {
+                normalize_supplied_confidential_merkle_path_v2(
+                    [0u8; 32],
+                    None,
+                    &input_paths[1],
+                    root_hint,
+                    "unshield dummy input 1 path",
+                )?
+            };
+            Ok((input_0_path, input_1_path))
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -3609,6 +3979,84 @@ mod tests {
             .expect("unshield key must parse as confidential unshield v2");
         super::parse_vk_for_unshield_v3(&unshield_v3.circuit_id, unshield_v3_key)
             .expect("unshield v3 key must parse as confidential unshield v3");
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn supplied_confidential_merkle_path_recomputes_witness_nodes() {
+        let commitments = vec![[0x11; 32], [0x22; 32], [0x33; 32]];
+        let path =
+            super::compute_confidential_merkle_path_v2(&commitments, 2).expect("computed path");
+        let mut supplied = path.clone();
+        supplied.witness_nodes.clear();
+
+        let normalized = super::normalize_supplied_confidential_merkle_path_v2(
+            [0x33; 32],
+            Some(2),
+            &supplied,
+            path.root,
+            "test path",
+        )
+        .expect("supplied path should validate");
+
+        assert_eq!(normalized.root, path.root);
+        assert_eq!(normalized.witness_nodes, path.witness_nodes);
+
+        let mut tampered = supplied;
+        tampered.directions[0] ^= 1;
+        assert!(
+            super::normalize_supplied_confidential_merkle_path_v2(
+                [0x33; 32],
+                Some(2),
+                &tampered,
+                path.root,
+                "test path",
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn next_zero_confidential_path_matches_padded_tree_path() {
+        for len in 1usize..12 {
+            let commitments: Vec<[u8; 32]> = (0..len)
+                .map(|index| {
+                    let mut commitment = [0u8; 32];
+                    commitment[0] = 0x40;
+                    commitment[31] = u8::try_from(index + 1).expect("fixture index fits in u8");
+                    commitment
+                })
+                .collect();
+            let previous_index = commitments.len() - 1;
+            let previous_path =
+                super::compute_confidential_merkle_path_v2(&commitments, previous_index)
+                    .expect("previous path");
+            let expected_next_zero =
+                super::compute_confidential_merkle_path_v2(&commitments, commitments.len())
+                    .expect("expected zero path");
+            let derived = super::derive_confidential_next_zero_path_v2(
+                commitments[previous_index],
+                previous_index,
+                &previous_path,
+                previous_path.root,
+            )
+            .expect("derived next zero path");
+
+            assert_eq!(derived.root, expected_next_zero.root, "len={len}");
+            assert_eq!(
+                derived.siblings, expected_next_zero.siblings,
+                "siblings len={len}"
+            );
+            assert_eq!(
+                derived.directions, expected_next_zero.directions,
+                "directions len={len}"
+            );
+            assert_eq!(
+                derived.witness_nodes, expected_next_zero.witness_nodes,
+                "witness nodes len={len}"
+            );
+        }
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]

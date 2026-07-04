@@ -103,6 +103,7 @@ impl RelayPayoutService {
         let mut expected: BTreeMap<TransferKey, LedgerTransferRecord> = BTreeMap::new();
         let mut expected_amount_nanos = 0u128;
         let mut total_expected_transfers = 0usize;
+        let mut amount_conversion_errors = Vec::new();
 
         for (relay_id, entry) in self.ledger.iter() {
             for (&epoch, record) in &entry.payouts {
@@ -117,8 +118,12 @@ impl RelayPayoutService {
                         &summary,
                     );
                     let key = record.key();
-                    expected_amount_nanos = expected_amount_nanos
-                        .saturating_add(numeric_to_nanos(&record.amount).unwrap_or(0));
+                    accumulate_reconciliation_amount(
+                        &mut expected_amount_nanos,
+                        &mut amount_conversion_errors,
+                        LedgerAmountSource::Expected,
+                        &record,
+                    );
                     total_expected_transfers += 1;
                     expected.insert(key, record);
                 }
@@ -158,8 +163,12 @@ impl RelayPayoutService {
                         *relay_id, epoch, kind, dispute_id, &summary,
                     );
                     let key = record.key();
-                    expected_amount_nanos = expected_amount_nanos
-                        .saturating_add(numeric_to_nanos(&record.amount).unwrap_or(0));
+                    accumulate_reconciliation_amount(
+                        &mut expected_amount_nanos,
+                        &mut amount_conversion_errors,
+                        LedgerAmountSource::Expected,
+                        &record,
+                    );
                     total_expected_transfers += 1;
                     expected.insert(key, record);
                 }
@@ -172,8 +181,12 @@ impl RelayPayoutService {
         let mut unexpected_transfers = Vec::new();
 
         for export in exports {
-            exported_amount_nanos =
-                exported_amount_nanos.saturating_add(numeric_to_nanos(&export.amount).unwrap_or(0));
+            accumulate_reconciliation_amount(
+                &mut exported_amount_nanos,
+                &mut amount_conversion_errors,
+                LedgerAmountSource::Exported,
+                export,
+            );
             let key = TransferKey::from_record(export);
             match expected.remove(&key) {
                 Some(expected_record) => {
@@ -205,6 +218,7 @@ impl RelayPayoutService {
             missing_transfers,
             unexpected_transfers,
             mismatched_transfers,
+            amount_conversion_errors,
         }
     }
 
@@ -625,6 +639,8 @@ pub struct LedgerReconciliationReport {
     pub unexpected_transfers: Vec<LedgerTransferRecord>,
     /// Transfers whose metadata differed between ledger and export.
     pub mismatched_transfers: Vec<LedgerTransferMismatch>,
+    /// Transfers whose amount could not be represented as XOR nanos.
+    pub amount_conversion_errors: Vec<LedgerAmountConversionError>,
 }
 
 impl LedgerReconciliationReport {
@@ -634,6 +650,7 @@ impl LedgerReconciliationReport {
         self.missing_transfers.is_empty()
             && self.unexpected_transfers.is_empty()
             && self.mismatched_transfers.is_empty()
+            && self.amount_conversion_errors.is_empty()
     }
 }
 
@@ -653,6 +670,39 @@ pub struct LedgerTransferMismatch {
     pub actual: LedgerTransferRecord,
     /// Reasons describing which fields diverged.
     pub reasons: Vec<MismatchReason>,
+}
+
+/// Side of reconciliation where an amount conversion failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LedgerAmountSource {
+    /// Expected payout-ledger transfer.
+    Expected,
+    /// Exported ledger transfer supplied for reconciliation.
+    Exported,
+}
+
+/// Numeric-to-nanos conversion failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericToNanosError {
+    /// The amount was negative or too wide to view as an unsigned mantissa.
+    NegativeOrTooWideMantissa,
+    /// Scaling the amount to nanos required an unrepresentable power of ten.
+    ScaleOverflow,
+    /// Scaling the amount to nanos overflowed `u128`.
+    NanosOverflow,
+    /// Adding this amount to the reconciliation total overflowed `u128`.
+    TotalOverflow,
+}
+
+/// Amount conversion error captured during ledger reconciliation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerAmountConversionError {
+    /// Whether the failed amount came from expected or exported transfers.
+    pub source: LedgerAmountSource,
+    /// Transfer whose amount could not be represented as XOR nanos.
+    pub record: LedgerTransferRecord,
+    /// Conversion failure reason.
+    pub error: NumericToNanosError,
 }
 
 /// Dimension along which a mismatch occurred.
@@ -1451,23 +1501,51 @@ fn record_dispute_metric(action: &str) {
 
 fn record_adjustment_metric(relay_id: RelayId, amount: &Numeric, kind: &str) {
     if let Some(metrics) = iroha_telemetry::metrics::global()
-        && let Some(nanos) = numeric_to_nanos(amount)
+        && let Ok(nanos) = numeric_to_nanos(amount)
     {
         metrics.record_soranet_adjustment(&hex_encode(relay_id), nanos, kind);
     }
 }
 
-fn numeric_to_nanos(amount: &Numeric) -> Option<u128> {
+fn accumulate_reconciliation_amount(
+    total: &mut u128,
+    errors: &mut Vec<LedgerAmountConversionError>,
+    source: LedgerAmountSource,
+    record: &LedgerTransferRecord,
+) {
+    match numeric_to_nanos(&record.amount).and_then(|nanos| {
+        total
+            .checked_add(nanos)
+            .ok_or(NumericToNanosError::TotalOverflow)
+    }) {
+        Ok(next_total) => *total = next_total,
+        Err(error) => errors.push(LedgerAmountConversionError {
+            source,
+            record: record.clone(),
+            error,
+        }),
+    }
+}
+
+fn numeric_to_nanos(amount: &Numeric) -> Result<u128, NumericToNanosError> {
     let scale = amount.scale();
     let mantissa = amount
         .try_mantissa_u128()
-        .expect("positive amount mantissa should fit u128");
+        .ok_or(NumericToNanosError::NegativeOrTooWideMantissa)?;
     if scale >= 9 {
-        let divisor = 10u128.checked_pow(scale.saturating_sub(9))?;
-        mantissa.checked_div(divisor)
+        let divisor = 10u128
+            .checked_pow(scale.saturating_sub(9))
+            .ok_or(NumericToNanosError::ScaleOverflow)?;
+        mantissa
+            .checked_div(divisor)
+            .ok_or(NumericToNanosError::ScaleOverflow)
     } else {
-        let multiplier = 10u128.checked_pow(9 - scale)?;
-        mantissa.checked_mul(multiplier)
+        let multiplier = 10u128
+            .checked_pow(9 - scale)
+            .ok_or(NumericToNanosError::ScaleOverflow)?;
+        mantissa
+            .checked_mul(multiplier)
+            .ok_or(NumericToNanosError::NanosOverflow)
     }
 }
 
@@ -2058,6 +2136,37 @@ mod tests {
             mismatch
                 .reasons
                 .iter()
+                .any(|reason| matches!(reason, MismatchReason::Amount))
+        );
+    }
+
+    #[test]
+    fn reconcile_reports_unconvertible_export_amount_without_zeroing_total() {
+        let (mut service, _) = payout_service();
+        let bond = bond_entry(1_000);
+
+        service
+            .process_epoch(&metrics(16, 1_000), &bond, account(16), Metadata::default())
+            .expect("epoch recorded");
+
+        let mut exports = expected_exports(&service);
+        exports[0].amount = Numeric::new(-1_i128, 0);
+
+        let report = service.reconcile_ledger(&exports);
+
+        assert!(!report.is_clean());
+        assert_eq!(report.amount_conversion_errors.len(), 1);
+        let error = &report.amount_conversion_errors[0];
+        assert_eq!(error.source, LedgerAmountSource::Exported);
+        assert_eq!(error.error, NumericToNanosError::NegativeOrTooWideMantissa);
+        assert_eq!(error.record.amount, Numeric::new(-1_i128, 0));
+        assert_eq!(report.exported_amount_nanos, 0);
+        assert!(report.expected_amount_nanos > 0);
+        assert!(
+            report
+                .mismatched_transfers
+                .iter()
+                .flat_map(|mismatch| &mismatch.reasons)
                 .any(|reason| matches!(reason, MismatchReason::Amount))
         );
     }

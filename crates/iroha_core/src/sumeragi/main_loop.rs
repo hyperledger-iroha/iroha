@@ -400,6 +400,7 @@ mod background;
 mod block_sync;
 mod commit;
 mod kura;
+mod lane_scheduler;
 mod locked_qc;
 mod mode;
 mod pacing;
@@ -6056,7 +6057,8 @@ fn build_commitment_snapshots_from_totals(
 
 #[cfg(test)]
 fn interleave_lane_indices(routing_decisions: &[RoutingDecision]) -> Vec<usize> {
-    interleave_lane_indices_from_offset(routing_decisions, 0)
+    lane_scheduler::LaneProposalBatch::from_routing_decisions(routing_decisions)
+        .interleaved_indices_from_offset(0)
 }
 
 fn interleave_lane_indices_for_slot(
@@ -6064,65 +6066,49 @@ fn interleave_lane_indices_for_slot(
     height: u64,
     view: u64,
 ) -> Vec<usize> {
-    let lane_count = routing_decisions
-        .iter()
-        .map(|decision| decision.lane_id)
-        .collect::<BTreeSet<_>>()
-        .len();
-    if lane_count <= 1 {
-        return interleave_lane_indices_from_offset(routing_decisions, 0);
-    }
-    let Ok(lane_count_u64) = u64::try_from(lane_count) else {
-        return interleave_lane_indices_from_offset(routing_decisions, 0);
-    };
-    let start_offset =
-        usize::try_from(height.wrapping_add(view) % lane_count_u64).unwrap_or_default();
-    interleave_lane_indices_from_offset(routing_decisions, start_offset)
+    lane_scheduler::LaneProposalBatch::from_routing_decisions(routing_decisions)
+        .interleaved_indices_for_slot(height, view)
 }
 
+#[cfg(test)]
 fn interleave_lane_indices_from_offset(
     routing_decisions: &[RoutingDecision],
     start_offset: usize,
 ) -> Vec<usize> {
-    let total = routing_decisions.len();
-    if total <= 1 {
-        return (0..total).collect();
-    }
-    let mut per_lane: BTreeMap<LaneId, VecDeque<usize>> = BTreeMap::new();
-    for (idx, decision) in routing_decisions.iter().enumerate() {
-        per_lane.entry(decision.lane_id).or_default().push_back(idx);
-    }
-    let lane_ids: Vec<LaneId> = per_lane.keys().copied().collect();
-    if lane_ids.is_empty() {
-        return (0..total).collect();
-    }
-    let start_offset = start_offset % lane_ids.len();
+    lane_scheduler::LaneProposalBatch::from_routing_decisions(routing_decisions)
+        .interleaved_indices_from_offset(start_offset)
+}
 
-    let mut order = Vec::with_capacity(total);
-    while order.len() < total {
-        let mut progress = false;
-        for offset in 0..lane_ids.len() {
-            let lane_id = lane_ids[(start_offset + offset) % lane_ids.len()];
-            let Some(indices) = per_lane.get_mut(&lane_id) else {
-                continue;
-            };
-            if let Some(idx) = indices.pop_front() {
-                order.push(idx);
-                progress = true;
-                if order.len() == total {
-                    break;
-                }
-            }
-        }
-        if !progress {
-            break;
-        }
+#[cfg(test)]
+mod lane_interleave_wrapper_tests {
+    use super::*;
+
+    fn routing_for_lanes(lanes: &[u32]) -> Vec<RoutingDecision> {
+        lanes
+            .iter()
+            .enumerate()
+            .map(|(idx, lane)| {
+                RoutingDecision::new(
+                    LaneId::new(*lane),
+                    DataSpaceId::new(u64::try_from(idx + 1).expect("dataspace id fits")),
+                )
+            })
+            .collect()
     }
 
-    if order.len() == total {
-        order
-    } else {
-        (0..total).collect()
+    #[test]
+    fn interleave_lane_indices_wrappers_use_lane_scheduler_ordering() {
+        let routing = routing_for_lanes(&[1, 1, 3]);
+
+        assert_eq!(interleave_lane_indices(&routing), vec![0, 2, 1]);
+        assert_eq!(
+            interleave_lane_indices_from_offset(&routing, 1),
+            vec![2, 0, 1]
+        );
+        assert_eq!(
+            interleave_lane_indices_for_slot(&routing, 1, 0),
+            vec![2, 0, 1]
+        );
     }
 }
 
@@ -6782,6 +6768,22 @@ impl Actor {
             lock.block_hash,
             lock.view,
         )
+    }
+
+    fn same_height_vote_lock_superseded_by_committed_frontier_new_view(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        lock: &SameHeightVoteLock,
+    ) -> bool {
+        self.latest_committed_qc().is_some_and(|highest_qc| {
+            self.new_view_qc_supersedes_same_height_vote_lock(
+                proposal_height,
+                proposal_view,
+                highest_qc,
+                lock,
+            )
+        })
     }
 
     fn new_view_qc_supersedes_noncommit_same_height_vote_conflict(
@@ -9848,7 +9850,14 @@ impl Actor {
             .then(|| {
                 self.same_height_vote_lock_blocking_candidate(frontier_height, requested_view, None)
             })
-            .flatten();
+            .flatten()
+            .filter(|lock| {
+                !self.same_height_vote_lock_superseded_by_committed_frontier_new_view(
+                    frontier_height,
+                    requested_view,
+                    lock,
+                )
+            });
 
         let retarget_vote_locked_seed = self.frontier_slot.as_ref().and_then(|slot| {
             let lock = vote_locked_seed.as_ref()?;
@@ -10386,6 +10395,24 @@ impl Actor {
             .count()
     }
 
+    fn pending_consensus_evidence_blocks_proposals(
+        &self,
+        pending: &PendingBlock,
+        now: Instant,
+        quorum_timeout: Duration,
+    ) -> bool {
+        let block_hash = pending.block.hash();
+        let has_precommit_votes = pending.local_commit_vote_emitted()
+            || self.pending_block_has_votes(block_hash, pending.height, pending.view);
+        let has_commit_qc = pending.commit_qc_observed()
+            || self.pending_block_has_qc(block_hash, pending.height, pending.view);
+        if has_commit_qc {
+            return true;
+        }
+        has_precommit_votes
+            && (quorum_timeout == Duration::ZERO || pending.progress_age(now) < quorum_timeout)
+    }
+
     fn blocking_pending_blocks_len_with_progress(&self, now: Instant) -> usize {
         let da_enabled = self.runtime_da_enabled();
         let quorum_timeout = self.quorum_timeout(da_enabled);
@@ -10414,12 +10441,7 @@ impl Actor {
                 ) {
                     return false;
                 }
-                let block_hash = pending.block.hash();
-                let has_precommit_votes = pending.local_commit_vote_emitted()
-                    || self.pending_block_has_votes(block_hash, pending.height, pending.view);
-                let has_commit_qc = pending.commit_qc_observed()
-                    || self.pending_block_has_qc(block_hash, pending.height, pending.view);
-                if has_precommit_votes || has_commit_qc {
+                if self.pending_consensus_evidence_blocks_proposals(pending, now, quorum_timeout) {
                     return true;
                 }
                 if pending.last_quorum_reschedule.is_some() {
@@ -10472,30 +10494,65 @@ impl Actor {
     }
 
     pub(super) fn frontier_body_gap_payload_drain_urgent(&self) -> bool {
-        let Some(slot) = self.frontier_slot.as_ref() else {
-            return false;
-        };
-        if !matches!(slot.mode, FrontierSlotMode::Normal)
-            || !slot.exact_fetch_armed
-            || slot.body_present()
-            || !matches!(
-                slot.phase,
-                FrontierSlotPhase::AwaitBody | FrontierSlotPhase::AwaitCommitQc
-            )
-        {
-            return false;
-        }
-        if !(slot.quorum_progress.votes_observed
-            || slot.quorum_progress.commit_qc_observed
-            || self.slot_has_vote_backed_consensus_evidence(slot.height, slot.view))
-        {
+        let queue_depths = super::status::worker_queue_depth_snapshot();
+        let repair_payload_queued = queue_depths.rbc_chunk_rx > 0
+            || queue_depths.block_payload_rx > 0
+            || queue_depths.block_rx > 0;
+        if !repair_payload_queued {
             return false;
         }
 
-        let queue_depths = super::status::worker_queue_depth_snapshot();
-        queue_depths.rbc_chunk_rx > 0
-            || queue_depths.block_payload_rx > 0
-            || queue_depths.block_rx > 0
+        if self.frontier_slot.as_ref().is_some_and(|slot| {
+            matches!(slot.mode, FrontierSlotMode::Normal)
+                && slot.exact_fetch_armed
+                && !slot.body_present()
+                && matches!(
+                    slot.phase,
+                    FrontierSlotPhase::AwaitBody | FrontierSlotPhase::AwaitCommitQc
+                )
+                && (slot.quorum_progress.votes_observed
+                    || slot.quorum_progress.commit_qc_observed
+                    || self.slot_has_vote_backed_consensus_evidence(slot.height, slot.view))
+        }) {
+            return true;
+        }
+
+        let committed_height = self.committed_height_snapshot();
+        let frontier_height = committed_height.saturating_add(1);
+        let now = Instant::now();
+        let deferred_roster_payload_missing = self.deferred_qcs.values().any(|qc| {
+            let subject_height =
+                Self::missing_dependency_subject_height_for_phase(qc.phase, qc.height);
+            subject_height >= frontier_height
+                && !self.authoritative_block_payload_available(qc.subject_block_hash)
+                && !self.deferred_roster_qc_is_non_actionable_dependency(qc, committed_height, now)
+        });
+        let deferred_commit_payload_missing =
+            self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.height >= frontier_height
+                    && self.deferred_missing_payload_qc_has_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            });
+        let missing_block_payload_requested =
+            self.pending
+                .missing_block_requests
+                .iter()
+                .any(|(hash, request)| {
+                    request.height >= frontier_height
+                        && self.missing_block_request_has_actionable_dependency(
+                            *hash,
+                            request,
+                            committed_height,
+                            now,
+                        )
+                });
+
+        deferred_roster_payload_missing
+            || deferred_commit_payload_missing
+            || missing_block_payload_requested
     }
 
     fn has_blocking_pending_blocks(&self) -> bool {
@@ -22985,6 +23042,70 @@ impl Actor {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.proposal_backpressure");
             self.proposal_backpressure_at(now)
         };
+        {
+            let committed_height = self.committed_height_snapshot();
+            let committed_qc = self.latest_committed_qc();
+            let gate_height = active_round_height(self.highest_qc, committed_qc, committed_height)
+                .min(committed_height.saturating_add(1));
+            let gate_view = self.phase_tracker.current_view(gate_height).unwrap_or(0);
+            let tip_height = self.state.committed_height();
+            let tip_hash = self.state.latest_block_hash_fast();
+            let age_ms = |timestamp: Option<Instant>| {
+                timestamp
+                    .map(|last| {
+                        u64::try_from(now.saturating_duration_since(last).as_millis())
+                            .unwrap_or(u64::MAX)
+                    })
+                    .unwrap_or(0)
+            };
+            super::status::set_proposal_gate_snapshot(super::status::ProposalGateSnapshot {
+                height: gate_height,
+                view: gate_view,
+                queue_len: u64::try_from(queue_len).unwrap_or(u64::MAX),
+                pending_blocks_total: u64::try_from(self.pending.pending_blocks.len())
+                    .unwrap_or(u64::MAX),
+                pending_blocks_blocking: u64::try_from(
+                    self.blocking_pending_blocks_len_with_progress(now),
+                )
+                .unwrap_or(u64::MAX),
+                active_pending_for_tip: u64::try_from(
+                    self.active_pending_blocks_len_for_tip(tip_height, tip_hash),
+                )
+                .unwrap_or(u64::MAX),
+                queue_saturated: proposal_backpressure.queue_state.is_saturated(),
+                active_pending: proposal_backpressure.active_pending,
+                rbc_backlog: proposal_backpressure.rbc_backlog,
+                relay_backpressure: proposal_backpressure.relay_backpressure,
+                consensus_queue_backpressure: proposal_backpressure.consensus_queue_backpressure,
+                should_defer: proposal_backpressure.should_defer(),
+                only_pacing_backpressure: proposal_backpressure.only_pacing_backpressure(),
+                commit_inflight_active: self.subsystems.commit.inflight.is_some(),
+                cached_proposal_present: self
+                    .subsystems
+                    .propose
+                    .proposal_cache
+                    .get_proposal(gate_height, gate_view)
+                    .is_some(),
+                cached_proposal_hint_present: self
+                    .subsystems
+                    .propose
+                    .proposal_cache
+                    .get_hint(gate_height, gate_view)
+                    .is_some(),
+                round_liveness_present: self.slot_has_round_liveness(gate_height, gate_view),
+                frontier_owner_present: self
+                    .frontier_slot_live_local_owner_for_round(gate_height, gate_view)
+                    .is_some(),
+                missing_qc_liveness_active: self
+                    .frontier_missing_qc_liveness_active(gate_height, gate_view),
+                last_pacemaker_attempt_age_ms: age_ms(
+                    self.subsystems.propose.last_pacemaker_attempt,
+                ),
+                last_successful_proposal_age_ms: age_ms(
+                    self.subsystems.propose.last_successful_proposal,
+                ),
+            });
+        }
         if let Some(telemetry) = self.telemetry_handle() {
             let pending_blocks_total = self.pending.pending_blocks.len() as u64;
             let pending_blocks_blocking = if pending_blocks_total == 0 {
@@ -41937,6 +42058,9 @@ impl Actor {
                 .validation
                 .inflight
                 .contains_key(&block_hash);
+        let availability_validation_ready = pending.validation_status == ValidationStatus::Pending
+            && (self.pending_block_has_delivered_rbc(block_hash, pending)
+                || self.pending_block_has_rbc_ready_quorum(block_hash, pending));
         let commit_qc_repair_active = self.missing_commit_qc_repair_active_for_round(
             block_hash,
             pending.height,
@@ -41959,6 +42083,7 @@ impl Actor {
             || backlog_signals.residual_round_backlog
             || backlog_signals.unresolved_rbc_backlog
             || validation_recovery_active
+            || availability_validation_ready
             || commit_pipeline_backlog_active
             || commit_qc_repair_active
             || same_block_recovery_active;
@@ -43604,6 +43729,45 @@ impl Actor {
         }
     }
 
+    fn frontier_slot_preserves_stale_da_repair(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height
+                && slot.view == view
+                && slot.block_hash == block_hash
+                && Self::frontier_slot_has_active_owner_state_in_slot(slot)
+        })
+    }
+
+    fn stale_da_rbc_session_has_repair_progress(session: &RbcSession) -> bool {
+        session.received_chunks() > 0
+            || !session.ready_signatures.is_empty()
+            || session.sent_ready
+            || session.delivered
+            || session.block_header.is_some()
+            || session.leader_signature.is_some()
+            || session.progress_stage() > RbcProgressStage::CollectingChunks
+    }
+
+    fn should_preserve_stale_da_missing_payload_request(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        request: &MissingBlockRequest,
+    ) -> bool {
+        self.frontier_slot_preserves_stale_da_repair(block_hash, request.height, request.view)
+            || self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get(&(block_hash, request.height, request.view))
+                .is_some_and(Self::stale_da_rbc_session_has_repair_progress)
+    }
+
     fn prune_stale_view_state(&mut self, height: u64, min_view: u64) {
         self.subsystems
             .propose
@@ -43615,8 +43779,9 @@ impl Actor {
         // Keep DA availability state across view changes until payloads are durably resolved.
         // In DA mode, retain stale same-height payloads in a retired state so block sync can
         // still serve missing payloads after view changes without reviving the stale branch
-        // into active consensus ownership. Retain stale RBC sessions until delivery
-        // (or invalidation) so READY/DELIVER can converge after view changes.
+        // into active consensus ownership. Retain stale RBC sessions only while
+        // they carry repair progress or are still owned by the active exact frontier
+        // slot; zero-progress superseded sessions should not pin the frontier.
         let stale_pending: Vec<_> = self
             .pending
             .pending_blocks
@@ -43674,10 +43839,11 @@ impl Actor {
             .missing_block_requests
             .iter()
             .filter(|(_, request)| request.height == height && request.view < min_view)
-            .filter(|(hash, _)| {
+            .filter(|(hash, request)| {
                 !da_enabled
                     || self.authoritative_block_payload_available(**hash)
                     || self.kura.block_payload_available_by_hash(**hash)
+                    || !self.should_preserve_stale_da_missing_payload_request(**hash, request)
             })
             .map(|(hash, _)| *hash)
             .collect();
@@ -43744,7 +43910,12 @@ impl Actor {
                 {
                     return Some((*key, true));
                 }
-                None
+                if self.frontier_slot_preserves_stale_da_repair(key.0, key.1, key.2)
+                    || Self::stale_da_rbc_session_has_repair_progress(session)
+                {
+                    return None;
+                }
+                Some((*key, false))
             })
             .collect();
         let mut rbc_removed = 0usize;

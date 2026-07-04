@@ -6726,7 +6726,7 @@ def test_recursive_kagemusha_exports_stable_circuit_ids() -> None:
         kagemusha.normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(
             None,
         )
-        == ""
+        is None
     )
     assert (
         kagemusha.normalize_kagemusha_recursive_spend_append_output_proof_circuit_id(

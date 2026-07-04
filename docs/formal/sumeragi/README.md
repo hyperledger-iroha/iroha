@@ -18374,6 +18374,9 @@ drift while proof commands stay unchanged.
 Formal workflow header key inventories must stay exact,
 so `run-name`, duplicate `env`, or other unreviewed top-level controls cannot
 change proof metadata or inherited workflow behavior.
+Formal workflow full top-level key inventories must stay exact,
+so post-`jobs` `permissions`, `defaults`, duplicate `jobs`, or other late
+top-level controls cannot bypass the header-only proof workflow guards.
 Formal workflow trigger event inventories must stay exact,
 so extra `push`, `pull_request_target`, or inline trigger forms cannot run
 checked proof jobs outside the reviewed PR and scheduled/manual surfaces.

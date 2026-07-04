@@ -6918,6 +6918,8 @@ pub struct SorafsStorage {
     pub orderbook: SorafsOrderbook,
     /// Local SFM-4c privacy aggregate publication scheduler.
     pub privacy_aggregates: SorafsPrivacyAggregateSchedule,
+    /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
+    pub evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule,
     /// Local SFM-6 reserve lifecycle advancement scheduler.
     pub reserve_lifecycle: SorafsReserveLifecycleSchedule,
     /// Optional filesystem directory used to publish governance artefacts.
@@ -6945,6 +6947,17 @@ pub struct SorafsPrivacyAggregateSchedule {
     /// Whether config-backed due-cycle publication is enabled.
     pub enabled: bool,
     /// Width of each privacy aggregate cycle, in seconds.
+    pub cycle_seconds: u64,
+    /// Delay after a cycle closes before publication, in seconds.
+    pub publish_delay_seconds: u64,
+}
+
+/// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SorafsEvidenceViewerAuditSchedule {
+    /// Whether config-backed due-cycle publication is enabled.
+    pub enabled: bool,
+    /// Width of each evidence-viewer audit-report cycle, in seconds.
     pub cycle_seconds: u64,
     /// Delay after a cycle closes before publication, in seconds.
     pub publish_delay_seconds: u64,
@@ -6991,6 +7004,7 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsTokenConfig::default(),
             orderbook: SorafsOrderbook::default(),
             privacy_aggregates: SorafsPrivacyAggregateSchedule::default(),
+            evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule::default(),
             reserve_lifecycle: SorafsReserveLifecycleSchedule::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
@@ -7017,6 +7031,17 @@ impl Default for SorafsPrivacyAggregateSchedule {
             cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
             publish_delay_seconds:
                 defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
+        }
+    }
+}
+
+impl Default for SorafsEvidenceViewerAuditSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::storage::evidence_viewer_audits::ENABLED,
+            cycle_seconds: defaults::sorafs::storage::evidence_viewer_audits::CYCLE_SECONDS,
+            publish_delay_seconds:
+                defaults::sorafs::storage::evidence_viewer_audits::PUBLISH_DELAY_SECONDS,
         }
     }
 }
@@ -7813,10 +7838,6 @@ pub struct IsoBridgeProfile {
     pub x509_require_ocsp_revocation_check: bool,
     /// Base64 DER OCSP responses accepted as rail-profile revocation material.
     pub x509_ocsp_response_der_base64: Vec<String>,
-    /// Backward-compatible SHA-256 pins of raw XMLDSig public keys accepted by this profile.
-    pub trusted_public_key_sha256: Vec<String>,
-    /// Backward-compatible SHA-256 pins of DER XMLDSig X.509 trust-anchor certificates.
-    pub trusted_certificate_sha256: Vec<String>,
     /// SHA-256 pins of DER XMLDSig X.509 certificates denied by this profile.
     pub revoked_certificate_sha256: Vec<String>,
     /// Required reference datasets for this profile.

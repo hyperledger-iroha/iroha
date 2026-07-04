@@ -154,10 +154,22 @@ __all__ = [
     "derive_confidential_keyset_from_hex",
     "compute_confidential_root_v2",
     "computeConfidentialRootV2",
+    "derive_confidential_next_zero_path_v2",
+    "deriveConfidentialNextZeroPathV2",
+    "derive_confidential_diversifier_v2",
+    "deriveConfidentialDiversifierV2",
+    "derive_confidential_owner_tag_v2",
+    "deriveConfidentialOwnerTagV2",
+    "derive_confidential_note_v2",
+    "deriveConfidentialNoteV2",
     "build_confidential_transfer_proof_v2",
     "buildConfidentialTransferProofV2",
+    "build_confidential_transfer_proof_v2_with_paths",
+    "buildConfidentialTransferProofV2WithPaths",
     "build_confidential_unshield_proof_v3",
     "buildConfidentialUnshieldProofV3",
+    "build_confidential_unshield_proof_v3_with_paths",
+    "buildConfidentialUnshieldProofV3WithPaths",
     "build_confidential_asset_hidden_transfer_proof_v1",
     "buildConfidentialAssetHiddenTransferProofV1",
     "zk_ace_verifying_key_registration_payload_v1",
@@ -1044,6 +1056,46 @@ def _confidential_native_result(result: Any, context: str) -> Dict[str, Any]:
     return result
 
 
+def _confidential_path_hex(value: Any, name: str) -> str:
+    data = bytes(value)
+    if len(data) != 32:
+        raise RuntimeError(f"{name} must be 32 bytes, got {len(data)}")
+    return data.hex()
+
+
+def _confidential_path_list_hex(value: Any, name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise RuntimeError(f"{name} must be a list")
+    return [_confidential_path_hex(item, f"{name}[{index}]") for index, item in enumerate(value)]
+
+
+def _confidential_merkle_path_result(result: Any, context: str) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{context} returned a non-object payload")
+    leaf_index = result.get("leaf_index")
+    if isinstance(leaf_index, bool) or not isinstance(leaf_index, int) or leaf_index < 0:
+        raise RuntimeError(f"{context} returned an invalid leaf_index")
+    directions_raw = result.get("directions")
+    if not isinstance(directions_raw, list):
+        raise RuntimeError(f"{context} returned invalid directions")
+    directions = []
+    for index, item in enumerate(directions_raw):
+        if item not in (0, 1):
+            raise RuntimeError(f"{context} directions[{index}] must be 0 or 1")
+        directions.append(int(item))
+    return {
+        "leaf_index": leaf_index,
+        "commitment": _confidential_path_hex(result.get("commitment"), f"{context}.commitment"),
+        "siblings": _confidential_path_list_hex(result.get("siblings"), f"{context}.siblings"),
+        "directions": directions,
+        "witness_nodes": _confidential_path_list_hex(
+            result.get("witness_nodes"),
+            f"{context}.witness_nodes",
+        ),
+        "root": _confidential_path_hex(result.get("root"), f"{context}.root"),
+    }
+
+
 def compute_confidential_root_v2(
     tree_commitments: Iterable[bytes | bytearray | memoryview | str],
 ) -> bytes:
@@ -1058,6 +1110,89 @@ def compute_confidential_root_v2(
     if len(root) != 32:
         raise RuntimeError("confidential root v2 returned a non-32-byte root")
     return root
+
+
+def derive_confidential_next_zero_path_v2(
+    *,
+    previous_leaf_commitment: bytes | bytearray | memoryview | str,
+    previous_leaf_index: int,
+    previous_path: Mapping[str, Any],
+    root_hint: bytes | bytearray | memoryview | str,
+) -> Dict[str, Any]:
+    """Derive the padded zero-leaf path immediately after the latest commitment."""
+
+    if not hasattr(_crypto, "derive_confidential_next_zero_path_v2"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential next-zero path support; rebuild the extension"
+        )
+    if isinstance(previous_leaf_index, bool) or not isinstance(previous_leaf_index, int):
+        raise TypeError("previous_leaf_index must be a non-negative integer")
+    if previous_leaf_index < 0:
+        raise ValueError("previous_leaf_index must be a non-negative integer")
+    result = _crypto.derive_confidential_next_zero_path_v2(
+        previous_leaf_commitment,
+        previous_leaf_index,
+        dict(previous_path),
+        root_hint,
+    )
+    return _confidential_merkle_path_result(result, "confidential next-zero path")
+
+
+def derive_confidential_diversifier_v2(
+    seed: bytes | bytearray | memoryview | str,
+) -> bytes:
+    """Derive a canonical confidential-transfer v2 note diversifier."""
+
+    if not hasattr(_crypto, "derive_confidential_diversifier_v2"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential diversifier v2 support; rebuild the extension"
+        )
+    result = _crypto.derive_confidential_diversifier_v2(seed)
+    diversifier = bytes(result)
+    if len(diversifier) != 32:
+        raise RuntimeError("confidential diversifier v2 returned non-32-byte output")
+    return diversifier
+
+
+def derive_confidential_owner_tag_v2(
+    spend_key: bytes | bytearray | memoryview | str,
+    diversifier: bytes | bytearray | memoryview | str,
+) -> bytes:
+    """Derive a canonical confidential-transfer v2 owner tag."""
+
+    if not hasattr(_crypto, "derive_confidential_owner_tag_v2"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential owner tag v2 support; rebuild the extension"
+        )
+    result = _crypto.derive_confidential_owner_tag_v2(spend_key, diversifier)
+    owner_tag = bytes(result)
+    if len(owner_tag) != 32:
+        raise RuntimeError("confidential owner tag v2 returned non-32-byte output")
+    return owner_tag
+
+
+def derive_confidential_note_v2(
+    asset_definition_id: str,
+    amount: int | str,
+    rho: bytes | bytearray | memoryview | str,
+    owner_tag: bytes | bytearray | memoryview | str,
+) -> bytes:
+    """Derive a canonical confidential-transfer v2 note commitment."""
+
+    if not hasattr(_crypto, "derive_confidential_note_v2"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential note v2 support; rebuild the extension"
+        )
+    result = _crypto.derive_confidential_note_v2(
+        asset_definition_id,
+        amount,
+        rho,
+        owner_tag,
+    )
+    note_commitment = bytes(result)
+    if len(note_commitment) != 32:
+        raise RuntimeError("confidential note v2 returned non-32-byte output")
+    return note_commitment
 
 
 def build_confidential_transfer_proof_v2(
@@ -1094,6 +1229,42 @@ def build_confidential_transfer_proof_v2(
         vk_bytes,
     )
     return _confidential_native_result(result, "confidential transfer v2 prover")
+
+
+def build_confidential_transfer_proof_v2_with_paths(
+    *,
+    chain_id: str,
+    asset_definition_id: str,
+    spend_key: bytes | bytearray | memoryview | str,
+    input_paths: Iterable[Mapping[str, Any]],
+    inputs: Iterable[Mapping[str, Any]],
+    outputs: Iterable[Mapping[str, Any]],
+    root_hint: bytes | bytearray | memoryview | str,
+    verifying_key: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Build a confidential transfer v2 proof envelope from ledger Merkle paths."""
+
+    if not hasattr(_crypto, "build_confidential_transfer_proof_v2_with_paths"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential transfer v2 path prover support; rebuild the extension"
+        )
+    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
+        verifying_key,
+        "verifying_key",
+    )
+    result = _crypto.build_confidential_transfer_proof_v2_with_paths(
+        str(chain_id),
+        str(asset_definition_id),
+        spend_key,
+        list(input_paths),
+        list(inputs),
+        list(outputs),
+        root_hint,
+        vk_backend,
+        vk_circuit_id,
+        vk_bytes,
+    )
+    return _confidential_native_result(result, "confidential transfer v2 path prover")
 
 
 def build_confidential_unshield_proof_v3(
@@ -1134,6 +1305,44 @@ def build_confidential_unshield_proof_v3(
     return _confidential_native_result(result, "confidential unshield v3 prover")
 
 
+def build_confidential_unshield_proof_v3_with_paths(
+    *,
+    chain_id: str,
+    asset_definition_id: str,
+    spend_key: bytes | bytearray | memoryview | str,
+    input_paths: Iterable[Mapping[str, Any]],
+    inputs: Iterable[Mapping[str, Any]],
+    outputs: Iterable[Mapping[str, Any]],
+    public_amount: int | str,
+    root_hint: bytes | bytearray | memoryview | str,
+    verifying_key: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Build a confidential unshield v3 proof envelope from ledger Merkle paths."""
+
+    if not hasattr(_crypto, "build_confidential_unshield_proof_v3_with_paths"):
+        raise RuntimeError(
+            "iroha_python._crypto is missing confidential unshield v3 path prover support; rebuild the extension"
+        )
+    vk_backend, vk_circuit_id, vk_bytes = _confidential_verifying_key_parts(
+        verifying_key,
+        "verifying_key",
+    )
+    result = _crypto.build_confidential_unshield_proof_v3_with_paths(
+        str(chain_id),
+        str(asset_definition_id),
+        spend_key,
+        list(input_paths),
+        list(inputs),
+        list(outputs),
+        _normalize_u128_literal(public_amount, "public_amount"),
+        root_hint,
+        vk_backend,
+        vk_circuit_id,
+        vk_bytes,
+    )
+    return _confidential_native_result(result, "confidential unshield v3 path prover")
+
+
 def build_confidential_asset_hidden_transfer_proof_v1(
     *,
     chain_id: str,
@@ -1171,8 +1380,14 @@ def build_confidential_asset_hidden_transfer_proof_v1(
 
 
 computeConfidentialRootV2 = compute_confidential_root_v2
+deriveConfidentialNextZeroPathV2 = derive_confidential_next_zero_path_v2
+deriveConfidentialDiversifierV2 = derive_confidential_diversifier_v2
+deriveConfidentialOwnerTagV2 = derive_confidential_owner_tag_v2
+deriveConfidentialNoteV2 = derive_confidential_note_v2
 buildConfidentialTransferProofV2 = build_confidential_transfer_proof_v2
+buildConfidentialTransferProofV2WithPaths = build_confidential_transfer_proof_v2_with_paths
 buildConfidentialUnshieldProofV3 = build_confidential_unshield_proof_v3
+buildConfidentialUnshieldProofV3WithPaths = build_confidential_unshield_proof_v3_with_paths
 buildConfidentialAssetHiddenTransferProofV1 = (
     build_confidential_asset_hidden_transfer_proof_v1
 )

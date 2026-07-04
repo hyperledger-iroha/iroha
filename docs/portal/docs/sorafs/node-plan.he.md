@@ -50,12 +50,13 @@ SF-3 מספקת את ה-crate הראשון שניתן להרצה `sorafs-node` �
 
 ### C. נקודות קצה של Gateway
 
-| נקודת קצה | התנהגות | משימות |
-|-----------|---------|--------|
-| `POST /sorafs/pin` | מקבל `PinProposalV1`, מאמת manifests, מכניס את ההטענה לתור ומחזיר CID של ה-manifest. | אימות פרופיל chunker, אכיפת קצבות, הזרמת נתונים דרך chunk store. |
-| `GET /sorafs/chunks/{cid}` + שאילתת range | מגיש bytes של chunk עם כותרות `Content-Chunker`; מכבד את מפרט יכולת ה-range. | שימוש ב-scheduler ובתקציבי זרימה (קשור ליכולת range של SF-2d). |
-| `POST /sorafs/por/sample` | מבצע דגימת PoR עבור manifest ומחזיר bundle של הוכחה. | שימוש בדגימה של chunk store, תגובה עם Norito JSON. |
-| `GET /sorafs/telemetry` | תקצירים: קיבולת, הצלחת PoR, ספירת שגיאות fetch. | לספק נתונים ללוחות/מפעילים. |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 צנרת הריצה מעבירה אינטראקציות PoR דרך `sorafs_node::por`: ה-tracker רושם כל `PorChallengeV1`, `PorProofV1` ו-`AuditVerdictV1` כדי שמדדי `CapacityMeter` ישקפו את פסיקות הממשל ללא לוגיקה ייעודית ב-Torii.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ SF-3 מספקת את ה-crate הראשון שניתן להרצה `sorafs-node` �
 ## קריטריוני יציאה מהשלב
 
 - `cargo run -p sorafs_node --example pin_fetch` עובד מול fixtures מקומיים.
-- Torii נבנה עם `--features sorafs-storage` ועובר בדיקות אינטגרציה.
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - תיעוד ([מדריך אחסון הצומת](node-storage.md)) מעודכן עם ברירות מחדל ותצורות CLI; runbook למפעיל זמין.
 - טלמטריה נראית בדשבורדים של staging; התראות הוגדרו לרוויה בקיבולת ולכשלים ב-PoR.
 
@@ -116,4 +117,4 @@ SF-3 מספקת את ה-crate הראשון שניתן להרצה `sorafs-node` �
 
 - לעדכן את [אסמכתת אחסון הצומת](node-storage.md) עם ברירות מחדל, שימוש ב-CLI ושלבי troubleshooting.
 - לשמור את [runbook תפעול הצומת](node-operations.md) מסונכרן עם המימוש ככל ש-SF-3 מתפתח.
-- לפרסם אסמכתאות API עבור נקודות `/sorafs/*` בפורטל המפתחים ולחבר אותן ל-OpenAPI manifest לאחר שה-handlers של Torii ייכנסו.
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

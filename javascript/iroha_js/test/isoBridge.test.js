@@ -34,7 +34,7 @@ test("buildPacs008Message renders minimal document", () => {
     supplementaryData: { account_id: "34mSYnDgbaJM58rbLoif4Tkp7G4LTcGTWkBnWUGuYYFogLyNhhuq386y2zQoSXk5oi1iY4YYx", leg: "delivery" },
   });
 
-  assert.match(xml, /<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.008\.001\.10">/);
+  assert.match(xml, /<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.008\.001\.08">/);
   assert.match(xml, /<MsgId>example-msg<\/MsgId>/);
   assert.match(xml, /<EndToEndId>end-001<\/EndToEndId>/);
   assert.match(xml, /<IntrBkSttlmAmt Ccy="EUR">25\.00<\/IntrBkSttlmAmt>/);
@@ -450,7 +450,7 @@ test("buildPacs009Message renders minimal document", () => {
   const xml = buildPacs009Message({
     messageId: "msg-009",
     businessMessageId: "biz-abc",
-    messageDefinitionId: "pacs.009.001.10",
+    messageDefinitionId: "pacs.009.001.08",
     creationDateTime: new Date("2026-02-03T09:30:00Z"),
     instructionId: "instr-xyz",
     transactionId: "tx-xyz",
@@ -462,9 +462,9 @@ test("buildPacs009Message renders minimal document", () => {
     supplementaryData: { alias: "pvp-demo" },
   });
 
-  assert.match(xml, /<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.009\.001\.10">/);
+  assert.match(xml, /<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.009\.001\.08">/);
   assert.match(xml, /<BizMsgIdr>biz-abc<\/BizMsgIdr>/);
-  assert.match(xml, /<MsgDefIdr>pacs\.009\.001\.10<\/MsgDefIdr>/);
+  assert.match(xml, /<MsgDefIdr>pacs\.009\.001\.08<\/MsgDefIdr>/);
   assert.match(xml, /<InstrId>instr-xyz<\/InstrId>/);
   assert.match(xml, /<TxId>tx-xyz<\/TxId>/);
   assert.match(xml, /<IntrBkSttlmAmt Ccy="USD">1250\.50<\/IntrBkSttlmAmt>/);
@@ -485,7 +485,8 @@ test("buildPacs009Message infers defaults when optional headers are omitted", ()
 
   assert.match(xml, /<MsgId>instr-default<\/MsgId>/);
   assert.match(xml, /<BizMsgIdr>instr-default<\/BizMsgIdr>/);
-  assert.match(xml, /<MsgDefIdr>pacs\.009\.001\.10<\/MsgDefIdr>/);
+  assert.match(xml, /<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.009\.001\.08">/);
+  assert.match(xml, /<MsgDefIdr>pacs\.009\.001\.08<\/MsgDefIdr>/);
 });
 
 test("buildPacs009Message enforces pacs.009 messageDefinitionId shape", () => {
@@ -501,6 +502,7 @@ test("buildPacs009Message enforces pacs.009 messageDefinitionId shape", () => {
     ...base,
     messageDefinitionId: "PACS.009.001.09",
   });
+  assert.match(xml, /<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs\.009\.001\.09">/);
   assert.match(xml, /<MsgDefIdr>pacs\.009\.001\.09<\/MsgDefIdr>/);
 
   assert.throws(
@@ -1044,7 +1046,7 @@ test("buildCamt056Message renders cancellation requests", () => {
     debtorAgent: { bic: "ALPHGB2L" },
     creditorAgent: { bic: "OMEGGB2L" },
     originalMessageId: "pacs008-001",
-    originalMessageNameId: "pacs.008.001.10",
+    originalMessageNameId: "pacs.008.001.08",
     originalInstructionId: "instr-001",
     originalEndToEndId: "e2e-001",
     originalTransactionId: "tx-001",

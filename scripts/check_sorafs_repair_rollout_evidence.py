@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -39,11 +40,13 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    record_observed_evidence_value,
     validate_bound_evidence_digest_references,
     require_2xx_status,
     require_bool_true,
@@ -52,9 +55,8 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
-    require_non_negative_int,
     require_object,
     require_object_array,
     required_evidence_kind_names,
@@ -86,6 +88,34 @@ DEFAULT_MAX_EVENT_LAG_SECS = 15 * 60
 DEFAULT_MAX_REPAIR_LATENCY_SECS = 2 * 60 * 60
 DEFAULT_MIN_AUDITORS = 3
 HEX64_LEN = 64
+AUDITOR_LABEL_PATTERN = re.compile(r"^repair-auditor-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+AUDITOR_LABEL_ERROR = (
+    "auditors[].name must match canonical lowercase `repair-auditor-*`"
+)
+FAILURE_EVENT_LABEL_PATTERN = re.compile(
+    r"^repair-failure-event-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+FAILURE_EVENT_LABEL_ERROR = (
+    "failure_events[].name must match canonical lowercase "
+    "`repair-failure-event-name`"
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "local",
+        "mock",
+        "placeholder",
+        "sample",
+        "sandbox",
+        "test",
+        "todo",
+    )
+)
 
 REQUIRED_FAILURE_SOURCES = ("por", "potr")
 REQUIRED_AUDITOR_ROUTES = (
@@ -210,12 +240,14 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "failure_capture": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "failure_sources",
+        "failure_source_count",
         "por_history_replayed",
         "potr_receipt_replayed",
         "coordinator_event_verified",
         "merkle_or_receipt_inclusion_verified",
         "object_storage_retention_bound",
         "failure_event_count",
+        "failure_events",
         "evidence_bundle_digest_hex",
         "raw_evidence_included",
     ),
@@ -239,6 +271,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "evidence_bundle_digest_hex",
         "routes",
         "statuses_observed",
+        "status_count",
         "worker_permission_enforced",
         "lease_heartbeat_enforced",
         "idempotency_enforced",
@@ -272,6 +305,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "transparency_publication_verified",
         "reputation_handoff_verified",
         "handoff_targets",
+        "handoff_target_count",
         "handoff_digest_hex",
         "policy_digest_hex",
         "raw_ledger_included",
@@ -283,6 +317,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "alert_rules_installed",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "response_bodies_included",
     ),
     "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -313,6 +348,31 @@ class ValidationOptions:
     min_auditors: int
 
 
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
 
 FINGERPRINT_FIELDS: tuple[str, ...] = (
     "schema",
@@ -324,6 +384,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "evidence_bundle_digest_hex",
     "handoff_digest_hex",
     "policy_digest_hex",
+    "metric_count",
+    "metrics",
 )
 
 
@@ -336,7 +398,14 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
-        require_maximum_number(
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
@@ -354,6 +423,7 @@ def validate_route_inventory(
 ) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_coverage(payload, "routes", "name", required_routes, errors)
+    require_only_required_values(payload, "routes", "name", required_routes, errors)
     require_string_inventory_count_match(
         payload,
         "routes",
@@ -362,6 +432,31 @@ def validate_route_inventory(
         field="name",
         allow_scalar_items=False,
     )
+
+
+def require_inventory_label(
+    value: Any,
+    *,
+    path: str,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> str:
+    """Require a reviewed production inventory label."""
+
+    if not isinstance(value, str):
+        return ""
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error)
+        return value
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+    return value
 
 
 def validate_auditor_roster(
@@ -383,14 +478,58 @@ def validate_auditor_roster(
         field="name",
         allow_scalar_items=False,
     )
-    for _index, record in require_object_array(payload, "auditors", errors):
-        require_string(record, "name", errors)
+    for index, record in require_object_array(payload, "auditors", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"auditors[{index}].name",
+            pattern=AUDITOR_LABEL_PATTERN,
+            label_error=AUDITOR_LABEL_ERROR,
+            errors=errors,
+        )
     require_hex(payload, "roster_digest_hex", HEX64_LEN, errors)
     require_false(payload, "raw_roster_included", errors)
 
 
 def validate_failure_capture(payload: dict[str, Any], errors: list[str]) -> None:
     require_string_coverage(payload, "failure_sources", "", REQUIRED_FAILURE_SOURCES, errors)
+    require_only_required_values(
+        payload, "failure_sources", "", REQUIRED_FAILURE_SOURCES, errors
+    )
+    require_string_inventory_count_match(
+        payload,
+        "failure_sources",
+        "failure_source_count",
+        errors,
+    )
+    require_string_coverage(
+        payload,
+        "failure_events",
+        "source",
+        REQUIRED_FAILURE_SOURCES,
+        errors,
+        allow_scalar_items=False,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "failure_events",
+        "failure_event_count",
+        errors,
+        field="name",
+        allow_scalar_items=False,
+    )
+    for index, record in require_object_array(payload, "failure_events", errors):
+        name = require_string(record, "name", errors)
+        require_inventory_label(
+            name,
+            path=f"failure_events[{index}].name",
+            pattern=FAILURE_EVENT_LABEL_PATTERN,
+            label_error=FAILURE_EVENT_LABEL_ERROR,
+            errors=errors,
+        )
+        source = require_string(record, "source", errors)
+        if source and source not in REQUIRED_FAILURE_SOURCES:
+            errors.append("failure_events source must be one of failure_sources")
     require_bool_true(payload, "por_history_replayed", errors)
     require_bool_true(payload, "potr_receipt_replayed", errors)
     require_bool_true(payload, "coordinator_event_verified", errors)
@@ -425,12 +564,27 @@ def validate_worker_lifecycle(
     require_hex(payload, "evidence_bundle_digest_hex", HEX64_LEN, errors)
     validate_route_inventory(payload, REQUIRED_WORKER_ROUTES, errors)
     require_string_coverage(payload, "statuses_observed", "", REQUIRED_LIFECYCLE_STATUSES, errors)
+    require_only_required_values(
+        payload, "statuses_observed", "", REQUIRED_LIFECYCLE_STATUSES, errors
+    )
+    require_minimum_int(
+        payload,
+        "status_count",
+        len(REQUIRED_LIFECYCLE_STATUSES),
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "statuses_observed",
+        "status_count",
+        errors,
+    )
     require_bool_true(payload, "worker_permission_enforced", errors)
     require_bool_true(payload, "lease_heartbeat_enforced", errors)
     require_bool_true(payload, "idempotency_enforced", errors)
     require_bool_true(payload, "norito_snapshot_persisted", errors)
     require_bool_true(payload, "gc_protection_verified", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "repair_latency_seconds",
         options.max_repair_latency_secs,
@@ -451,7 +605,7 @@ def validate_event_streams(
     require_bool_true(payload, "backlog_replay_verified", errors)
     require_bool_true(payload, "sse_delivery_verified", errors)
     require_bool_true(payload, "websocket_delivery_verified", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "event_lag_seconds",
         options.max_event_lag_secs,
@@ -472,6 +626,21 @@ def validate_governance_handoff(payload: dict[str, Any], errors: list[str]) -> N
     require_bool_true(payload, "transparency_publication_verified", errors)
     require_bool_true(payload, "reputation_handoff_verified", errors)
     require_string_coverage(payload, "handoff_targets", "", REQUIRED_GOVERNANCE_TARGETS, errors)
+    require_only_required_values(
+        payload, "handoff_targets", "", REQUIRED_GOVERNANCE_TARGETS, errors
+    )
+    require_minimum_int(
+        payload,
+        "handoff_target_count",
+        len(REQUIRED_GOVERNANCE_TARGETS),
+        errors,
+    )
+    require_string_inventory_count_match(
+        payload,
+        "handoff_targets",
+        "handoff_target_count",
+        errors,
+    )
     require_hex(payload, "handoff_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_false(payload, "raw_ledger_included", errors)
@@ -483,6 +652,9 @@ def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "alert_rules_installed", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -566,6 +738,8 @@ def build_summary(
     valid_failure_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_handoff_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -594,6 +768,9 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
+        if kind_name == "observability":
+            record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+            metric_names.update(hashable_evidence_values(payload.get("metrics")))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
@@ -713,6 +890,8 @@ def build_summary(
         "valid_failure_bundle_digests": sorted(valid_failure_bundle_digests),
         "valid_handoff_digests": sorted(valid_handoff_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

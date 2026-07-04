@@ -12,6 +12,101 @@ abs_path() {
   fi
 }
 
+abs_output_path() {
+  local input="$1"
+  if [[ "$input" = /* ]]; then
+    printf '%s\n' "$input"
+  else
+    printf '%s/%s\n' "$(pwd -P)" "$input"
+  fi
+}
+
+reject_symlinked_output_parent() {
+  local label="$1"
+  local target="$2"
+  local parent
+  parent="$(dirname "$target")"
+  local current="/"
+  local rest="${parent#/}"
+  local component
+  IFS='/' read -r -a components <<< "$rest"
+  for component in "${components[@]}"; do
+    [[ -z "$component" || "$component" == "." ]] && continue
+    if [[ "$component" == ".." ]]; then
+      echo "error: ${label} parent must not contain parent-directory segments" >&2
+      exit 1
+    fi
+    if [[ "$current" == "/" ]]; then
+      current="/${component}"
+    else
+      current="${current}/${component}"
+    fi
+    if [[ -L "$current" ]]; then
+      echo "error: ${label} parent must not be a symlink: ${current}" >&2
+      exit 1
+    fi
+    if [[ -e "$current" && ! -d "$current" ]]; then
+      echo "error: ${label} parent component must be a directory: ${current}" >&2
+      exit 1
+    fi
+    if [[ ! -e "$current" ]]; then
+      break
+    fi
+  done
+}
+
+validate_output_dir_path() {
+  local label="$1"
+  local target="$2"
+  if [[ -z "$target" ]]; then
+    echo "error: ${label} path must not be empty" >&2
+    exit 1
+  fi
+  if [[ -L "$target" ]]; then
+    echo "error: ${label} must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  if [[ -e "$target" && ! -d "$target" ]]; then
+    echo "error: ${label} must be a directory path: ${target}" >&2
+    exit 1
+  fi
+  reject_symlinked_output_parent "$label" "$target"
+}
+
+prepare_output_dir_path() {
+  local label="$1"
+  local target="$2"
+  validate_output_dir_path "$label" "$target"
+  mkdir -p "$target"
+  validate_output_dir_path "$label" "$target"
+}
+
+validate_output_file_path() {
+  local label="$1"
+  local target="$2"
+  if [[ -z "$target" ]]; then
+    echo "error: ${label} path must not be empty" >&2
+    exit 1
+  fi
+  if [[ -L "$target" ]]; then
+    echo "error: ${label} must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  if [[ -e "$target" && ! -f "$target" ]]; then
+    echo "error: ${label} must be a regular file path: ${target}" >&2
+    exit 1
+  fi
+  reject_symlinked_output_parent "$label" "$target"
+}
+
+prepare_output_file_path() {
+  local label="$1"
+  local target="$2"
+  validate_output_file_path "$label" "$target"
+  mkdir -p "$(dirname "$target")"
+  validate_output_file_path "$label" "$target"
+}
+
 usage() {
   cat <<'USAGE'
 sorafs_gateway_self_cert.sh --signing-key <path> --signer <account> [options]
@@ -283,8 +378,9 @@ fi
 if [[ -z "${output_dir}" ]]; then
   output_dir="${workspace}/artifacts/sorafs_gateway_attest"
 else
-  output_dir="$(abs_path "${output_dir}")"
+  output_dir="$(abs_output_path "${output_dir}")"
 fi
+prepare_output_dir_path "gateway self-cert output directory" "${output_dir}"
 
 cmd=(sorafs-gateway-attest --signing-key "${signing_key}" --signer-account "${signer_account}" --out "${output_dir}")
 if [[ -n "${gateway_target}" ]]; then
@@ -324,6 +420,9 @@ if [[ -n "${manifest_path}" && ( -n "${bundle_path}" || ( -n "${signature_path}"
     exit 1
   fi
 
+  verify_summary_path="${output_dir}/manifest.verify.summary.json"
+  prepare_output_file_path "manifest verification summary" "${verify_summary_path}"
+
   if [[ -z "${cli_path}" ]]; then
     cli_path="${workspace}/target/release/sorafs_cli"
     if [[ ! -x "${cli_path}" ]]; then
@@ -344,9 +443,6 @@ if [[ -n "${manifest_path}" && ( -n "${bundle_path}" || ( -n "${signature_path}"
   if [[ -n "${chunk_summary_path}" ]]; then verify_cmd+=(--summary "${chunk_summary_path}"); fi
   if [[ -n "${chunk_digest_hex}" ]]; then verify_cmd+=(--chunk-digest-sha3 "${chunk_digest_hex}"); fi
   if [[ -n "${expect_token_hash}" ]]; then verify_cmd+=(--expect-token-hash "${expect_token_hash}"); fi
-
-  verify_summary_path="${output_dir}/manifest.verify.summary.json"
-  mkdir -p "${output_dir}"
 
   echo "Verifying manifest signature with sorafs_cli..."
   (
@@ -370,8 +466,10 @@ if [[ -n "${denylist_old_bundle}" || -n "${denylist_new_bundle}" ]]; then
     diff_report_path="${denylist_report}"
     if [[ -z "${diff_report_path}" ]]; then
       diff_report_path="${output_dir}/denylist_diff.json"
+    else
+      diff_report_path="$(abs_output_path "${diff_report_path}")"
     fi
-    mkdir -p "$(dirname "${diff_report_path}")"
+    prepare_output_file_path "denylist diff report" "${diff_report_path}"
     echo "Generating denylist diff evidence..."
     (
       cd "${workspace}"

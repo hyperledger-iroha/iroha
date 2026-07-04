@@ -49,7 +49,6 @@ RECEIPT_VERSION = 1
 RECEIPT_SUMMARY_VERSION = 2
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 SUPPORTED_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
-LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
 SUPPORTED_RAIL_MESSAGE_TYPES = {
     "pacs.008",
     "pacs.009",
@@ -59,7 +58,6 @@ SUPPORTED_RAIL_MESSAGE_TYPES = {
     "sese.023",
     "sese.024",
     "sese.025",
-    "colr.007",
     "colr.012",
 }
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
@@ -2286,7 +2284,6 @@ def _verify_rail_source(
     path: Path,
     *,
     require_source_files: bool,
-    allow_legacy_colr007: bool,
     allow_default_profile: bool,
     display_label: str | None = None,
 ) -> None:
@@ -2302,11 +2299,6 @@ def _verify_rail_source(
         raise ReceiptError(f"{label} message_type must be lowercase ISO family id")
     if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
         raise ReceiptError(f"{label} has unsupported rail message_type")
-    if message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
-        raise ReceiptError(
-            f"{label} uses legacy rail message_type; "
-            "production evidence must use colr.012"
-        )
     if "profile" not in receipt:
         raise ReceiptError(f"{label} profile must be recorded")
     profile = _normalize_profile(receipt["profile"], f"{label} profile")
@@ -2371,7 +2363,6 @@ def verify_receipt_file(
     *,
     allow_failed: bool,
     allow_insecure_http: bool,
-    allow_legacy_colr007: bool,
     allow_default_profile: bool,
     require_source_files: bool,
     display_label: str | None = None,
@@ -2426,7 +2417,6 @@ def verify_receipt_file(
             receipt,
             path,
             require_source_files=require_source_files,
-            allow_legacy_colr007=allow_legacy_colr007,
             allow_default_profile=allow_default_profile,
             display_label=label,
         )
@@ -2530,14 +2520,6 @@ def _reject_unused_local_overrides(args: argparse.Namespace, receipts: list[dict
         raise ReceiptError(
             "--allow-insecure-http requires at least one http:// or local/private receipt endpoint"
         )
-    if args.allow_legacy_colr007 and not any(
-        receipt.get("receipt_kind") == "iso-rail-gateway"
-        and receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES
-        for receipt in receipts
-    ):
-        raise ReceiptError(
-            "--allow-legacy-colr007 requires at least one rail receipt with legacy colr.007 message_type"
-        )
     if args.allow_default_profile and not any(
         receipt.get("receipt_kind") == "iso-rail-gateway"
         and receipt.get("profile") is None
@@ -2552,7 +2534,6 @@ def _require_policy_booleans(args: argparse.Namespace) -> None:
     for attr in (
         "allow_failed",
         "allow_insecure_http",
-        "allow_legacy_colr007",
         "allow_default_profile",
         "require_source_files",
     ):
@@ -2610,7 +2591,6 @@ def run(args: argparse.Namespace) -> int:
             path,
             allow_failed=args.allow_failed,
             allow_insecure_http=args.allow_insecure_http,
-            allow_legacy_colr007=args.allow_legacy_colr007,
             allow_default_profile=args.allow_default_profile,
             require_source_files=args.require_source_files,
             display_label=f"receipt[{offset}]",
@@ -2634,7 +2614,6 @@ def run(args: argparse.Namespace) -> int:
         "receipt_kind": sorted({receipt["receipt_kind"] for receipt in verified}),
         "allow_failed": args.allow_failed,
         "allow_insecure_http": args.allow_insecure_http,
-        "allow_legacy_colr007": args.allow_legacy_colr007,
         "allow_default_profile": args.allow_default_profile,
         "require_source_files": args.require_source_files,
         "receipts": receipt_entries,
@@ -2675,11 +2654,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow http:// endpoints in receipts for local tests.",
     )
     parser.add_argument(
-        "--allow-legacy-colr007",
-        action="store_true",
-        help="Allow legacy local colr.007 rail receipts; production evidence should use colr.012.",
-    )
-    parser.add_argument(
         "--allow-default-profile",
         action="store_true",
         help="Allow rail receipts that omitted an explicit profile for local tests.",
@@ -2703,7 +2677,6 @@ def main(argv: list[str] | None = None) -> int:
                 "--allow-default-profile",
                 "--allow-failed",
                 "--allow-insecure-http",
-                "--allow-legacy-colr007",
                 "--require-source-files",
             },
         )

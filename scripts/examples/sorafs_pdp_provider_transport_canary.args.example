@@ -24,3 +24,5 @@ pdp_export
 200
 --route-latency-ms
 200
+--route-body-blake3-hex
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

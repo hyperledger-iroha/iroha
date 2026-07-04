@@ -15,9 +15,9 @@ use sorafs_manifest::{
     ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1,
     ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
     OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1,
-    OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, SETTLEMENT_CHANNEL_VERSION_V1,
-    SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
-    SettlementReceiptV1, SignatureAlgorithm, TradeEventV1, XorAmount, apply_settlement_receipt_v1,
+    OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, SETTLEMENT_RECEIPT_VERSION_V1,
+    SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1, SignatureAlgorithm,
+    TradeEventV1, XorAmount, apply_settlement_receipt_v1, open_settlement_channel_for_trade_v1,
 };
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -65,20 +65,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     trade.validate()?;
 
-    let channel = SettlementChannelV1 {
-        version: SETTLEMENT_CHANNEL_VERSION_V1,
-        channel_id: id(0x82),
-        trade_id: trade.trade_id,
-        buyer_account: order.owner_account.clone(),
-        provider_id: id(0x10),
-        total_bytes: 1_048_576,
-        remaining_bytes: 1_048_576,
-        xor_locked: XorAmount::from_micro(1_000_000),
-        status: SettlementChannelStatusV1::Open,
-        opened_at_unix: 1_700_000_110,
-        updated_at_unix: 1_700_000_110,
-    };
-    channel.validate()?;
+    let channel = open_settlement_channel_for_trade_v1(
+        &trade,
+        id(0x82),
+        order.owner_account.clone(),
+        id(0x10),
+        1_700_000_110,
+    )?;
 
     let receipt = SettlementReceiptV1 {
         version: SETTLEMENT_RECEIPT_VERSION_V1,

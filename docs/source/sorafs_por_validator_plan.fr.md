@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_por_validator_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 543f6c80a6a914753e94ccf1e29ae7aceba2af89a36290f2a0b0f94ceb827acc
+source_hash: 55ad3268dc514105d13a9ee854b154af4bcde5c881d53dc44ddda3031dc4a928
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-06-25
 ---

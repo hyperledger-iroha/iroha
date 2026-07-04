@@ -101,6 +101,80 @@ def test_write_json_completes_partial_descriptor_writes(
     assert len(writes) > 1
 
 
+def test_write_json_fsyncs_descriptor_before_close(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "fixture.json"
+    payload = {"ready": True}
+    original_fsync = os.fsync
+    fsynced: list[int] = []
+
+    def fsync(fd: int) -> None:
+        fsynced.append(fd)
+        original_fsync(fd)
+
+    monkeypatch.setattr(MODULE.os, "fsync", fsync)
+
+    MODULE.write_json(output, payload)
+
+    assert json.loads(output.read_text(encoding="utf-8")) == payload
+    assert len(fsynced) == 2
+
+
+def test_write_json_propagates_fsync_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "fixture.json"
+
+    def fsync(_fd: int) -> None:
+        raise OSError("fsync denied")
+
+    monkeypatch.setattr(MODULE.os, "fsync", fsync)
+
+    try:
+        MODULE.write_json(output, {"ready": True})
+    except OSError as error:
+        assert "fsync denied" in str(error)
+    else:
+        raise AssertionError("fixture write ignored fsync failure")
+
+
+def test_write_json_fsyncs_output_parent_after_descriptor_close(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    output = tmp_path / "fixture.json"
+    calls: list[tuple[Path, str]] = []
+
+    def record_parent_sync(path: Path, *, label: str) -> list[str]:
+        calls.append((path, label))
+        return []
+
+    monkeypatch.setattr(MODULE, "fsync_checker_output_parent", record_parent_sync)
+
+    MODULE.write_json(output, {"ready": True})
+
+    assert calls == [(output, "orchestrator fixture output")]
+
+
+def test_write_json_propagates_parent_fsync_failure(tmp_path: Path, monkeypatch) -> None:
+    output = tmp_path / "fixture.json"
+
+    def fail_parent_sync(_path: Path, *, label: str) -> list[str]:
+        return [f"{label} parent cannot be fsynced"]
+
+    monkeypatch.setattr(MODULE, "fsync_checker_output_parent", fail_parent_sync)
+
+    try:
+        MODULE.write_json(output, {"ready": True})
+    except ValueError as error:
+        assert str(error) == "orchestrator fixture output parent cannot be fsynced"
+    else:
+        raise AssertionError("fixture write ignored parent fsync failure")
+
+
 def test_ensure_fixture_directory_rejects_symlink_before_create(
     tmp_path: Path,
 ) -> None:

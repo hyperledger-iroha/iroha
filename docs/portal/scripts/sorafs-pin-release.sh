@@ -150,6 +150,17 @@ def write_all(fd: int, chunk: bytes) -> None:
             raise OSError("failed to write SoraFS pin release descriptor")
         view = view[written:]
 
+def sync_output_parent(path: pathlib.Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if nofollow:
+        flags |= nofollow
+    fd = os.open(path.parent, flags)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
 def write_descriptor(path: pathlib.Path, payload) -> None:
     validate_descriptor_path(path)
     rendered = json.dumps(payload, indent=2, allow_nan=False).encode("utf-8")
@@ -158,8 +169,10 @@ def write_descriptor(path: pathlib.Path, payload) -> None:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             fail(f"`{path}` must be a regular file")
         write_all(fd, rendered)
+        os.fsync(fd)
     finally:
         os.close(fd)
+    sync_output_parent(path)
 
 existing = read_descriptor(target)
 if not isinstance(existing, list):

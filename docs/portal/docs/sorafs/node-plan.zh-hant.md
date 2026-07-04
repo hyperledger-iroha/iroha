@@ -47,12 +47,13 @@ SF-3 提供了第一個可運行的 `sorafs-node` 包，可將 Iroha/Torii 進�
 
 ### C. 網關端點
 
-|端點 |行為 |任務 |
-|----------|------------|--------|
-| `POST /sorafs/pin` |接受 `PinProposalV1`，驗證清單，隊列攝取，使用清單 CID 進行響應。 |驗證塊配置文件、強製配額、通過塊存儲傳輸數據。 |
-| `GET /sorafs/chunks/{cid}` + 範圍查詢 |使用 `Content-Chunker` 標頭提供塊字節；遵守範圍能力規範。 |使用調度程序 + 流預算（與 SF-2d 範圍功能相關）。 |
-| `POST /sorafs/por/sample` |對清單和退貨證明包運行 PoR 採樣。 |重用塊存儲采樣，使用 Norito JSON 有效負載進行響應。 |
-| `GET /sorafs/telemetry` |摘要：容量、PoR 成功、獲取錯誤計數。 |為儀表板/操作員提供數據。 |
+| Endpoint | Behaviour | Tasks |
+|----------|-----------|-------|
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 運行時管道通過 `sorafs_node::por` 線程 PoR 交互：跟踪器記錄每個 `PorChallengeV1`、`PorProofV1` 和 `AuditVerdictV1`，因此 `CapacityMeter` 指標反映治理結論，無需定制 Torii邏輯.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ SF-3 提供了第一個可運行的 `sorafs-node` 包，可將 Iroha/Torii 進�
 ## 里程碑退出標準
 
 - `cargo run -p sorafs_node --example pin_fetch` 適用於本地裝置。  
-- Torii 使用 `--features sorafs-storage` 構建並通過集成測試。  
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - 使用默認配置+ CLI 示例更新了文檔（[節點存儲指南](node-storage.md)）；提供操作手冊。  
 - 遙測在暫存儀表板中可見；針對容量飽和和 PoR 故障配置的警報。
 
@@ -116,4 +117,4 @@ SF-3 提供了第一個可運行的 `sorafs-node` 包，可將 Iroha/Torii 進�
 
 - 使用默認配置、CLI 用法和故障排除步驟更新[節點存儲參考](node-storage.md)。  
 - 隨著 SF-3 的發展，保持[節點操作運行手冊](node-operations.md) 與實施保持一致。  
-- 在開發人員門戶內發布 `/sorafs/*` 端點的 API 參考，並在 Torii 處理程序登陸後將它們連接到 OpenAPI 清單中。
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

@@ -12,6 +12,8 @@ production
 1800600000
 --receipt-summary-digest-hex
 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+--route-body-blake3-hex
+eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 --route
 gateway_range_fetch
 --route

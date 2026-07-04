@@ -34,7 +34,7 @@ use norito::json::{self, Value};
 use norito::{NoritoDeserialize, NoritoSerialize};
 use sha3::{Digest, Sha3_256};
 pub use sorafs_chunker;
-use sorafs_chunker::{ChunkDigest, ChunkProfile, chunk_bytes_with_digests_profile};
+use sorafs_chunker::{ChunkDigest, ChunkProfile, try_chunk_bytes_with_digests_profile};
 #[cfg(feature = "manifest")]
 use sorafs_manifest::ManifestV1 as SorafsManifestV1;
 use thiserror::Error;
@@ -124,6 +124,16 @@ pub enum CarPlanError {
     NonUtf8Path(String),
     #[error("file path '{new}' conflicts with ancestor '{existing}'")]
     PathConflict { existing: String, new: String },
+    #[error("chunking failed: {0}")]
+    Chunking(#[from] sorafs_chunker::ChunkerError),
+    #[error("chunking profile max_size {max_size} exceeds CAR chunk length limit {limit}")]
+    ChunkProfileMaxSizeTooLarge { max_size: usize, limit: u32 },
+    #[error("chunk length {length} exceeds CAR chunk length limit {limit}")]
+    ChunkLengthTooLarge { length: usize, limit: u32 },
+    #[error("chunk offset {offset} exceeds u64::MAX")]
+    ChunkOffsetTooLarge { offset: usize },
+    #[error("content length exceeds u64::MAX")]
+    ContentLengthTooLarge,
 }
 
 /// Errors surfaced by the future CAR writer.
@@ -156,6 +166,16 @@ pub enum ChunkStoreError {
     LengthMismatch { expected: u64, actual: u64 },
     #[error("payload offset {offset} out of range (len {len})")]
     OffsetOutOfRange { offset: u64, len: u64 },
+    #[error("chunking failed: {0}")]
+    Chunking(#[from] sorafs_chunker::ChunkerError),
+    #[error("chunking profile max_size {max_size} exceeds chunk length limit {limit}")]
+    ChunkProfileMaxSizeTooLarge { max_size: usize, limit: u32 },
+    #[error("chunk length {length} exceeds chunk length limit {limit}")]
+    ChunkLengthTooLarge { length: usize, limit: u32 },
+    #[error("chunk offset {offset} exceeds u64::MAX")]
+    ChunkOffsetTooLarge { offset: usize },
+    #[error("payload length exceeds u64::MAX")]
+    PayloadLengthTooLarge,
 }
 
 /// Abstraction over payload sources that support random-access reads.
@@ -394,6 +414,72 @@ pub struct CarChunk {
     pub digest: [u8; 32],
     /// Optional Taikai segment hint carried alongside the chunk metadata.
     pub taikai_segment_hint: Option<TaikaiSegmentHint>,
+}
+
+const CAR_CHUNK_LENGTH_LIMIT: u32 = u32::MAX;
+
+fn ensure_car_plan_profile(profile: ChunkProfile) -> Result<(), CarPlanError> {
+    profile.validate()?;
+    let limit = CAR_CHUNK_LENGTH_LIMIT as usize;
+    if profile.max_size > limit {
+        return Err(CarPlanError::ChunkProfileMaxSizeTooLarge {
+            max_size: profile.max_size,
+            limit: CAR_CHUNK_LENGTH_LIMIT,
+        });
+    }
+    Ok(())
+}
+
+fn ensure_chunk_store_profile(profile: ChunkProfile) -> Result<(), ChunkStoreError> {
+    profile.validate()?;
+    let limit = CAR_CHUNK_LENGTH_LIMIT as usize;
+    if profile.max_size > limit {
+        return Err(ChunkStoreError::ChunkProfileMaxSizeTooLarge {
+            max_size: profile.max_size,
+            limit: CAR_CHUNK_LENGTH_LIMIT,
+        });
+    }
+    Ok(())
+}
+
+fn car_chunk_from_digest_with_base(
+    digest: ChunkDigest,
+    base_offset: u64,
+) -> Result<CarChunk, CarPlanError> {
+    let local_offset =
+        u64::try_from(digest.offset).map_err(|_| CarPlanError::ChunkOffsetTooLarge {
+            offset: digest.offset,
+        })?;
+    let offset = base_offset
+        .checked_add(local_offset)
+        .ok_or(CarPlanError::ContentLengthTooLarge)?;
+    let length = u32::try_from(digest.length).map_err(|_| CarPlanError::ChunkLengthTooLarge {
+        length: digest.length,
+        limit: CAR_CHUNK_LENGTH_LIMIT,
+    })?;
+    Ok(CarChunk {
+        offset,
+        length,
+        digest: digest.digest,
+        taikai_segment_hint: None,
+    })
+}
+
+fn stored_chunk_from_digest(digest: ChunkDigest) -> Result<StoredChunk, ChunkStoreError> {
+    let offset =
+        u64::try_from(digest.offset).map_err(|_| ChunkStoreError::ChunkOffsetTooLarge {
+            offset: digest.offset,
+        })?;
+    let length =
+        u32::try_from(digest.length).map_err(|_| ChunkStoreError::ChunkLengthTooLarge {
+            length: digest.length,
+            limit: CAR_CHUNK_LENGTH_LIMIT,
+        })?;
+    Ok(StoredChunk {
+        offset,
+        length,
+        blake3: digest.digest,
+    })
 }
 
 #[cfg(feature = "manifest")]
@@ -1083,19 +1169,25 @@ impl ChunkStore {
 
     /// Clears the store and ingests the provided payload.
     pub fn ingest_bytes(&mut self, payload: &[u8]) {
-        let vectors = sorafs_chunker::chunk_bytes_with_digests_profile(self.profile, payload);
+        self.try_ingest_bytes(payload)
+            .expect("invalid SoraFS chunk profile");
+    }
+
+    /// Clears the store and ingests the provided payload, returning chunker
+    /// validation errors instead of panicking on invalid profile parameters.
+    pub fn try_ingest_bytes(&mut self, payload: &[u8]) -> Result<(), ChunkStoreError> {
+        ensure_chunk_store_profile(self.profile)?;
+        let vectors = sorafs_chunker::try_chunk_bytes_with_digests_profile(self.profile, payload)?;
         self.chunks.clear();
         self.chunks.reserve(vectors.len());
         for digest in vectors {
-            self.chunks.push(StoredChunk {
-                offset: digest.offset as u64,
-                length: digest.length as u32,
-                blake3: digest.digest,
-            });
+            self.chunks.push(stored_chunk_from_digest(digest)?);
         }
         self.por_tree = PorMerkleTree::from_payload(payload, &self.chunks);
         self.payload_digest = blake3::hash(payload);
-        self.payload_len = payload.len() as u64;
+        self.payload_len =
+            u64::try_from(payload.len()).map_err(|_| ChunkStoreError::PayloadLengthTooLarge)?;
+        Ok(())
     }
 
     /// Ingests a payload using chunk boundaries supplied by an existing plan.
@@ -2669,18 +2761,24 @@ impl CarBuildPlan {
         if payload.is_empty() {
             return Err(CarPlanError::EmptyInput);
         }
-        let chunks = chunk_bytes_with_digests_profile(profile, payload);
+        ensure_car_plan_profile(profile)?;
+        let chunks = try_chunk_bytes_with_digests_profile(profile, payload)?;
         let chunk_count = chunks.len();
+        let content_length =
+            u64::try_from(payload.len()).map_err(|_| CarPlanError::ContentLengthTooLarge)?;
         Ok(Self {
             chunk_profile: profile,
             payload_digest: blake3::hash(payload),
-            content_length: payload.len() as u64,
-            chunks: chunks.into_iter().map(CarChunk::from).collect(),
+            content_length,
+            chunks: chunks
+                .into_iter()
+                .map(|chunk| car_chunk_from_digest_with_base(chunk, 0))
+                .collect::<Result<_, _>>()?,
             files: vec![FilePlan {
                 path: Vec::new(),
                 first_chunk: 0,
                 chunk_count,
-                size: payload.len() as u64,
+                size: content_length,
             }],
         })
     }
@@ -2723,6 +2821,7 @@ impl CarBuildPlan {
         if files.is_empty() {
             return Err(CarPlanError::EmptyInput);
         }
+        ensure_car_plan_profile(profile)?;
 
         files.sort_by(|a, b| a.path.cmp(&b.path));
         let mut prev_path: Option<Vec<String>> = None;
@@ -2748,18 +2847,14 @@ impl CarBuildPlan {
             prev_path = Some(entry.path.clone());
 
             let start_chunk = chunks.len();
-            let data_len = entry.data.len() as u64;
+            let data_len =
+                u64::try_from(entry.data.len()).map_err(|_| CarPlanError::ContentLengthTooLarge)?;
             hasher.update(&entry.data);
             payload.extend_from_slice(&entry.data);
 
-            let chunk_digests = chunk_bytes_with_digests_profile(profile, &entry.data);
+            let chunk_digests = try_chunk_bytes_with_digests_profile(profile, &entry.data)?;
             for digest in chunk_digests {
-                chunks.push(CarChunk {
-                    offset: base_offset + digest.offset as u64,
-                    length: digest.length as u32,
-                    digest: digest.digest,
-                    taikai_segment_hint: None,
-                });
+                chunks.push(car_chunk_from_digest_with_base(digest, base_offset)?);
             }
             let end_chunk = chunks.len();
             file_plans.push(FilePlan {
@@ -2768,15 +2863,19 @@ impl CarBuildPlan {
                 chunk_count: end_chunk - start_chunk,
                 size: data_len,
             });
-            base_offset += data_len;
+            base_offset = base_offset
+                .checked_add(data_len)
+                .ok_or(CarPlanError::ContentLengthTooLarge)?;
         }
 
         let payload_digest = hasher.finalize();
+        let content_length =
+            u64::try_from(payload.len()).map_err(|_| CarPlanError::ContentLengthTooLarge)?;
         Ok((
             Self {
                 chunk_profile: profile,
                 payload_digest,
-                content_length: payload.len() as u64,
+                content_length,
                 chunks,
                 files: file_plans,
             },
@@ -2826,17 +2925,6 @@ fn path_to_string(path: &[String]) -> String {
 pub struct FileEntry {
     pub path: Vec<String>,
     pub data: Vec<u8>,
-}
-
-impl From<ChunkDigest> for CarChunk {
-    fn from(chunk: ChunkDigest) -> Self {
-        Self {
-            offset: chunk.offset as u64,
-            length: chunk.length as u32,
-            digest: chunk.digest,
-            taikai_segment_hint: None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -3390,6 +3478,100 @@ mod tests {
     fn empty_input_rejected() {
         let err = CarBuildPlan::single_file(&[]).unwrap_err();
         assert!(matches!(err, CarPlanError::EmptyInput));
+    }
+
+    #[test]
+    fn plan_building_rejects_invalid_chunk_profile_without_panicking() {
+        let invalid_profile = ChunkProfile {
+            min_size: 4096,
+            target_size: 2048,
+            max_size: 8192,
+            break_mask: ChunkProfile::DEFAULT.break_mask,
+        };
+        let err = CarBuildPlan::single_file_with_profile(b"payload", invalid_profile).unwrap_err();
+        assert!(matches!(
+            err,
+            CarPlanError::Chunking(sorafs_chunker::ChunkerError::TargetBeforeMin { .. })
+        ));
+
+        let files = vec![FileEntry {
+            path: vec!["payload.bin".to_owned()],
+            data: b"payload".to_vec(),
+        }];
+        let err = CarBuildPlan::from_files_with_profile(files, invalid_profile).unwrap_err();
+        assert!(matches!(
+            err,
+            CarPlanError::Chunking(sorafs_chunker::ChunkerError::TargetBeforeMin { .. })
+        ));
+    }
+
+    #[test]
+    fn chunk_store_try_ingest_rejects_invalid_profile_without_mutation() {
+        let invalid_profile = ChunkProfile {
+            min_size: 1,
+            target_size: 1,
+            max_size: 1,
+            break_mask: 0,
+        };
+        let mut store = ChunkStore::with_profile(invalid_profile);
+        let err = store.try_ingest_bytes(b"payload").unwrap_err();
+        assert!(matches!(
+            err,
+            ChunkStoreError::Chunking(sorafs_chunker::ChunkerError::BreakMaskZero)
+        ));
+        assert!(store.chunks().is_empty());
+        assert_eq!(store.payload_len(), 0);
+        assert_eq!(
+            store.payload_digest().as_bytes(),
+            blake3::hash(&[]).as_bytes()
+        );
+    }
+
+    #[test]
+    fn car_plan_and_store_reject_profiles_wider_than_car_chunk_length() {
+        let Some(max_size) = (u32::MAX as usize).checked_add(1) else {
+            return;
+        };
+        let profile = ChunkProfile {
+            min_size: 1,
+            target_size: 1,
+            max_size,
+            break_mask: 1,
+        };
+
+        let err = CarBuildPlan::single_file_with_profile(b"payload", profile).unwrap_err();
+        assert!(matches!(
+            err,
+            CarPlanError::ChunkProfileMaxSizeTooLarge {
+                max_size: observed,
+                limit: u32::MAX
+            } if observed == max_size
+        ));
+
+        let files = vec![FileEntry {
+            path: vec!["payload.bin".to_owned()],
+            data: b"payload".to_vec(),
+        }];
+        let err = CarBuildPlan::from_files_with_profile(files, profile).unwrap_err();
+        assert!(matches!(
+            err,
+            CarPlanError::ChunkProfileMaxSizeTooLarge {
+                max_size: observed,
+                limit: u32::MAX
+            } if observed == max_size
+        ));
+
+        let mut store = ChunkStore::with_profile(profile);
+        let err = store.try_ingest_bytes(b"payload").unwrap_err();
+        assert!(matches!(
+            err,
+            ChunkStoreError::ChunkProfileMaxSizeTooLarge {
+                max_size: observed,
+                limit: u32::MAX
+            } if observed == max_size
+        ));
+        assert!(store.chunks().is_empty());
+        assert_eq!(store.payload_len(), 0);
     }
 
     #[test]

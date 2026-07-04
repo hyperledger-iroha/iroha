@@ -751,7 +751,7 @@ heshləri və ya hadisə axınlarını yenidən yaratmaq üçün scrambles.
   testlər yeni matris siyasətini əhatə edir.
 - **ISO 20022 xəritələşdirilməsi:** ISO zərflərini qurarkən və ya xarici uyğunlaşdırarkən
   sistemlərində sənədləşdirilmiş sahə xəritəsini yenidən istifadə edin
-  `docs/source/finance/settlement_iso_mapping.md` (`colr.007`, `sese.023`,
+  `docs/source/finance/settlement_iso_mapping.md` (`colr.012`, `sese.023`,
   `sese.025`) beləliklə, Norito faydalı yük və ISO təsdiqləri sinxron qalır.
 
 ## 5. Əməliyyat yoxlama siyahıları

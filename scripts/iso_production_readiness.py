@@ -45,7 +45,7 @@ CANARY_SUMMARY_VERSION = 1
 RECEIPT_SUMMARY_VERSION = 2
 TRUST_SUMMARY_VERSION = 1
 XSD_SUMMARY_VERSION = 3
-PENDING_XSD_PROBE_SUMMARY_VERSION = 1
+PENDING_XSD_PROBE_SUMMARY_VERSION = 2
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 PENDING_XSD_PROBE_MAX_TIMEOUT_SECS = 300.0
 PENDING_XSD_PROBE_MAX_BYTES = 65536
@@ -70,6 +70,7 @@ MAX_SOURCE_REPOSITORY_CHARS = 2048
 MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
 MAX_PENDING_SCHEMA_ORGANISATION_CHARS = 256
+ISO_NAMESPACE_PREFIX = "urn:iso:std:iso:20022:tech:xsd:"
 MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}\.[0-9]{3}\.[0-9]{2}$")
 ISO_SCHEMA_DOWNLOAD_PATH_RE = re.compile(r"^/message/[1-9][0-9]*/download$")
 ISO_SCHEMA_ARCHIVE_QUERY_RE = re.compile(r"^page=[1-9][0-9]*$")
@@ -152,7 +153,7 @@ STAGE_RECEIPT_KINDS = {
 REQUIRE_VERIFIED = "require-verified"
 TRUST_SIGNATURE_POLICIES = {"record-only", "reject-unsupported", REQUIRE_VERIFIED}
 RECEIPT_PATH_SUFFIX = ".receipt.json"
-LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
+RETIRED_RAIL_MESSAGE_TYPES = {"colr.007"}
 SUPPORTED_RAIL_MESSAGE_TYPES = {
     "pacs.008",
     "pacs.009",
@@ -162,11 +163,16 @@ SUPPORTED_RAIL_MESSAGE_TYPES = {
     "sese.023",
     "sese.024",
     "sese.025",
-    "colr.007",
     "colr.012",
 }
 RAIL_MESSAGE_TYPES = {
-    "generic-iso20022": SUPPORTED_RAIL_MESSAGE_TYPES - LEGACY_RAIL_MESSAGE_TYPES,
+    "generic-iso20022": {
+        "pacs.008",
+        "pacs.009",
+        "pacs.002",
+        "pacs.004",
+        "camt.056",
+    },
     "swift-cbpr-plus": {
         "pacs.008",
         "pacs.009",
@@ -192,10 +198,6 @@ RAIL_MESSAGE_TYPES = {
         "pacs.002",
         "pacs.004",
         "camt.056",
-        "sese.023",
-        "sese.024",
-        "sese.025",
-        "colr.012",
     },
 }
 ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
@@ -228,7 +230,6 @@ PRODUCTION_FALSE_POLICY_FLAGS = {
     "allow_plan_only",
     "allow_dry_run",
     "allow_insecure_http",
-    "allow_legacy_colr007",
     "allow_default_profile",
     "allow_failed_receipts",
     "allow_partial_canary",
@@ -293,7 +294,6 @@ RECEIPT_SUMMARY_KEYS = {
     "receipt_kind",
     "allow_failed",
     "allow_insecure_http",
-    "allow_legacy_colr007",
     "allow_default_profile",
     "require_source_files",
     "receipts",
@@ -559,6 +559,7 @@ PENDING_XSD_PROBE_KEYS = {
     "submitting_organisation",
     "catalogue_url",
     "download_url",
+    "target_namespace",
     "status",
     "http_status",
     "content_type",
@@ -624,6 +625,50 @@ KNOWN_PENDING_SCHEMA_SOURCE_METADATA = {
         "download_type": "XSD",
         "message_name": "SecuritiesSettlementTransactionConfirmationV11",
         "submitting_organisation": "SWIFT",
+    },
+}
+KNOWN_BLOCKED_SCHEMA_SOURCE_METADATA = {
+    "pacs.002.001.12": {
+        "source": {
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+            "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+            "path": "XSDtoGo/xsd/pacs.002.001.12.xsd",
+            "sha256": "92630b81604db82429006f6898455ddb3700dce0584ae909d7863dba8a3ce3bb",
+        },
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+            "no-public-distribution-right",
+            "exclusive-swift-property",
+        ],
+    },
+    "pacs.008.001.10": {
+        "source": {
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+            "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+            "path": "XSDtoGo/xsd/pacs.008.001.10.xsd",
+            "sha256": "f0105110928868142f496740303413d213fc182161391134f424f7271295d986",
+        },
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+            "no-public-distribution-right",
+            "exclusive-swift-property",
+        ],
+    },
+    "pacs.009.001.10": {
+        "source": {
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
+            "commit": "35e07d59bfc367886d29693d2a5f909947b00fa9",
+            "path": "XSDtoGo/xsd/pacs.009.001.10.xsd",
+            "sha256": "cd3ae758c3694f9ac7b5a0fb6d208eb21b6e3be7f57882cca62a8c60915899af",
+        },
+        "restriction_markers": [
+            "swift-copyright-header",
+            "licensed-product-redistribution-agreement",
+            "no-public-distribution-right",
+            "exclusive-swift-property",
+        ],
     },
 }
 XSD_ISO_SCHEMA_CATALOGUE_PATHS = {
@@ -2694,7 +2739,6 @@ def _block_receipt_entry_metadata_errors(
     blockers: list[dict[str, Any]],
     *,
     receipt_kind: str,
-    allow_legacy_colr007: bool,
     allow_default_profile: bool,
     require_source_files: bool,
     metadata_code: str,
@@ -2829,13 +2873,6 @@ def _block_receipt_entry_metadata_errors(
                     blockers,
                     metadata_code,
                     f"{entry_label}.message_type is unsupported",
-                    path,
-                )
-            elif message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
-                _block_receipt_metadata_error(
-                    blockers,
-                    metadata_code,
-                    f"{entry_label}.message_type uses legacy rail message type",
                     path,
                 )
         _check_receipt_entry_sha256(
@@ -3334,6 +3371,31 @@ def _reject_xsd_source_repository_secret_material(repository: str, label: str) -
         raise ReadinessError(f"{label} must not contain secret-looking material")
 
 
+def _validate_known_blocked_schema_source_metadata(
+    message_def_id: str,
+    source: dict[str, str],
+    restriction_markers: list[str],
+    label: str,
+) -> None:
+    if message_def_id in KNOWN_PENDING_SCHEMA_SOURCE_METADATA:
+        raise ReadinessError(
+            f"{label}.message_def_id is tracked as official pending ISO source evidence, not blocked-source evidence"
+        )
+    expected = KNOWN_BLOCKED_SCHEMA_SOURCE_METADATA.get(message_def_id)
+    if expected is None:
+        return
+    expected_source = expected["source"]
+    for key, expected_value in expected_source.items():
+        if source[key] != expected_value:
+            raise ReadinessError(
+                f"{label}.source.{key} must match known restricted blocked-source metadata"
+            )
+    if restriction_markers != expected["restriction_markers"]:
+        raise ReadinessError(
+            f"{label}.restriction_markers must match known restricted blocked-source metadata"
+        )
+
+
 def _verify_schema_source_summary(
     source_raw: Any,
     label: str,
@@ -3483,14 +3545,21 @@ def _verify_blocked_schema_source_summary(
         raise ReadinessError(
             f"{label}.restriction_markers must include a redistribution restriction marker"
         )
+    normalized_source = {
+        "repository": repository,
+        "commit": commit,
+        "path": source_path,
+        "sha256": source_sha256,
+    }
+    _validate_known_blocked_schema_source_metadata(
+        message_def_id,
+        normalized_source,
+        markers,
+        label,
+    )
     return {
         "message_def_id": message_def_id,
-        "source": {
-            "repository": repository,
-            "commit": commit,
-            "path": source_path,
-            "sha256": source_sha256,
-        },
+        "source": normalized_source,
         "reason": reason,
         "restriction_markers": markers,
     }
@@ -3774,6 +3843,38 @@ def _validate_probe_content_type(raw: Any, label: str) -> str | None:
     return raw
 
 
+def _expected_xsd_target_namespace(message_def_id: str) -> str:
+    return f"{ISO_NAMESPACE_PREFIX}{message_def_id}"
+
+
+def _validate_probe_target_namespace(raw: Any, label: str) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    raw = _plain_text(raw, label)
+    if not raw:
+        raise ReadinessError(f"{label} must be a non-empty string or null")
+    try:
+        if len(raw) > MAX_XML_IDENTIFIER_CHARS:
+            raise ReadinessError(
+                f"{label} must be no longer than {MAX_XML_IDENTIFIER_CHARS} characters"
+            )
+        if raw != raw.strip():
+            raise ReadinessError(f"{label} must not have surrounding whitespace")
+        if any(ch.isspace() for ch in raw):
+            raise ReadinessError(f"{label} must not contain whitespace")
+        if _contains_control_character(raw):
+            raise ReadinessError(f"{label} must not contain control characters")
+        _reject_non_ascii_context(raw, label)
+        _reject_secret_string(raw, label)
+    except ReadinessError:
+        raise
+    except Exception:
+        raise ReadinessError(f"{label} must be valid text") from None
+    return raw
+
+
 def _validate_probe_error_kind(raw: Any, label: str) -> str | None:
     value = _validate_optional_probe_text(raw, label)
     if value is None:
@@ -3792,7 +3893,12 @@ def _validate_probe_http_status(raw: Any, label: str) -> int | None:
 
 
 def _pending_xsd_probe_is_successful(probe: dict[str, Any]) -> bool:
-    return probe["status"] == "reachable" and probe["looks_like_xsd"]
+    return (
+        probe["status"] == "reachable"
+        and probe["looks_like_xsd"]
+        and probe["target_namespace"]
+        == _expected_xsd_target_namespace(probe["message_def_id"])
+    )
 
 
 def _verify_pending_xsd_probe(raw: Any, label: str) -> dict[str, Any]:
@@ -3855,11 +3961,16 @@ def _verify_pending_xsd_probe(raw: Any, label: str) -> dict[str, Any]:
         if sample_sha256 is not None:
             raise ReadinessError(f"{label}.sample_sha256 must be null without downloaded bytes")
     truncated = _require_bool(probe, "truncated", label)
+    target_namespace = _validate_probe_target_namespace(
+        probe.get("target_namespace"),
+        f"{label}.target_namespace",
+    )
     looks_like_xsd = _require_bool(probe, "looks_like_xsd", label)
     error_kind = _validate_probe_error_kind(
         probe.get("error_kind"),
         f"{label}.error_kind",
     )
+    expected_target_namespace = _expected_xsd_target_namespace(message_def_id)
     if status == "reachable":
         if http_status is None or not (200 <= http_status <= 299):
             raise ReadinessError(f"{label}.http_status must record a 2xx status")
@@ -3870,6 +3981,10 @@ def _verify_pending_xsd_probe(raw: Any, label: str) -> dict[str, Any]:
         if not looks_like_xsd:
             raise ReadinessError(
                 f"{label}.looks_like_xsd must be true for reachable probes"
+            )
+        if target_namespace != expected_target_namespace:
+            raise ReadinessError(
+                f"{label}.target_namespace must match message_def_id"
             )
     if status == "unexpected":
         if http_status is None or not (100 <= http_status <= 399):
@@ -3883,6 +3998,10 @@ def _verify_pending_xsd_probe(raw: Any, label: str) -> dict[str, Any]:
         if looks_like_xsd:
             raise ReadinessError(
                 f"{label}.looks_like_xsd must be false for unexpected probes"
+            )
+        if target_namespace == expected_target_namespace:
+            raise ReadinessError(
+                f"{label}.target_namespace must not match message_def_id for unexpected probes"
             )
     if status in {"timeout", "network_error"} and http_status is not None:
         raise ReadinessError(f"{label}.http_status must be null for {status} probes")
@@ -3919,6 +4038,10 @@ def _verify_pending_xsd_probe(raw: Any, label: str) -> dict[str, Any]:
             raise ReadinessError(
                 f"{label}.content_type must be null for {status} probes"
             )
+        if target_namespace is not None:
+            raise ReadinessError(
+                f"{label}.target_namespace must be null for failed probes"
+            )
         if truncated:
             raise ReadinessError(f"{label}.truncated must be false for failed probes")
         if looks_like_xsd:
@@ -3931,6 +4054,7 @@ def _verify_pending_xsd_probe(raw: Any, label: str) -> dict[str, Any]:
         "submitting_organisation": submitting_organisation,
         "catalogue_url": catalogue_url,
         "download_url": download_url,
+        "target_namespace": target_namespace,
         "status": status,
         "http_status": http_status,
         "content_type": content_type,
@@ -5616,7 +5740,6 @@ def _verify_receipt_summary(
     missing_kinds_code: str,
     allow_failed_code: str,
     allow_insecure_code: str,
-    allow_legacy_code: str,
     allow_default_profile_code: str,
     version_code: str,
     source_files_code: str,
@@ -5716,7 +5839,6 @@ def _verify_receipt_summary(
         )
     allow_failed = _require_bool(receipt_obj, "allow_failed", label)
     allow_insecure_http = _require_bool(receipt_obj, "allow_insecure_http", label)
-    allow_legacy_colr007 = _require_bool(receipt_obj, "allow_legacy_colr007", label)
     allow_default_profile = _require_bool(receipt_obj, "allow_default_profile", label)
     require_source_files = _require_bool(receipt_obj, "require_source_files", label)
     if not require_source_files:
@@ -5745,7 +5867,6 @@ def _verify_receipt_summary(
     seen_source_material_fields: dict[tuple[str, str], dict[str, int]] = {}
     has_failed_receipt = False
     has_insecure_receipt_endpoint = False
-    has_legacy_colr007_receipt = False
     has_default_profile_receipt = False
     for offset, receipt_raw in enumerate(receipts_raw):
         entry_label = f"{label}.receipts[{offset}]"
@@ -5910,7 +6031,6 @@ def _verify_receipt_summary(
             path,
             blockers,
             receipt_kind=receipt_kind,
-            allow_legacy_colr007=allow_legacy_colr007,
             allow_default_profile=allow_default_profile,
             require_source_files=require_source_files,
             metadata_code=metadata_code,
@@ -5976,9 +6096,6 @@ def _verify_receipt_summary(
                     path,
                 )
         if receipt_kind == "iso-rail-gateway":
-            message_type = receipt.get("message_type")
-            if isinstance(message_type, str) and message_type in LEGACY_RAIL_MESSAGE_TYPES:
-                has_legacy_colr007_receipt = True
             if receipt.get("profile") is None:
                 has_default_profile_receipt = True
         receipts.append(
@@ -6012,11 +6129,6 @@ def _verify_receipt_summary(
         if not has_insecure_receipt_endpoint:
             message += " but no http:// or local/private receipt endpoint was recorded"
         _blocker(blockers, allow_insecure_code, message, path)
-    if allow_legacy_colr007:
-        message = "receipt verifier evidence allowed legacy rail receipts"
-        if not has_legacy_colr007_receipt:
-            message += " but no legacy receipt entry was recorded"
-        _blocker(blockers, allow_legacy_code, message, path)
     if allow_default_profile:
         message = "receipt verifier evidence allowed default rail profile fallback"
         if not has_default_profile_receipt:
@@ -6030,9 +6142,6 @@ def _verify_receipt_summary(
         "allow_failed": _nonproduction_flag_for_readiness_output(allow_failed),
         "allow_insecure_http": _nonproduction_flag_for_readiness_output(
             allow_insecure_http,
-        ),
-        "allow_legacy_colr007": _nonproduction_flag_for_readiness_output(
-            allow_legacy_colr007,
         ),
         "allow_default_profile": _nonproduction_flag_for_readiness_output(
             allow_default_profile,
@@ -6649,6 +6758,7 @@ def _pending_xsd_probe_for_readiness_output(probe: dict[str, Any]) -> dict[str, 
             "downloaded_bytes",
             "sample_sha256",
             "truncated",
+            "target_namespace",
             "error_kind",
         ):
             if key in output:
@@ -6664,9 +6774,13 @@ def _pending_xsd_probe_response_metadata_is_publicly_supported(
     http_status = probe.get("http_status")
     downloaded_bytes = probe.get("downloaded_bytes")
     sample_sha256 = probe.get("sample_sha256")
+    message_def_id = probe.get("message_def_id")
+    target_namespace = probe.get("target_namespace")
     return (
         probe.get("status") == "reachable"
         and probe.get("looks_like_xsd") is True
+        and isinstance(message_def_id, str)
+        and target_namespace == _expected_xsd_target_namespace(message_def_id)
         and type(http_status) is int
         and 200 <= http_status <= 299
         and type(downloaded_bytes) is int
@@ -6702,6 +6816,7 @@ def _pending_xsd_failed_probe_entry(probe: dict[str, Any]) -> dict[str, Any]:
         "message_def_id": output["message_def_id"],
         "status": output["status"],
         "http_status": output["http_status"],
+        "target_namespace": output["target_namespace"],
         "downloaded_bytes": output["downloaded_bytes"],
         "sample_sha256": output["sample_sha256"],
         "looks_like_xsd": output["looks_like_xsd"],
@@ -7102,7 +7217,6 @@ def _verify_canary(
             missing_kinds_code="evidence.missing_receipt_kinds",
             allow_failed_code="evidence.receipts_allow_failed",
             allow_insecure_code="evidence.receipts_allow_insecure_http",
-            allow_legacy_code="evidence.receipts_allow_legacy_colr007",
             allow_default_profile_code="evidence.receipts_allow_default_profile",
             version_code="evidence.receipt_summary_version_unsupported",
             source_files_code="evidence.receipts_source_files_not_required",
@@ -7526,7 +7640,6 @@ def _verify_archive_receipts(
         missing_kinds_code="evidence.archive_receipt_kinds_missing",
         allow_failed_code="evidence.archive_receipts_allow_failed",
         allow_insecure_code="evidence.archive_receipts_insecure_http",
-        allow_legacy_code="evidence.archive_receipts_allow_legacy_colr007",
         allow_default_profile_code="evidence.archive_receipts_allow_default_profile",
         version_code="evidence.archive_receipt_summary_version_unsupported",
         source_files_code="evidence.archive_receipts_source_files_not_required",
@@ -8039,6 +8152,88 @@ def _block_compact_summary_digest_role_confusion(
                 )
 
 
+def _trusted_profile_rails_by_environment(
+    trusts: list[dict[str, Any]],
+) -> dict[tuple[str, str], set[str]]:
+    trusted_profile_rails: dict[tuple[str, str], set[str]] = {}
+    for trust in trusts:
+        for profile in trust["profiles"]:
+            key = (profile["profile_id"], profile["environment"])
+            trusted_profile_rails.setdefault(key, set()).add(profile["rail"])
+    return trusted_profile_rails
+
+
+def _block_rail_receipt_without_trust(
+    receipt: dict[str, Any],
+    *,
+    label: str,
+    environment: str,
+    environment_label: str,
+    default_rail_profile: str | None,
+    trusted_profile_rails_by_environment: dict[tuple[str, str], set[str]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+    default_profile_code: str,
+    no_profile_code: str,
+    message_type_code: str,
+) -> None:
+    if receipt.get("receipt_kind") != "iso-rail-gateway":
+        return
+    profile_id = receipt.get("profile")
+    if profile_id is None:
+        profile_id = default_rail_profile
+        if profile_id is None:
+            _blocker(
+                blockers,
+                default_profile_code,
+                (
+                    f"{label}.profile uses default rail profile "
+                    "without evidence.policy.default_rail_profile"
+                ),
+                path,
+            )
+            return
+    if not isinstance(profile_id, str) or PROFILE_ID_RE.fullmatch(profile_id) is None:
+        return
+    candidate_rails = trusted_profile_rails_by_environment.get(
+        (profile_id, environment),
+        set(),
+    )
+    if profile_id in KNOWN_RAILS:
+        matching_rails = candidate_rails & {profile_id}
+    else:
+        matching_rails = candidate_rails
+    if not matching_rails:
+        _blocker(
+            blockers,
+            no_profile_code,
+            (
+                f"{label}.profile has no matching trust profile "
+                f"coverage for {environment_label}"
+            ),
+            path,
+        )
+        return
+    message_type = receipt.get("message_type")
+    if (
+        isinstance(message_type, str)
+        and MESSAGE_TYPE_RE.fullmatch(message_type) is not None
+        and not any(
+            message_type in RAIL_MESSAGE_TYPES.get(rail, set())
+            for rail in matching_rails
+        )
+    ):
+        _blocker(
+            blockers,
+            message_type_code,
+            (
+                f"{label}.message_type has no matching trust "
+                "profile rail coverage"
+            ),
+            path,
+        )
+
+
 def _block_canary_rail_receipts_without_trust(
     canaries: list[dict[str, Any]],
     trusts: list[dict[str, Any]],
@@ -8048,79 +8243,57 @@ def _block_canary_rail_receipts_without_trust(
 ) -> None:
     """Require every canary rail receipt to have matching trust material."""
 
-    trusted_profile_rails_by_environment: dict[tuple[str, str], set[str]] = {}
-    for trust in trusts:
-        for profile in trust["profiles"]:
-            key = (profile["profile_id"], profile["environment"])
-            trusted_profile_rails_by_environment.setdefault(key, set()).add(
-                profile["rail"]
-            )
+    trusted_profile_rails_by_environment = _trusted_profile_rails_by_environment(trusts)
     for canary_offset, canary in enumerate(canaries):
         canary_environment = canary["environment"]
         receipt_summary = canary.get("receipt_summary")
         if receipt_summary is None:
             continue
         for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
-            if receipt.get("receipt_kind") != "iso-rail-gateway":
-                continue
-            if receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES:
-                continue
-            profile_id = receipt.get("profile")
-            if profile_id is None:
-                profile_id = evidence_policy["default_rail_profile"]
-                if profile_id is None:
-                    _blocker(
-                        blockers,
-                        "trust.canary_rail_default_profile_unbound",
-                        (
-                            f"canary_summaries[{canary_offset}].receipt_summary.receipts"
-                            f"[{receipt_offset}].profile uses default rail profile "
-                            "without evidence.policy.default_rail_profile"
-                        ),
-                        path,
-                    )
-                    continue
-            if not isinstance(profile_id, str) or PROFILE_ID_RE.fullmatch(profile_id) is None:
-                continue
-            candidate_rails = trusted_profile_rails_by_environment.get(
-                (profile_id, canary_environment),
-                set(),
+            _block_rail_receipt_without_trust(
+                receipt,
+                label=(
+                    f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                    f"[{receipt_offset}]"
+                ),
+                environment=canary_environment,
+                environment_label="canary environment",
+                default_rail_profile=evidence_policy["default_rail_profile"],
+                trusted_profile_rails_by_environment=trusted_profile_rails_by_environment,
+                path=path,
+                blockers=blockers,
+                default_profile_code="trust.canary_rail_default_profile_unbound",
+                no_profile_code="trust.canary_rail_without_profile",
+                message_type_code="trust.canary_rail_message_type_without_profile",
             )
-            if profile_id in KNOWN_RAILS:
-                matching_rails = candidate_rails & {profile_id}
-            else:
-                matching_rails = candidate_rails
-            if not matching_rails:
-                _blocker(
-                    blockers,
-                    "trust.canary_rail_without_profile",
-                    (
-                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
-                        f"[{receipt_offset}].profile has no matching trust profile "
-                        "coverage for canary environment"
-                    ),
-                    path,
-                )
-                continue
-            message_type = receipt.get("message_type")
-            if (
-                isinstance(message_type, str)
-                and MESSAGE_TYPE_RE.fullmatch(message_type) is not None
-                and not any(
-                    message_type in RAIL_MESSAGE_TYPES.get(rail, set())
-                    for rail in matching_rails
-                )
-            ):
-                _blocker(
-                    blockers,
-                    "trust.canary_rail_message_type_without_profile",
-                    (
-                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
-                        f"[{receipt_offset}].message_type has no matching trust "
-                        "profile rail coverage"
-                    ),
-                    path,
-                )
+
+
+def _block_archive_rail_receipts_without_trust(
+    archive_receipts: dict[str, Any] | None,
+    trusts: list[dict[str, Any]],
+    evidence_policy: dict[str, Any],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Require every archive rail receipt to have matching trust material."""
+
+    if archive_receipts is None:
+        return
+    trusted_profile_rails_by_environment = _trusted_profile_rails_by_environment(trusts)
+    for receipt_offset, receipt in enumerate(archive_receipts["receipts"]):
+        _block_rail_receipt_without_trust(
+            receipt,
+            label=f"receipt_verification.receipts[{receipt_offset}]",
+            environment=evidence_policy["environment"],
+            environment_label="evidence environment",
+            default_rail_profile=evidence_policy["default_rail_profile"],
+            trusted_profile_rails_by_environment=trusted_profile_rails_by_environment,
+            path=path,
+            blockers=blockers,
+            default_profile_code="trust.archive_rail_default_profile_unbound",
+            no_profile_code="trust.archive_rail_without_profile",
+            message_type_code="trust.archive_rail_message_type_without_profile",
+        )
 
 
 def _block_cross_xsd_summary_reuse(
@@ -9497,7 +9670,7 @@ def _redact_public_receipt_entries(receipt_summary: dict[str, Any] | None) -> No
             receipt["endpoint_requires_insecure_http"] = "unsupported"
         if receipt.get("receipt_kind") != "iso-rail-gateway":
             continue
-        if receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES:
+        if receipt.get("message_type") in RETIRED_RAIL_MESSAGE_TYPES:
             receipt["message_type"] = "unsupported"
         if "profile" in receipt and receipt["profile"] is None:
             receipt["profile"] = "unsupported"
@@ -9875,6 +10048,13 @@ def verify_evidence_summary(
     )
     _block_canary_rail_receipts_without_trust(
         canaries,
+        trust_outputs,
+        evidence_policy,
+        path,
+        blockers,
+    )
+    _block_archive_rail_receipts_without_trust(
+        archive_receipts,
         trust_outputs,
         evidence_policy,
         path,

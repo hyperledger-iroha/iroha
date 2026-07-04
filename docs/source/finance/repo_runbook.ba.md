@@ -161,7 +161,7 @@ iroha --config client.toml --output \
 * CLI саҡырыуҙары бөгөн буш инструкция метамағлүмәттәрен сығара; ҡулланыу Python ярҙамсылары ҡасан ҡасаба кимәлендә
   метамағлүмәттәр беркетелергә тейеш.
 * Ҡара: ISO 20022 ялан картаһы өсөн ISO
-  backs these instructions (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
+  backs these instructions (`sese.023`, `sese.025`, `colr.012`, `pacs.009`, `camt.054`).
 * Pass `--iso-xml-out <path>` CLI канонлы XML алдан ҡарау Norito менән бер рәттән сығарыу өсөн.
   өйрәтеү; файл өҫтәге картаға ярашлы (`sese.023` өсөн DvP, `sese.025` өсөн PvP`). Пар
   флаг менән `--iso-reference-crosswalk <path>` шулай CLI раҫлай `--delivery-instrument-id` ҡаршы .

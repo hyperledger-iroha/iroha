@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from sorafs_evidence_json import (  # noqa: E402
     load_evidence_json_with_sha256_or_record_error,
 )
 from sorafs_evidence_validation import (  # noqa: E402
+    EVIDENCE_URL_FIELD_ERROR,
     archive_artifact_path_label,
     build_evidence_artifact,
     count_evidence_artifacts,
@@ -37,11 +39,13 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    record_observed_evidence_value,
     validate_bound_evidence_digest_references,
     require_2xx_status,
     require_bool_true,
@@ -51,7 +55,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_config_backed_governance_approval,
     require_iroha_config_binding,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     require_object_array,
@@ -60,6 +64,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_policy_digest,
     require_positive_int,
     require_recent_timestamp,
+    require_safe_url,
     require_string,
     require_string_coverage,
     require_string_equal,
@@ -85,6 +90,63 @@ DEFAULT_MIN_GATEWAYS = 3
 DEFAULT_MIN_DENYLIST_ENTRIES = 5
 DEFAULT_MIN_HONEY_PROBES = 4
 HEX64_LEN = 64
+CONTROLLER_INSTANCE_ID_PATTERN = re.compile(
+    r"^gateway-compliance-controller-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+CONTROLLER_INSTANCE_ID_ERROR = (
+    "controller_instance_id must match canonical lowercase "
+    "`gateway-compliance-controller-name`"
+)
+GATEWAY_LABEL_PATTERN = re.compile(
+    r"^gateway-compliance-gateway-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+GATEWAY_LABEL_ERROR = (
+    "gateways[].name must match canonical lowercase "
+    "`gateway-compliance-gateway-name`"
+)
+DENYLIST_ENTRY_LABEL_PATTERN = re.compile(
+    r"^gateway-denylist-entry-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+DENYLIST_ENTRY_LABEL_ERROR = (
+    "denylist_entries[].name must match canonical lowercase "
+    "`gateway-denylist-entry-name`"
+)
+HONEY_PROBE_LABEL_PATTERN = re.compile(
+    r"^gateway-honey-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+HONEY_PROBE_LABEL_ERROR = (
+    "probes[].name must match canonical lowercase `gateway-honey-probe-*`"
+)
+FORBIDDEN_CONTROLLER_INSTANCE_ID_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 REQUIRED_DENIAL_REASONS = (
     "provider",
@@ -96,6 +158,26 @@ REQUIRED_DENIAL_REASONS = (
     "perceptual_family",
     "gar_ttl",
     "legal_hold",
+)
+REQUIRED_CONTROLLER_FEEDS = (
+    "ofac",
+    "eu-sanctions",
+    "malware",
+    "csam-hash",
+    "legal-hold",
+    "regional-blocklist",
+    "appeal-overrides",
+)
+REQUIRED_MODERATION_TOGGLES = (
+    "provider-deny",
+    "appeal-override",
+    "legal-hold",
+    "regional-emergency",
+)
+REQUIRED_ENFORCEMENT_ROUTES = (
+    "manifest",
+    "cid",
+    "provider",
 )
 REQUIRED_METRICS = (
     "sorafs_gateway_policy_denials_total",
@@ -272,6 +354,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     + (
         "bundle_digest_hex",
         "denial_reasons_observed",
+        "denial_reason_count",
         "structured_error_labels_verified",
         "telemetry_labels_stable",
         "fail_closed_missing_envelope",
@@ -329,6 +412,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "alert_rules_installed",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "response_bodies_included",
     ),
     "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -370,11 +454,23 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "bundle_digest_hex",
     "policy_digest_hex",
+    "metric_count",
+    "metrics",
 )
 
 
-def validate_routes(payload: dict[str, Any], errors: list[str], options: ValidationOptions) -> None:
+def validate_routes(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
     require_count_equal(payload, "route_count", "passed_route_count", errors)
+    require_minimum_int(
+        payload,
+        "route_count",
+        len(REQUIRED_ENFORCEMENT_ROUTES),
+        errors,
+    )
     require_string_inventory_count_match(
         payload,
         "routes",
@@ -382,6 +478,21 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
         errors,
         field="name",
         allow_scalar_items=False,
+    )
+    require_string_coverage(
+        payload,
+        "routes",
+        "name",
+        REQUIRED_ENFORCEMENT_ROUTES,
+        errors,
+        allow_scalar_items=False,
+    )
+    require_only_required_values(
+        payload,
+        "routes",
+        "name",
+        REQUIRED_ENFORCEMENT_ROUTES,
+        errors,
     )
     for index, record in require_object_array(payload, "routes", errors):
         require_string(record, "name", errors)
@@ -392,19 +503,103 @@ def validate_routes(payload: dict[str, Any], errors: list[str], options: Validat
             errors,
             path=f"routes[{index}].status_code",
         )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
         require_bool_true(
             record,
             "authz_enforced",
             errors,
             path=f"routes[{index}].authz_enforced",
         )
-        require_maximum_number(
+        require_maximum_int(
             record,
             "latency_ms",
             options.max_route_latency_ms,
             errors,
             path=f"routes[{index}].latency_ms",
         )
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
+def require_controller_instance_id(
+    payload: dict[str, Any], errors: list[str]
+) -> str:
+    """Require a reviewed lowercase gateway compliance controller identifier."""
+
+    controller_instance_id = require_string(payload, "controller_instance_id", errors)
+    if not controller_instance_id:
+        return ""
+    if CONTROLLER_INSTANCE_ID_PATTERN.fullmatch(controller_instance_id) is None:
+        errors.append(CONTROLLER_INSTANCE_ID_ERROR)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_CONTROLLER_INSTANCE_ID_MARKERS
+        if marker in controller_instance_id.split("-")
+    )
+    if forbidden:
+        errors.append(
+            "controller_instance_id must not contain non-production markers "
+            f"{forbidden}"
+        )
+        return ""
+    return controller_instance_id
+
+
+def require_inventory_label(
+    record: dict[str, Any],
+    errors: list[str],
+    *,
+    pattern: re.Pattern[str],
+    label_error: str,
+    path: str,
+) -> str:
+    """Require a reviewed lowercase production inventory label."""
+
+    label = require_string(record, "name", errors)
+    if not label:
+        return ""
+    if pattern.fullmatch(label) is None:
+        errors.append(label_error)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in label.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+        return ""
+    return label
 
 
 def validate_feed_promotion(
@@ -428,7 +623,13 @@ def validate_feed_promotion(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "gateways", errors):
-        require_string(record, "name", errors)
+        require_inventory_label(
+            record,
+            errors,
+            pattern=GATEWAY_LABEL_PATTERN,
+            label_error=GATEWAY_LABEL_ERROR,
+            path="gateways[].name",
+        )
     require_minimum_int(
         payload,
         "denylist_entry_count",
@@ -444,7 +645,13 @@ def validate_feed_promotion(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "denylist_entries", errors):
-        require_string(record, "name", errors)
+        require_inventory_label(
+            record,
+            errors,
+            pattern=DENYLIST_ENTRY_LABEL_PATTERN,
+            label_error=DENYLIST_ENTRY_LABEL_ERROR,
+            path="denylist_entries[].name",
+        )
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_false(payload, "raw_feeds_included", errors)
@@ -453,11 +660,17 @@ def validate_feed_promotion(
 
 def validate_controller_runtime(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
-    require_string(payload, "controller_instance_id", errors)
+    require_controller_instance_id(payload, errors)
     require_iroha_config_binding(payload, errors)
     require_count_equal(payload, "external_feed_count", "fetched_feed_count", errors)
     require_count_equal(payload, "external_feed_count", "normalized_feed_count", errors)
     require_count_equal(payload, "external_feed_count", "signed_feed_count", errors)
+    require_minimum_int(
+        payload,
+        "external_feed_count",
+        len(REQUIRED_CONTROLLER_FEEDS),
+        errors,
+    )
     require_string_inventory_count_match(
         payload,
         "feeds",
@@ -466,6 +679,15 @@ def validate_controller_runtime(payload: dict[str, Any], errors: list[str]) -> N
         field="name",
         allow_scalar_items=False,
     )
+    require_string_coverage(
+        payload,
+        "feeds",
+        "name",
+        REQUIRED_CONTROLLER_FEEDS,
+        errors,
+        allow_scalar_items=False,
+    )
+    require_only_required_values(payload, "feeds", "name", REQUIRED_CONTROLLER_FEEDS, errors)
     for _, record in require_object_array(payload, "feeds", errors):
         require_string(record, "name", errors)
     require_bool_true(payload, "controller_service_enabled", errors)
@@ -485,8 +707,14 @@ def validate_controller_runtime(payload: dict[str, Any], errors: list[str]) -> N
 
 def validate_moderation_toggle(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
-    require_string(payload, "toggle_api_url", errors)
+    require_safe_url(payload, "toggle_api_url", errors)
     require_count_equal(payload, "toggle_count", "approved_toggle_count", errors)
+    require_minimum_int(
+        payload,
+        "toggle_count",
+        len(REQUIRED_MODERATION_TOGGLES),
+        errors,
+    )
     require_string_inventory_count_match(
         payload,
         "toggles",
@@ -494,6 +722,21 @@ def validate_moderation_toggle(payload: dict[str, Any], errors: list[str]) -> No
         errors,
         field="name",
         allow_scalar_items=False,
+    )
+    require_string_coverage(
+        payload,
+        "toggles",
+        "name",
+        REQUIRED_MODERATION_TOGGLES,
+        errors,
+        allow_scalar_items=False,
+    )
+    require_only_required_values(
+        payload,
+        "toggles",
+        "name",
+        REQUIRED_MODERATION_TOGGLES,
+        errors,
     )
     for _, record in require_object_array(payload, "toggles", errors):
         require_string(record, "name", errors)
@@ -525,8 +768,14 @@ def validate_gateway_reload(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "gateways", errors):
-        require_string(record, "name", errors)
-    require_maximum_number(
+        require_inventory_label(
+            record,
+            errors,
+            pattern=GATEWAY_LABEL_PATTERN,
+            label_error=GATEWAY_LABEL_ERROR,
+            path="gateways[].name",
+        )
+    require_maximum_int(
         payload,
         "max_reload_latency_ms",
         options.max_reload_latency_ms,
@@ -548,6 +797,20 @@ def validate_enforcement_probe(
 ) -> None:
     require_hex(payload, "bundle_digest_hex", HEX64_LEN, errors)
     require_string_coverage(payload, "denial_reasons_observed", "", REQUIRED_DENIAL_REASONS, errors)
+    require_only_required_values(
+        payload,
+        "denial_reasons_observed",
+        "",
+        REQUIRED_DENIAL_REASONS,
+        errors,
+    )
+    require_positive_int(payload, "denial_reason_count", errors)
+    require_string_inventory_count_match(
+        payload,
+        "denial_reasons_observed",
+        "denial_reason_count",
+        errors,
+    )
     require_bool_true(payload, "structured_error_labels_verified", errors)
     require_bool_true(payload, "telemetry_labels_stable", errors)
     require_bool_true(payload, "fail_closed_missing_envelope", errors)
@@ -575,7 +838,13 @@ def validate_honey_audit(
         allow_scalar_items=False,
     )
     for _, record in require_object_array(payload, "probes", errors):
-        require_string(record, "name", errors)
+        require_inventory_label(
+            record,
+            errors,
+            pattern=HONEY_PROBE_LABEL_PATTERN,
+            label_error=HONEY_PROBE_LABEL_ERROR,
+            path="probes[].name",
+        )
     require_bool_true(payload, "denied_response_verified", errors)
     require_bool_true(payload, "cache_version_binding_verified", errors)
     require_bool_true(payload, "proof_token_verified", errors)
@@ -616,6 +885,9 @@ def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "alert_rules_installed", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -700,6 +972,8 @@ def build_summary(
     bundle_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_digests: set[str] = set()
     policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -728,6 +1002,9 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
+        if kind_name == "observability":
+            record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+            metric_names.update(hashable_evidence_values(payload.get("metrics")))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
@@ -803,6 +1080,8 @@ def build_summary(
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_bundle_digests": sorted(valid_bundle_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

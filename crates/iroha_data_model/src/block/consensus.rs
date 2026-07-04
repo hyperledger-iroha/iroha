@@ -2263,6 +2263,82 @@ pub struct SumeragiV1StatusWire {
     pub rbc_status: String,
 }
 
+/// Proposal-gate inputs from the most recent pacemaker evaluation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "operator diagnostics expose independent proposal-gate booleans"
+)]
+pub struct SumeragiProposalGateStatus {
+    /// Height currently considered by the proposal path.
+    #[norito(default)]
+    pub height: u64,
+    /// View currently considered by the proposal path.
+    #[norito(default)]
+    pub view: u64,
+    /// Number of locally queued transactions when the gate was evaluated.
+    #[norito(default)]
+    pub queue_len: u64,
+    /// Total locally tracked pending blocks.
+    #[norito(default)]
+    pub pending_blocks_total: u64,
+    /// Pending blocks considered blocking by proposal backpressure.
+    #[norito(default)]
+    pub pending_blocks_blocking: u64,
+    /// Active pending blocks that still extend the local tip.
+    #[norito(default)]
+    pub active_pending_for_tip: u64,
+    /// Whether transaction-queue capacity pressure is gating proposals.
+    #[norito(default)]
+    pub queue_saturated: bool,
+    /// Whether active pending block state is gating proposals.
+    #[norito(default)]
+    pub active_pending: bool,
+    /// Whether RBC backlog is gating proposals.
+    #[norito(default)]
+    pub rbc_backlog: bool,
+    /// Whether lane relay backpressure is gating proposals.
+    #[norito(default)]
+    pub relay_backpressure: bool,
+    /// Whether consensus worker queues are gating proposals.
+    #[norito(default)]
+    pub consensus_queue_backpressure: bool,
+    /// Whether aggregate proposal backpressure defers proposal assembly.
+    #[norito(default)]
+    pub should_defer: bool,
+    /// Whether deferral is only queue/consensus pacing.
+    #[norito(default)]
+    pub only_pacing_backpressure: bool,
+    /// Whether a commit job is currently in flight.
+    #[norito(default)]
+    pub commit_inflight_active: bool,
+    /// Whether the current height/view has a cached proposal.
+    #[norito(default)]
+    pub cached_proposal_present: bool,
+    /// Whether the current height/view has a cached proposal hint.
+    #[norito(default)]
+    pub cached_proposal_hint_present: bool,
+    /// Whether local round-liveness evidence exists for the current height/view.
+    #[norito(default)]
+    pub round_liveness_present: bool,
+    /// Whether a local frontier owner still exists for this height/view.
+    #[norito(default)]
+    pub frontier_owner_present: bool,
+    /// Whether missing-QC liveness recovery is active for this height/view.
+    #[norito(default)]
+    pub missing_qc_liveness_active: bool,
+    /// Milliseconds since the last pacemaker proposal attempt.
+    #[norito(default)]
+    pub last_pacemaker_attempt_age_ms: u64,
+    /// Milliseconds since the last successful proposal assembly.
+    #[norito(default)]
+    pub last_successful_proposal_age_ms: u64,
+}
+
 /// Compact Norito payload returned by Torii for `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -2422,6 +2498,9 @@ pub struct SumeragiStatusWire {
     pub block_sync_roster: SumeragiBlockSyncRosterStatus,
     /// Total pacemaker proposal attempts deferred due to transaction queue backpressure.
     pub pacemaker_backpressure_deferrals_total: u64,
+    /// Most recent proposal-gate inputs observed by the pacemaker tick loop.
+    #[norito(default)]
+    pub proposal_gate: SumeragiProposalGateStatus,
     /// Total commit-pipeline executions triggered by the pacemaker tick loop.
     #[norito(default)]
     pub commit_pipeline_tick_total: u64,

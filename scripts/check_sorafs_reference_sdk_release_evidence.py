@@ -50,7 +50,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_hex,
     require_governance_approval,
     validate_standard_evidence_payload,
-    require_maximum_number,
+    require_maximum_int,
     require_minimum_int,
     require_object,
     required_evidence_kind_names,
@@ -61,6 +61,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_string,
     require_string_coverage,
     require_string_equal,
+    require_string_in,
     require_string_inventory_count_match,
 )
 from sorafs_required_kinds import (  # noqa: E402
@@ -103,6 +104,7 @@ RELEASE_MANIFEST_BOUND_KINDS = (
     "governance_approval",
 )
 POLICY_BOUND_KINDS = ("governance_approval",)
+ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS = ("ed25519", "rsa-sha256")
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -137,6 +139,31 @@ SENSITIVE_KEYS = {
     "signed_transaction",
     "token",
 }
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
 
 
 @dataclass(frozen=True)
@@ -289,6 +316,7 @@ def validate_release_archive(
     require_bool_true(payload, "dist_gitkeep_only_tracked", errors)
     require_minimum_int(payload, "target_count", options.min_release_targets, errors)
     require_string_coverage(payload, "targets", "", REQUIRED_RELEASE_TARGETS, errors)
+    require_only_required_values(payload, "targets", "", REQUIRED_RELEASE_TARGETS, errors)
     require_string_inventory_count_match(payload, "targets", "target_count", errors)
     require_hex(payload, "archive_index_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "release_manifest_digest_hex", HEX64_LEN, errors)
@@ -302,7 +330,12 @@ def validate_signed_manifest(payload: dict[str, Any], errors: list[str]) -> None
     require_bool_true(payload, "governed_release_key_used", errors)
     require_bool_true(payload, "public_key_fingerprint_recorded", errors)
     require_bool_true(payload, "private_key_absent", errors)
-    require_string(payload, "signature_algorithm", errors)
+    require_string_in(
+        payload,
+        "signature_algorithm",
+        ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS,
+        errors,
+    )
     require_hex(payload, "manifest_digest_hex", HEX64_LEN, errors)
     require_policy_digest(payload, errors)
     require_hex(payload, "public_key_fingerprint_hex", HEX64_LEN, errors)
@@ -315,6 +348,7 @@ def validate_downstream_bindings(
     options: ValidationOptions,
 ) -> None:
     require_string_coverage(payload, "packages", "", REQUIRED_DOWNSTREAM_PACKAGES, errors)
+    require_only_required_values(payload, "packages", "", REQUIRED_DOWNSTREAM_PACKAGES, errors)
     require_string_inventory_count_match(payload, "packages", "package_count", errors)
     require_minimum_int(
         payload,
@@ -342,11 +376,12 @@ def validate_cookbook_smoke(
     require_bool_true(payload, "fixture_bundle_validation_passed", errors)
     require_bool_true(payload, "manifest_car_replay_passed", errors)
     require_bool_true(payload, "validation_outcomes_emitted", errors)
-    require_maximum_number(
+    require_maximum_int(
         payload,
         "smoke_duration_seconds",
         options.max_smoke_duration_secs,
         errors,
+        minimum=1,
     )
     require_hex(payload, "release_manifest_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "smoke_output_digest_hex", HEX64_LEN, errors)

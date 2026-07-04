@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -40,16 +41,17 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_fingerprint,
     evidence_artifact_is_valid,
     evidence_schema_by_kind,
+    hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
     record_evidence_artifact,
     record_evidence_validation_errors,
+    record_observed_evidence_value,
     require_2xx_status,
     require_bool_true,
     require_count_equal,
     require_false,
-    require_false_or_absent,
     require_hex,
     require_config_backed_governance_approval,
     validate_standard_evidence_payload,
@@ -90,6 +92,77 @@ DEFAULT_MAX_REVOCATION_AGE_SECS = 24 * 60 * 60
 DEFAULT_MAX_SERVICE_LAG_SECS = 15 * 60
 DEFAULT_MAX_VERIFY_LATENCY_MS = 1_000
 HEX64_LEN = 64
+ISSUER_ID_PATTERN = re.compile(r"^pop-issuer-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+ISSUER_ID_ERROR = "issuer_id must match canonical lowercase `pop-issuer-*`"
+CREDENTIAL_LABEL_PATTERN = re.compile(r"^pop-credential-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+REVOKED_NONCE_LABEL_PATTERN = re.compile(
+    r"^pop-revoked-nonce-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+VALID_PROOF_PROBE_LABEL_PATTERN = re.compile(
+    r"^pop-valid-proof-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+INVALID_PROOF_PROBE_LABEL_PATTERN = re.compile(
+    r"^pop-invalid-proof-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+SORTITION_PROBE_LABEL_PATTERN = re.compile(
+    r"^pop-sortition-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+COMMIT_REVEAL_PROBE_LABEL_PATTERN = re.compile(
+    r"^pop-commit-reveal-probe-[a-z0-9]+(?:-[a-z0-9]+)*\Z"
+)
+CREDENTIAL_LABEL_ERROR = (
+    "credentials[].name must match canonical lowercase `pop-credential-*`"
+)
+REVOKED_NONCE_LABEL_ERROR = (
+    "revoked_nonce_refs[].name must match canonical lowercase `pop-revoked-nonce-*`"
+)
+VALID_PROOF_PROBE_LABEL_ERROR = (
+    "probes[].name must match canonical lowercase `pop-valid-proof-*` "
+    "for accepted probes"
+)
+INVALID_PROOF_PROBE_LABEL_ERROR = (
+    "probes[].name must match canonical lowercase `pop-invalid-proof-*` "
+    "for rejected probes"
+)
+SORTITION_PROBE_LABEL_ERROR = (
+    "sortition_probes[].name must match canonical lowercase "
+    "`pop-sortition-probe-name`"
+)
+COMMIT_REVEAL_PROBE_LABEL_ERROR = (
+    "commit_reveal_probes[].name must match canonical lowercase "
+    "`pop-commit-reveal-probe-name`"
+)
+FORBIDDEN_ISSUER_ID_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
+FORBIDDEN_INVENTORY_LABEL_MARKERS = frozenset(
+    (
+        "debug",
+        "dev",
+        "draft",
+        "example",
+        "fake",
+        "latest",
+        "placeholder",
+        "private",
+        "sample",
+        "secret",
+        "test",
+        "todo",
+    )
+)
 
 REQUIRED_ENROLLMENT_ROUTES = (
     "application_submit",
@@ -218,6 +291,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "rollback_detected",
         "revoked_nonces_included",
         "revoked_nonce_count",
+        "revoked_nonce_refs",
     ),
     "enrollment_portal": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -250,6 +324,8 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "accepted_valid_proof_count",
         "rejected_invalid_proof_count",
         "probes",
+        "route_count",
+        "passed_route_count",
         "expired_proof_rejected",
         "revoked_proof_rejected",
         "replay_nullifier_rejected",
@@ -286,6 +362,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "alert_rules_installed",
         "critical_alerts_firing",
         "metrics",
+        "metric_count",
         "response_bodies_included",
     ),
     "governance_approval": COMMON_EVIDENCE_REQUIRED_FIELDS
@@ -330,6 +407,8 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "synced_revocation_list_digest_hex",
     "pop_snapshot_digest_hex",
     "policy_digest_hex",
+    "metric_count",
+    "metrics",
 )
 
 
@@ -338,7 +417,20 @@ def validate_routes(
     errors: list[str],
     *,
     required_routes: tuple[str, ...],
+    count_field: str | None = None,
+    require_passed_count: bool = False,
 ) -> None:
+    if require_passed_count and count_field is not None:
+        require_count_equal(payload, count_field, "passed_route_count", errors)
+    if count_field is not None:
+        require_string_inventory_count_match(
+            payload,
+            "routes",
+            count_field,
+            errors,
+            field="name",
+            allow_scalar_items=False,
+        )
     for index, record in require_object_array(payload, "routes", errors):
         require_bool_true(record, "passed", errors, path=f"routes[{index}].passed")
         require_2xx_status(
@@ -347,13 +439,91 @@ def validate_routes(
             errors,
             path=f"routes[{index}].status_code",
         )
+        require_hex(
+            record,
+            "body_blake3_hex",
+            HEX64_LEN,
+            errors,
+            path=f"routes[{index}].body_blake3_hex",
+        )
         for field in ("authz_enforced", "signature_verified"):
             require_bool_true(record, field, errors, path=f"routes[{index}].{field}")
     require_string_coverage(payload, "routes", "name", required_routes, errors)
+    require_only_required_values(payload, "routes", "name", required_routes, errors)
+
+
+def require_only_required_values(
+    payload: dict[str, Any],
+    array_field: str,
+    field: str,
+    required_values: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Reject reviewed inventory rows outside a required closed string set."""
+
+    values = payload.get(array_field)
+    if not isinstance(values, list):
+        return
+    allowed = frozenset(required_values)
+    for item in values:
+        if field:
+            if not isinstance(item, dict):
+                continue
+            value = item.get(field)
+        else:
+            value = item
+        if not isinstance(value, str) or value.strip() not in allowed:
+            errors.append(f"{array_field} must not include unknown values")
+            return
+
+
+def require_issuer_id(payload: dict[str, Any], errors: list[str]) -> str:
+    """Require a reviewed lowercase PoP issuer identifier."""
+
+    issuer_id = require_string(payload, "issuer_id", errors)
+    if not issuer_id:
+        return ""
+    if ISSUER_ID_PATTERN.fullmatch(issuer_id) is None:
+        errors.append(ISSUER_ID_ERROR)
+        return ""
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_ISSUER_ID_MARKERS
+        if marker in issuer_id.split("-")
+    )
+    if forbidden:
+        errors.append(f"issuer_id must not contain non-production markers {forbidden}")
+        return ""
+    return issuer_id
+
+
+def require_inventory_label(
+    value: Any,
+    *,
+    path: str,
+    pattern: re.Pattern[str],
+    label_error: str,
+    errors: list[str],
+) -> str:
+    """Require a reviewed production inventory label."""
+
+    if not isinstance(value, str):
+        return ""
+    if pattern.fullmatch(value) is None:
+        errors.append(label_error)
+        return value
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(f"{path} must not contain non-production markers {forbidden}")
+    return value
 
 
 def validate_issuer_bundle(payload: dict[str, Any], errors: list[str]) -> None:
-    require_string(payload, "issuer_id", errors)
+    require_issuer_id(payload, errors)
     require_hex(payload, "bundle_id_hex", HEX64_LEN, errors)
     require_hex(payload, "root_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "revocation_list_digest_hex", HEX64_LEN, errors)
@@ -370,7 +540,14 @@ def validate_issuer_bundle(payload: dict[str, Any], errors: list[str]) -> None:
         allow_scalar_items=False,
     )
     for _index, record in require_object_array(payload, "credentials", errors):
-        require_string(record, "name", errors)
+        credential = require_string(record, "name", errors)
+        require_inventory_label(
+            credential,
+            path="credentials[].name",
+            pattern=CREDENTIAL_LABEL_PATTERN,
+            label_error=CREDENTIAL_LABEL_ERROR,
+            errors=errors,
+        )
     require_bool_true(payload, "canonical_norito_verified", errors)
     require_bool_true(payload, "issuer_signature_verified", errors)
     require_bool_true(payload, "issuer_key_policy_verified", errors)
@@ -417,24 +594,41 @@ def validate_revocation_registry(
     require_false(payload, "rollback_detected", errors)
     require_false(payload, "revoked_nonces_included", errors)
     require_non_negative_int(payload, "revoked_nonce_count", errors)
-
-
-def validate_enrollment_portal(payload: dict[str, Any], errors: list[str]) -> None:
-    require_count_equal(payload, "route_count", "passed_route_count", errors)
     require_string_inventory_count_match(
         payload,
-        "routes",
-        "route_count",
+        "revoked_nonce_refs",
+        "revoked_nonce_count",
         errors,
         field="name",
         allow_scalar_items=False,
     )
+    refs = payload.get("revoked_nonce_refs")
+    if isinstance(refs, list):
+        for index, item in enumerate(refs):
+            record = require_object(item, f"revoked_nonce_refs[{index}]", errors)
+            name = require_string(record, "name", errors)
+            require_inventory_label(
+                name,
+                path=f"revoked_nonce_refs[{index}].name",
+                pattern=REVOKED_NONCE_LABEL_PATTERN,
+                label_error=REVOKED_NONCE_LABEL_ERROR,
+                errors=errors,
+            )
+
+
+def validate_enrollment_portal(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "issuer_approval_required", errors)
     require_bool_true(payload, "renewal_flow_verified", errors)
     require_bool_true(payload, "rate_limit_configured", errors)
     require_false(payload, "pii_fields_included", errors)
     require_false(payload, "attestations_included", errors)
-    validate_routes(payload, errors, required_routes=REQUIRED_ENROLLMENT_ROUTES)
+    validate_routes(
+        payload,
+        errors,
+        required_routes=REQUIRED_ENROLLMENT_ROUTES,
+        count_field="route_count",
+        require_passed_count=True,
+    )
 
 
 def validate_juror_client(payload: dict[str, Any], errors: list[str]) -> None:
@@ -480,14 +674,29 @@ def validate_verifier_service(
     accepted_probe_count = 0
     rejected_probe_count = 0
     for index, record in require_object_array(payload, "probes", errors):
-        require_string(record, "name", errors)
         accepted_value = record.get("accepted")
         if isinstance(accepted_value, bool):
+            probe_name = require_string(record, "name", errors)
             if accepted_value:
                 accepted_probe_count += 1
+                require_inventory_label(
+                    probe_name,
+                    path="probes[].name",
+                    pattern=VALID_PROOF_PROBE_LABEL_PATTERN,
+                    label_error=VALID_PROOF_PROBE_LABEL_ERROR,
+                    errors=errors,
+                )
             else:
                 rejected_probe_count += 1
+                require_inventory_label(
+                    probe_name,
+                    path="probes[].name",
+                    pattern=INVALID_PROOF_PROBE_LABEL_PATTERN,
+                    label_error=INVALID_PROOF_PROBE_LABEL_ERROR,
+                    errors=errors,
+                )
         else:
+            require_string(record, "name", errors)
             errors.append(f"probes[{index}].accepted must be a boolean")
     if (
         isinstance(accepted, int)
@@ -521,7 +730,13 @@ def validate_verifier_service(
     )
     require_false(payload, "raw_proofs_included", errors)
     require_false(payload, "holder_identity_disclosed", errors)
-    validate_routes(payload, errors, required_routes=REQUIRED_VERIFIER_ROUTES)
+    validate_routes(
+        payload,
+        errors,
+        required_routes=REQUIRED_VERIFIER_ROUTES,
+        count_field="route_count",
+        require_passed_count=True,
+    )
 
 
 def validate_moderation_integration(payload: dict[str, Any], errors: list[str]) -> None:
@@ -538,7 +753,14 @@ def validate_moderation_integration(payload: dict[str, Any], errors: list[str]) 
         allow_scalar_items=False,
     )
     for _index, record in require_object_array(payload, "sortition_probes", errors):
-        require_string(record, "name", errors)
+        probe = require_string(record, "name", errors)
+        require_inventory_label(
+            probe,
+            path="sortition_probes[].name",
+            pattern=SORTITION_PROBE_LABEL_PATTERN,
+            label_error=SORTITION_PROBE_LABEL_ERROR,
+            errors=errors,
+        )
     require_positive_int(payload, "commit_reveal_probe_count", errors)
     require_string_inventory_count_match(
         payload,
@@ -549,7 +771,14 @@ def validate_moderation_integration(payload: dict[str, Any], errors: list[str]) 
         allow_scalar_items=False,
     )
     for _index, record in require_object_array(payload, "commit_reveal_probes", errors):
-        require_string(record, "name", errors)
+        probe = require_string(record, "name", errors)
+        require_inventory_label(
+            probe,
+            path="commit_reveal_probes[].name",
+            pattern=COMMIT_REVEAL_PROBE_LABEL_PATTERN,
+            label_error=COMMIT_REVEAL_PROBE_LABEL_ERROR,
+            errors=errors,
+        )
     require_bool_true(payload, "juror_pool_bound", errors)
     require_bool_true(payload, "moderation_case_binding_verified", errors)
     require_bool_true(payload, "duplicate_nullifier_rejected", errors)
@@ -566,6 +795,9 @@ def validate_metrics_alerts(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "alert_rules_installed", errors)
     require_false(payload, "critical_alerts_firing", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
+    require_positive_int(payload, "metric_count", errors)
+    require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_false(payload, "response_bodies_included", errors)
 
 
@@ -655,6 +887,8 @@ def build_summary(
     policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_juror_sync_bindings: set[tuple[str, str]] = set()
     valid_pop_snapshot_digests: set[str] = set()
+    metric_counts: set[int] = set()
+    metric_names: set[str] = set()
     files = discover_evidence_files(
         evidence_dirs,
         evidence_files,
@@ -693,6 +927,9 @@ def build_summary(
                 revocation_registry_artifacts.append(artifact)
             if kind_name == "verifier_service":
                 policy_candidate_artifacts.append(artifact)
+            if kind_name == "metrics_alerts":
+                record_observed_evidence_value(metric_counts, payload.get("metric_count"))
+                metric_names.update(hashable_evidence_values(payload.get("metrics")))
             if kind_name in ROOT_BOUND_KINDS:
                 root_bound_artifacts.append((kind_name, artifact))
             if kind_name in REVOCATION_BOUND_KINDS:
@@ -902,6 +1139,8 @@ def build_summary(
         "valid_root_digests": sorted(valid_root_digests),
         "valid_revocation_list_digests": sorted(valid_revocation_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "metrics": sorted(metric_names),
+        "metric_count_values": sorted(metric_counts),
         "required": required,
         "errors": errors,
     }

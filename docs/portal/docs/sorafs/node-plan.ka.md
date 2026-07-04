@@ -47,12 +47,13 @@ SF-3 აწვდის პირველ გაშვებად `sorafs-node
 
 ### C. კარიბჭის ბოლო წერტილები
 
-| ბოლო წერტილი | ქცევა | ამოცანები |
+| Endpoint | Behaviour | Tasks |
 |----------|-----------|-------|
-| `POST /sorafs/pin` | მიიღეთ `PinProposalV1`, დაადასტურეთ მანიფესტები, რიგში ჩასმა, უპასუხეთ manifest CID-ით. | დაადასტურეთ ნაწილის პროფილი, განახორციელეთ კვოტები, მონაცემების სტრიმინგი chunk store-ის მეშვეობით. |
-| `GET /sorafs/chunks/{cid}` + დიაპაზონის მოთხოვნა | მიირთვით ბაიტები `Content-Chunker` სათაურებით; დაიცვან დიაპაზონის შესაძლებლობების სპეციფიკა. | გამოიყენეთ განრიგის + ნაკადის ბიუჯეტები (დაკავშირება SF-2d დიაპაზონის შესაძლებლობებში). |
-| `POST /sorafs/por/sample` | გაუშვით PoR ნიმუშის მანიფესტის და დაბრუნების მტკიცებულების ნაკრები. | ხელახლა გამოიყენეთ მაღაზიის ნაჭრის ნიმუში, უპასუხეთ Norito JSON დატვირთვით. |
-| `GET /sorafs/telemetry` | შეჯამება: მოცულობა, PoR წარმატება, შეცდომის რაოდენობა. | მიაწოდეთ მონაცემები დაფების/ოპერატორებისთვის. |
+| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
+| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
+| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample`, `POST /v1/sorafs/storage/por-challenge`, `POST /v1/sorafs/storage/por-proof`, `POST /v1/sorafs/storage/por-verdict` | Report peer/storage state and exercise local PoR sampling, challenge, proof, and verdict plumbing. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
+
 
 Runtime plumbing threads PoR ურთიერთქმედებები `sorafs_node::por`-ის მეშვეობით: ტრეკერი ჩაწერს ყოველ `PorChallengeV1`, `PorProofV1` და `AuditVerdictV1`, ასე რომ, I18NI000000059X მემგონი ასახავს Torii ლოგიკა.【crates/sorafs_node/src/scheduler.rs#L147】
 
@@ -108,7 +109,7 @@ Runtime plumbing threads PoR ურთიერთქმედებები `s
 ## Milestone გასვლის კრიტერიუმები
 
 - `cargo run -p sorafs_node --example pin_fetch` მუშაობს ადგილობრივი მოწყობილობების წინააღმდეგ.  
-- Torii აშენებს `--features sorafs-storage`-ით და გადის ინტეგრაციის ტესტებს.  
+- Torii exposes the current `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface and passes integration tests.
 - დოკუმენტაცია ([კვანძის შენახვის სახელმძღვანელო](node-storage.md)) განახლებულია კონფიგურაციის ნაგულისხმევი პარამეტრებით + CLI მაგალითებით; ხელმისაწვდომია ოპერატორის runbook.  
 - ტელემეტრია ხილული დადგმის დაფებში; სიგნალიზაცია კონფიგურირებულია სიმძლავრის გაჯერებისა და PoR უკმარისობისთვის.
 
@@ -116,4 +117,4 @@ Runtime plumbing threads PoR ურთიერთქმედებები `s
 
 - განაახლეთ [node storage reference] (node-storage.md) კონფიგურაციის ნაგულისხმევი პარამეტრებით, CLI გამოყენებისა და პრობლემების მოგვარების ნაბიჯებით.  
 - შეინახეთ [node Operations Runbook] (node-operations.md) გასწორებული იმპლემენტაციისთვის, როგორც SF-3 ვითარდება.  
-- გამოაქვეყნეთ API მითითებები `/sorafs/*` საბოლოო წერტილებისთვის დეველოპერის პორტალში და ჩაერთეთ ისინი OpenAPI მანიფესტში, როგორც კი Torii დამმუშავებლები დაეშვება.
+- Keep API reference for `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.

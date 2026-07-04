@@ -1,3 +1,5 @@
+//! Integration tests for the SoraFS CAR streaming verifier.
+
 use sorafs_car::{
     CarBuildPlan,
     sorafs_chunker::ChunkProfile,
@@ -8,6 +10,11 @@ use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,
     PinPolicy, StorageClass,
 };
+
+const CARV2_PRAGMA_LEN: usize = 11;
+const DATA_OFFSET_FIELD: usize = CARV2_PRAGMA_LEN + 16;
+const DATA_SIZE_FIELD: usize = CARV2_PRAGMA_LEN + 24;
+const INDEX_OFFSET_FIELD: usize = CARV2_PRAGMA_LEN + 32;
 
 fn sample_payload() -> Vec<u8> {
     let total_bytes = 512 * 1024;
@@ -38,6 +45,38 @@ fn build_manifest(plan: &CarBuildPlan, stats: &sorafs_car::CarWriteStats) -> Man
         .expect("manifest")
 }
 
+fn build_valid_car() -> (Vec<u8>, ManifestV1) {
+    let payload = sample_payload();
+    let plan =
+        CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+    let mut car_bytes = Vec::new();
+    let stats = sorafs_car::CarWriter::new(&plan, &payload)
+        .expect("writer")
+        .write_to(&mut car_bytes)
+        .expect("write car");
+    let manifest = build_manifest(&plan, &stats);
+    (car_bytes, manifest)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(
+        bytes[offset..offset + 8]
+            .try_into()
+            .expect("fixed-width header field"),
+    )
+}
+
+fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn refresh_manifest_archive_fields(manifest: &mut ManifestV1, car_bytes: &[u8]) {
+    manifest.car_size = car_bytes.len() as u64;
+    manifest
+        .car_digest
+        .copy_from_slice(blake3::hash(car_bytes).as_bytes());
+}
+
 #[test]
 fn streaming_verifier_consumes_valid_car() {
     let payload = sample_payload();
@@ -59,6 +98,26 @@ fn streaming_verifier_consumes_valid_car() {
         assert_eq!(consumed, chunk.len());
     }
 
+    verifier.finalize().expect("finalize");
+}
+
+#[test]
+fn streaming_verifier_consumes_index_when_boundary_splits_update() {
+    let (car_bytes, manifest) = build_valid_car();
+    let index_offset = read_u64_le(&car_bytes, INDEX_OFFSET_FIELD) as usize;
+    let split = index_offset
+        .checked_sub(1)
+        .expect("valid CAR data region should be non-empty");
+
+    let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
+    assert_eq!(
+        verifier.update(&car_bytes[..split]).expect("first update"),
+        split
+    );
+    assert_eq!(
+        verifier.update(&car_bytes[split..]).expect("second update"),
+        car_bytes.len() - split
+    );
     verifier.finalize().expect("finalize");
 }
 
@@ -186,4 +245,37 @@ fn streaming_verifier_enforces_chunk_size_limit() {
         result,
         Err(CarVerifyError::ChunkSizeExceeded { .. })
     ));
+}
+
+#[test]
+fn streaming_verifier_rejects_zero_length_section_with_matching_manifest_digest() {
+    let (mut car_bytes, mut manifest) = build_valid_car();
+    let data_size = read_u64_le(&car_bytes, DATA_SIZE_FIELD);
+    let index_offset = read_u64_le(&car_bytes, INDEX_OFFSET_FIELD);
+
+    car_bytes.insert(index_offset as usize, 0);
+    write_u64_le(&mut car_bytes, DATA_SIZE_FIELD, data_size + 1);
+    write_u64_le(&mut car_bytes, INDEX_OFFSET_FIELD, index_offset + 1);
+    refresh_manifest_archive_fields(&mut manifest, &car_bytes);
+
+    let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
+    let result = verifier.update(&car_bytes);
+    assert!(matches!(
+        result,
+        Err(CarVerifyError::TruncatedSection { .. })
+    ));
+}
+
+#[test]
+fn streaming_verifier_rejects_header_outside_declared_data_region() {
+    let (mut car_bytes, mut manifest) = build_valid_car();
+    let data_offset = read_u64_le(&car_bytes, DATA_OFFSET_FIELD);
+
+    write_u64_le(&mut car_bytes, DATA_SIZE_FIELD, 0);
+    write_u64_le(&mut car_bytes, INDEX_OFFSET_FIELD, data_offset);
+    refresh_manifest_archive_fields(&mut manifest, &car_bytes);
+
+    let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
+    let result = verifier.update(&car_bytes);
+    assert!(matches!(result, Err(CarVerifyError::HeaderTruncated)));
 }

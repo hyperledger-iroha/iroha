@@ -161,7 +161,7 @@ iroha --config client.toml --output \
 * CLI chaqiruvlari bugungi kunda bo'sh ko'rsatmalar metama'lumotlarini chiqaradi; hisob-kitob darajasida Python yordamchilaridan foydalaning
   metama'lumotlar biriktirilishi kerak.
 * ISO 20022 maydon xaritasi uchun [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) ga qarang.
-  ushbu ko'rsatmalarni qo'llab-quvvatlaydi (`sese.023`, `sese.025`, `colr.007`, `pacs.009`, `camt.054`).
+  ushbu ko'rsatmalarni qo'llab-quvvatlaydi (`sese.023`, `sese.025`, `colr.012`, `pacs.009`, `camt.054`).
 * CLI Norito bilan birga kanonik XML ko'rinishini chiqarishi uchun `--iso-xml-out <path>` dan o'ting
   ko'rsatma; fayl yuqoridagi xaritaga amal qiladi (DvP uchun `sese.023`, PvP` uchun `sese.025`). ni juftlashtiring
   `--iso-reference-crosswalk <path>` bayrog'i bilan belgilang, shuning uchun CLI `--delivery-instrument-id` ga qarshi tekshiradi.

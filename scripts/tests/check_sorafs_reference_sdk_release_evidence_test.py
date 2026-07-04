@@ -77,7 +77,11 @@ def release_archive(
     return payload
 
 
-def signed_manifest(*, private_key_absent: bool = True) -> dict:
+def signed_manifest(
+    *,
+    private_key_absent: bool = True,
+    signature_algorithm: str = "ed25519",
+) -> dict:
     payload = base("sorafs.reference_sdk.signed_manifest_canary.v1")
     payload.update(
         {
@@ -87,7 +91,7 @@ def signed_manifest(*, private_key_absent: bool = True) -> dict:
             "governed_release_key_used": True,
             "public_key_fingerprint_recorded": True,
             "private_key_absent": private_key_absent,
-            "signature_algorithm": "ed25519",
+            "signature_algorithm": signature_algorithm,
             "manifest_digest_hex": DIGEST,
             "policy_digest_hex": DIGEST,
             "public_key_fingerprint_hex": DIGEST,
@@ -292,6 +296,23 @@ def test_release_archive_targets_must_not_duplicate(tmp_path: Path) -> None:
     assert "target_count must match unique targets count" in artifact["errors"]
 
 
+def test_release_archive_targets_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = release_archive()
+    payload["targets"].append("riscv64-unknown-linux-gnu")
+    payload["target_count"] = len(payload["targets"])
+    write_json(tmp_path / "release-archive.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["release_archive"]["artifacts"][0]
+    assert "targets must not include unknown values" in artifact["errors"]
+
+
 def test_signed_manifest_rejects_private_key_presence(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(tmp_path / "signed-manifest.json", signed_manifest(private_key_absent=False))
@@ -315,6 +336,41 @@ def test_signed_manifest_requires_policy_digest(tmp_path: Path) -> None:
     assert required["valid"] is False
     assert artifact["valid"] is False
     assert "policy_digest_hex must be a non-empty string" in artifact["errors"]
+
+
+def test_signed_manifest_accepts_rsa_sha256_signature_algorithm(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "signed-manifest.json",
+        signed_manifest(signature_algorithm="rsa-sha256"),
+    )
+
+    assert run_gate(tmp_path) == 0
+
+
+def test_signed_manifest_rejects_unsupported_signature_algorithm(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    write_json(
+        tmp_path / "signed-manifest.json",
+        signed_manifest(signature_algorithm="none"),
+    )
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    required = payload["required"]["signed_manifest"]
+    artifact = required["artifacts"][0]
+    assert required["valid"] is False
+    assert artifact["valid"] is False
+    assert "signature_algorithm must be `ed25519` or `rsa-sha256`" in artifact[
+        "errors"
+    ]
+    assert payload["valid_release_manifest_digests"] == []
 
 
 def test_stale_signed_manifest_does_not_anchor_release_bound_evidence(
@@ -389,6 +445,21 @@ def test_downstream_packages_must_not_duplicate(tmp_path: Path) -> None:
     assert "package_count must match unique packages count" in artifact["errors"]
 
 
+def test_downstream_packages_must_not_include_unknown_values(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = downstream_bindings()
+    payload["packages"].append("csharp")
+    payload["package_count"] = len(payload["packages"])
+    write_json(tmp_path / "downstream-bindings.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["downstream_bindings"]["artifacts"][0]
+    assert "packages must not include unknown values" in artifact["errors"]
+
+
 def test_downstream_bindings_require_release_manifest_binding(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = downstream_bindings()
@@ -445,6 +516,19 @@ def test_cookbook_smoke_duration_above_threshold_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "cookbook-smoke.json", cookbook_smoke(duration=4_000))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_cookbook_smoke_duration_must_be_integer(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(tmp_path / "cookbook-smoke.json", cookbook_smoke(duration=12.5))
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["cookbook_smoke"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "smoke_duration_seconds must be a positive integer" in artifact["errors"]
 
 
 def test_ffi_contract_requires_ci_guard(tmp_path: Path) -> None:

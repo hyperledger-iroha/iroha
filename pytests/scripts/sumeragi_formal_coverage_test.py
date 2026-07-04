@@ -1644,6 +1644,117 @@ def test_formal_workflow_header_key_errors_rejects_extra_or_duplicate_keys(
     ]
 
 
+def test_formal_workflow_top_level_key_errors_accepts_reviewed_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    pr_workflow = tmp_path / "pr.yml"
+    nightly_workflow = tmp_path / "nightly.yml"
+    pr_workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    nightly_workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "on:",
+                "  workflow_dispatch:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: false",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_top_level_key_errors(
+        (
+            (
+                pr_workflow,
+                "PR formal workflow",
+                ("name", "on", "concurrency", "env", "jobs"),
+            ),
+            (
+                nightly_workflow,
+                "nightly formal workflow",
+                ("name", "on", "concurrency", "jobs"),
+            ),
+        )
+    ) == []
+
+
+def test_formal_workflow_top_level_key_errors_rejects_post_jobs_controls(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+                "permissions:",
+                "  contents: read",
+                "jobs:",
+                "  publish-summary:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_top_level_key_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                ("name", "on", "concurrency", "env", "jobs"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow {workflow} must keep exact full top-level keys:\n"
+        "  - name\n"
+        "  - on\n"
+        "  - concurrency\n"
+        "  - env\n"
+        "  - jobs; found:\n"
+        "  - 1: name\n"
+        "  - 2: on\n"
+        "  - 4: concurrency\n"
+        "  - 7: env\n"
+        "  - 9: jobs\n"
+        "  - 12: permissions\n"
+        "  - 14: jobs",
+    ]
+
+
 def test_formal_workflow_trigger_errors_accepts_checked_triggers(
     tmp_path: Path,
 ) -> None:

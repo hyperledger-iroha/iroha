@@ -109,9 +109,10 @@ use sorafs_orchestrator::{
     },
     treasury::{
         AdjustmentKind, AdjustmentRequest, DisputeId, DisputeResolution, DisputeStatus,
-        EarningsDashboard, EarningsRow, LedgerReconciliationReport, LedgerTransferMismatch,
-        LedgerTransferRecord, MismatchReason, PayoutInput, RelayPayoutService, ResolutionKind,
-        RewardDispute, RewardLedgerSnapshot, TransferKind,
+        EarningsDashboard, EarningsRow, LedgerAmountConversionError, LedgerAmountSource,
+        LedgerReconciliationReport, LedgerTransferMismatch, LedgerTransferRecord, MismatchReason,
+        NumericToNanosError, PayoutInput, RelayPayoutService, ResolutionKind, RewardDispute,
+        RewardLedgerSnapshot, TransferKind,
     },
 };
 use soranet_pq::MlDsaSuite;
@@ -1830,6 +1831,9 @@ pub enum ModerationBallotsCommand {
     List(ModerationBallotsListArgs),
     /// Get one local moderation ballot record.
     Get(ModerationBallotsGetArgs),
+    /// Get the payload-free no-show plan for one closed moderation ballot.
+    #[command(name = "no-show-plan")]
+    NoShowPlan(ModerationBallotsNoShowPlanArgs),
     /// List local moderation ballot governance events.
     Events(ModerationBallotsEventsArgs),
     /// Submit a juror ballot commit payload.
@@ -1851,6 +1855,7 @@ impl Run for ModerationBallotsCommand {
         match self {
             Self::List(args) => args.run(context),
             Self::Get(args) => args.run(context),
+            Self::NoShowPlan(args) => args.run(context),
             Self::Events(args) => args.run(context),
             Self::Commit(args) => args.run(context),
             Self::Reveal(args) => args.run(context),
@@ -1918,6 +1923,36 @@ impl ModerationBallotsGetArgs {
         let filter = SorafsModerationBallotsFilter { limit: self.limit };
         let client = context.client_from_config();
         let response = get(&client, &case_id, &round_id, filter)?;
+        render_json_response(context, response)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ModerationBallotsNoShowPlanArgs {
+    /// Moderation or appeal case identifier.
+    #[arg(long = "case-id", value_name = "TEXT")]
+    case_id: String,
+    /// Moderation ballot round identifier.
+    #[arg(long = "round-id", value_name = "TEXT")]
+    round_id: String,
+}
+
+impl Run for ModerationBallotsNoShowPlanArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::get_sorafs_moderation_ballot_no_show_plan)
+    }
+}
+
+impl ModerationBallotsNoShowPlanArgs {
+    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &str, &str) -> Result<Response<Vec<u8>>>,
+    {
+        let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
+        let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
+        let client = context.client_from_config();
+        let response = get(&client, &case_id, &round_id)?;
         render_json_response(context, response)
     }
 }
@@ -8968,15 +9003,41 @@ fn mismatch_reason_label(reason: MismatchReason) -> &'static str {
     }
 }
 
-fn numeric_to_nanos(amount: &Numeric) -> Option<u128> {
+fn ledger_amount_source_label(source: LedgerAmountSource) -> &'static str {
+    match source {
+        LedgerAmountSource::Expected => "expected",
+        LedgerAmountSource::Exported => "exported",
+    }
+}
+
+fn numeric_to_nanos_error_label(error: NumericToNanosError) -> &'static str {
+    match error {
+        NumericToNanosError::NegativeOrTooWideMantissa => "negative_or_too_wide_mantissa",
+        NumericToNanosError::ScaleOverflow => "scale_overflow",
+        NumericToNanosError::NanosOverflow => "nanos_overflow",
+        NumericToNanosError::TotalOverflow => "total_overflow",
+    }
+}
+
+fn numeric_to_nanos_checked(amount: &Numeric) -> Result<u128, NumericToNanosError> {
     let scale = amount.scale();
-    let mantissa = amount.try_mantissa_u128()?;
+    let mantissa = amount
+        .try_mantissa_u128()
+        .ok_or(NumericToNanosError::NegativeOrTooWideMantissa)?;
     if scale >= 9 {
-        let divisor = 10u128.checked_pow(scale.saturating_sub(9))?;
-        mantissa.checked_div(divisor)
+        let divisor = 10u128
+            .checked_pow(scale.saturating_sub(9))
+            .ok_or(NumericToNanosError::ScaleOverflow)?;
+        mantissa
+            .checked_div(divisor)
+            .ok_or(NumericToNanosError::ScaleOverflow)
     } else {
-        let multiplier = 10u128.checked_pow(9 - scale)?;
-        mantissa.checked_mul(multiplier)
+        let multiplier = 10u128
+            .checked_pow(9 - scale)
+            .ok_or(NumericToNanosError::ScaleOverflow)?;
+        mantissa
+            .checked_mul(multiplier)
+            .ok_or(NumericToNanosError::NanosOverflow)
     }
 }
 
@@ -9188,20 +9249,27 @@ struct ReconciliationTransferSummary {
     kind: String,
     dispute_id: Option<DisputeId>,
     amount: String,
-    amount_nanos: u128,
+    amount_nanos: Option<u128>,
+    amount_conversion_error: Option<String>,
     source_asset: String,
     destination: String,
 }
 
 impl ReconciliationTransferSummary {
     fn from_record(record: &LedgerTransferRecord) -> Self {
+        let (amount_nanos, amount_conversion_error) = match numeric_to_nanos_checked(&record.amount)
+        {
+            Ok(nanos) => (Some(nanos), None),
+            Err(error) => (None, Some(numeric_to_nanos_error_label(error).to_string())),
+        };
         Self {
             relay_id: relay_id_to_hex(record.relay_id),
             epoch: record.epoch,
             kind: transfer_kind_label(record.kind).to_string(),
             dispute_id: record.dispute_id,
             amount: record.amount.to_string(),
-            amount_nanos: numeric_to_nanos(&record.amount).unwrap_or(0),
+            amount_nanos,
+            amount_conversion_error,
             source_asset: record.source_asset.to_string(),
             destination: record.destination.to_string(),
         }
@@ -9232,6 +9300,23 @@ impl ReconciliationMismatchSummary {
 }
 
 #[derive(Debug, norito::json::JsonSerialize)]
+struct ReconciliationAmountConversionSummary {
+    source: String,
+    reason: String,
+    record: ReconciliationTransferSummary,
+}
+
+impl ReconciliationAmountConversionSummary {
+    fn from_error(error: &LedgerAmountConversionError) -> Self {
+        Self {
+            source: ledger_amount_source_label(error.source).to_string(),
+            reason: numeric_to_nanos_error_label(error.error).to_string(),
+            record: ReconciliationTransferSummary::from_record(&error.record),
+        }
+    }
+}
+
+#[derive(Debug, norito::json::JsonSerialize)]
 struct ReconciliationReportSummary {
     clean: bool,
     matched_transfers: usize,
@@ -9241,6 +9326,7 @@ struct ReconciliationReportSummary {
     missing_transfers: Vec<ReconciliationTransferSummary>,
     unexpected_transfers: Vec<ReconciliationTransferSummary>,
     mismatched_transfers: Vec<ReconciliationMismatchSummary>,
+    amount_conversion_errors: Vec<ReconciliationAmountConversionSummary>,
 }
 
 impl ReconciliationReportSummary {
@@ -9260,6 +9346,11 @@ impl ReconciliationReportSummary {
             .iter()
             .map(ReconciliationMismatchSummary::from_mismatch)
             .collect();
+        let amount_conversion_errors = report
+            .amount_conversion_errors
+            .iter()
+            .map(ReconciliationAmountConversionSummary::from_error)
+            .collect();
 
         Self {
             clean: report.is_clean(),
@@ -9270,6 +9361,7 @@ impl ReconciliationReportSummary {
             missing_transfers,
             unexpected_transfers,
             mismatched_transfers,
+            amount_conversion_errors,
         }
     }
 }
@@ -9279,6 +9371,7 @@ struct ShadowRunRelaySummary {
     relay_id_hex: String,
     epochs: usize,
     payout_nanos: u128,
+    amount_conversion_errors: usize,
     average_payout_nanos: f64,
     average_score_per_mille: f64,
     average_availability_per_mille: f64,
@@ -9289,10 +9382,19 @@ struct ShadowRunRelaySummary {
 }
 
 #[derive(Debug, norito::json::JsonSerialize)]
+struct ShadowRunAmountConversionError {
+    relay_id_hex: String,
+    epoch: u32,
+    amount: String,
+    reason: String,
+}
+
+#[derive(Debug, norito::json::JsonSerialize)]
 struct ShadowRunSummary {
     processed_payouts: usize,
     total_relays: usize,
     total_payout_nanos: u128,
+    payout_amount_conversion_errors: Vec<ShadowRunAmountConversionError>,
     gini_coefficient: f64,
     top_relay_share: f64,
     zero_score_epochs: usize,
@@ -9324,9 +9426,11 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
         warning_epochs: usize,
         suspended_epochs: usize,
         zero_score_epochs: usize,
+        amount_conversion_errors: usize,
     }
 
     let mut accumulators: BTreeMap<&str, RelayAccumulator> = BTreeMap::new();
+    let mut payout_amount_conversion_errors = Vec::new();
     let mut payout_totals: Vec<u128> = Vec::new();
     let mut sum_availability = 0_u64;
     let mut sum_bandwidth = 0_u64;
@@ -9337,8 +9441,21 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
     let mut max_relay_payout = 0_u128;
 
     for payout in &summary.processed {
-        let payout_nanos = numeric_to_nanos(&payout.payout_amount).unwrap_or(0);
         let relay_entry = accumulators.entry(&payout.relay_id_hex).or_default();
+        let payout_nanos = match numeric_to_nanos_checked(&payout.payout_amount) {
+            Ok(nanos) => nanos,
+            Err(error) => {
+                relay_entry.amount_conversion_errors =
+                    relay_entry.amount_conversion_errors.saturating_add(1);
+                payout_amount_conversion_errors.push(ShadowRunAmountConversionError {
+                    relay_id_hex: payout.relay_id_hex.clone(),
+                    epoch: payout.epoch,
+                    amount: payout.payout_amount.to_string(),
+                    reason: numeric_to_nanos_error_label(error).to_string(),
+                });
+                0
+            }
+        };
         relay_entry.epochs = relay_entry.epochs.saturating_add(1);
         relay_entry.payout_nanos = relay_entry.payout_nanos.saturating_add(payout_nanos);
         relay_entry.total_score = relay_entry
@@ -9392,6 +9509,7 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
                 relay_id_hex: relay_id_hex.to_string(),
                 epochs,
                 payout_nanos: acc.payout_nanos,
+                amount_conversion_errors: acc.amount_conversion_errors,
                 average_payout_nanos: u128_to_f64(acc.payout_nanos) / epochs_f64,
                 average_score_per_mille: u64_to_f64(acc.total_score) / epochs_f64,
                 average_availability_per_mille: u64_to_f64(acc.total_availability) / epochs_f64,
@@ -9433,6 +9551,7 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
         processed_payouts: total_epochs,
         total_relays: relay_summaries.len(),
         total_payout_nanos,
+        payout_amount_conversion_errors,
         gini_coefficient,
         top_relay_share: top_share,
         zero_score_epochs: zero_score_epochs_total,
@@ -19992,6 +20111,13 @@ fn moderation_operator_read_http_request(
 
     let header_text = moderation_operator_header_text(&buffer, header_end)?;
     let content_length = moderation_operator_content_length(header_text)?;
+    if content_length.is_none() && buffer.len() > header_end {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request body requires Content-Length",
+        ));
+    }
+    let content_length = content_length.unwrap_or(0);
     if content_length > max_body_bytes {
         return Err(ModerationOperatorRequestError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -20020,6 +20146,12 @@ fn moderation_operator_read_http_request(
             ));
         }
         buffer.extend_from_slice(&chunk[..read]);
+    }
+    if buffer.len() > request_len {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request has trailing bytes after declared body",
+        ));
     }
     buffer.truncate(request_len);
     Ok(buffer)
@@ -20069,6 +20201,19 @@ fn moderation_operator_parse_http_request(
         ));
     }
     let content_length = moderation_operator_content_length(header_text)?;
+    if method == "POST" && content_length.is_none() {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service POST request requires Content-Length",
+        ));
+    }
+    if content_length.is_none() && raw.len() > header_end {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request body requires Content-Length",
+        ));
+    }
+    let content_length = content_length.unwrap_or(0);
     if content_length > max_body_bytes {
         return Err(ModerationOperatorRequestError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -20087,6 +20232,12 @@ fn moderation_operator_parse_http_request(
         return Err(ModerationOperatorRequestError::new(
             StatusCode::BAD_REQUEST,
             "SoraFS moderation operator service request body is incomplete",
+        ));
+    }
+    if raw.len() > body_end {
+        return Err(ModerationOperatorRequestError::new(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation operator service request has trailing bytes after declared body",
         ));
     }
     let headers = moderation_operator_headers(header_text);
@@ -20120,7 +20271,7 @@ fn moderation_operator_header_text(
 
 fn moderation_operator_content_length(
     header_text: &str,
-) -> Result<usize, ModerationOperatorRequestError> {
+) -> Result<Option<usize>, ModerationOperatorRequestError> {
     let mut content_length = None;
     for line in header_text.lines().skip(1) {
         let Some((name, value)) = line.split_once(':') else {
@@ -20142,7 +20293,7 @@ fn moderation_operator_content_length(
             content_length = Some(parsed);
         }
     }
-    Ok(content_length.unwrap_or_default())
+    Ok(content_length)
 }
 
 fn moderation_operator_headers(header_text: &str) -> Vec<(&str, &str)> {
@@ -22157,6 +22308,8 @@ mod tests {
         let mismatch_expected = sample_transfer_record(TransferKind::Debit, 40);
         let mut mismatch_actual = sample_transfer_record(TransferKind::Debit, 35);
         mismatch_actual.destination = sample_account_id("alt-treasury");
+        let mut invalid_amount_record = sample_transfer_record(TransferKind::Payout, 5);
+        invalid_amount_record.amount = Numeric::new(-5_i128, 0);
 
         let report = LedgerReconciliationReport {
             total_expected_transfers: 3,
@@ -22171,6 +22324,11 @@ mod tests {
                 expected: mismatch_expected.clone(),
                 actual: mismatch_actual.clone(),
                 reasons: vec![MismatchReason::Amount, MismatchReason::Destination],
+            }],
+            amount_conversion_errors: vec![LedgerAmountConversionError {
+                source: LedgerAmountSource::Exported,
+                record: invalid_amount_record.clone(),
+                error: NumericToNanosError::NegativeOrTooWideMantissa,
             }],
         };
 
@@ -22194,6 +22352,26 @@ mod tests {
                 .reasons
                 .iter()
                 .any(|reason| reason == "amount")
+        );
+        assert_eq!(summary.amount_conversion_errors.len(), 1);
+        assert_eq!(summary.amount_conversion_errors[0].source, "exported");
+        assert_eq!(
+            summary.amount_conversion_errors[0].reason,
+            "negative_or_too_wide_mantissa"
+        );
+        assert_eq!(
+            summary.amount_conversion_errors[0].record.amount,
+            invalid_amount_record.amount.to_string()
+        );
+        assert_eq!(
+            summary.amount_conversion_errors[0].record.amount_nanos,
+            None
+        );
+        assert!(
+            summary.amount_conversion_errors[0]
+                .record
+                .amount_conversion_error
+                .is_some()
         );
     }
 
@@ -24429,6 +24607,36 @@ mod tests {
 
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"case-401\""));
+    }
+
+    #[test]
+    fn moderation_ballots_no_show_plan_trims_identifiers_and_prints_payload() {
+        let args = ModerationBallotsNoShowPlanArgs {
+            case_id: " case-401 ".to_string(),
+            round_id: " round-7 ".to_string(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, case_id, round_id| {
+            assert_eq!(case_id, "case-401");
+            assert_eq!(round_id, "round-7");
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/json")
+                .body(norito::json::to_vec(&norito::json!({
+                    "schema": "sorafs.moderation.ballot.no_show_plan.v1",
+                    "case_id": "case-401",
+                    "round_id": "round-7",
+                    "no_show_count": 2,
+                    "penalty_plan_digest_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                }))?)
+                .unwrap())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"no_show_count\""));
+        assert!(ctx.printed[0].contains("\"penalty_plan_digest_hex\""));
     }
 
     #[test]
@@ -26995,6 +27203,64 @@ mod tests {
     }
 
     #[test]
+    fn moderation_operator_parse_rejects_post_without_content_length() {
+        let quarantine_id_hex = encode([0x42_u8; 16]);
+        let request = format!(
+            "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review HTTP/1.1\r\nHost: local\r\n\r\n{{}}"
+        );
+
+        let error = moderation_operator_parse_http_request(request.as_bytes(), 1024)
+            .expect_err("POST bodies must declare Content-Length");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("requires Content-Length"));
+    }
+
+    #[test]
+    fn moderation_operator_parse_rejects_body_without_content_length() {
+        let request = b"GET /healthz HTTP/1.1\r\nHost: local\r\n\r\n{}";
+
+        let error = moderation_operator_parse_http_request(request, 1024)
+            .expect_err("undeclared body bytes must be rejected");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("requires Content-Length"));
+    }
+
+    #[test]
+    fn moderation_operator_parse_rejects_trailing_bytes_after_declared_body() {
+        let request = b"GET /healthz HTTP/1.1\r\nHost: local\r\nContent-Length: 0\r\n\r\nGET / HTTP/1.1\r\n\r\n";
+
+        let error = moderation_operator_parse_http_request(request, 1024)
+            .expect_err("trailing bytes after declared body must be rejected");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("trailing bytes"));
+    }
+
+    #[test]
+    fn moderation_operator_read_rejects_trailing_bytes_after_declared_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let addr = listener.local_addr().expect("listener address");
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).expect("connect test client");
+            stream
+                .write_all(
+                    b"GET /healthz HTTP/1.1\r\nHost: local\r\nContent-Length: 0\r\n\r\nGET / HTTP/1.1\r\n\r\n",
+                )
+                .expect("write trailing request bytes");
+        });
+        let (mut stream, _) = listener.accept().expect("accept test client");
+
+        let error = moderation_operator_read_http_request(&mut stream, 1024)
+            .expect_err("socket reader must reject trailing request bytes");
+
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert!(error.message.contains("trailing bytes"));
+        client.join().expect("client thread finished");
+    }
+
+    #[test]
     fn moderation_operator_service_serves_browser_ui() {
         let quarantine_id = [0xA1_u8; 16];
         let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
@@ -28749,6 +29015,45 @@ mod tests {
                 .iter()
                 .any(|relay| relay["warning_epochs"].as_u64() == Some(1))
         );
+    }
+
+    #[test]
+    fn incentives_shadow_run_summary_reports_unconvertible_payout_amount() {
+        let relay_id_hex = relay_id_to_hex([0x5A; 32]);
+        let summary = DaemonIterationSummary {
+            processed: vec![DaemonProcessedPayoutSummary {
+                relay_id_hex: relay_id_hex.clone(),
+                epoch: 7,
+                payout_amount: Numeric::new(-7_i128, 0),
+                budget_approval_id: Some(sample_budget_id_hex()),
+                metrics: PayoutMetricsSnapshot {
+                    availability_per_mille: 1_000,
+                    bandwidth_per_mille: 1_000,
+                    compliance_per_mille: 1_000,
+                    compliance_status: "clean".to_string(),
+                    score_per_mille: 900,
+                    exit_bonus_applied: false,
+                },
+                instruction_path: None,
+                transfer_path: None,
+                metrics_archived_to: None,
+            }],
+            ..DaemonIterationSummary::default()
+        };
+
+        let shadow = build_shadow_run_summary(&summary);
+
+        assert_eq!(shadow.processed_payouts, 1);
+        assert_eq!(shadow.total_payout_nanos, 0);
+        assert_eq!(shadow.payout_amount_conversion_errors.len(), 1);
+        let error = &shadow.payout_amount_conversion_errors[0];
+        assert_eq!(error.relay_id_hex, relay_id_hex);
+        assert_eq!(error.epoch, 7);
+        assert_eq!(error.amount, "-7");
+        assert_eq!(error.reason, "negative_or_too_wide_mantissa");
+        assert_eq!(shadow.relays.len(), 1);
+        assert_eq!(shadow.relays[0].amount_conversion_errors, 1);
+        assert_eq!(shadow.relays[0].payout_nanos, 0);
     }
 
     #[test]

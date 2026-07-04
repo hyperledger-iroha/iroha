@@ -161,7 +161,7 @@ iroha --config client.toml --output \
 * የ CLI ጥሪዎች ዛሬ ባዶ የመመሪያ ሜታዳታ ያወጣሉ። በሰፈራ ደረጃ የ Python አጋዥዎችን ይጠቀሙ
   ሜታዳታ መያያዝ አለበት።
 * ለ ISO 20022 የመስክ ካርታ ስራ [`settlement_iso_mapping.md`](./settlement_iso_mapping.md) ይመልከቱ
-  እነዚህን መመሪያዎች ይደግፋል (`sese.023`፣ `sese.025`፣ `colr.007`፣ `pacs.009`፣ `camt.054`)።
+  እነዚህን መመሪያዎች ይደግፋል (`sese.023`፣ `sese.025`፣ `colr.012`፣ `pacs.009`፣ `camt.054`)።
 * CLI ከ Norito ጎን ለጎን ቀኖናዊ የኤክስኤምኤል ቅድመ እይታ እንዲያወጣ `--iso-xml-out <path>` ይለፉ
   መመሪያ; ፋይሉ ከላይ ያለውን ካርታ (`sese.023` ለDvP፣ `sese.025` ለ PvP`) ይከተላል። ያጣምሩ
   ባንዲራ ከ `--iso-reference-crosswalk <path>` ጋር ስለዚህ CLI `--delivery-instrument-id`ን ከ

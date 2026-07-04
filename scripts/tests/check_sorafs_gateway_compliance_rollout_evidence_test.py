@@ -47,6 +47,7 @@ def route(name: str, *, latency_ms: int = 120) -> dict:
         "name": name,
         "passed": True,
         "status_code": 200,
+        "body_blake3_hex": DIGEST,
         "latency_ms": latency_ms,
         "authz_enforced": True,
     }
@@ -54,19 +55,22 @@ def route(name: str, *, latency_ms: int = 120) -> dict:
 
 def feed_promotion(*, ack_count: int = 3) -> dict:
     gateways = [
-        {"name": "gateway-a"},
-        {"name": "gateway-b"},
-        {"name": "gateway-c"},
+        {"name": "gateway-compliance-gateway-a"},
+        {"name": "gateway-compliance-gateway-b"},
+        {"name": "gateway-compliance-gateway-c"},
     ]
     denylist_entries = [
-        {"name": "ofac"},
-        {"name": "eu-sanctions"},
-        {"name": "malware"},
-        {"name": "csam-hash"},
-        {"name": "legal-hold"},
+        {"name": "gateway-denylist-entry-ofac"},
+        {"name": "gateway-denylist-entry-eu-sanctions"},
+        {"name": "gateway-denylist-entry-malware"},
+        {"name": "gateway-denylist-entry-csam-hash"},
+        {"name": "gateway-denylist-entry-legal-hold"},
     ]
     if ack_count != len(gateways):
-        gateways = [{"name": f"gateway-{index}"} for index in range(ack_count)]
+        gateways = [
+            {"name": f"gateway-compliance-gateway-{index:02d}"}
+            for index in range(ack_count)
+        ]
     payload = base("sorafs.gateway_compliance.feed_promotion_canary.v1")
     payload.update(
         {
@@ -90,7 +94,7 @@ def feed_promotion(*, ack_count: int = 3) -> dict:
 
 
 def controller_runtime() -> dict:
-    feeds = [{"name": "ofac"}, {"name": "malware"}]
+    feeds = [{"name": name} for name in MODULE.REQUIRED_CONTROLLER_FEEDS]
     payload = base("sorafs.gateway_compliance.controller_runtime_canary.v1")
     payload.update(
         {
@@ -122,7 +126,7 @@ def controller_runtime() -> dict:
 
 
 def moderation_toggle() -> dict:
-    toggles = [{"name": "provider-deny"}, {"name": "appeal-override"}]
+    toggles = [{"name": name} for name in MODULE.REQUIRED_MODERATION_TOGGLES]
     payload = base("sorafs.gateway_compliance.moderation_toggle_canary.v1")
     payload.update(
         {
@@ -149,9 +153,9 @@ def moderation_toggle() -> dict:
 
 def gateway_reload(*, reload_latency_ms: int = 1_000) -> dict:
     gateways = [
-        {"name": "gateway-a"},
-        {"name": "gateway-b"},
-        {"name": "gateway-c"},
+        {"name": "gateway-compliance-gateway-a"},
+        {"name": "gateway-compliance-gateway-b"},
+        {"name": "gateway-compliance-gateway-c"},
     ]
     payload = base("sorafs.gateway_compliance.gateway_reload_canary.v1")
     payload.update(
@@ -173,13 +177,13 @@ def gateway_reload(*, reload_latency_ms: int = 1_000) -> dict:
 
 
 def enforcement_probe(*, reasons: list[str] | None = None) -> dict:
+    denial_reasons = list(MODULE.REQUIRED_DENIAL_REASONS) if reasons is None else reasons
     payload = base("sorafs.gateway_compliance.enforcement_probe_canary.v1")
     payload.update(
         {
             "bundle_digest_hex": DIGEST,
-            "denial_reasons_observed": list(MODULE.REQUIRED_DENIAL_REASONS)
-            if reasons is None
-            else reasons,
+            "denial_reasons_observed": denial_reasons,
+            "denial_reason_count": len(denial_reasons),
             "structured_error_labels_verified": True,
             "telemetry_labels_stable": True,
             "fail_closed_missing_envelope": True,
@@ -197,7 +201,10 @@ def enforcement_probe(*, reasons: list[str] | None = None) -> dict:
 
 
 def honey_audit(*, probe_count: int = 4) -> dict:
-    probes = [{"name": f"honey-probe-{index}"} for index in range(probe_count)]
+    probes = [
+        {"name": f"gateway-honey-probe-{index:02d}"}
+        for index in range(probe_count)
+    ]
     payload = base("sorafs.gateway_compliance.honey_audit_canary.v1")
     payload.update(
         {
@@ -262,6 +269,7 @@ def observability(*, critical: bool = False) -> dict:
             "alert_rules_installed": True,
             "critical_alerts_firing": critical,
             "metrics": list(MODULE.REQUIRED_METRICS),
+            "metric_count": len(MODULE.REQUIRED_METRICS),
             "response_bodies_included": False,
         }
     )
@@ -305,6 +313,38 @@ def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
 
+def test_observability_metrics_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append(payload["metrics"][0])
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert "metrics must not contain duplicate values" in artifact["errors"]
+    assert "metric_count must match unique metrics count" in artifact["errors"]
+
+
+def test_observability_metrics_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = observability()
+    payload["metrics"].append("sorafs_gateway_unknown_metric_total")
+    payload["metric_count"] = len(payload["metrics"])
+    write_json(tmp_path / "observability.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["observability"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "metrics must not include unknown values" in artifact["errors"]
+
+
 def test_missing_argument_value_returns_argparse_error_code(capsys) -> None:
     assert MODULE.main(["--evidence-dir"]) == 2
 
@@ -325,6 +365,91 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["feed_promotion"]["valid"] is True
     assert payload["valid_bundle_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
+    assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
+    assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    observability_artifact = payload["required"]["observability"]["artifacts"][0]
+    assert observability_artifact["fingerprint"]["metric_count"] == len(
+        MODULE.REQUIRED_METRICS
+    )
+    assert observability_artifact["fingerprint"]["metrics"] == list(
+        MODULE.REQUIRED_METRICS
+    )
+
+
+def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
+    cases = (
+        (
+            "feed-promotion.json",
+            "feed_promotion",
+            feed_promotion,
+            ("raw_feeds_included", "feed_payloads_included"),
+        ),
+        (
+            "controller-runtime.json",
+            "controller_runtime",
+            controller_runtime,
+            ("raw_feeds_included", "feed_payloads_included", "response_bodies_included"),
+        ),
+        (
+            "moderation-toggle.json",
+            "moderation_toggle",
+            moderation_toggle,
+            ("raw_toggle_payloads_included", "response_bodies_included"),
+        ),
+        (
+            "gateway-reload.json",
+            "gateway_reload",
+            gateway_reload,
+            ("raw_catalog_included",),
+        ),
+        (
+            "enforcement-probe.json",
+            "enforcement_probe",
+            enforcement_probe,
+            ("response_bodies_included",),
+        ),
+        (
+            "honey-audit.json",
+            "honey_audit",
+            honey_audit,
+            ("raw_probe_responses_included",),
+        ),
+        (
+            "appeal-override.json",
+            "appeal_override",
+            appeal_override,
+            ("raw_appeal_payload_included",),
+        ),
+        (
+            "transparency-publication.json",
+            "transparency_publication",
+            transparency_publication,
+            ("raw_receipts_included",),
+        ),
+        (
+            "observability.json",
+            "observability",
+            observability,
+            ("critical_alerts_firing", "response_bodies_included"),
+        ),
+    )
+
+    for artifact_file, kind, make_payload, fields in cases:
+        for field in fields:
+            case_dir = tmp_path / kind / field
+            case_dir.mkdir(parents=True)
+            write_complete_evidence(case_dir)
+            payload = make_payload()
+            payload.pop(field)
+            write_json(case_dir / artifact_file, payload)
+            summary = case_dir / "summary.json"
+
+            assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+            result = json.loads(summary.read_text(encoding="utf-8"))
+            artifact = result["required"][kind]["artifacts"][0]
+            assert artifact["valid"] is False
+            assert f"{field} must be false" in artifact["errors"]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -361,6 +486,27 @@ def test_gateway_reload_requires_bundle_binding(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_integer_unit_latency_fields_reject_fractional_or_negative_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    reload_payload = gateway_reload()
+    reload_payload["max_reload_latency_ms"] = -1
+    write_json(tmp_path / "gateway-reload.json", reload_payload)
+    probe_payload = enforcement_probe()
+    probe_payload["routes"][0]["latency_ms"] = 12.5
+    write_json(tmp_path / "enforcement-probe.json", probe_payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    reload_errors = result["required"]["gateway_reload"]["artifacts"][0]["errors"]
+    probe_errors = result["required"]["enforcement_probe"]["artifacts"][0]["errors"]
+    assert "max_reload_latency_ms must be a non-negative integer" in reload_errors
+    assert "routes[0].latency_ms must be a non-negative integer" in probe_errors
+
+
 def test_controller_runtime_requires_feed_count_equality(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = controller_runtime()
@@ -368,6 +514,66 @@ def test_controller_runtime_requires_feed_count_equality(tmp_path: Path) -> None
     write_json(tmp_path / "controller-runtime.json", payload)
 
     assert run_gate(tmp_path) == 1
+
+
+def test_controller_runtime_instance_id_must_be_canonical(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["controller_instance_id"] = "gateway_compliance_controller_prod_a"
+    write_json(tmp_path / "controller-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["controller_runtime"]["artifacts"][0]
+    assert MODULE.CONTROLLER_INSTANCE_ID_ERROR in artifact["errors"]
+
+
+def test_controller_runtime_instance_id_rejects_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["controller_instance_id"] = "gateway-compliance-controller-prod-placeholder"
+    write_json(tmp_path / "controller-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["controller_runtime"]["artifacts"][0]
+    assert (
+        "controller_instance_id must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
+
+
+def test_controller_runtime_instance_id_rejects_generic_controller_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["controller_instance_id"] = "compliance-controller-prod-a"
+    write_json(tmp_path / "controller-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["controller_runtime"]["artifacts"][0]
+    assert MODULE.CONTROLLER_INSTANCE_ID_ERROR in artifact["errors"]
+
+
+def test_controller_runtime_instance_id_accepts_gateway_prefixed_label(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["controller_instance_id"] = "gateway-compliance-controller-prod-b-2"
+    write_json(tmp_path / "controller-runtime.json", payload)
+
+    assert run_gate(tmp_path) == 0
 
 
 def test_controller_runtime_feed_count_must_match_unique_feeds(tmp_path: Path) -> None:
@@ -404,6 +610,48 @@ def test_controller_runtime_feeds_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["controller_runtime"]["artifacts"][0]
     assert "feeds must not contain duplicate values" in artifact["errors"]
     assert "external_feed_count must match unique feeds count" in artifact["errors"]
+
+
+def test_controller_runtime_must_cover_required_feeds(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["feeds"] = [
+        feed for feed in payload["feeds"] if feed["name"] != "appeal-overrides"
+    ]
+    payload["external_feed_count"] = len(payload["feeds"])
+    payload["fetched_feed_count"] = len(payload["feeds"])
+    payload["normalized_feed_count"] = len(payload["feeds"])
+    payload["signed_feed_count"] = len(payload["feeds"])
+    write_json(tmp_path / "controller-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["controller_runtime"]["artifacts"][0]
+    assert "external_feed_count must be at least 7" in artifact["errors"]
+    assert "feeds must include name `appeal-overrides`" in artifact["errors"]
+
+
+def test_controller_runtime_feeds_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = controller_runtime()
+    payload["feeds"].append({"name": "unknown-feed"})
+    payload["external_feed_count"] = len(payload["feeds"])
+    payload["fetched_feed_count"] = len(payload["feeds"])
+    payload["normalized_feed_count"] = len(payload["feeds"])
+    payload["signed_feed_count"] = len(payload["feeds"])
+    write_json(tmp_path / "controller-runtime.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["controller_runtime"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "feeds must not include unknown values" in artifact["errors"]
 
 
 def test_controller_runtime_bundle_binding_must_match_feed_promotion(tmp_path: Path) -> None:
@@ -507,6 +755,78 @@ def test_moderation_toggle_toggles_must_not_duplicate(tmp_path: Path) -> None:
     assert "toggle_count must match unique toggles count" in artifact["errors"]
 
 
+def test_moderation_toggle_must_cover_required_toggles(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = moderation_toggle()
+    payload["toggles"] = [
+        toggle for toggle in payload["toggles"] if toggle["name"] != "regional-emergency"
+    ]
+    payload["toggle_count"] = len(payload["toggles"])
+    payload["approved_toggle_count"] = len(payload["toggles"])
+    write_json(tmp_path / "moderation-toggle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_toggle"]["artifacts"][0]
+    assert "toggle_count must be at least 4" in artifact["errors"]
+    assert "toggles must include name `regional-emergency`" in artifact["errors"]
+
+
+def test_moderation_toggle_toggles_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = moderation_toggle()
+    payload["toggles"].append({"name": "unknown-toggle"})
+    payload["toggle_count"] = len(payload["toggles"])
+    payload["approved_toggle_count"] = len(payload["toggles"])
+    write_json(tmp_path / "moderation-toggle.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["moderation_toggle"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "toggles must not include unknown values" in artifact["errors"]
+
+
+def test_moderation_toggle_url_must_be_safe_without_leaking(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    unsafe_urls = (
+        "https://user:private_key@gateway.example/v1/toggles",
+        "https://gateway.example/%2e%2e/toggles",
+        "https://gateway.example/bad%2Ftoggle",
+        "https://gateway.example/C%3A/toggles",
+        "https://C%3A.gateway.example/v1/toggles",
+        "https://http%3A.gateway.example/v1/toggles",
+        "https://gateway.example/v1/toggles?token=secret",
+    )
+
+    for index, unsafe_url in enumerate(unsafe_urls):
+        case_dir = tmp_path / f"case-{index}"
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = moderation_toggle()
+        payload["toggle_api_url"] = unsafe_url
+        write_json(case_dir / "moderation-toggle.json", payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        captured = capsys.readouterr()
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["moderation_toggle"]["artifacts"][0]
+        result_text = json.dumps(result, sort_keys=True)
+        assert MODULE.EVIDENCE_URL_FIELD_ERROR in artifact["errors"]
+        assert unsafe_url not in captured.err
+        assert unsafe_url not in result_text
+
+
 def test_moderation_toggle_bundle_binding_must_match_feed_promotion(
     tmp_path: Path,
 ) -> None:
@@ -584,7 +904,7 @@ def test_gateway_reload_ack_count_must_match_unique_gateways(tmp_path: Path) -> 
 def test_gateway_reload_gateways_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = gateway_reload()
-    payload["gateways"].append({"name": "gateway-a"})
+    payload["gateways"].append({"name": "gateway-compliance-gateway-a"})
     payload["reload_ack_count"] = len(payload["gateways"])
     write_json(tmp_path / "gateway-reload.json", payload)
     summary = tmp_path / "summary.json"
@@ -595,6 +915,40 @@ def test_gateway_reload_gateways_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["gateway_reload"]["artifacts"][0]
     assert "gateways must not contain duplicate values" in artifact["errors"]
     assert "reload_ack_count must match unique gateways count" in artifact["errors"]
+
+
+def test_gateway_reload_gateways_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = gateway_reload()
+    payload["gateways"][0]["name"] = "gateway-a"
+    write_json(tmp_path / "gateway-reload.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["gateway_reload"]["artifacts"][0]
+    assert (
+        "gateways[].name must match canonical lowercase "
+        "`gateway-compliance-gateway-name`"
+    ) in artifact["errors"]
+
+
+def test_gateway_reload_gateways_reject_placeholder_marker(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = gateway_reload()
+    payload["gateways"][0]["name"] = "gateway-compliance-gateway-placeholder"
+    write_json(tmp_path / "gateway-reload.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["gateway_reload"]["artifacts"][0]
+    assert (
+        "gateways[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_stale_feed_promotion_fails(tmp_path: Path) -> None:
@@ -623,7 +977,7 @@ def test_feed_promotion_ack_count_must_match_unique_gateways(tmp_path: Path) -> 
 def test_feed_promotion_gateways_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = feed_promotion()
-    payload["gateways"].append({"name": "gateway-a"})
+    payload["gateways"].append({"name": "gateway-compliance-gateway-a"})
     payload["gateway_ack_count"] = len(payload["gateways"])
     write_json(tmp_path / "feed-promotion.json", payload)
     summary = tmp_path / "summary.json"
@@ -634,6 +988,40 @@ def test_feed_promotion_gateways_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["feed_promotion"]["artifacts"][0]
     assert "gateways must not contain duplicate values" in artifact["errors"]
     assert "gateway_ack_count must match unique gateways count" in artifact["errors"]
+
+
+def test_feed_promotion_gateways_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["gateways"][0]["name"] = "gateway-a"
+    write_json(tmp_path / "feed-promotion.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["feed_promotion"]["artifacts"][0]
+    assert (
+        "gateways[].name must match canonical lowercase "
+        "`gateway-compliance-gateway-name`"
+    ) in artifact["errors"]
+
+
+def test_feed_promotion_gateways_reject_placeholder_marker(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["gateways"][0]["name"] = "gateway-compliance-gateway-placeholder"
+    write_json(tmp_path / "feed-promotion.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["feed_promotion"]["artifacts"][0]
+    assert (
+        "gateways[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_feed_promotion_denylist_entry_count_must_match_unique_entries(
@@ -676,6 +1064,44 @@ def test_feed_promotion_denylist_entries_must_not_duplicate(
     )
 
 
+def test_feed_promotion_denylist_entries_must_use_production_family(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["denylist_entries"][0]["name"] = "ofac"
+    write_json(tmp_path / "feed-promotion.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["feed_promotion"]["artifacts"][0]
+    assert (
+        "denylist_entries[].name must match canonical lowercase "
+        "`gateway-denylist-entry-name`"
+    ) in artifact["errors"]
+
+
+def test_feed_promotion_denylist_entries_reject_placeholder_marker(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["denylist_entries"][0]["name"] = "gateway-denylist-entry-placeholder"
+    write_json(tmp_path / "feed-promotion.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["feed_promotion"]["artifacts"][0]
+    assert (
+        "denylist_entries[].name must not contain non-production markers "
+        "['placeholder']"
+    ) in artifact["errors"]
+
+
 def test_raw_feed_leakage_fails(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = feed_promotion()
@@ -690,6 +1116,39 @@ def test_enforcement_requires_denial_reason_coverage(tmp_path: Path) -> None:
     write_json(tmp_path / "enforcement-probe.json", enforcement_probe(reasons=["provider"]))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_enforcement_requires_denial_reason_count(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = enforcement_probe()
+    del payload["denial_reason_count"]
+    write_json(tmp_path / "enforcement-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["enforcement_probe"]["artifacts"][0]
+    assert "denial_reason_count must be a positive integer" in artifact["errors"]
+
+
+def test_enforcement_denial_reason_count_must_match_unique_reasons(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = enforcement_probe()
+    payload["denial_reason_count"] += 1
+    write_json(tmp_path / "enforcement-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["enforcement_probe"]["artifacts"][0]
+    assert (
+        "denial_reason_count must match unique denial_reasons_observed count"
+        in artifact["errors"]
+    )
 
 
 def test_enforcement_route_count_must_match_unique_routes(tmp_path: Path) -> None:
@@ -707,6 +1166,25 @@ def test_enforcement_route_count_must_match_unique_routes(tmp_path: Path) -> Non
     assert "route_count must match unique routes count" in artifact["errors"]
 
 
+def test_enforcement_routes_must_cover_required_route_inventory(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = enforcement_probe()
+    payload["routes"] = [route("manifest"), route("cid")]
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "enforcement-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enforcement_probe"]["artifacts"][0]
+    assert "route_count must be at least 3" in artifact["errors"]
+    assert "routes must include name `provider`" in artifact["errors"]
+
+
 def test_enforcement_routes_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = enforcement_probe()
@@ -722,6 +1200,78 @@ def test_enforcement_routes_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["enforcement_probe"]["artifacts"][0]
     assert "routes must not contain duplicate values" in artifact["errors"]
     assert "route_count must match unique routes count" in artifact["errors"]
+
+
+def test_enforcement_routes_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = enforcement_probe()
+    payload["routes"].append(route("shadow-route"))
+    payload["route_count"] = len(payload["routes"])
+    payload["passed_route_count"] = len(payload["routes"])
+    write_json(tmp_path / "enforcement-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enforcement_probe"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "routes must not include unknown values" in artifact["errors"]
+
+
+def test_enforcement_route_body_hash_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = enforcement_probe()
+    del payload["routes"][0]["body_blake3_hex"]
+    write_json(tmp_path / "enforcement-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["enforcement_probe"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "routes[0].body_blake3_hex must be a non-empty string"
+        in artifact["errors"]
+    )
+
+
+def test_enforcement_denial_reasons_must_not_duplicate(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = enforcement_probe()
+    payload["denial_reasons_observed"].append(payload["denial_reasons_observed"][0])
+    write_json(tmp_path / "enforcement-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["enforcement_probe"]["artifacts"][0]
+    assert "denial_reasons_observed must not contain duplicate values" in artifact["errors"]
+
+
+def test_enforcement_denial_reasons_must_not_include_unknown_values(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = enforcement_probe()
+    payload["denial_reasons_observed"].append("unknown-denial-reason")
+    payload["denial_reason_count"] = len(payload["denial_reasons_observed"])
+    write_json(tmp_path / "enforcement-probe.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["enforcement_probe"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "denial_reasons_observed must not include unknown values"
+        in artifact["errors"]
+    )
 
 
 def test_honey_audit_requires_minimum_probe_count(tmp_path: Path) -> None:
@@ -748,7 +1298,7 @@ def test_honey_audit_probe_count_must_match_unique_probes(tmp_path: Path) -> Non
 def test_honey_audit_probes_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = honey_audit()
-    payload["probes"].append({"name": "honey-probe-0"})
+    payload["probes"].append({"name": "gateway-honey-probe-00"})
     payload["honey_probe_count"] = len(payload["probes"])
     write_json(tmp_path / "honey-audit.json", payload)
     summary = tmp_path / "summary.json"
@@ -759,6 +1309,40 @@ def test_honey_audit_probes_must_not_duplicate(tmp_path: Path) -> None:
     artifact = payload["required"]["honey_audit"]["artifacts"][0]
     assert "probes must not contain duplicate values" in artifact["errors"]
     assert "honey_probe_count must match unique probes count" in artifact["errors"]
+
+
+def test_honey_audit_probes_must_use_production_family(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = honey_audit()
+    payload["probes"][0]["name"] = "honey-probe-0"
+    write_json(tmp_path / "honey-audit.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["honey_audit"]["artifacts"][0]
+    assert (
+        "probes[].name must match canonical lowercase "
+        "`gateway-honey-probe-*`"
+    ) in artifact["errors"]
+
+
+def test_honey_audit_probes_reject_placeholder_marker(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = honey_audit()
+    payload["probes"][0]["name"] = "gateway-honey-probe-placeholder"
+    write_json(tmp_path / "honey-audit.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["honey_audit"]["artifacts"][0]
+    assert (
+        "probes[].name must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
 
 
 def test_governance_must_use_iroha_config(tmp_path: Path) -> None:

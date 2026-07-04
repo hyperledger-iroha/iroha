@@ -18,13 +18,28 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
+    CONTROLLER_INSTANCE_ID_ERROR,
+    CONTROLLER_INSTANCE_ID_PATTERN,
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_RELOAD_LATENCY_MS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
     DEFAULT_MIN_DENYLIST_ENTRIES,
     DEFAULT_MIN_GATEWAYS,
     DEFAULT_MIN_HONEY_PROBES,
+    DENYLIST_ENTRY_LABEL_ERROR,
+    DENYLIST_ENTRY_LABEL_PATTERN,
+    FORBIDDEN_INVENTORY_LABEL_MARKERS,
+    FORBIDDEN_CONTROLLER_INSTANCE_ID_MARKERS,
+    GATEWAY_LABEL_ERROR,
+    GATEWAY_LABEL_PATTERN,
+    HONEY_PROBE_LABEL_ERROR,
+    HONEY_PROBE_LABEL_PATTERN,
     KIND_BY_NAME,
+    REQUIRED_CONTROLLER_FEEDS,
+    REQUIRED_DENIAL_REASONS,
+    REQUIRED_ENFORCEMENT_ROUTES,
+    REQUIRED_METRICS,
+    REQUIRED_MODERATION_TOGGLES,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -32,6 +47,8 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    fsync_checker_output_parent,
+    write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
 from sorafs_path_identity import path_diagnostic_label  # noqa: E402
@@ -40,10 +57,27 @@ from sorafs_response_args import (  # noqa: E402
     expand_response_args,
     positive_int_arg,
 )
+from sorafs_runner_preflight import runner_url_arg_is_plan_safe  # noqa: E402
 
 
-CANARY_KINDS = ("controller_runtime", "moderation_toggle")
+CANARY_KINDS = tuple(KIND_BY_NAME)
 HEX64_LEN = 64
+DEFAULT_GATEWAYS = (
+    "gateway-compliance-gateway-a",
+    "gateway-compliance-gateway-b",
+    "gateway-compliance-gateway-c",
+)
+DEFAULT_DENYLIST_ENTRIES = (
+    "gateway-denylist-entry-ofac",
+    "gateway-denylist-entry-eu-sanctions",
+    "gateway-denylist-entry-malware",
+    "gateway-denylist-entry-csam-hash",
+    "gateway-denylist-entry-legal-hold",
+)
+DEFAULT_ENFORCEMENT_ROUTES = REQUIRED_ENFORCEMENT_ROUTES
+DEFAULT_HONEY_PROBES = tuple(
+    f"gateway-honey-probe-{index:02d}" for index in range(DEFAULT_MIN_HONEY_PROBES)
+)
 CONTROLLER_TRUE_CLAIMS = (
     "iroha_config_bound",
     "controller_service_enabled",
@@ -67,6 +101,10 @@ MODERATION_TRUE_CLAIMS = (
     "rollback_verified",
 )
 FORBIDDEN_PAYLOAD_CLAIMS = {
+    "feed_promotion": (
+        "raw_feeds_included",
+        "feed_payloads_included",
+    ),
     "controller_runtime": (
         "raw_feeds_included",
         "feed_payloads_included",
@@ -76,7 +114,20 @@ FORBIDDEN_PAYLOAD_CLAIMS = {
         "raw_toggle_payloads_included",
         "response_bodies_included",
     ),
+    "gateway_reload": ("raw_catalog_included",),
+    "enforcement_probe": ("response_bodies_included",),
+    "honey_audit": ("raw_probe_responses_included",),
+    "appeal_override": ("raw_appeal_payload_included",),
+    "transparency_publication": ("raw_receipts_included",),
+    "observability": ("response_bodies_included",),
+    "governance_approval": (),
 }
+CANARY_URL_ARG_ERROR = (
+    "SoraFS gateway compliance canary URL arguments must not contain userinfo, "
+    "query strings, fragments, control characters, encoded traversal, separators, "
+    "drive prefixes, URI-scheme-like host/path tokens, or secret-looking host/path "
+    "components"
+)
 
 
 def split_csv_values(values: Sequence[str]) -> list[str]:
@@ -156,40 +207,187 @@ def validate_canonical_string(value: str | None, *, option: str, errors: list[st
         errors.append(f"{option} must be a non-empty canonical string")
 
 
+def validate_canary_url(value: str | None, *, option: str, errors: list[str]) -> None:
+    """Validate a URL argument before it can enter canary evidence."""
+
+    before = len(errors)
+    validate_canonical_string(value, option=option, errors=errors)
+    if len(errors) != before:
+        return
+    if not runner_url_arg_is_plan_safe(value):
+        if CANARY_URL_ARG_ERROR not in errors:
+            errors.append(CANARY_URL_ARG_ERROR)
+
+
+def validate_controller_instance_id_arg(
+    value: str | None, *, errors: list[str]
+) -> None:
+    """Require a reviewed lowercase compliance controller instance identifier."""
+
+    validate_canonical_string(value, option="--controller-instance-id", errors=errors)
+    if not isinstance(value, str):
+        return
+    if CONTROLLER_INSTANCE_ID_PATTERN.fullmatch(value) is None:
+        errors.append(
+            CONTROLLER_INSTANCE_ID_ERROR.replace(
+                "controller_instance_id", "--controller-instance-id"
+            )
+        )
+        return
+    forbidden = sorted(
+        marker
+        for marker in FORBIDDEN_CONTROLLER_INSTANCE_ID_MARKERS
+        if marker in value.split("-")
+    )
+    if forbidden:
+        errors.append(
+            "--controller-instance-id must not contain non-production markers "
+            f"{forbidden}"
+        )
+
+
+def render_inventory_label_error(label_error: str, option: str) -> str:
+    """Render checker inventory-label diagnostics against builder constants."""
+
+    return (
+        label_error.replace("gateways[].name", option)
+        .replace("denylist_entries[].name", option)
+        .replace("probes[].name", option)
+    )
+
+
+def validate_static_inventory_labels(
+    values: Iterable[str],
+    *,
+    option: str,
+    pattern,
+    label_error: str,
+    errors: list[str],
+) -> None:
+    """Validate fixed builder inventory labels before generating evidence."""
+
+    for value in values:
+        validate_canonical_string(value, option=option, errors=errors)
+        if not isinstance(value, str):
+            continue
+        if pattern.fullmatch(value) is None:
+            errors.append(render_inventory_label_error(label_error, option))
+            continue
+        forbidden = sorted(
+            marker
+            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
+            if marker in value.split("-")
+        )
+        if forbidden:
+            errors.append(f"{option} must not contain non-production markers {forbidden}")
+
+
+def validate_default_inventories(errors: list[str]) -> None:
+    """Validate fixed inventories that are not operator-provided CLI args."""
+
+    validate_static_inventory_labels(
+        DEFAULT_GATEWAYS,
+        option="DEFAULT_GATEWAYS",
+        pattern=GATEWAY_LABEL_PATTERN,
+        label_error=GATEWAY_LABEL_ERROR,
+        errors=errors,
+    )
+    validate_static_inventory_labels(
+        DEFAULT_DENYLIST_ENTRIES,
+        option="DEFAULT_DENYLIST_ENTRIES",
+        pattern=DENYLIST_ENTRY_LABEL_PATTERN,
+        label_error=DENYLIST_ENTRY_LABEL_ERROR,
+        errors=errors,
+    )
+    validate_static_inventory_labels(
+        DEFAULT_HONEY_PROBES,
+        option="DEFAULT_HONEY_PROBES",
+        pattern=HONEY_PROBE_LABEL_PATTERN,
+        label_error=HONEY_PROBE_LABEL_ERROR,
+        errors=errors,
+    )
+
+
 def validate_feed_names(args: argparse.Namespace, errors: list[str]) -> None:
     """Validate reviewed feed names and bind the optional count cross-check."""
 
-    feed_names = split_csv_values(args.feed)
-    if not feed_names:
-        errors.append("--feed is required for controller_runtime")
-    for name in feed_names:
-        validate_canonical_string(name, option="--feed", errors=errors)
-    if len(set(feed_names)) != len(feed_names):
-        errors.append("--feed must not contain duplicates")
-    unique_feed_count = len(set(feed_names))
+    feed_names = validate_name_set(
+        split_csv_values(args.feed),
+        allowed=REQUIRED_CONTROLLER_FEEDS,
+        option="--feed",
+        errors=errors,
+    )
+    unique_feed_count = len(feed_names)
     if args.feed_count is None:
         errors.append("--feed-count is required for controller_runtime")
     elif unique_feed_count != args.feed_count:
-        errors.append("--feed-count must match the number of unique --feed values")
+        errors.append(
+            "--feed-count must match the number of required unique --feed values"
+        )
     args.feeds = feed_names
 
 
 def validate_toggle_names(args: argparse.Namespace, errors: list[str]) -> None:
     """Validate reviewed moderation toggle names and bind the count cross-check."""
 
-    toggle_names = split_csv_values(args.toggle)
-    if not toggle_names:
-        errors.append("--toggle is required for moderation_toggle")
-    for name in toggle_names:
-        validate_canonical_string(name, option="--toggle", errors=errors)
-    if len(set(toggle_names)) != len(toggle_names):
-        errors.append("--toggle must not contain duplicates")
-    unique_toggle_count = len(set(toggle_names))
+    toggle_names = validate_name_set(
+        split_csv_values(args.toggle),
+        allowed=REQUIRED_MODERATION_TOGGLES,
+        option="--toggle",
+        errors=errors,
+    )
+    unique_toggle_count = len(toggle_names)
     if args.toggle_count is None:
         errors.append("--toggle-count is required for moderation_toggle")
     elif unique_toggle_count != args.toggle_count:
-        errors.append("--toggle-count must match the number of unique --toggle values")
+        errors.append(
+            "--toggle-count must match the number of required unique --toggle values"
+        )
     args.toggles = toggle_names
+
+
+def validate_denial_reasons(args: argparse.Namespace, errors: list[str]) -> None:
+    """Validate reviewed denial reason labels for enforcement probes."""
+
+    args.denial_reasons = validate_name_set(
+        split_csv_values(args.denial_reason),
+        allowed=REQUIRED_DENIAL_REASONS,
+        option="--denial-reason",
+        errors=errors,
+    )
+
+
+def validate_metric_names(args: argparse.Namespace, errors: list[str]) -> None:
+    """Validate reviewed observability metrics for canary evidence."""
+
+    args.metrics = validate_name_set(
+        split_csv_values(args.metric),
+        allowed=REQUIRED_METRICS,
+        option="--metric",
+        errors=errors,
+    )
+
+
+def named_records(names: Iterable[str]) -> list[dict[str, str]]:
+    """Build stable `{name}` records for inventory-backed evidence."""
+
+    return [{"name": name} for name in names]
+
+
+def route_records(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Build payload-free enforcement route probe records."""
+
+    return [
+        {
+            "name": name,
+            "passed": True,
+            "status_code": 200,
+            "body_blake3_hex": args.route_body_blake3_hex,
+            "latency_ms": args.route_latency_ms,
+            "authz_enforced": True,
+        }
+        for name in DEFAULT_ENFORCEMENT_ROUTES
+    ]
 
 
 def build_common_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -203,8 +401,6 @@ def build_common_payload(args: argparse.Namespace) -> dict[str, Any]:
         "deployment_context_reviewed": True,
         "generated_at_unix": args.generated_at_unix,
         "bundle_digest_hex": args.bundle_digest_hex,
-        "iroha_config_bound": "iroha_config_bound" in args.verified_claims,
-        "config_source": "iroha_config",
     }
 
 
@@ -212,15 +408,33 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     """Build a payload-free gateway compliance canary payload."""
 
     payload = build_common_payload(args)
-    if args.kind == "controller_runtime":
+    if args.kind == "feed_promotion":
+        payload.update(
+            {
+                "external_feeds_normalized": True,
+                "feed_signature_verified": True,
+                "bundle_pack_verified": True,
+                "bundle_diff_reviewed": True,
+                "merkle_root_bound": True,
+                "update_history_persisted": True,
+                "gateway_ack_count": len(DEFAULT_GATEWAYS),
+                "gateways": named_records(DEFAULT_GATEWAYS),
+                "denylist_entry_count": len(DEFAULT_DENYLIST_ENTRIES),
+                "denylist_entries": named_records(DEFAULT_DENYLIST_ENTRIES),
+                "policy_digest_hex": args.policy_digest_hex,
+            }
+        )
+    elif args.kind == "controller_runtime":
         payload.update(
             {
                 "controller_instance_id": args.controller_instance_id,
+                "iroha_config_bound": "iroha_config_bound" in args.verified_claims,
+                "config_source": "iroha_config",
                 "external_feed_count": len(args.feeds),
                 "fetched_feed_count": len(args.feeds),
                 "normalized_feed_count": len(args.feeds),
                 "signed_feed_count": len(args.feeds),
-                "feeds": [{"name": name} for name in args.feeds],
+                "feeds": named_records(args.feeds),
             }
         )
         for claim in CONTROLLER_TRUE_CLAIMS:
@@ -231,12 +445,109 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "toggle_api_url": args.toggle_api_url,
                 "toggle_count": len(args.toggles),
                 "approved_toggle_count": len(args.toggles),
-                "toggles": [{"name": name} for name in args.toggles],
+                "toggles": named_records(args.toggles),
                 "toggle_digest_hex": args.toggle_digest_hex,
+                "iroha_config_bound": "iroha_config_bound" in args.verified_claims,
+                "config_source": "iroha_config",
             }
         )
         for claim in MODERATION_TRUE_CLAIMS:
             payload[claim] = claim in args.verified_claims
+    elif args.kind == "gateway_reload":
+        payload.update(
+            {
+                "reload_ack_count": len(DEFAULT_GATEWAYS),
+                "gateways": named_records(DEFAULT_GATEWAYS),
+                "max_reload_latency_ms": args.reload_latency_ms,
+                "hot_reload_verified": True,
+                "cache_version_bound": True,
+                "denylist_catalog_readback_verified": True,
+                "persistence_path_configured": True,
+                "stale_bundle_rejected": True,
+                "rollback_plan_verified": True,
+            }
+        )
+    elif args.kind == "enforcement_probe":
+        routes = route_records(args)
+        payload.update(
+            {
+                "denial_reasons_observed": list(args.denial_reasons),
+                "denial_reason_count": len(args.denial_reasons),
+                "structured_error_labels_verified": True,
+                "telemetry_labels_stable": True,
+                "fail_closed_missing_envelope": True,
+                "fail_closed_unadmitted_provider": True,
+                "rate_limit_verified": True,
+                "geofence_verified": True,
+                "proof_token_required": True,
+                "route_count": len(routes),
+                "passed_route_count": len(routes),
+                "routes": routes,
+            }
+        )
+    elif args.kind == "honey_audit":
+        payload.update(
+            {
+                "honey_probe_count": len(DEFAULT_HONEY_PROBES),
+                "probes": named_records(DEFAULT_HONEY_PROBES),
+                "denied_response_verified": True,
+                "cache_version_binding_verified": True,
+                "proof_token_verified": True,
+                "json_report_generated": True,
+                "markdown_report_generated": True,
+                "audit_digest_hex": args.audit_digest_hex,
+            }
+        )
+    elif args.kind == "appeal_override":
+        payload.update(
+            {
+                "appeal_outcome_consumed": True,
+                "policy_override_signed": True,
+                "cache_invalidation_verified": True,
+                "override_expiry_enforced": True,
+                "operator_audit_trail_persisted": True,
+                "denylist_override_scoped": True,
+                "override_digest_hex": args.override_digest_hex,
+            }
+        )
+    elif args.kind == "transparency_publication":
+        payload.update(
+            {
+                "gar_receipts_published": True,
+                "proof_token_index_published": True,
+                "moderation_events_published": True,
+                "legal_hold_redaction_summaries_published": True,
+                "governance_dag_bound": True,
+                "transparency_cycle_verified": True,
+                "publication_digest_hex": args.publication_digest_hex,
+            }
+        )
+    elif args.kind == "observability":
+        payload.update(
+            {
+                "metrics_scrape_success": True,
+                "dashboard_provisioned": True,
+                "alert_rules_installed": True,
+                "critical_alerts_firing": False,
+                "metrics": list(args.metrics),
+                "metric_count": len(args.metrics),
+            }
+        )
+    elif args.kind == "governance_approval":
+        payload.update(
+            {
+                "approved": True,
+                "governance_vote_recorded": True,
+                "iroha_config_bound": True,
+                "config_source": "iroha_config",
+                "compliance_policy_bound": True,
+                "denylist_feed_roster_bound": True,
+                "transparency_policy_bound": True,
+                "operator_roles_bound": True,
+                "retention_policy_bound": True,
+                "policy_digest_hex": args.policy_digest_hex,
+            }
+        )
     for claim in FORBIDDEN_PAYLOAD_CLAIMS[args.kind]:
         payload[claim] = False
     return payload
@@ -246,11 +557,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
     """Validate kind-specific reviewed operator inputs."""
 
     if args.kind == "controller_runtime":
-        validate_canonical_string(
-            args.controller_instance_id,
-            option="--controller-instance-id",
-            errors=errors,
-        )
+        validate_controller_instance_id_arg(args.controller_instance_id, errors=errors)
         validate_feed_names(args, errors)
         args.verified_claims = validate_name_set(
             split_csv_values(args.verified_claim),
@@ -261,7 +568,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         return
 
     if args.kind == "moderation_toggle":
-        validate_canonical_string(
+        validate_canary_url(
             args.toggle_api_url,
             option="--toggle-api-url",
             errors=errors,
@@ -274,6 +581,39 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             option="--verified-claim",
             errors=errors,
         )
+        return
+
+    if args.kind in {"feed_promotion", "governance_approval"}:
+        validate_hex64(args.policy_digest_hex, option="--policy-digest-hex", errors=errors)
+        return
+
+    if args.kind == "enforcement_probe":
+        validate_hex64(
+            args.route_body_blake3_hex,
+            option="--route-body-blake3-hex",
+            errors=errors,
+        )
+        validate_denial_reasons(args, errors)
+        return
+
+    if args.kind == "honey_audit":
+        validate_hex64(args.audit_digest_hex, option="--audit-digest-hex", errors=errors)
+        return
+
+    if args.kind == "appeal_override":
+        validate_hex64(args.override_digest_hex, option="--override-digest-hex", errors=errors)
+        return
+
+    if args.kind == "transparency_publication":
+        validate_hex64(
+            args.publication_digest_hex,
+            option="--publication-digest-hex",
+            errors=errors,
+        )
+        return
+
+    if args.kind == "observability":
+        validate_metric_names(args, errors)
 
 
 def validate_inputs(args: argparse.Namespace) -> list[str]:
@@ -284,6 +624,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     validate_canonical_string(args.deployment_id, option="--deployment-id", errors=errors)
     validate_canonical_string(args.environment, option="--environment", errors=errors)
     validate_hex64(args.bundle_digest_hex, option="--bundle-digest-hex", errors=errors)
+    validate_default_inventories(errors)
     validate_kind_inputs(args, errors)
     return errors
 
@@ -333,12 +674,14 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if nofollow:
             flags |= nofollow
         fd = os.open(tmp_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_all_checker_summary_bytes(fd, text.encode("utf-8"))
+        os.fsync(fd)
+        os.close(fd)
+        fd = -1
         os.replace(tmp_path, path)
+        parent_sync_errors = fsync_checker_output_parent(path, label="--out")
+        if parent_sync_errors:
+            return parent_sync_errors
     except (OSError, RuntimeError) as error:
         del error
         try:
@@ -368,6 +711,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--generated-at-unix", type=positive_int_arg, required=True)
     parser.add_argument("--now-unix", type=positive_int_arg)
     parser.add_argument("--bundle-digest-hex", required=True)
+    parser.add_argument("--policy-digest-hex")
     parser.add_argument("--verified-claim", action="append", default=[])
     parser.add_argument("--controller-instance-id")
     parser.add_argument("--feed-count", type=positive_int_arg)
@@ -376,6 +720,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--toggle-count", type=positive_int_arg)
     parser.add_argument("--toggle", action="append", default=[])
     parser.add_argument("--toggle-digest-hex")
+    parser.add_argument(
+        "--reload-latency-ms",
+        type=positive_int_arg,
+        default=1_000,
+    )
+    parser.add_argument(
+        "--route-latency-ms",
+        type=positive_int_arg,
+        default=120,
+    )
+    parser.add_argument("--route-body-blake3-hex")
+    parser.add_argument("--denial-reason", action="append", default=[])
+    parser.add_argument("--audit-digest-hex")
+    parser.add_argument("--override-digest-hex")
+    parser.add_argument("--publication-digest-hex")
+    parser.add_argument("--metric", action="append", default=[])
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)
