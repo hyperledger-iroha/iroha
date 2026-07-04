@@ -250,8 +250,14 @@ fn verify_repro_signature(
     public_key: &PublicKey,
     body: &ModerationReproBodyV1,
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    match public_key.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(public_key, body)
 }
@@ -751,7 +757,7 @@ impl AdversarialCorpusManifestV1 {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{KeyPair, Signature};
+    use iroha_crypto::{Algorithm, KeyPair, Signature};
 
     use super::*;
 
@@ -787,6 +793,12 @@ mod tests {
         KeyPair::try_random().expect("generate checked moderation fixture keypair")
     }
 
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} moderation fixture key generation should succeed: {err}")
+        })
+    }
+
     fn checked_signature(
         keypair: &KeyPair,
         body: &ModerationReproBodyV1,
@@ -812,6 +824,22 @@ mod tests {
         }
 
         ModerationReproManifestV1 { body, signatures }
+    }
+
+    fn sign_manifest_with_keypair(
+        body: ModerationReproBodyV1,
+        role: &str,
+        keypair: &KeyPair,
+    ) -> ModerationReproManifestV1 {
+        let signature = checked_signature(keypair, &body);
+        ModerationReproManifestV1 {
+            body,
+            signatures: vec![ModerationReproSignatureV1 {
+                role: role.to_string(),
+                public_key: keypair.public_key().clone(),
+                signature,
+            }],
+        }
     }
 
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
@@ -895,6 +923,44 @@ mod tests {
                 source,
                 iroha_crypto::Error::BadSignature,
                 "{label} moderation signature R produced unexpected error"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_rejects_malformed_mldsa_signature_lengths() {
+        let keypair = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+        let manifest = sign_manifest_with_keypair(sample_body(), "council", &keypair);
+        manifest
+            .validate()
+            .expect("valid ML-DSA moderation manifest verifies");
+        let valid_signature = manifest.signatures[0].signature.payload().to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x5E);
+                payload
+            }),
+        ] {
+            let mut invalid_manifest = manifest.clone();
+            invalid_manifest.signatures[0].signature =
+                SignatureOf::from_signature(Signature::from_bytes(&replacement_signature));
+
+            let err = invalid_manifest
+                .validate()
+                .expect_err("malformed moderation ML-DSA signature length must fail admission");
+            let ModerationReproValidationError::BadSignature { source, .. } = err else {
+                panic!("expected bad moderation signature error: {err:?}");
+            };
+            assert_eq!(
+                source,
+                iroha_crypto::Error::BadSignature,
+                "{label} moderation ML-DSA signature length produced unexpected error"
             );
         }
     }

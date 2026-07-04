@@ -184,6 +184,8 @@ fn vrf_signature_for_peer(
     {
         iroha_crypto::Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(payload)
             .map_err(|_| VrfSignatureCheckError::Malformed),
+        iroha_crypto::Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(payload)
+            .map_err(|_| VrfSignatureCheckError::Malformed),
         _ => Signature::try_from_bytes(payload).map_err(|_| VrfSignatureCheckError::Malformed),
     }
 }
@@ -1310,6 +1312,11 @@ mod checked_vrf_signature_tests {
             .expect("derive VRF Ed25519 fixture key")
     }
 
+    fn checked_mldsa_keypair() -> KeyPair {
+        KeyPair::try_from_seed(b"vrf-mldsa-signature-length".to_vec(), Algorithm::MlDsa)
+            .expect("derive VRF ML-DSA fixture key")
+    }
+
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1419,6 +1426,87 @@ mod checked_vrf_signature_tests {
                 vrf_reveal_signature_check(&chain, PERMISSIONED_TAG, &reveal, &peer),
                 Err(VrfSignatureCheckError::Malformed),
                 "{label} VRF reveal Ed25519 signature R must fail admission"
+            );
+        }
+    }
+
+    #[test]
+    fn vrf_signature_checks_reject_malformed_mldsa_signature_lengths() {
+        let chain: ChainId = "vrf-malformed-mldsa-length-helper"
+            .parse()
+            .expect("chain id");
+        let keypair = checked_mldsa_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+
+        let mut commit = VrfCommit {
+            epoch: 7,
+            commitment: [0xC8; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let commit_preimage = vrf_commit_preimage(&chain, PERMISSIONED_TAG, &commit);
+        let commit_signature = Signature::try_new(keypair.private_key(), &commit_preimage)
+            .expect("sign VRF commit")
+            .payload()
+            .to_vec();
+        commit.bls_sig = commit_signature.clone();
+        assert_eq!(
+            vrf_commit_signature_check(&chain, PERMISSIONED_TAG, &commit, &peer),
+            Ok(())
+        );
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                commit_signature[..commit_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = commit_signature.clone();
+                payload.push(0xC9);
+                payload
+            }),
+        ] {
+            commit.bls_sig = replacement_signature;
+            assert_eq!(
+                vrf_commit_signature_check(&chain, PERMISSIONED_TAG, &commit, &peer),
+                Err(VrfSignatureCheckError::Malformed),
+                "{label} VRF commit ML-DSA signature length must fail admission"
+            );
+        }
+
+        let mut reveal = VrfReveal {
+            epoch: 7,
+            reveal: [0xD8; 32],
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let reveal_preimage = vrf_reveal_preimage(&chain, PERMISSIONED_TAG, &reveal);
+        let reveal_signature = Signature::try_new(keypair.private_key(), &reveal_preimage)
+            .expect("sign VRF reveal")
+            .payload()
+            .to_vec();
+        reveal.bls_sig = reveal_signature.clone();
+        assert_eq!(
+            vrf_reveal_signature_check(&chain, PERMISSIONED_TAG, &reveal, &peer),
+            Ok(())
+        );
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                reveal_signature[..reveal_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = reveal_signature.clone();
+                payload.push(0xD9);
+                payload
+            }),
+        ] {
+            reveal.bls_sig = replacement_signature;
+            assert_eq!(
+                vrf_reveal_signature_check(&chain, PERMISSIONED_TAG, &reveal, &peer),
+                Err(VrfSignatureCheckError::Malformed),
+                "{label} VRF reveal ML-DSA signature length must fail admission"
             );
         }
     }

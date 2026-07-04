@@ -64,8 +64,8 @@ public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
     public let recordBundle: Data
     public let pallasOpenEnvelopes: Data
     public let currentNote: KagemushaRecursiveSpendableNoteDescriptor
-    public let lineageVerifierKey: Data
-    public let lineageProvingKeyArchive: Data
+    public let lineageVerifierKey: Data?
+    public let lineageProvingKeyArchive: Data?
     public let blockHeight: UInt64?
 
     public init(
@@ -76,12 +76,6 @@ public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
         lineageProvingKeyArchive: Data?,
         blockHeight: UInt64? = nil
     ) throws {
-        guard let lineageVerifierKey, !lineageVerifierKey.isEmpty else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageVerifierKey")
-        }
-        guard let lineageProvingKeyArchive else {
-            throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageProvingKeyArchive")
-        }
         let recordBundlePayload = try KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
             recordBundle,
             schema: KagemushaRecursiveSpendRequestCodecs.recordBundleWireName,
@@ -97,10 +91,18 @@ public struct KagemushaRecursiveSpendInitRequest: Equatable, Sendable {
             field: "pallasOpenEnvelopes",
             maxBytes: KagemushaRecursiveSpendProver.nativeArchiveMaxBytes
         )
-        try KagemushaRecursiveSpendRequestCodecs.validateLineageKeyArtifactsForInit(
-            lineageVerifierKey: lineageVerifierKey,
-            lineageProvingKeyArchive: lineageProvingKeyArchive
-        )
+        if lineageVerifierKey != nil || lineageProvingKeyArchive != nil {
+            guard let lineageVerifierKey, !lineageVerifierKey.isEmpty else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageVerifierKey")
+            }
+            guard let lineageProvingKeyArchive else {
+                throw KagemushaRecursiveSpendRequestCodecError.invalidField("lineageProvingKeyArchive")
+            }
+            try KagemushaRecursiveSpendRequestCodecs.validateLineageKeyArtifactsForInit(
+                lineageVerifierKey: lineageVerifierKey,
+                lineageProvingKeyArchive: lineageProvingKeyArchive
+            )
+        }
         self.recordBundle = recordBundle
         self.pallasOpenEnvelopes = pallasOpenEnvelopes
         self.currentNote = currentNote
@@ -115,7 +117,7 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
     public let recordBundle: Data
     public let pallasOpenEnvelopes: Data
     public let currentNote: KagemushaRecursiveSpendableNoteDescriptor
-    public let outputProofCircuitId: String?
+    public let outputProofCircuitId: String
     public let previousLineageVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef?
     public let previousProofOpenEnvelopes: Data?
     public let lineageVerifierKey: Data?
@@ -127,7 +129,7 @@ public struct KagemushaRecursiveSpendAppendRequest: Equatable, Sendable {
         recordBundle: Data,
         pallasOpenEnvelopes: Data,
         currentNote: KagemushaRecursiveSpendableNoteDescriptor,
-        outputProofCircuitId: String? = nil,
+        outputProofCircuitId: String,
         previousLineageVerifierRecord: KagemushaRecursiveSpendVerifierRecordRef? = nil,
         previousProofOpenEnvelopes: Data? = nil,
         lineageVerifierKey: Data? = nil,
@@ -516,7 +518,7 @@ public enum KagemushaRecursiveSpendRequestCodecs {
         ))
         writer.writeField(encodeBytesVec(request.pallasOpenEnvelopes))
         writer.writeField(try encodeSpendableNote(request.currentNote))
-        writer.writeField(encodeOptionRaw(verifyingKeyBoxPayload(request.lineageVerifierKey)))
+        writer.writeField(encodeOptionRaw(request.lineageVerifierKey.map(verifyingKeyBoxPayload)))
         writer.writeField(encodeOptionBytesVec(request.lineageProvingKeyArchive))
         writer.writeField(encodeOptionUInt64(request.blockHeight))
         return noritoEncode(typeName: initRequestWireName, payload: writer.data, flags: requestFlags)

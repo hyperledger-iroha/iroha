@@ -6,6 +6,8 @@ cd "$repo_root"
 
 python3 scripts/formal/check_sumeragi_formal_coverage.py
 
+target/apalache/toolchains/v0.52.2/bin/apalache-mc --version
+
 bash scripts/formal/sumeragi_apalache.sh fast
 bash scripts/formal/sumeragi_apalache.sh deep
 bash scripts/formal/sumeragi_apalache.sh byzantine-delivered-first-top-fast

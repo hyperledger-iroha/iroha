@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use blake3::Hasher;
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
-use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
+use iroha_crypto::{Algorithm, PublicKey};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use soranet_pq::MlDsaSuite;
 use thiserror::Error;
@@ -2263,7 +2263,7 @@ fn verify_mldsa_governance_signature(
             },
         )?;
     let signature =
-        IrohaSignature::try_from_bytes(&publisher_signature.signature).map_err(|err| {
+        iroha_crypto::mldsa65_parse_signature(&publisher_signature.signature).map_err(|err| {
             GovernanceLogSignatureVerificationError::Verification {
                 reason: format!("invalid signature material: {err}"),
             }

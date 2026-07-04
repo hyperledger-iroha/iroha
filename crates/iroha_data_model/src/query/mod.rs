@@ -65,8 +65,16 @@ fn verify_query_signature_for_signer(
     material_error: &'static str,
     verify_error: &'static str,
 ) -> Result<(), &'static str> {
-    if matches!(signer.try_algorithm(), Ok(iroha_crypto::Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload()).map_err(|_| material_error)?;
+    match signer.try_algorithm() {
+        Ok(iroha_crypto::Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())
+                .map_err(|_| material_error)?;
+        }
+        Ok(iroha_crypto::Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())
+                .map_err(|_| material_error)?;
+        }
+        _ => {}
     }
     signature.verify(signer, payload).map_err(|_| verify_error)
 }
@@ -2644,6 +2652,49 @@ mod candidate {
                     .validate()
                     .err()
                     .unwrap_or_else(|| panic!("{label} Ed25519 signature R must be rejected"));
+                assert_eq!(err, "Query request signature material is not valid");
+            }
+        }
+
+        #[test]
+        fn malformed_mldsa_signature_lengths_rejected_before_verify() {
+            let keypair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::MlDsa)
+                .expect("generate checked ML-DSA query fixture keypair");
+            let make_signed_query = || {
+                QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
+                    FindExecutorDataModel,
+                ))
+                .with_authority(AccountId::new(keypair.public_key().clone()))
+                .sign(&keypair)
+            };
+            let signed_query = make_signed_query();
+            let valid_signature = signed_query.signature.0.payload().to_vec();
+            iroha_crypto::mldsa65_parse_signature(&valid_signature)
+                .expect("valid ML-DSA signed query signature parses");
+
+            for (label, replacement_signature) in [
+                (
+                    "short",
+                    valid_signature[..valid_signature.len() - 1].to_vec(),
+                ),
+                ("overlong", {
+                    let mut payload = valid_signature.clone();
+                    payload.push(0x5C);
+                    payload
+                }),
+            ] {
+                let signed_query = make_signed_query();
+                let mut candidate = SignedQueryCandidate {
+                    signature: signed_query.signature,
+                    payload: signed_query.payload,
+                };
+                *candidate.signature.0 =
+                    iroha_crypto::Signature::from_bytes(&replacement_signature);
+
+                let err = candidate
+                    .validate()
+                    .err()
+                    .unwrap_or_else(|| panic!("{label} ML-DSA signature length must be rejected"));
                 assert_eq!(err, "Query request signature material is not valid");
             }
         }

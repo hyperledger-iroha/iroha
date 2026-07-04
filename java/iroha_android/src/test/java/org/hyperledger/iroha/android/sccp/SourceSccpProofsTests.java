@@ -981,8 +981,9 @@ public final class SourceSccpProofsTests {
         : "TRON solid-block header proof hash must match raw recovery-id fixture";
 
     for (int legacyRecoveryId = 27; legacyRecoveryId <= 30; legacyRecoveryId++) {
+      final int unsupportedRecoveryId = legacyRecoveryId;
       final byte[] legacyTransactionSignature = Arrays.copyOf(transactionSourceSignature, 65);
-      legacyTransactionSignature[64] = (byte) legacyRecoveryId;
+      legacyTransactionSignature[64] = (byte) unsupportedRecoveryId;
       final byte[] legacyTransactionBytes =
           replaceFirst(transactionSourceBytes, transactionSourceSignature, legacyTransactionSignature);
       expectThrowsMessage(
@@ -999,7 +1000,7 @@ public final class SourceSccpProofsTests {
           "successful TRON TriggerSmartContract source call");
 
       final byte[] legacyWitnessSignature = Arrays.copyOf(witnessSignature, 65);
-      legacyWitnessSignature[64] = (byte) legacyRecoveryId;
+      legacyWitnessSignature[64] = (byte) unsupportedRecoveryId;
       expectThrowsMessage(
           () ->
               SourceSccpProofs.canonicalTronWitnessSealBytes(
@@ -1013,7 +1014,7 @@ public final class SourceSccpProofsTests {
           "canonical low-S 65-byte TRON signature");
 
       final byte[] legacyTransitionSignature = Arrays.copyOf(transitionSignature, 65);
-      legacyTransitionSignature[64] = (byte) legacyRecoveryId;
+      legacyTransitionSignature[64] = (byte) unsupportedRecoveryId;
       expectThrowsMessage(
           () ->
               SourceSccpProofs.canonicalTronWitnessScheduleTransitionSealBytes(
@@ -1038,7 +1039,7 @@ public final class SourceSccpProofsTests {
           () ->
               SourceSccpProofs.canonicalTronSolidBlockHeaderProofBytes(
                   rawHeader,
-                  tronHeaderSignature(legacyRecoveryId),
+                  tronHeaderSignature(unsupportedRecoveryId),
                   parentRawHeader,
                   tronHeaderSignature(1),
                   rawHeaderHash,
@@ -1057,7 +1058,7 @@ public final class SourceSccpProofsTests {
                   rawHeader,
                   tronHeaderSignature(0),
                   parentRawHeader,
-                  tronHeaderSignature(legacyRecoveryId),
+                  tronHeaderSignature(unsupportedRecoveryId),
                   rawHeaderHash,
                   parentRawHeaderHash,
                   blockId,

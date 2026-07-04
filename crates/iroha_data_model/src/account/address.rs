@@ -1342,7 +1342,7 @@ fn decode_i105_literal_with_embedded_discriminant(
             Err(err) => {
                 first_err.get_or_insert(err);
             }
-        };
+        }
     }
     decoded.ok_or_else(|| {
         structural_err

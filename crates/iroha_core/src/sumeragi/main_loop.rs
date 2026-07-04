@@ -102,6 +102,11 @@ mod checked_consensus_signing_tests {
             .expect("derive consensus Ed25519 fixture key")
     }
 
+    fn checked_mldsa_keypair() -> KeyPair {
+        KeyPair::try_from_seed(b"sumeragi-main-loop-mldsa".to_vec(), Algorithm::MlDsa)
+            .expect("derive consensus ML-DSA fixture key")
+    }
+
     const SMALL_ORDER_ED25519_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -201,6 +206,59 @@ mod checked_consensus_signing_tests {
     }
 
     #[test]
+    fn vote_signature_check_rejects_malformed_mldsa_signature_lengths() {
+        let chain: ChainId = "vote-malformed-mldsa-length-helper"
+            .parse()
+            .expect("chain id");
+        let keypair = checked_mldsa_keypair();
+        let topology = Topology::new(vec![PeerId::new(keypair.public_key().clone())]);
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([1_u8; Hash::LENGTH]),
+            height: 1,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = vote_preimage(&chain, PERMISSIONED_TAG, &vote);
+        let valid_signature = Signature::try_new(keypair.private_key(), &preimage)
+            .expect("checked ML-DSA vote signature")
+            .payload()
+            .to_vec();
+        vote.bls_sig = valid_signature.clone();
+        vote_signature_check(&vote, &topology, &chain, PERMISSIONED_TAG)
+            .expect("valid ML-DSA vote signature verifies");
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x46);
+                payload
+            }),
+        ] {
+            vote.bls_sig = replacement_signature;
+
+            assert_eq!(
+                vote_signature_check(&vote, &topology, &chain, PERMISSIONED_TAG),
+                Err(VoteSignatureError::SignatureInvalid),
+                "{label} ML-DSA vote signature length must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn merge_signature_valid_rejects_all_zero_signature_material() {
         let keypair = checked_bls_keypair();
         let peer = PeerId::new(keypair.public_key().clone());
@@ -243,6 +301,52 @@ mod checked_consensus_signing_tests {
             assert!(
                 !merge_signature_valid(&peer, &signature),
                 "{label} Ed25519 merge signature R must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_signature_valid_rejects_malformed_mldsa_signature_lengths() {
+        let keypair = checked_mldsa_keypair();
+        let peer = PeerId::new(keypair.public_key().clone());
+        let message_digest = Hash::prehashed([0x4A; Hash::LENGTH]);
+        let valid_signature = Signature::try_new(keypair.private_key(), message_digest.as_ref())
+            .expect("checked ML-DSA merge signature")
+            .payload()
+            .to_vec();
+        assert!(merge_signature_valid(
+            &peer,
+            &super::MergeCommitteeSignature {
+                epoch_id: 0,
+                view: 0,
+                signer: 0,
+                message_digest,
+                bls_sig: valid_signature.clone(),
+            }
+        ));
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x4A);
+                payload
+            }),
+        ] {
+            let signature = super::MergeCommitteeSignature {
+                epoch_id: 0,
+                view: 0,
+                signer: 0,
+                message_digest,
+                bls_sig: replacement_signature,
+            };
+
+            assert!(
+                !merge_signature_valid(&peer, &signature),
+                "{label} ML-DSA merge signature length must be rejected"
             );
         }
     }
@@ -3645,6 +3749,7 @@ pub(super) fn vote_signature_check(
         Ok(iroha_crypto::Algorithm::Ed25519) => {
             iroha_crypto::ed25519_parse_signature(&vote.bls_sig)
         }
+        Ok(iroha_crypto::Algorithm::MlDsa) => iroha_crypto::mldsa65_parse_signature(&vote.bls_sig),
         Ok(_) => Signature::try_from_bytes(&vote.bls_sig).map_err(iroha_crypto::Error::from),
         Err(_) => return Err(VoteSignatureError::SignatureInvalid),
     }
@@ -3658,6 +3763,9 @@ fn merge_signature_valid(peer: &PeerId, signature: &MergeCommitteeSignature) -> 
     let Ok(parsed_signature) = (match peer.public_key().try_algorithm() {
         Ok(iroha_crypto::Algorithm::Ed25519) => {
             iroha_crypto::ed25519_parse_signature(&signature.bls_sig)
+        }
+        Ok(iroha_crypto::Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(&signature.bls_sig)
         }
         Ok(_) => Signature::try_from_bytes(&signature.bls_sig).map_err(iroha_crypto::Error::from),
         Err(_) => return false,
@@ -23097,6 +23205,7 @@ impl Actor {
                 );
             }
         }
+        self.publish_canonical_pending_finality_status(tick_start);
         self.tick_in_progress = false;
         progress
     }
@@ -31229,6 +31338,24 @@ impl Actor {
         committed_height: u64,
         now: Instant,
     ) -> bool {
+        self.missing_commit_qc_request_has_live_local_repair_dependency(
+            block_hash,
+            request,
+            committed_height,
+            now,
+        ) && !self.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
+            request.height,
+            request.view,
+        )
+    }
+
+    fn missing_commit_qc_request_has_live_local_repair_dependency(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        request: &MissingBlockRequest,
+        committed_height: u64,
+        now: Instant,
+    ) -> bool {
         let pending_payload_available =
             self.pending
                 .pending_blocks
@@ -31250,10 +31377,6 @@ impl Actor {
             && self
                 .cached_commit_qc_for_block(block_hash, request.height, request.view)
                 .is_none()
-            && !self.known_block_commit_qc_request_is_superseded_by_higher_new_view_quorum(
-                request.height,
-                request.view,
-            )
             && !self.missing_block_request_is_non_actionable_dependency(
                 block_hash,
                 request,
@@ -31874,6 +31997,81 @@ impl Actor {
             || frontier_commit_inflight
             || frontier_slot_active
             || next_slot_prefetch_active
+    }
+
+    fn pending_block_waiting_for_commit_finality(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+        frontier_height: u64,
+        tip_height: usize,
+        tip_hash: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        pending.height == frontier_height
+            && !pending.aborted
+            && !pending.is_retry_aborted()
+            && pending.validation_status == ValidationStatus::Valid
+            && pending_extends_tip(
+                pending.height,
+                pending.block.header().prev_block_hash(),
+                tip_height,
+                tip_hash,
+            )
+            && self
+                .cached_commit_qc_for_block(block_hash, pending.height, pending.view)
+                .is_none()
+            && (pending.local_commit_vote_emitted()
+                || pending.commit_qc_observed()
+                || pending.validated_commit_artifact.is_some()
+                || self
+                    .commit_vote_quorum_status_for_block_detail(
+                        block_hash,
+                        pending.height,
+                        pending.view,
+                    )
+                    .quorum_reached)
+    }
+
+    fn canonical_pending_finality_hash(&self, now: Instant) -> Option<HashOf<BlockHeader>> {
+        let committed_height = self.committed_height_snapshot();
+        let frontier_height = committed_height.saturating_add(1);
+        if let Some((block_hash, _)) =
+            self.pending
+                .missing_commit_qc_requests
+                .iter()
+                .find(|(block_hash, request)| {
+                    request.phase == crate::sumeragi::consensus::Phase::Commit
+                        && request.height == frontier_height
+                        && self.missing_commit_qc_request_has_live_local_repair_dependency(
+                            **block_hash,
+                            request,
+                            committed_height,
+                            now,
+                        )
+                })
+        {
+            return Some(*block_hash);
+        }
+
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        self.pending
+            .pending_blocks
+            .iter()
+            .find_map(|(block_hash, pending)| {
+                self.pending_block_waiting_for_commit_finality(
+                    *block_hash,
+                    pending,
+                    frontier_height,
+                    tip_height,
+                    tip_hash,
+                )
+                .then_some(*block_hash)
+            })
+    }
+
+    pub(super) fn publish_canonical_pending_finality_status(&self, now: Instant) {
+        status::set_canonical_pending_finality(self.canonical_pending_finality_hash(now));
     }
 
     pub(super) fn sync_external_hints(&self) {
@@ -41481,6 +41679,47 @@ impl Actor {
                 || request.height != height
                 || request.view != view
                 || !self.missing_commit_qc_request_has_actionable_dependency(
+                    *block_hash,
+                    request,
+                    committed_height,
+                    now,
+                )
+            {
+                continue;
+            }
+            let repair_window =
+                self.frontier_slot_lag_window()
+                    .max(request.view_change_window.unwrap_or_else(|| {
+                        self.known_block_commit_qc_recovery_view_change_window()
+                    }))
+                    .max(Duration::from_millis(1));
+            let progress_age = now.saturating_duration_since(request.last_dependency_progress);
+            let rotation_ready = request.attempts >= 2
+                && request.view_change_due(now)
+                && progress_age >= repair_window;
+            if !request.view_change_triggered_in_view() && !rotation_ready {
+                let dwell = now.saturating_duration_since(request.first_seen);
+                return Some((*block_hash, dwell, repair_window, request.attempts));
+            }
+        }
+        None
+    }
+
+    pub(super) fn known_block_commit_qc_repair_should_defer_new_view_install(
+        &self,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> Option<(HashOf<BlockHeader>, Duration, Duration, u32)> {
+        if height != self.committed_height_snapshot().saturating_add(1) {
+            return None;
+        }
+        let committed_height = self.committed_height_snapshot();
+        for (block_hash, request) in &self.pending.missing_commit_qc_requests {
+            if !matches!(request.phase, crate::sumeragi::consensus::Phase::Commit)
+                || request.height != height
+                || request.view != view
+                || !self.missing_commit_qc_request_has_live_local_repair_dependency(
                     *block_hash,
                     request,
                     committed_height,

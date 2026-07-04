@@ -2536,18 +2536,28 @@ pub(crate) fn validate_taikai_ssm(
             )
         })?;
 
-    if matches!(
-        signing_manifest.body.publisher_key.try_algorithm(),
-        Ok(iroha_crypto::Algorithm::Ed25519)
-    ) {
-        iroha_crypto::ed25519_parse_signature(signing_manifest.signature.payload()).map_err(
-            |err| {
-                taikai_ingest::bad_request(
-                    META_TAIKAI_SSM,
-                    format!("publisher signature material malformed: {err}"),
-                )
-            },
-        )?;
+    match signing_manifest.body.publisher_key.try_algorithm() {
+        Ok(iroha_crypto::Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signing_manifest.signature.payload()).map_err(
+                |err| {
+                    taikai_ingest::bad_request(
+                        META_TAIKAI_SSM,
+                        format!("publisher signature material malformed: {err}"),
+                    )
+                },
+            )?;
+        }
+        Ok(iroha_crypto::Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signing_manifest.signature.payload()).map_err(
+                |err| {
+                    taikai_ingest::bad_request(
+                        META_TAIKAI_SSM,
+                        format!("publisher signature material malformed: {err}"),
+                    )
+                },
+            )?;
+        }
+        _ => {}
     }
 
     signing_manifest

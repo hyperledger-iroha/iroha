@@ -1877,11 +1877,12 @@ fn verify_json_signature(
         json::to_vec(payload).map_err(|source| Error::SerializationFailure { context, source })?;
     let signature_bytes = decode_canonical_base64(signature_base64, "signature_base64", code)
         .map_err(|_| validation(code, message))?;
-    let signature = if matches!(public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        checked_ed25519_signature_from_bytes(&signature_bytes)
-            .map_err(|_| validation(code, message))?
-    } else {
-        Signature::try_from_bytes(&signature_bytes).map_err(|_| validation(code, message))?
+    let signature = match public_key.try_algorithm() {
+        Ok(Algorithm::Ed25519) => checked_ed25519_signature_from_bytes(&signature_bytes)
+            .map_err(|_| validation(code, message))?,
+        Ok(Algorithm::MlDsa) => iroha_crypto::mldsa65_parse_signature(&signature_bytes)
+            .map_err(|_| validation(code, message))?,
+        _ => Signature::try_from_bytes(&signature_bytes).map_err(|_| validation(code, message))?,
     };
     signature
         .verify(public_key, &bytes)
@@ -1952,9 +1953,13 @@ mod tests {
     const NOW_MS: u64 = 1_700_000_000_000;
     const REPORT_BYTES: &[u8] = b"offline-platform-attestation";
 
-    fn checked_seed_keypair(seed: u8) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+    fn checked_seed_keypair_with_algorithm(seed: u8, algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("generate checked offline issuer fixture keypair")
+    }
+
+    fn checked_seed_keypair(seed: u8) -> KeyPair {
+        checked_seed_keypair_with_algorithm(seed, Algorithm::Ed25519)
     }
 
     fn checked_signature(key_pair: &KeyPair, message: &[u8]) -> Signature {
@@ -2414,6 +2419,46 @@ mod tests {
                 )),
                 "OFFLINE_SIGNATURE_INVALID",
                 "{label} Ed25519 signature R must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_json_signature_rejects_malformed_mldsa_signature_lengths() {
+        let key_pair = checked_seed_keypair_with_algorithm(0x44, Algorithm::MlDsa);
+        let payload = json_object(vec![("kind", string_value("offline-json-mldsa-admission"))]);
+        let payload_bytes = json::to_vec(&payload).expect("offline JSON signing payload");
+        let valid_signature = checked_signature(&key_pair, &payload_bytes);
+        verify_json_signature(
+            key_pair.public_key(),
+            &payload,
+            &BASE64_STANDARD.encode(valid_signature.payload()),
+            "offline_json_signature_test",
+            "OFFLINE_SIGNATURE_INVALID",
+            "invalid signature",
+        )
+        .expect("valid offline JSON ML-DSA signature verifies before mutation");
+
+        let mut extended = valid_signature.payload().to_vec();
+        extended.push(0);
+        for (label, malformed) in [
+            (
+                "truncated",
+                valid_signature.payload()[..valid_signature.payload().len() - 1].to_vec(),
+            ),
+            ("extended", extended),
+        ] {
+            assert_eq!(
+                validation_code(verify_json_signature(
+                    key_pair.public_key(),
+                    &payload,
+                    &BASE64_STANDARD.encode(malformed),
+                    "offline_json_signature_test",
+                    "OFFLINE_SIGNATURE_INVALID",
+                    "invalid signature",
+                )),
+                "OFFLINE_SIGNATURE_INVALID",
+                "{label} ML-DSA signature length must fail closed"
             );
         }
     }

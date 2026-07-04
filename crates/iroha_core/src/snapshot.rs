@@ -3015,8 +3015,9 @@ mod tests {
         let tmp_root = tempdir().unwrap();
         let store_dir = tmp_root.path().join("snapshot");
         let state = state_factory();
-        let key_pair = KeyPair::try_from_seed(b"snapshot-mldsa-signature".to_vec(), Algorithm::MlDsa)
-            .expect("snapshot ML-DSA fixture key generation should succeed");
+        let key_pair =
+            KeyPair::try_from_seed(b"snapshot-mldsa-signature".to_vec(), Algorithm::MlDsa)
+                .expect("snapshot ML-DSA fixture key generation should succeed");
 
         try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).expect("snapshot write");
         let signature_hex = std::fs::read_to_string(store_dir.join(SNAPSHOT_SIGNATURE_FILE_NAME))

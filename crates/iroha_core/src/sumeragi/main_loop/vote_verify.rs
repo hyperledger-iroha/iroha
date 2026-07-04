@@ -155,6 +155,8 @@ fn parse_vote_signature_for_algorithm(
     match algorithm {
         Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(payload)
             .map_err(|_| VoteSignatureError::SignatureInvalid),
+        Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(payload)
+            .map_err(|_| VoteSignatureError::SignatureInvalid),
         _ => Signature::try_from_bytes(payload).map_err(|_| VoteSignatureError::SignatureInvalid),
     }
 }
@@ -1008,6 +1010,103 @@ mod tests {
                         Err(VoteSignatureError::SignatureInvalid)
                     ),
                     "{label} vote verify result did not reject malformed R"
+                );
+            }
+            drop(work_tx);
+
+            drop(handle.work_txs);
+            for join in handle.join_handles {
+                if let Err(err) = join.join() {
+                    panic!("vote verify worker panicked: {err:?}");
+                }
+            }
+        }
+
+        #[test]
+        fn vote_verify_rejects_malformed_mldsa_signature_lengths() {
+            let handle = spawn_vote_verify_workers(None, 1, 1, 1);
+            let work_tx = handle.work_txs[0].clone();
+
+            let signer = checked_seed_keypair(
+                b"mldsa-vote-malformed-length-signer".to_vec(),
+                Algorithm::MlDsa,
+            );
+            let topology = Arc::new(super::network_topology::Topology::new(vec![PeerId::from(
+                signer.public_key().clone(),
+            )]));
+            let chain_id: ChainId = "vote-malformed-mldsa-length-test"
+                .parse()
+                .expect("chain id");
+            let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [0x53; Hash::LENGTH],
+            ));
+            let mut vote = crate::sumeragi::consensus::Vote {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+                post_state_root: Hash::prehashed([1u8; Hash::LENGTH]),
+                height: 1,
+                view: 0,
+                epoch: 0,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
+                highest_qc: None,
+                signer: 0,
+                bls_sig: Vec::new(),
+            };
+            let preimage = crate::sumeragi::consensus::vote_preimage(
+                &chain_id,
+                super::PERMISSIONED_TAG,
+                &vote,
+            );
+            let valid_signature = checked_signature(&signer, &preimage).payload().to_vec();
+            parse_vote_signature_for_algorithm(Algorithm::MlDsa, &valid_signature)
+                .expect("valid ML-DSA vote signature must parse");
+
+            for (index, (label, replacement_signature)) in [
+                (
+                    "short",
+                    valid_signature[..valid_signature.len() - 1].to_vec(),
+                ),
+                ("overlong", {
+                    let mut payload = valid_signature.clone();
+                    payload.push(0xA7);
+                    payload
+                }),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert!(
+                    parse_vote_signature_for_algorithm(Algorithm::MlDsa, &replacement_signature)
+                        .is_err(),
+                    "{label} ML-DSA vote parser must reject malformed length before backend verification"
+                );
+
+                vote.bls_sig = replacement_signature;
+                let key = VoteVerifyKey::from_vote(&vote);
+                work_tx
+                    .send(VoteVerifyWork {
+                        id: 20 + index as u64,
+                        key,
+                        vote: vote.clone(),
+                        signature_topology: topology.clone(),
+                        pops: Arc::new(BTreeMap::new()),
+                        chain_id: chain_id.clone(),
+                        mode_tag: super::PERMISSIONED_TAG,
+                    })
+                    .expect("send vote verify work");
+
+                let result = handle
+                    .result_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("vote verify result");
+                assert!(
+                    matches!(
+                        result.signature_result,
+                        Err(VoteSignatureError::SignatureInvalid)
+                    ),
+                    "{label} vote verify result did not reject malformed ML-DSA length"
                 );
             }
             drop(work_tx);

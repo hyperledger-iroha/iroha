@@ -19868,7 +19868,7 @@ mod accel_tests {
         let value: JsonValue = norito::json::from_str(&json).expect("json");
         let attachment =
             parse_proof_attachment_value(&value).expect("matching envelope hash should parse");
-        assert_eq!(attachment.envelope_hash, Some(Hash::new(&[0_u8]).into()));
+        assert_eq!(attachment.envelope_hash, Some(Hash::new([0_u8]).into()));
     }
 
     #[test]
@@ -33409,7 +33409,7 @@ mod tests {
 
     #[test]
     fn ffi_sign_verify_ed25519() {
-        let private = vec![0x11; 32];
+        let private = [0x11; 32];
         let message = b"ffi-ed25519-signing";
         let (signature, public) = sign_and_verify_roundtrip(Algorithm::Ed25519, &private, message);
         assert_eq!(public.len(), 32);
@@ -33418,7 +33418,7 @@ mod tests {
 
     #[test]
     fn ffi_verify_detached_rejects_all_zero_signature_material() {
-        let private = vec![0x11; 32];
+        let private = [0x11; 32];
         let message = b"ffi-ed25519-signing";
         let mut pk_ptr: *mut c_uchar = ptr::null_mut();
         let mut pk_len: c_ulong = 0;
@@ -33582,8 +33582,53 @@ mod tests {
     }
 
     #[test]
+    fn ffi_verify_detached_rejects_malformed_mldsa_signature_lengths() {
+        let keypair =
+            KeyPair::try_from_seed(b"ffi-mldsa-malformed-signature".to_vec(), Algorithm::MlDsa)
+                .expect("fixture seed must derive a valid ML-DSA keypair");
+        let (_public_key, private_key) = keypair.into_parts();
+        let (_alg, private_bytes) = private_key.to_bytes();
+        let message = b"ffi-mldsa-malformed-signature";
+        let (signature, public) =
+            sign_and_verify_roundtrip(Algorithm::MlDsa, &private_bytes, message);
+        let mut short = signature.clone();
+        short.pop();
+        let mut overlong = signature.clone();
+        overlong.push(0x42);
+
+        for (label, malformed) in [
+            ("short", short),
+            ("overlong", overlong),
+            ("all-zero", vec![0_u8; signature.len()]),
+        ] {
+            let mut valid: c_uchar = 1;
+            let rc_verify = unsafe {
+                connect_norito_verify_detached(
+                    Algorithm::MlDsa as u8,
+                    public.as_ptr(),
+                    public.len() as c_ulong,
+                    message.as_ptr(),
+                    message.len() as c_ulong,
+                    malformed.as_ptr(),
+                    malformed.len() as c_ulong,
+                    &mut valid,
+                )
+            };
+
+            assert_eq!(
+                rc_verify, 0,
+                "{label} malformed ML-DSA signature must not become an API error"
+            );
+            assert_eq!(
+                valid, 0,
+                "{label} malformed ML-DSA signature must not verify"
+            );
+        }
+    }
+
+    #[test]
     fn java_detached_signing_helper_signs_and_verifies() {
-        let private = vec![0x21; 32];
+        let private = [0x21; 32];
         let message = b"java-helper-detached-signing";
         let algorithm = Algorithm::Ed25519 as jni::sys::jint;
 
@@ -33601,8 +33646,48 @@ mod tests {
     }
 
     #[test]
+    fn java_detached_verify_helper_rejects_malformed_mldsa_signature_lengths() {
+        let keypair = KeyPair::try_from_seed(
+            b"java-helper-mldsa-malformed-signature".to_vec(),
+            Algorithm::MlDsa,
+        )
+        .expect("fixture seed must derive a valid ML-DSA keypair");
+        let (_, public) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("checked ML-DSA public key");
+        let (_alg, private) = keypair.private_key().to_bytes();
+        let public = public.to_vec();
+        let message = b"java-helper-mldsa-malformed-signature";
+        let algorithm = Algorithm::MlDsa as jni::sys::jint;
+        let signature =
+            java_sign_detached_bytes(algorithm, &private, message).expect("Java helper signs");
+        assert!(
+            java_verify_detached_bytes(algorithm, &public, message, &signature)
+                .expect("Java verify helper runs"),
+            "valid ML-DSA signature must verify"
+        );
+        let mut short = signature.clone();
+        short.pop();
+        let mut overlong = signature.clone();
+        overlong.push(0x42);
+
+        for (label, malformed) in [
+            ("short", short),
+            ("overlong", overlong),
+            ("all-zero", vec![0_u8; signature.len()]),
+        ] {
+            assert!(
+                !java_verify_detached_bytes(algorithm, &public, message, &malformed)
+                    .expect("Java verify helper runs"),
+                "{label} malformed ML-DSA signature must not verify"
+            );
+        }
+    }
+
+    #[test]
     fn java_detached_verify_helper_rejects_all_zero_signature_material() {
-        let private = vec![0x21; 32];
+        let private = [0x21; 32];
         let message = b"java-helper-detached-signing";
         let algorithm = Algorithm::Ed25519 as jni::sys::jint;
         let public = java_public_key_from_private_bytes(algorithm, &private)

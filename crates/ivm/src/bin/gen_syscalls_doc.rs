@@ -352,23 +352,6 @@ fn rewrite_gas_tokens(gas_raw: &str) -> (String, Vec<String>) {
     (out_gas, gas_keys)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::rewrite_gas_tokens;
-
-    #[test]
-    fn rewrite_gas_tokens_preserves_parenthesized_plus_text() {
-        let (rendered, keys) =
-            rewrite_gas_tokens("G_soracloud + request bytes (+ response bytes under host)");
-
-        assert_eq!(
-            rendered,
-            "asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under host)"
-        );
-        assert_eq!(keys, ["G_soracloud"]);
-    }
-}
-
 fn unescape_basic_toml_string(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut chars = value.chars();
@@ -611,5 +594,22 @@ fn main() {
     } else if check {
         eprintln!("syscalls.md missing generated markers");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_gas_tokens;
+
+    #[test]
+    fn rewrite_gas_tokens_preserves_parenthesized_plus_text() {
+        let (rendered, keys) =
+            rewrite_gas_tokens("G_soracloud + request bytes (+ response bytes under host)");
+
+        assert_eq!(
+            rendered,
+            "asset:gas/G_soracloud@ivm.core/v2 + request bytes (+ response bytes under host)"
+        );
+        assert_eq!(keys, ["G_soracloud"]);
     }
 }

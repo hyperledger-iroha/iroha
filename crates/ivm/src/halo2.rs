@@ -1188,15 +1188,12 @@ impl<'a> Ed25519VerifyCircuit<'a> {
     /// Verify the signature using `ed25519-dalek` and compare with the
     /// expected `result` flag.
     pub fn verify(&self) -> Result<(), &'static str> {
-        use ed25519_dalek::{Signature, VerifyingKey};
-        if crate::signature::material_bytes_are_all_zero(&self.public_key) {
+        use ed25519_dalek::Signature;
+        let Some(pk) =
+            crate::signature::parse_ed25519_public_key_for_verification(&self.public_key)
+        else {
             return ensure_equal_bool(false, self.result);
-        }
-        let pk = VerifyingKey::from_bytes(&self.public_key)
-            .map_err(|_| "Ed25519 verifying key decode failed")?;
-        if crate::signature::ed25519_public_key_is_weak(&pk) {
-            return ensure_equal_bool(false, self.result);
-        }
+        };
         if crate::signature::signature_bytes_are_all_zero(&self.signature) {
             return ensure_equal_bool(false, self.result);
         }

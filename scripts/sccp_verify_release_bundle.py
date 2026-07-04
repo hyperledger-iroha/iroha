@@ -921,10 +921,10 @@ READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_EXCLUDED_MARKERS = (
     "missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence",
     "Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`",
     "truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence",
+    "Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping",
     "TRX XML metadata percent decoding is bounded and fail-closed",
     "sensitive metadata hidden behind nested percent encoding",
     "values still percent-decodable after eight rounds remain forged evidence",
-    "Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping",
 )
 READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_MARKERS = tuple(
     marker
@@ -5157,9 +5157,34 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "canonical source-state preflight FASTPQ parameter set",
             "canonical open proof with opaque backend",
             "canonical open proof with compressed backend",
+            "fn sccp_checked_source_envelope_encoder_rejects_base_shape_drift()",
+            "checked source envelope encoder must reject empty consensus proof bytes",
+            "checked source envelope hash must reject empty consensus proof bytes",
+            "checked source envelope encoder must reject empty message-inclusion proof bytes",
+            "checked source envelope hash must reject empty message-inclusion proof bytes",
+            "checked source envelope encoder must reject empty inclusion branches",
+            "checked source envelope hash must reject empty inclusion branches",
+            "checked source envelope encoder must reject source-chain label drift",
+            "checked source envelope hash must reject source-chain label drift",
+            "checked source envelope encoder must reject role-hash aliasing",
+            "checked source envelope hash must reject role-hash aliasing",
             "fn sccp_checked_source_adapter_verification_encoders_match_legacy_bytes()",
+            "fn sccp_checked_source_adapter_statement_rejects_role_hash_drift()",
+            "zero transcript hashes",
+            "zero verifier evidence hashes",
+            "transcript hash/message id role replay",
+            "verifier evidence/payload hash role replay",
+            "transcript/evidence role aliasing",
+            "checked source-adapter statement must reject {label}",
+            "checked source-adapter context must reject {label}",
+            "source-adapter FastPQ batch must reject {label}",
+            "checked source-adapter statement must reject base envelope shape drift",
+            "checked source-adapter context must reject base envelope shape drift",
+            "source-adapter FastPQ batch must reject base envelope shape drift",
             "fn sccp_checked_source_adapter_proof_encoder_matches_legacy_for_launch_lanes()",
             "fn sccp_checked_source_adapter_proof_encoder_rejects_oversized_launch_lane_shapes()",
+            "verify_sccp_eth_beacon_execution_header_root_binding(adapter)",
+            "ETH structural preflight must reject non-fixed-depth execution-payload branches",
             "checked source-adapter FastPQ context must reject unknown source domains",
             "source-adapter FastPQ batch must not normalize an unknown domain to an empty chain key",
             "fn sccp_checked_source_adapter_verification_rejects_unbounded_adapter()",
@@ -5170,9 +5195,12 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "BSC source-adapter preflight must reject transition headers whose Parlia payload does not match the advertised next set",
             "BSC source-adapter preflight must reject next-validator-set hash drift from the decoded payload",
             "Solana source-adapter preflight must reject all-zero nested proof capsules",
+            "Solana checked adapter encoding must reject all-zero nested proof capsules",
             "Solana audit transcripts must reject opaque nested AccountsLtHash proof bytes",
             "Solana source-adapter preflight must reject opaque nested proof capsules",
+            "Solana checked adapter encoding must reject opaque nested proof capsules",
             "Solana source-adapter preflight must reject all-zero audit role proof capsules",
+            "Solana checked adapter encoding must reject all-zero audit role proof capsules",
             "Solana production proofs must not pass without the Tower replay verifier capsule",
             "Solana readiness must reject verifier hashes replayed from request-bound audit statement hashes",
             "Solana {label} replay must not satisfy governed source-adapter readiness",
@@ -5181,18 +5209,63 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "Solana bank/fork-choice verifier capsule must be role-separated from full AccountsDB lattice",
             "Solana bank/fork-choice verifier capsule bytes must be cryptographically checked",
             "TON source-adapter preflight must reject all-zero shard-state proof capsules",
+            "TON checked adapter encoding must reject all-zero shard-state proof capsules",
             "TON audit transcripts must reject opaque shard-state source proof bytes",
             "TON source-adapter preflight must reject opaque shard-state proof capsules",
+            "TON checked adapter encoding must reject opaque shard-state proof capsules",
             "TON source-adapter preflight must reject all-zero audit role proof capsules",
+            "TON checked adapter encoding must reject all-zero audit role proof capsules",
             "TON production proofs must not pass without the masterchain config verifier capsule",
             "template-derived TON shard-state verifier hashes are not production-ready",
             "TON shard-state FASTPQ batch must not package template source-state verifier material",
             "TON shard-state proof builder must not package template source-state verifier material",
             "TON validator-set transition verifier capsule must be role-separated from masterchain config",
             "TON shard-accounts verifier capsule bytes must be cryptographically checked",
+            "verify_sccp_ton_validator_signature_proof(signatures_proof, validator_set_hash)",
+            "TON structural preflight must reject validator signatures that fail deterministic verification",
+            "TON checked adapter encoding must reject validator signatures that fail deterministic verification",
+            "TON structural preflight must reject transition signatures that fail deterministic verification",
+            "TON checked adapter encoding must reject transition signatures that fail deterministic verification",
+            "verify_sccp_ton_shard_state_opening(adapter)",
+            "verify_sccp_ton_masterchain_config_proof(adapter)",
+            "TON structural preflight must reject shard-state dictionary proof BOC drift",
+            "TON checked adapter encoding must reject shard-state dictionary proof BOC drift",
+            "TON structural preflight must reject masterchain config proof BOC drift",
+            "TON checked adapter encoding must reject masterchain config proof BOC drift",
+            "ton_shard_state_merkle_fields_are_canonical",
+            "dictionary-backed TON proofs must not carry unused shard-state leaf indexes",
             "TRON source gate hash must explicitly bind deployment receipts",
             "Solana source gate hash must explicitly bind deployment receipts",
             "TON source gate hash must explicitly bind deployment receipts",
+            "evm_recoverable_signature_slice_is_canonical",
+            "BSC structural preflight must reject high-S validator-set seal signatures",
+            "BSC structural preflight must reject high-S transition-seal signatures",
+            "verify_sccp_bsc_validator_set_seal_signatures(seal, validator_set_hash)",
+            "BSC structural preflight must reject validator-set seal signatures that recover to the wrong validator",
+            "BSC checked adapter encoding must reject validator-set seal signatures that recover to the wrong validator",
+            "BSC structural preflight must reject transition-seal signatures that recover to the wrong validator",
+            "BSC checked adapter encoding must reject transition-seal signatures that recover to the wrong validator",
+            "verify_sccp_solana_finality_context_shape(adapter)",
+            "Solana structural preflight must reject finality-context stake-root drift after vote-message refresh",
+            "Solana checked adapter encoding must reject finality-context stake-root drift after vote-message refresh",
+            "sccp_solana_validator_account_witnesses_are_consistent",
+            "Solana structural preflight must reject vote-account data drift before source verification",
+            "Solana checked adapter encoding must reject vote-account data drift before source verification",
+            "Solana structural preflight must reject stake-account data drift before source verification",
+            "Solana checked adapter encoding must reject stake-account data drift before source verification",
+            "sccp_tron_transaction_source_merkle_root_matches",
+            "TRON structural preflight must reject transaction Merkle roots that do not match transaction bytes",
+            "verify_sccp_tron_solid_block_header_proof(adapter, &adapter.witness_seal_proof)",
+            "TRON structural preflight must reject solid-block transaction-root drift",
+            "verify_sccp_tron_witness_seal_signatures(seal, witness_schedule_hash)",
+            "sccp_tron_witness_schedule_transition_seal_hash(transition)",
+            "TRON structural preflight must reject witness-seal signatures that recover to the wrong witness",
+            "TRON checked adapter encoding must reject witness-seal signatures that recover to the wrong witness",
+            "TRON structural preflight must reject witness-schedule transition signatures that recover to the wrong witness",
+            "TRON checked adapter encoding must reject witness-schedule transition signatures that recover to the wrong witness",
+            "sccp_tron_transition_block_hash_is_anchored(",
+            "TRON structural preflight must reject witness-schedule transition block hashes not anchored to the proven header chain",
+            "TRON checked adapter encoding must reject witness-schedule transition block hashes not anchored to the proven header chain",
             "adapter verifier commitment helper must reject wrong outer proof versions",
             "adapter verifier commitment helper must reject wrong proof families",
             "adapter verifier commitment helper must reject wrong outer circuit ids",
@@ -5208,11 +5281,20 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "adapter verifier commitment helper must reject stale adapter transcript hashes",
             "adapter verifier commitment helper must reject malformed source proof envelopes after transcript and OpenVerify rebuild",
             "malformed source proof envelope must fail the outer shape gate before wrapper rebuild",
+            "sccp_source_chain_proof_envelope_role_hashes_are_separated",
+            "ssz_merkle_root_from_branch",
+            "h256_merkle_leaf_index_is_canonical_for_depth",
             "outer version drift",
             "zero finality height",
             "source-event digest drift",
+            "message id replayed as payload hash",
+            "finality block replayed as receipt root",
+            "finalized header replayed as commitment root",
             "empty inclusion branch",
+            "SSZ Merkle roots must reject non-canonical high-bit leaf indexes",
+            "source message roots must reject non-canonical high-bit leaf indexes",
             "source_verifier_evidence_role_hashes_are_separated",
+            "source_verifier_evidence_adapter_hashes_reuse_builtin_template_component_hashes",
             "source_verifier_evidence_reuses_builtin_template_component_hashes",
             "adapter verifier commitment helper must reject malformed source verifier evidence after OpenVerify rebuild",
             "malformed source verifier evidence must fail common shape before wrapper rebuild",
@@ -5220,6 +5302,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "unpaired deployment receipt",
             "zero adapter proof hash",
             "zero adapter transcript hash",
+            "source verifier evidence reused adapter/source trust hashes",
+            "source verifier evidence reused transcript/consensus hashes",
+            "source verifier evidence adapter proof reused template hash",
             "deployment hash pair without deployment-bound source roles",
             "source verifier evidence reused trust-anchor/consensus hashes",
             "source verifier evidence reused message/finality hashes",
@@ -5285,7 +5370,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "deployment matching must reject deployment-bound verifier evidence role replay",
             "source role as deployment hash",
             "deployment hash as deployment receipt",
+            "deployment hash as adapter proof hash",
+            "deployment receipt as adapter transcript hash",
             "template source role as evidence consensus verifier",
+            "template source role as adapter transcript hash",
             "template source role as deployment receipt",
             "deployment-tagged ETH legacy receipt-root-only proofs must fail configured verification",
             "ETH production admission must not reopen the legacy receipt-root-only source path",
@@ -10140,13 +10228,13 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             "intentionally available only to tests and fixture",
             "fn sccp_allow_unready_transparent_proof_bypass_enabled(allow_unready: bool) -> bool",
             "fn sccp_allow_unready_source_proof_bypass_enabled(allow_unready: bool) -> bool",
-            'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
+            "allow_unready && cfg!(test)",
             "sccp_allow_unready_transparent_proof_bypass_enabled(allow_unready)",
             "let allow_unready_source_proof = sccp_allow_unready_source_proof_bypass_enabled(allow_unready);",
             "sccp_allow_unready_source_proof_bypass_enabled(allow_unready_source_proof)",
             "if !allow_unready_source_proof\n        && !sccp_bundle_source_proof_satisfies_production_build_gate(",
-            "fn unready_manifest_bypass_is_test_fixture_gated()",
-            "fn unready_source_proof_bypass_is_test_fixture_gated()",
+            "fn unready_manifest_bypass_is_test_gated()",
+            "fn unready_source_proof_bypass_is_test_gated()",
             '#[cfg(any(test, feature = "test-fixtures"))]\n'
             "pub fn build_sccp_taira_tron_xor_diagnostic_transparent_proof(",
             '#[cfg(any(test, feature = "test-fixtures"))]\n'
@@ -10184,6 +10272,15 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             'iroha_sccp = { path = "../iroha_sccp" }',
             "[dev-dependencies]",
             'iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }',
+        ),
+    ),
+    (
+        "crates/iroha_js_host/Cargo.toml",
+        (
+            "[dependencies]",
+            'iroha_sccp = { workspace = true }',
+            "[dev-dependencies]",
+            'iroha_sccp = { workspace = true, features = ["test-fixtures"] }',
         ),
     ),
     (
@@ -10282,12 +10379,15 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             "SCCP_UNREADY_SOURCE_PROOF_BYPASS_CALL_SITE_MARKER = (",
             "SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES = 4",
             "def _sccp_unready_source_proof_bypass_call_site_errors(",
+            "SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_BYPASS_GATES = (",
+            "def _sccp_unready_widened_bypass_gate_errors(",
             "SCCP_UNREADY_TORII_ROUTE_BYPASS_CALL_SITE_MARKER = (",
             "SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES = 8",
             "def _sccp_unready_torii_route_bypass_call_site_errors(",
             "def _sccp_unready_transparent_proof_test_fixture_feature_errors(",
             "def _sccp_unready_transparent_proof_release_command_feature_errors(",
             "_sccp_unready_source_proof_bypass_call_site_errors(inventory)",
+            "_sccp_unready_widened_bypass_gate_errors(inventory)",
             "_sccp_unready_torii_route_bypass_call_site_errors(inventory)",
             "for forbidden_env in SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV:",
             "forbidden_identifier in source_identifier_texts",
@@ -10312,6 +10412,9 @@ SCCP_UNREADY_SOURCE_PROOF_BYPASS_CALL_SITE_MARKER = (
     "sccp_allow_unready_source_proof_bypass_enabled(allow_unready);"
 )
 SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES = 4
+SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_BYPASS_GATES = (
+    'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
+)
 SCCP_UNREADY_TORII_ROUTE_BYPASS_CALL_SITE_MARKER = (
     "let allow_unready = sccp_allow_unready_torii_route_bypass_enabled(allow_unready);"
 )
@@ -10355,6 +10458,11 @@ SCCP_UNREADY_TRANSPARENT_PROOF_ALLOWED_TEST_FIXTURE_CARGO_DEPENDENCIES = {
         "crates/iroha_torii/Cargo.toml",
         "dev-dependencies",
         'iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }',
+    ),
+    (
+        "crates/iroha_js_host/Cargo.toml",
+        "dev-dependencies",
+        'iroha_sccp = { workspace = true, features = ["test-fixtures"] }',
     ),
 }
 SCCP_UNREADY_TRANSPARENT_PROOF_RELEASE_COMMAND_PATHS = (
@@ -10520,6 +10628,12 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
             "built-in placeholder source material must not accept deployment-bound live material",
             "production admission may allow the disabled destination manifest only when the source proof is deployment-ready",
             "built-in placeholder source material must not build jobs for configured source proofs",
+            "fn sccp_proof_requests_reject_sora_bundle_finality_drift",
+            "valid SORA-origin proof request fixture must still build",
+            "proof-request bundle matcher must reject opaque SORA finality bytes",
+            "proof-request bundle matcher must reject SORA finality commitment-root drift",
+            "proof-request bundle matcher must reject SORA finality height drift",
+            "proof-request bundle matcher must reject SORA finality block-hash drift",
             "TON proof requests must reject arbitrary non-canonical SCCP bundle bytes",
             "TON proof requests for non-SORA source bundles must carry source proof bytes",
             "TON proof requests must reject canonical but mismatched non-SORA source proof bytes",
@@ -11259,7 +11373,7 @@ SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
         (
             "def _sccp_proof_request_bundle_gate_inventory_errors",
             "\"proof_request_bundle_gate\"",
-            "SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
+            "SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA Nexus-finality binding, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
         ),
     ),
     (
@@ -18787,7 +18901,7 @@ TRON_INBOUND_ADVERSARIAL_MARKERS = (
             "rejectsLegacyTronRecoveryIdAliasesForUiTooling",
             "final byte[] transactionSourceSignature =",
             "for (int legacyRecoveryId = 27; legacyRecoveryId <= 30; legacyRecoveryId++)",
-            "tronHeaderSignature(legacyRecoveryId)",
+            "tronHeaderSignature(unsupportedRecoveryId)",
             "0x362579d1667137b9dac3fc20772de7b0b4adb3888d4508bb5d75e53596d43771",
         ),
     ),
@@ -20108,13 +20222,14 @@ def _all_lanes_not_ready_nested_schema_errors(
                 ALL_LANES_SOURCE_ADAPTER_GATE_KEYS,
             )
         )
-        errors.extend(
-            _all_lanes_missing_key_errors(
-                source_gate_label,
-                source_gate,
-                ALL_LANES_SOURCE_ADAPTER_GATE_KEYS,
+        if source_gate:
+            errors.extend(
+                _all_lanes_missing_key_errors(
+                    source_gate_label,
+                    source_gate,
+                    ALL_LANES_SOURCE_ADAPTER_GATE_KEYS,
+                )
             )
-        )
         for field in ("required", "ready"):
             errors.extend(_boolean_field_errors(source_gate_label, source_gate, field))
         errors.extend(
@@ -20178,13 +20293,14 @@ def _all_lanes_not_ready_nested_schema_errors(
                 ALL_LANES_EVM_LIVE_METADATA_KEYS,
             )
         )
-        errors.extend(
-            _all_lanes_missing_key_errors(
-                metadata_label,
-                evm_metadata,
-                ALL_LANES_EVM_LIVE_METADATA_KEYS,
+        if evm_metadata:
+            errors.extend(
+                _all_lanes_missing_key_errors(
+                    metadata_label,
+                    evm_metadata,
+                    ALL_LANES_EVM_LIVE_METADATA_KEYS,
+                )
             )
-        )
         for field in ("required", "ready"):
             errors.extend(_boolean_field_errors(metadata_label, evm_metadata, field))
         for field in (
@@ -22830,6 +22946,65 @@ def _sccp_unready_source_proof_bypass_call_site_errors(
     return errors
 
 
+def _sccp_unready_widened_bypass_gate_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...],
+) -> list[str]:
+    """Return errors when SCCP allow_unready bypasses are feature-gated."""
+
+    errors: list[str] = []
+    for raw_path, required_markers in inventory:
+        if (
+            "fn sccp_allow_unready_transparent_proof_bypass_enabled(allow_unready: bool) -> bool"
+            not in required_markers
+        ):
+            continue
+        path = Path(raw_path)
+        display_path = str(path)
+        if not path.is_absolute():
+            display_path = path.as_posix()
+            path = ROOT / path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            errors.append(
+                "SCCP unready transparent-proof removed-surface source inventory "
+                "bypass-gate source is not UTF-8 text"
+            )
+            continue
+        except OSError:
+            errors.append(
+                "SCCP unready transparent-proof removed-surface source inventory "
+                "bypass-gate source cannot be read"
+            )
+            continue
+        except (Exception, SystemExit):
+            errors.append(
+                "SCCP unready transparent-proof removed-surface source inventory "
+                "bypass-gate source cannot be read"
+            )
+            continue
+
+        source_texts = (
+            source,
+            _source_escape_decoded_text(source),
+        )
+        source_identifier_texts = tuple(
+            _source_identifier_scan_text(text) for text in source_texts
+        )
+        for forbidden_gate in SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_BYPASS_GATES:
+            forbidden_identifier = _source_identifier_scan_text(forbidden_gate)
+            if any(forbidden_gate in source_text for source_text in source_texts) or any(
+                forbidden_identifier in source_identifier_text
+                for source_identifier_text in source_identifier_texts
+            ):
+                errors.append(
+                    "SCCP unready transparent-proof removed-surface source inventory "
+                    f"{display_path} contains forbidden widened allow_unready "
+                    f"gate: {forbidden_gate}"
+                )
+    return errors
+
+
 def _sccp_unready_torii_route_bypass_call_site_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...],
 ) -> list[str]:
@@ -22936,6 +23111,7 @@ def _sccp_unready_transparent_proof_config_inventory_errors(
         label="SCCP unready transparent-proof removed-surface",
     )
     errors.extend(_sccp_unready_source_proof_bypass_call_site_errors(inventory))
+    errors.extend(_sccp_unready_widened_bypass_gate_errors(inventory))
     errors.extend(_sccp_unready_torii_route_bypass_call_site_errors(inventory))
     for raw_path in forbidden_paths:
         path = Path(raw_path)
@@ -30780,7 +30956,7 @@ def _render_readiness_markdown(
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
             "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, BSC proof-artifact remote-prover marker rejection, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
             "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, copied-summary scalar exactness, and bundled-manifest drift rejection before published bundle readiness can pass.",
-            "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
+            "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA Nexus-finality binding, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
             "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, exact Kotlin Gradle selector list, exact Swift filter commands, exact Java Android harness class list including TRON, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
             "- SCCP release bundle source-copy source inventory must pin symlink, control-character, non-ASCII filename, and secret-looking filename rejection for evidence inputs, phase evidence, native EVM prover manifests, and native prover payload sources before bundle copy can run.",
@@ -30792,7 +30968,7 @@ def _render_readiness_markdown(
             "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, row-key and audit-key classification, lane-field binding, canonical row recomputation, Markdown row-domain/audit-key suppression, and active route-canary binding rejection before published bundle readiness can pass.",
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
-            "- SCCP unready transparent-proof source inventory must pin the removed runtime/config surface, keep the `allow_unready` manifest and source-proof bypasses effective only under `cfg(any(test, feature = \"test-fixtures\"))`, keep Torii route/proof `allow_unready` bypasses effective only under `cfg(test)`, keep `test-fixtures` out of production SCCP dependencies and release/corridor Rust commands, reject case-variant, split-token, and source-escaped environment override names, reject reintroduced runtime config fields, and require BSC/TRON route configs to reject the removed `--allow-unready` option while stripping stale merged config keys.",
+            "- SCCP unready transparent-proof source inventory must pin the removed runtime/config surface, keep the `allow_unready` manifest and source-proof bypasses effective only under `cfg(test)`, keep Torii route/proof `allow_unready` bypasses effective only under `cfg(test)`, keep `test-fixtures` out of production SCCP dependencies and release/corridor Rust commands, reject case-variant, split-token, and source-escaped environment override names, reject reintroduced runtime config fields, and require BSC/TRON route configs to reject the removed `--allow-unready` option while stripping stale merged config keys.",
             "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean and public-DNS endpoint rejection before TRON deploy helper evidence can satisfy production readiness.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]

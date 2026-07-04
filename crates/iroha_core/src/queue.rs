@@ -194,27 +194,29 @@ fn ensure_routing_plan_active_at_height(
 }
 
 fn route_uses_legacy_default_public_lane(route: RoutingDecision, nexus: &Nexus) -> bool {
-    if route.lane_id != LaneId::SINGLE || route.dataspace_id == DataSpaceId::UNIVERSAL {
+    if nexus.enabled || route.lane_id != LaneId::SINGLE {
         return false;
     }
-    if nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .any(|lane| lane.dataspace_id == route.dataspace_id)
-    {
-        return false;
-    }
-    nexus
+    let Some(default_lane) = nexus
         .lane_catalog
         .lanes()
         .iter()
         .find(|lane| lane.id == LaneId::SINGLE)
-        .is_some_and(|lane| {
-            lane.dataspace_id == DataSpaceId::UNIVERSAL
-                && !lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
-                && !lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
-        })
+    else {
+        return false;
+    };
+    if default_lane.dataspace_id != DataSpaceId::UNIVERSAL
+        || default_lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
+        || default_lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
+    {
+        return false;
+    }
+    route.dataspace_id == DataSpaceId::UNIVERSAL
+        || !nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .any(|lane| lane.dataspace_id == route.dataspace_id)
 }
 
 fn resolve_routing_plan_against_nexus_at_height(
@@ -7485,7 +7487,18 @@ pub mod tests {
             .with_metadata(multisig_metadata)
             .build(&multisig_id);
         let world = World::with([domain], [signer, cosigner, validator, multisig], []);
-        let state = Arc::new(State::new(world, kura, query_handle));
+        let mut state = State::new(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        }
+        let state = Arc::new(state);
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let mut statuses = BTreeMap::new();
@@ -7507,6 +7520,7 @@ pub mod tests {
         };
         statuses.insert(LaneId::SINGLE, status);
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.reconfigure_nexus_with_state(&state.nexus_snapshot(), &state, None);
         queue.install_lane_manifests(&manifests);
 
         let tx = accepted_tx_with(
@@ -11686,6 +11700,35 @@ pub mod tests {
             queue
                 .route_plan_for_gossip_with_state(&tx, &state)
                 .expect("legacy default public lane gossip route should resolve with state"),
+            expected
+        );
+    }
+
+    #[test]
+    fn state_backed_queue_routes_allow_disabled_nexus_default_universal_lane() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let expected = RoutingPlan::single(RoutingDecision::new(
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+        ));
+
+        assert_eq!(
+            queue
+                .route_plan_with_state(&tx, &state)
+                .expect("disabled Nexus should keep default universal route admissible"),
+            expected
+        );
+        assert_eq!(
+            queue
+                .route_plan_for_gossip_with_state(&tx, &state)
+                .expect("disabled Nexus gossip route should keep default route admissible"),
             expected
         );
     }

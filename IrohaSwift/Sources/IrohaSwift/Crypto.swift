@@ -736,13 +736,21 @@ public enum MlDsaSuite: UInt8, CaseIterable, Sendable {
     case mlDsa65 = 1
     case mlDsa87 = 2
 
-    func parameters() throws -> MlDsaParameters {
-        guard let params = NoritoNativeBridge.shared.mldsaParameters(suiteId: rawValue) else {
-            throw MlDsaError.bridgeUnavailable
+    func parameters() -> MlDsaParameters {
+        switch self {
+        case .mlDsa44:
+            return MlDsaParameters(publicKeyLength: 1_312,
+                                   secretKeyLength: 2_560,
+                                   signatureLength: 2_420)
+        case .mlDsa65:
+            return MlDsaParameters(publicKeyLength: 1_952,
+                                   secretKeyLength: 4_032,
+                                   signatureLength: 3_309)
+        case .mlDsa87:
+            return MlDsaParameters(publicKeyLength: 2_592,
+                                   secretKeyLength: 4_896,
+                                   signatureLength: 4_627)
         }
-        return MlDsaParameters(publicKeyLength: params.publicKeyLength,
-                               secretKeyLength: params.secretKeyLength,
-                               signatureLength: params.signatureLength)
     }
 }
 
@@ -753,7 +761,7 @@ public struct MlDsaKeypair: Sendable {
     private let params: MlDsaParameters
 
     public init(suite: MlDsaSuite, publicKey: Data, secretKey: Data) throws {
-        let parameters = try suite.parameters()
+        let parameters = suite.parameters()
         guard publicKey.count == parameters.publicKeyLength,
               secretKey.count == parameters.secretKeyLength else {
             throw MlDsaError.invalidKeyLength
@@ -765,7 +773,10 @@ public struct MlDsaKeypair: Sendable {
     }
 
     public static func generate(suite: MlDsaSuite) throws -> MlDsaKeypair {
-        let parameters = try suite.parameters()
+        let parameters = suite.parameters()
+        guard NoritoNativeBridge.shared.mldsaSupported else {
+            throw MlDsaError.bridgeUnavailable
+        }
         guard let pair = NoritoNativeBridge.shared.mldsaGenerateKeypair(
             suiteId: suite.rawValue,
             publicKeyLength: parameters.publicKeyLength,
@@ -777,6 +788,9 @@ public struct MlDsaKeypair: Sendable {
     }
 
     public func sign(message: Data) throws -> Data {
+        guard NoritoNativeBridge.shared.mldsaSupported else {
+            throw MlDsaError.bridgeUnavailable
+        }
         guard let signature = NoritoNativeBridge.shared.mldsaSign(
             suiteId: suite.rawValue,
             secretKey: secretKey,
@@ -791,6 +805,9 @@ public struct MlDsaKeypair: Sendable {
     public func verify(message: Data, signature: Data) throws -> Bool {
         guard signature.count == params.signatureLength else {
             throw MlDsaError.invalidSignatureLength
+        }
+        guard NoritoNativeBridge.shared.mldsaSupported else {
+            throw MlDsaError.bridgeUnavailable
         }
         guard let result = NoritoNativeBridge.shared.mldsaVerify(
             suiteId: suite.rawValue,

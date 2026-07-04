@@ -21,6 +21,8 @@ pub(crate) fn signature_for_public_key_algorithm(
     let signature = match algorithm {
         Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(signature.payload())
             .map_err(|_| iroha_crypto::Error::BadSignature)?,
+        Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(signature.payload())
+            .map_err(|_| iroha_crypto::Error::BadSignature)?,
         _ => Signature::try_from_bytes(signature.payload())
             .map_err(|_| iroha_crypto::Error::BadSignature)?,
     };
@@ -343,6 +345,12 @@ mod tests {
         KeyPair::try_random().expect("generate checked RAM-LFE fixture keypair")
     }
 
+    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} RAM-LFE fixture key generation should succeed: {err}")
+        })
+    }
+
     fn checked_ed25519_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive checked RAM-LFE Ed25519 fixture keypair")
@@ -501,6 +509,45 @@ mod tests {
     }
 
     #[test]
+    fn signed_receipt_rejects_malformed_mldsa_signature_lengths() {
+        let signer = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+        let receipt = signed_receipt(&signer, receipt_payload());
+        receipt
+            .verify_signature(signer.public_key())
+            .expect("valid ML-DSA RAM-LFE receipt signature verifies");
+        let valid_signature = receipt
+            .attestation
+            .signature()
+            .expect("signed fixture carries a signature")
+            .payload()
+            .to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x61);
+                payload
+            }),
+        ] {
+            let mut invalid_receipt = receipt.clone();
+            invalid_receipt.attestation =
+                RamLfeReceiptAttestation::Signed(Signature::from_bytes(&replacement_signature));
+
+            assert_eq!(
+                invalid_receipt
+                    .verify_signature(signer.public_key())
+                    .unwrap_err(),
+                iroha_crypto::Error::BadSignature,
+                "{label} RAM-LFE receipt ML-DSA signature length was not rejected"
+            );
+        }
+    }
+
+    #[test]
     fn signed_receipt_rejects_tampered_ciphertext_binding() {
         let signer = checked_random_keypair();
         let mut receipt = signed_receipt(&signer, receipt_payload());
@@ -623,6 +670,39 @@ mod tests {
                 opening.verify_signature(signer.public_key()).unwrap_err(),
                 iroha_crypto::Error::BadSignature,
                 "{label} RAM-LFE opening Ed25519 R must fail admission"
+            );
+        }
+    }
+
+    #[test]
+    fn output_opening_rejects_malformed_mldsa_signature_lengths() {
+        let signer = checked_random_keypair_with_algorithm(Algorithm::MlDsa);
+        let opening = signed_opening(&signer, opening_payload());
+        opening
+            .verify_signature(signer.public_key())
+            .expect("valid ML-DSA RAM-LFE opening signature verifies");
+        let valid_signature = opening.signature.payload().to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x62);
+                payload
+            }),
+        ] {
+            let mut invalid_opening = opening.clone();
+            invalid_opening.signature = Signature::from_bytes(&replacement_signature);
+
+            assert_eq!(
+                invalid_opening
+                    .verify_signature(signer.public_key())
+                    .unwrap_err(),
+                iroha_crypto::Error::BadSignature,
+                "{label} RAM-LFE opening ML-DSA signature length was not rejected"
             );
         }
     }

@@ -48,4 +48,5 @@ halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch"
 bs58 = "0.5.1"
 
 [dev-dependencies]
+iroha_sccp = { workspace = true, features = ["test-fixtures"] }
 tempfile = { workspace = true }

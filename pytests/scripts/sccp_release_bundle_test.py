@@ -32269,7 +32269,7 @@ def test_release_bundle_required_evidence_source_rows_have_strict_markers(
     assert (
         "keep the `allow_unready` manifest and source-proof bypasses "
         "effective only under "
-        '`cfg(any(test, feature = "test-fixtures"))`'
+        "`cfg(test)`"
     ) in markdown
     assert (
         "keep Torii route/proof `allow_unready` bypasses effective only under "
@@ -59094,6 +59094,51 @@ def test_release_bundle_verifier_guards_sccp_unready_removed_surface_sources(
         and "expected at least 4" in error
         for error in errors
     )
+
+    for fixture_name, widened_gate in (
+        (
+            "widened-bypass-gate",
+            'allow_unready && cfg!(any(test, feature = "test-fixtures"))',
+        ),
+        (
+            "escaped-widened-bypass-gate",
+            'allow_unready && cfg!(any(\\x74est, feature = "test-fixtures"))',
+        ),
+    ):
+        widened_bypass_source = (
+            tmp_path / f"{fixture_name}-{Path(sccp_source_path).name}"
+        )
+        widened_bypass_source.write_text(
+            "\n".join(sccp_required_markers)
+            + "\n"
+            + "\n".join(
+                verifier.SCCP_UNREADY_SOURCE_PROOF_BYPASS_CALL_SITE_MARKER
+                for _ in range(
+                    verifier.SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES
+                    - 1
+                )
+            )
+            + "\n"
+            + widened_gate
+            + "\n",
+            encoding="utf-8",
+        )
+        errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+            ((widened_bypass_source, sccp_required_markers),),
+            (),
+            (),
+            (),
+            (),
+            (),
+        )
+        assert any(
+            "SCCP unready transparent-proof removed-surface source inventory" in error
+            and str(widened_bypass_source) in error
+            and "contains forbidden widened allow_unready gate" in error
+            and 'allow_unready && cfg!(any(test, feature = "test-fixtures"))'
+            in error
+            for error in errors
+        )
 
     torii_source_path, torii_required_markers = next(
         (

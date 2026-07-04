@@ -2207,6 +2207,42 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(try mutatedReceipt.verifyAttestation(using: policy), false)
     }
 
+    func testIdentifierReceiptRejectsMalformedMlDsaAttestationLengthsBeforeBridge() throws {
+        let accountId = try canonicalOwnerLiteral()
+        let payload = makeSignedIdentifierReceiptPayload(
+            accountId: accountId,
+            opaqueId: "opaque:\(String(repeating: "11", count: 32))",
+            receiptHash: String(repeating: "22", count: 31) + "23",
+            uaid: "uaid:\(String(repeating: "33", count: 31))35",
+            backend: "bfv-affine-sha3-256-v1"
+        )
+        let params = MlDsaSuite.mlDsa65.parameters()
+        let publicKey = Data(repeating: 0xA5, count: params.publicKeyLength)
+        let publicKeyMultihash = OfflineNorito.publicKeyMultihash(
+            algorithm: .mlDsa,
+            payload: publicKey
+        )
+        let resolverPublicKey = "ml-dsa:\(publicKeyMultihash)"
+        let policy = identifierPolicy(
+            owner: accountId,
+            resolverPublicKey: resolverPublicKey
+        )
+
+        let shortSignature = Data(repeating: 0x11, count: params.signatureLength - 1)
+        let overlongSignature = Data(repeating: 0x22, count: params.signatureLength + 1)
+        let shortReceipt = try identifierReceipt(
+            payload: payload,
+            signatureHex: shortSignature.hexUppercased()
+        )
+        let overlongReceipt = try identifierReceipt(
+            payload: payload,
+            signatureHex: overlongSignature.hexUppercased()
+        )
+
+        XCTAssertEqual(try shortReceipt.verifyAttestation(using: policy), false)
+        XCTAssertEqual(try overlongReceipt.verifyAttestation(using: policy), false)
+    }
+
     func testIdentifierReceiptRejectsUaidMutationAfterSigning() throws {
         let accountId = try canonicalOwnerLiteral()
         let originalPayload = makeSignedIdentifierReceiptPayload(
@@ -9701,6 +9737,8 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let cases: [(Data, String)] = [
+            (payload(extra: "\"offline_kagemusha_abi7\": true,"), "offline_kagemusha_abi7 is not supported; use offline_kagemusha_recursive_compact_*"),
+            (payload(extra: "\"offline_kagemusha_abi7_bridge_abi_version\": 7,"), "offline_kagemusha_abi7_bridge_abi_version is not supported; use offline_kagemusha_recursive_compact_*"),
             (payload(compact: "0"), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be a positive integer"),
             (payload(compact: "\" 7\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),
             (payload(compact: "\"007\""), "offline_kagemusha_recursive_compact_required_native_bridge_abi_version must be an exact positive integer string"),

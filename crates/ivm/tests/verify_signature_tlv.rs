@@ -15,6 +15,11 @@ const ED25519_NON_CANONICAL_IDENTITY: [u8; 32] = [
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
 ];
 
+const ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT: [u8; 32] = [
+    0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     use iroha_crypto::Hash;
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -201,6 +206,30 @@ fn syscall_verify_signature_ed25519_rejects_weak_public_key_material() {
 }
 
 #[test]
+fn syscall_verify_signature_ed25519_rejects_malformed_public_key_material() {
+    use ed25519_dalek::Signer;
+
+    let message = b"ivm-ed25519-malformed-public-key";
+    let signing_key = ed25519_test_key(0x47);
+    let signature = signing_key.sign(message).to_bytes();
+
+    for (label, public_key) in [
+        ("small-order", ED25519_SMALL_ORDER_POINT),
+        ("noncanonical", ED25519_NON_CANONICAL_IDENTITY),
+        (
+            "noncanonical-non-small-order",
+            ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT,
+        ),
+    ] {
+        assert_eq!(
+            run_syscall_verify_signature_blob(message, &signature, &public_key, 1),
+            0,
+            "{label} public key must reject"
+        );
+    }
+}
+
+#[test]
 fn syscall_verify_signature_ed25519_rejects_malformed_signature_r() {
     let message = b"ivm-ed25519-malformed-r";
     let signing_key = ed25519_test_key(0x45);
@@ -376,6 +405,50 @@ fn opcode_verify_ed25519_rejects_all_zero_signature_material() {
     vm.memory.load_code(&code);
     vm.run().unwrap();
     assert_eq!(vm.register(3), 0);
+}
+
+#[test]
+fn opcode_verify_ed25519_rejects_malformed_public_key_material() {
+    use ed25519_dalek::Signer;
+
+    let sk = ed25519_test_key(0x48);
+    let msg = b"ivm-op-ed25519-malformed-public-key";
+    let signature = sk.sign(msg).to_bytes();
+
+    for (label, public_key) in [
+        ("small-order", ED25519_SMALL_ORDER_POINT),
+        ("noncanonical", ED25519_NON_CANONICAL_IDENTITY),
+        (
+            "noncanonical-non-small-order",
+            ED25519_NON_CANONICAL_NON_SMALL_ORDER_POINT,
+        ),
+    ] {
+        let sig_tlv = make_tlv(PointerType::Blob as u16, &signature);
+        let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
+        let pk_tlv = make_tlv(PointerType::Blob as u16, &public_key);
+        let mut vm = IVM::new(10_000);
+        vm.memory.preload_input(0, &msg_tlv).expect("preload input");
+        let p_msg = Memory::INPUT_START;
+        let p_sig = p_msg + msg_tlv.len() as u64 + 8;
+        let p_pk = p_sig + sig_tlv.len() as u64 + 8;
+        vm.memory
+            .preload_input(msg_tlv.len() as u64 + 8, &sig_tlv)
+            .expect("preload input");
+        vm.memory
+            .preload_input((msg_tlv.len() + sig_tlv.len()) as u64 + 16, &pk_tlv)
+            .expect("preload input");
+        vm.set_register(1, p_msg);
+        vm.set_register(2, p_sig);
+        vm.set_register(3, p_pk);
+        let word = encoding::wide::encode_rr(instruction::wide::crypto::ED25519VERIFY, 3, 1, 2);
+        let halt = encoding::wide::encode_halt().to_le_bytes();
+        let mut code = Vec::new();
+        code.extend_from_slice(&word.to_le_bytes());
+        code.extend_from_slice(&halt);
+        vm.memory.load_code(&code);
+        vm.run().unwrap();
+        assert_eq!(vm.register(3), 0, "{label} public key must reject");
+    }
 }
 
 #[test]

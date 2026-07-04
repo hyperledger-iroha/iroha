@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-03
+Last updated: 2026-07-04
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 The detailed engineering backlog lives in
@@ -25,15 +25,57 @@ relabelled as governed deployment evidence. Deployment-bound source-verifier
 evidence common-shape validation now shares that denylist before OpenVerify
 wrapper validation, so rebuilt wrappers cannot recover public adapter verifier
 commitments for template role or deployment-receipt replays. Source-verifier
-material and source-adapter deployment hashes in public cryptographic-evidence
-rows also remain role-separated across readiness JSON, bundle pre-rendering, and
-strict bundle verification. Release-bundle pre-render validation also keeps
+evidence now also treats adapter proof and transcript hashes as proof-artifact
+roles: they must stay separated from verifier/deployment roles and cannot reuse
+built-in or profile-template source-verifier components. Source-verifier material
+and source-adapter deployment hashes in public cryptographic-evidence rows also
+remain role-separated across readiness JSON, bundle pre-rendering, and strict
+bundle verification. Source-proof envelopes now also reject outer hash-role
+aliasing between message ids, payload hashes, source-event digests, commitment
+roots, finality block/header hashes, and receipt/message roots before material
+or OpenVerify checks run, and checked source-proof envelope serialization now
+requires that same base wrapper shape before canonical bytes or hashes are
+emitted. Checked source-adapter statement/context encoding now also rejects
+zero transcript/evidence hashes, role-hash replays, transcript/evidence
+aliasing, and source-envelope header drift before FastPQ batch construction.
+Source-message and ETH SSZ Merkle inclusion proofs now
+also reject non-canonical high-bit leaf indexes that would otherwise reconstruct
+the same root after unused index bits are shifted away, and ETH source-adapter
+preflight now rejects stale or non-fixed-depth execution payload branches before
+checked transcript encoding. BSC source-adapter preflight now rejects high-S or
+otherwise non-canonical validator-set seal signatures for both active and
+transition seals and verifies that each seal signature recovers to the declared
+validator address before checked transcript encoding. Solana source-adapter
+preflight now also reconstructs the finality-context stake, account-inclusion,
+bank/fork, and Tower replay hashes and verifies vote/stake account witness
+structs against their raw account bytes before checked transcript encoding, and
+checked Solana adapter encoding now uses the same strict OpenVerify capsule
+shape for present source-state proofs. TRON source-adapter preflight now also
+rejects transaction-source proofs whose
+transaction bytes and java-tron Merkle branch do not reconstruct the advertised
+transaction root, and solid-block header proofs whose raw headers, transaction
+roots, parent links, ancestors, or confirmations drift, plus active and
+transition witness-seal signatures that do not recover to the declared witness,
+and witness-schedule transition block hashes that are not anchored to the proven
+header chain before checked transcript encoding. TON dictionary-backed
+shard-state proofs now also canonicalize the
+unused shard-state Merkle fields by requiring a zero leaf index and empty branch,
+and TON active/transition validator signatures must pass deterministic Ed25519
+batch verification while shard-state openings and masterchain config proofs must
+verify their BOC/dictionary roots before checked transcript encoding; checked
+TON adapter encoder coverage now also pins all-zero and opaque source-state
+capsule rejection.
+Release-bundle pre-render
+validation also keeps
 top-level public crypto hash-role replay blockers visible when
 `source_adapter_gate_audit_hashes` is malformed, so a bad audit map cannot hide
 destination, route, source, or top-level source-gate hash role reuse before
 artifacts are written. Malformed public user-prover, crypto, or input
 provenance list rows also cannot hide missing required lane/domain coverage or
-safe-path provenance drift while copied row contents are redacted. Source-verifier
+safe-path provenance drift while copied row contents are redacted; if a copied
+user-prover or crypto list has no inspectable object rows at all, public
+readiness JSON stops at the root list-of-objects blocker instead of deriving
+coverage diagnostics from operator text. Source-verifier
 material constructors also fail closed on non-zero built-in placeholder hashes
 before deployed role, source-state, or source bridge code hashes can be
 relabelled as live verifier material, and the lower-level Solana/TON
@@ -70,6 +112,11 @@ release/readiness inventory rejects any reintroduced config field, environment
 override, or CLI production surface. Current release-verifier diagnostics also
 name that guard as a removed-surface inventory instead of preserving the older
 config-only framing.
+Strict release-bundle pre-rendering and verification now also distinguish
+empty future-lane diagnostic containers from copied evidence: empty not-ready
+nested maps may remain placeholders for inactive launch lanes, but non-empty
+or record-flagged copied source, destination, and route records still require
+their complete public schema.
 
 Outbound SCCP record admission is now canonical-only, SORA-origin outbound
 route binding requires canonical route-local asset keys rather than scoped
@@ -86,11 +133,15 @@ now pinned by a required inbound adversarial source-inventory gate, strict
 release-bundle verification now aggregates the TON route-manifest CLI
 source-inventory gate, the remaining `allow_unready` transparent-proof manifest
 and source-proof proof-builder, proof-job, submission-package, and verifier
-admission bypasses are cfg-gated to tests/fixture builds rather than production
-binaries, Torii's private SCCP route/proof `allow_unready` helper paths are
-test-only, the
-`iroha_sccp/test-fixtures` feature stays out of production SCCP dependencies
-and release/corridor Rust commands, and Rust SCCP TRON proof admission,
+admission bypasses are test-only under `cfg(test)` rather than feature-enabled
+in non-test builds, Torii's private SCCP route/proof `allow_unready` helper
+paths are test-only, the `iroha_sccp/test-fixtures` feature exposes fixture
+APIs only and stays out of production SCCP dependencies and release/corridor
+Rust commands, including the JavaScript native host, and strict release-bundle
+source-inventory verification pins the current Java
+Android TRON header-proof rejection calls through
+`tronHeaderSignature(unsupportedRecoveryId)`, and
+Rust SCCP TRON proof admission,
 Python/JavaScript/Kotlin/Java/Swift SCCP helpers,
 and TRON live-evidence scripts now require raw java-tron `0..=3`
 recoverable-signature recovery ids and reject Ethereum-style `27..=30`
@@ -212,15 +263,74 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   all-zero public-key and signature buffers before k256 parsing,
   ML-DSA aggregate wrapper coverage now pins valid inputs plus tampered,
   all-zero-signature, all-zero-public-key, and mismatched-length rejection,
-  SoraFS governance log and PoTR Dilithium3 signature verification now preflight
-  ML-DSA-65 public-key and detached-signature material before opaque signature
-  wrapping, shared `iroha_crypto::mldsa65_parse_signature` and Connect
-  identifier receipt parsing now preflight ML-DSA-65 detached signatures before
-  opaque signature storage, and Torii operator-auth ML-DSA header signatures now
-  use the same shared parser before request verification,
+  SoraFS governance log publisher/block/head and PoTR Dilithium3 signature
+  verification now preflight ML-DSA-65 public-key and detached-signature
+  material through `iroha_crypto::mldsa65_parse_signature` before opaque
+  signature wrapping, shared `iroha_crypto::mldsa65_parse_signature` and Connect
+  identifier receipt parsing, Connect native/Java detached verification, and JS
+  host `cryptoVerify` plus Python generic verification now preflight ML-DSA-65
+  detached signatures before opaque signature storage or backend verification,
+  with C FFI, JNI helper, JavaScript host, Python, and guarded Kotlin/Java SDK
+  parity regressions pinning valid, short, overlong, and all-zero ML-DSA
+  behavior where backend support is required while keeping
+  Swift malformed key/signature length rejection, identifier-receipt ML-DSA
+  attestation length rejection, and exact-length bridge-unavailable reporting
+  independent of bridge availability,
+  and Torii operator-auth ML-DSA header signatures plus P2P handshake ML-DSA
+  signatures now use the same shared parser before request or handshake-payload
+  verification, and data-model signed transactions,
+  submission receipts, signed queries, validation-fee policies, SoraFS
+  moderation manifests, SoraNet ticket/proof helper and VPN usage vouchers,
+  RAM-LFE receipts/openings, Core/Torii Soracloud provenance signatures, Torii
+  app-auth single-signature/witness payloads, Torii Offline V1/V2 JSON
+  signatures, Torii DA receipt operator signatures, Torii DA Taikai SSM
+  publisher signatures, Torii signed query requests, Torii SoraFS repair-worker
+  signatures, SoraFS orchestrator Taikai cache-admission envelope/gossip
+  signatures, Core oracle observation signatures, SoraDNS directory-builder
+  signatures, runtime-upgrade provenance signatures, Offline note key-certificate
+  issuer signatures, Core snapshot ML-DSA signature sidecars, Core
+  fraud-attestation signatures, JDG simple-threshold ML-DSA committee
+  signatures, and Sumeragi direct vote/merge/RBC/VRF plus peer trust-gossip ML-DSA
+  signatures use it
+  before digest, typed-payload
+  verification, governance-policy verification, moderation summary acceptance,
+  transport accounting, provenance-payload, app-auth wrapping/validation,
+  offline JSON, DA receipt, Taikai signing-manifest, query-payload,
+  repair-worker-payload, cache-admission payload, observation-payload,
+  directory-record, runtime-upgrade-provenance, offline-certificate,
+  attestation-hash, consensus-preimage, or trust-book mutation,
   ML-DSA public-key recovery from a typed secret rejects all-zero secret-key
   material before unsafe unpacking, and SoraNet signed-ticket
   sign/decode/direct-verify paths reject unsupported versions,
+  the final signer-admission inventory classifies remaining raw signature
+  constructors as fixed Ed25519 formats, signer-aware generic branches,
+  non-Ed25519 fallbacks, BLS-only checked paths, signer-context-free decode
+  staging, or fixtures/examples, with the July 4 continuation recheck keeping
+  identifier output-opening JSON in signer-context-free staging while pinning
+  malformed Ed25519 `R` and all-zero rejection at policy-key verification, and
+  the operator/tooling subset recheck classifying remaining xtask, SoraFS CAR,
+  fixture-generator, CLI example, and SoraNet/SoraDNS helper raw constructors
+  as fixture/example or codec-staging bytes while validating the
+  operator-facing Ed25519 helpers with malformed-`R` and all-zero tests,
+  the latest July 4 raw `Signature::try_from_bytes` pass found no new
+  externally supplied Ed25519 verifier gap after rechecking P2P, Torii,
+  Offline issuer, snapshot, fraud/jurisdiction, Sumeragi, Python/JavaScript,
+  Connect, signer-context-free decode, BLS aggregate, fallback, fixture, and
+  tooling categories,
+  and externally supplied Ed25519 signing seed parsers for Torii SoraFS stream
+  tokens, SoraFS CAR provider adverts, SoraFS CAR provider-admission council
+  secrets, and `sorafs-validate` signing commands now reject all-zero seed
+  material before constructing dalek signing keys, and SoraNet
+  guard-directory issuer rotation now fails closed if the generated Ed25519
+  issuer seed is all zero before constructing a dalek signing key or reissuing
+  relay certificates,
+  and the IVM Ed25519 verifier/opcode, deterministic batch, CUDA/Metal staging,
+  and Halo2 adapter paths now funnel public-key bytes through the same strict
+  noncanonical/small-order/all-zero preflight before backend or accelerator
+  verification, with the central parser plus SoraFS manifest, SoraNet relay,
+  and xtask SRCv2 readiness helpers now pinning noncanonical non-small-order
+  Ed25519 public-key rejection so canonicality coverage is independent of
+  weak-key rejection,
   unrepresentable expiries, all-zero ML-DSA relay public-key material, and
   all-zero ML-DSA signing secret-key material before backend work, while
   SoraNet admission-token minting rejects all-zero ML-DSA signing secrets and
@@ -358,17 +468,22 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   API detached `signature_b64` admission routes short, all-zero,
   noncanonical, or small-order Ed25519 buffers through the central
   malformed-`R` parser before transaction attachment, Torii app-auth header
-  and body signature-base64 decoders require exact standard-base64 text before
-  typed signature admission, Swift, Kotlin/JVM, Java Android, JavaScript, and
-  Python Torii request builders mirror exact standard-base64 `signature_b64`
-  encoding for contract, multisig, bridge-proof submit, and bridge-message
-  submit requests, Iroha client operator-panel signature fixtures parse decoded
-  header material through checked opaque-signature admission before verification,
+  and body signature-base64 decoders require exact standard-base64 text and
+  keep decoded bytes raw until signer-resolved Ed25519 admission rejects
+  malformed-`R` encodings before opaque signature wrapping, the latest
+  `Signature::try_from_bytes` inventory classifies the remaining
+  production-looking raw constructors as signer-strict verifier branches,
+  non-Ed25519 fallbacks, BLS-only paths, signer-context-free decode staging, or
+  fixtures/examples rather than unpatched Ed25519 verifier gaps; Swift,
+  Kotlin/JVM, Java Android, JavaScript, and Python Torii request builders
+  mirror exact standard-base64 `signature_b64` encoding for contract, multisig,
+  bridge-proof submit, and bridge-message submit requests, Iroha client
+  operator-panel signature fixtures parse decoded header material through
+  checked opaque-signature admission before verification,
   JavaScript standalone multisig instruction-builder DTO
   helpers, native Norito multisig DTO encoders, and JavaScript/Python SCCP
   bridge-proof submit helpers reject the same whitespace, missing-padding, and
   pad-bit aliases before preserving detached signatures, Torii app-auth
-  header, body, and
   multisig witness verification routes signer-resolved Ed25519 signature
   material through that same parser before backend verification, Torii operator
   signature headers apply the same Ed25519 `R` preflight after parsing the
@@ -533,7 +648,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `Signature::from_bytes`, `SignatureOf::from_signature`, `Signature::from_hex`,
   and direct Dalek `Signature::from_bytes` sites; remaining hits are
   test/fixture mutation helpers, non-Ed25519 paths, placeholders, or locally
-  preflighted decode-to-verify paths.
+  preflighted decode-to-verify paths. The SoraFS CLI manifest verifier and
+  shared SoraFS manifest verifier helper now alias their post-preflight dalek
+  conversions as `DalekSig`, so raw Iroha signature-constructor scans no
+  longer conflate those strict Ed25519 verifier boundaries with unchecked
+  opaque `iroha_crypto::Signature` admission.
   The 2026-07-03 SoraNet continuation rechecked the current
   `Signature::try_from_bytes` inventory after the ticket and relay
   bandwidth-proof hardening and found no additional production Ed25519 verifier
@@ -8438,7 +8557,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
-  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 13
+  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 15
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
   Java Android, and Swift SDK wrappers. The SFM-5 rollout evidence gate now
   validates feed-collector, reference-price, billing-cycle,
@@ -17919,7 +18038,231 @@ digest-bound pending-XSD source probe summaries for reviewed
   corridor CFGs must keep `INIT Init` with the family-specific `NEXT` operator,
   and the root fast/deep/TLC-fast CFGs must keep their documented
   `INIT`/`NEXT` versus `SPECIFICATION Spec` split, so a CFG cannot keep the
-  right checks while model-checking a stale transition surface. It also pins
+  right checks while model-checking a stale transition surface. Every local TLA
+  module must pass the same module validation surface, so orphaned modules
+  cannot keep malformed headers, unchecked dependencies, assumptions/proofs,
+  duplicate declarations, namespace overlaps, or variable/`vars` drift outside
+  runner-selected paths. CFGs must
+  pass the global directive-shape scanner, so empty configs, unknown or
+  malformed directives, duplicate `CHECK_DEADLOCK`, missing behavior, and
+  missing proof checks cannot hide outside runner-referenced modes. CFGs must
+  define exactly one behavior surface: either a single `SPECIFICATION` or
+  exactly one `INIT` plus one `NEXT`, so newly added CFGs cannot rely on
+  implicit behavior defaults or mix temporal and transition surfaces. Every
+  CFG must also check `INVARIANT TypeInvariant` plus at least one
+  non-`TypeInvariant` invariant or property, so formal evidence cannot come
+  from type-only or untyped proof surfaces. CFG filenames must belong to their
+  inferred owning modules, so suffix fallbacks cannot accidentally let a CFG
+  count against an unrelated TLA module. CFG operator references must
+  resolve to zero-arity non-trivial targets on the inferred owning TLA module,
+  so stale behavior/check/constraint names, parameterized targets, and literal
+  or `TypeInvariant` aliases cannot satisfy coverage. CFG operator references
+  must also be duplicate-free and role-disjoint, so repeated behavior or
+  constraint directives, duplicate proof checks, invariant/property kind
+  conflicts, and behavior/constraint/proof target reuse cannot count as formal
+  evidence. Clean fast CFGs must use model-specific `*CorrectnessEnvelope`
+  proof checks and avoid generic correctness checks, so fast evidence cannot
+  regress to broad root aliases when a direct corridor envelope is expected.
+  CFG proof-target shapes must preserve correctness-envelope/direct-exactness
+  structure, so checked envelopes compose `TypeInvariant` and direct
+  model-specific exactness conjuncts, direct exactness checks inline concrete
+  predicates, and each checked exactness target is paired with a checked
+  envelope in the same CFG.
+  TLC runner constraint injections stay on documented singleton-or-empty
+  families, so only the documented pure candidate-enumeration `*-fast` and
+  `*-bug-*` branches may narrow TLC with `TlcSingletonOrEmpty`, and those
+  branches must keep that exact constraint.
+  The TLC runner must keep an empty top-level `tlc_constraint` default, so
+  modes without documented per-branch constraints cannot inherit a hidden
+  global state-space bound.
+  Sumeragi formal proof commands must not set `APALACHE_LENGTH`, so CI,
+  workflow, and counted README evidence cannot silently shrink documented
+  per-mode bounds.
+  Sumeragi formal proof commands must not set model-checker toolchain override
+  variables, so evidence cannot silently swap the pinned Apalache/TLC
+  installation.
+  CI, workflow, and README formal commands must use strict Apalache/TLC runner
+  shapes, so direct evidence invocations cannot hide extra arguments or
+  malformed mode tokens outside the central scripts.
+  README formal runner commands must be standalone command lines, so inline
+  prose, `echo`, or backtick mentions cannot satisfy documented mode coverage.
+  README formal runner commands must live in shell fenced code blocks, so
+  standalone prose outside command blocks cannot satisfy documented mode
+  coverage.
+  README shell fences containing formal runner commands must be closed, so one
+  opening fence cannot make later prose count as command evidence.
+  YAML `run:` formal commands are only accepted in workflow files, so shell
+  scripts and Markdown cannot use workflow syntax to satisfy proof inventory or
+  ordering checks.
+  Workflow and baseline formal entrypoint commands must be active `run:` or
+  script lines, so commented commands and prose mentions cannot satisfy
+  proof-entrypoint coverage or ordering.
+  Workflow active command extraction must ignore block-scalar bodies, so a
+  command hidden inside `run: |` cannot satisfy single-line workflow entrypoint
+  coverage.
+  Formal preflight, sweep, and success ordering checks must use exact command
+  lines, so preflight-looking commands with extra arguments cannot satisfy
+  proof ordering before the real guard runs.
+  CI and workflow mode inventories must count only active direct runner
+  commands, so comments, prose, or `echo` lines cannot satisfy proof-mode
+  coverage.
+  Active CI/workflow TLC modes must be supported by the TLC runner and
+  documented by README TLC commands, so direct TLC proof evidence cannot drift
+  outside the checked inventory.
+  Active CI/workflow TLC modes must be duplicate-free, so repeated TLC
+  invocations cannot inflate or obscure the direct TLC evidence inventory.
+  Formal coverage audit must run before Apalache, TLC, and expected-failure
+  evidence commands, so stale inventory wiring cannot execute proof jobs before
+  the guard fails.
+  Formal workflow triggers must keep the checked PR and scheduled/manual
+  surfaces, so PR evidence remains on `pull_request` for `main` and nightly
+  evidence remains both manually dispatchable and scheduled at the reviewed
+  cron.
+  Formal workflow path filters must keep the reviewed ignored-path set, so PR
+  proof evidence cannot be skipped for formal specs, scripts, or workflow edits
+  by adding broader `paths_ignore` entries.
+  Workflow Apalache install and toolchain version pins must come from active
+  commands, so comments and step names cannot satisfy the pinned model-checker
+  install contract.
+  Formal workflows must verify the pinned Apalache binary before running proof
+  jobs, preserving install -> version-probe -> proof-job ordering in both PR
+  and nightly evidence.
+  Formal baseline script must verify the pinned Apalache binary after coverage
+  and before proof jobs, so direct baseline runs record the same model-checker
+  binary before producing proof evidence.
+  Expected-failure script must verify coverage and the pinned Apalache binary
+  before mutation proof jobs, so standalone counterexample sweeps cannot run
+  under stale inventory or an unrecorded model-checker binary.
+  Standalone expected-failure script must stay Apalache-only, so direct TLC
+  mutation evidence remains in the checked PR/README TLC inventory instead of
+  drifting into the standalone mutation sweep.
+  Formal baseline script must run the expected-failure sweep after all positive
+  Apalache and TLC proof commands, so mutation counterexample evidence cannot
+  be reported before the clean proof surface has completed.
+  Formal baseline success marker must run after all proof and mutation evidence
+  commands, so the success line cannot appear before a later proof or
+  counterexample sweep can still fail.
+  Expected-failure success marker must run after all mutation evidence
+  commands, so the standalone mutation sweep cannot print success before a
+  later mutation counterexample check can still fail.
+  Formal CI proof scripts must stay linear and free of shell control-flow
+  blocks, so proof commands cannot be made conditional while still satisfying
+  inventory coverage.
+  Formal CI proof scripts must not contain here-documents, so command-shaped
+  text inside shell data blocks cannot satisfy proof inventory.
+  Formal CI proof scripts must not contain early exits or error-handling
+  overrides, so proof commands cannot become unreachable and proof failures
+  cannot be masked after the strict shell preflight.
+  Formal CI proof scripts may contain only allowlisted direct evidence commands,
+  so unrelated shell commands or shell-composed substitutes cannot change proof
+  runtime behavior while satisfying inventory checks.
+  Formal workflow proof jobs may contain only single-line allowlisted run
+  commands, so workflow block scripts or shell-composed run steps cannot wrap,
+  skip, or mask the pinned formal evidence entrypoints.
+  Formal workflow run steps must set `run` at most once and cannot combine `run`
+  with `uses`, so ambiguous YAML keys cannot inflate proof-command inventory or
+  hide whether GitHub Actions executes a shell command or an action step.
+  Formal workflow run inventories must match the checked proof jobs, so PR
+  evidence runs only install/version/baseline and scheduled evidence runs
+  install/version/baseline/frontier/docs-metadata in the reviewed order.
+  Formal workflow proof jobs may use only allowlisted action steps, so arbitrary
+  marketplace or local actions cannot mutate the checked workspace, toolchain,
+  or proof environment while leaving the visible proof commands unchanged.
+  Formal workflow action steps must set `uses` at most once, so duplicate action
+  keys cannot hide which setup or reporting action GitHub Actions will execute.
+  Formal workflow action inventories must match the checked proof jobs, so PR
+  evidence uses only checkout/setup-java and scheduled evidence uses
+  checkout/setup-java/report-upload in the reviewed order.
+  Formal workflow action inputs must match the pinned proof environment, so
+  checkout cannot switch refs or paths, Java setup cannot drift from Temurin
+  17, and report upload cannot silently change the evidence artifact contract.
+  Inline `with:` values count as input drift, so same-line YAML maps cannot
+  bypass the pinned input contract.
+  Formal workflow setup action steps must not use conditionals, execution
+  modifiers, or continue-on-error, so checkout and Java setup cannot be skipped,
+  masked, or run under workflow-local environment overrides while the later
+  proof commands remain unchanged.
+  Formal workflow proof jobs must use the pinned runner label, so PR and
+  scheduled/manual proof evidence stays on the reviewed `ubuntu-latest`
+  GitHub-hosted environment instead of silently moving to a self-hosted or
+  otherwise different runner.
+  Formal workflow proof jobs must keep pinned timeout budgets, so PR proof
+  evidence keeps its 45-minute budget and scheduled proof evidence keeps its
+  90-minute budget.
+  Formal workflow proof jobs must not use dependency or environment gates, so
+  checked proof evidence cannot be skipped behind unrelated `needs` jobs or
+  GitHub environment approvals.
+  Formal workflow proof jobs must not set job-level token permissions, so
+  checkout and artifact actions use the reviewed default token scope rather
+  than a workflow-local permission override.
+  Formal workflow proof entrypoints must stay inside the checked formal jobs,
+  so required install, version-probe, baseline, and nightly proof commands
+  cannot be satisfied by unrelated workflow jobs.
+  Formal workflow proof commands must not appear outside checked formal jobs in
+  any workflow, so unrelated workflow files or jobs cannot run hidden formal
+  proof entrypoints outside the guarded install, version, ordering, and
+  inventory contracts.
+  Formal workflow job scoping must only recognize jobs under the top-level jobs
+  block, so same-named keys in `env`, `on`, or other workflow sections cannot
+  satisfy or hide formal proof jobs.
+  Formal workflow job scoping must normalize top-level and job-name YAML key
+  spacing, so `jobs :` and `frontier-nightly :` cannot hide or drop checked
+  formal jobs.
+  Formal workflow proof steps must not use job or step conditionals, execution
+  modifiers, or continue-on-error, so checked proof evidence cannot be skipped
+  or reported green after a proof command fails, and cannot run under
+  workflow-local `env`, `defaults`, `shell`, `working-directory`, step-level
+  `timeout-minutes`, `container`, `services`, or `strategy` overrides, or
+  job-level dependency or environment gates, or job-level `permissions`
+  overrides. Job-level timeouts remain pinned workflow budgets. The guard
+  normalizes YAML field spacing around colons, so `run :`, `if :`, and
+  `continue-on-error :` cannot hide proof evidence or failure-masking controls.
+  Formal workflow mode and toolchain inventories must stay scoped to checked
+  formal jobs, so unrelated workflow jobs cannot satisfy pinned-toolchain
+  evidence or add scheduled/manual formal modes to the proof inventory.
+  Formal singleton evidence commands must appear at most once, so coverage
+  audits, pinned-version probes, formal workflow entrypoints, expected-failure
+  sweeps, and success markers cannot duplicate evidence with an ambiguous
+  transcript.
+  Formal shell entrypoints must use `set -euo pipefail`, so failed proof,
+  installation, or piped evidence commands stop the script instead of being
+  masked by later commands.
+  Apalache runner proof invocations must route through
+  `run_with_expected_status`, so positive proofs and expected counterexample
+  checks cannot bypass the shared exit-status contract in local,
+  installed-binary, or Docker execution paths.
+  TLC runner proof invocations must preserve the `PIPESTATUS[0]`
+  status-capture contract, so piped TLC output remains logged while the
+  expected-failure branch still interprets the model-checker exit status rather
+  than `tee` success.
+  The top-level Sumeragi proof CFGs must remain unconstrained, so root fast,
+  deep, TLC-fast, and focused Byzantine top CFGs cannot satisfy correctness
+  checks only under a hidden static CFG `CONSTRAINT`.
+  The non-temporal top-level Sumeragi CFGs must not bind CHECK_DEADLOCK, so
+  root fast, deep, and focused Byzantine top CFGs keep transition-safety proof
+  surfaces separate from the TLC-fast temporal deadlock policy.
+  The top-level sentinel CFG proof-check sets must remain exact, so
+  `Sumeragi_fast` and focused Byzantine top CFGs cannot grow extra proof checks
+  beyond their documented sentinel obligations.
+  Top-level Apalache/TLC CFG proof checks must stay in parity, so a deep-only
+  or TLC-only root obligation cannot count as shared consensus-core evidence.
+  Apalache-only top-level corridor modes must stay typecheck-only unless listed
+  as the bounded `deep` exception, so un-TLC-cross-checked top corridors cannot
+  be counted as bounded proof evidence.
+  Aggregate proof root conjuncts must stay named zero-arity operators, so
+  shared TLA root/envelope contracts cannot add inline literals, formulas, or
+  anonymous wrappers outside the named conjunct comparison, except for
+  documented implication/spec wrappers with dedicated shape guards.
+  The state-safety temporal wrapper must keep the direct
+  `[] SumeragiConsensusCoreStateMatchesEnvelope` zero-arity shape, so the
+  state+temporal aggregate cannot silently substitute a weaker alias or
+  compound temporal formula for the checked state envelope.
+  The top-level Sumeragi CFG constant sets must remain exact, so those same
+  proof CFGs cannot bind extra model constants beyond the documented quorum,
+  fault, stake, view, and RBC chunk envelope.
+  CFG constant bindings must also match the inferred owning TLA
+  module, so CFGs cannot omit declared constants, bind undeclared constants,
+  or repeat a binding while still counting as formal evidence. It also pins
   the root fast, deep, and TLC-fast quorum/fault constant envelopes, so those
   top-level proofs cannot silently become evidence for a different validator,
   quorum, stake, view, or RBC chunk bound. The top-level Byzantine
@@ -17927,15 +18270,48 @@ digest-bound pending-XSD source probe summaries for reviewed
   same pinned fast quorum/fault envelope. It also pins
   that temporal CFGs keep `CHECK_DEADLOCK FALSE` for the root TLC-fast and
   source/projection progress proof configs, so weak-fairness liveness runs
-  cannot drift to a different TLC deadlock obligation. Clean temporal progress
-  configs must also keep `Bug = "none"`, so positive liveness runs cannot
-  accidentally check a mutation surface. Progress mutation configs must bind
+  cannot drift to a different TLC deadlock obligation. Every CFG that binds
+  `SPECIFICATION` must also set `CHECK_DEADLOCK FALSE`, so newly added temporal
+  proof configs cannot reintroduce TLC deadlock checking while preserving the
+  right temporal surface. Clean temporal progress configs must also keep
+  `Bug = "none"`, so positive liveness runs cannot accidentally check a
+  mutation surface. Any non-mutation CFG that binds a
+  mutation selector must keep it disabled (`Bug = "none"` or legacy `Bug = 0`,
+  and boolean `Bug...` selectors set to `FALSE`) and must not mix exact and
+  boolean selector styles. Progress mutation configs must bind
   `Bug` to their filename suffix, so expected-failure liveness runs cannot
-  silently check a different injected fault. Source safety and projection
-  bridge mutation configs follow the same suffix rule, so bounded
+  silently check a different injected fault. The guard now also applies that
+  suffix rule to every quoted-string mutation `Bug` constant while preserving
+  legacy numeric bug selectors as numeric selectors; numeric selectors must
+  remain unique within each mutation CFG family so legacy selector-based modes
+  cannot alias each other. Mutation configs must use exactly one selector
+  style, so exact `Bug` selectors and boolean `Bug...` switches cannot be
+  mixed or omitted, and selector constants must be duplicate-free within each
+  CFG; every mutation CFG must check `INVARIANT TypeInvariant`, check at least
+  one non-`TypeInvariant` invariant or property, resolve each semantic proof
+  target to a zero-arity non-trivial operator on the owning TLA module, and bind
+  the expected behavior surface; exact `Bug`
+  selector values must remain quoted suffix strings or decimal
+  legacy selectors, quoted selectors must be used by reachable TLA expressions
+  that explicitly mention the exact `Bug` selector, and numeric selectors must
+  be written in canonical positive decimal form and used as reachable TLA `Bug`
+  relation operands. Boolean `Bug...` selector configs must remain one-hot, with only the
+  documented double-sign compound mutation allowed to enable two gates; the
+  TRUE selector must also match the mutation file suffix
+  by normalized name or an explicit semantic alias, remain unique within its
+  CFG family, be declared by the owning TLA module, and bind every declared
+  boolean selector in that module, and be used by reachable TLA expressions
+  outside declarations. Exact `Bug` selector configs must declare
+  `Bug` in the owning module as well. The alias/compound exception tables must
+  stay live, necessary, and exact. Source safety and projection bridge mutation
+  configs follow the same suffix rule, so bounded
   expected-failure safety runs cannot drift to a different fault either. Those
   safety mutation configs must also keep `INIT Init` / `NEXT Next`, so the
   expected-failure safety checks cannot run against a stale transition surface.
+  Custom mutation `INIT` exceptions must stay live, necessary, and exact, so
+  documented seed-initializer CFGs cannot silently point at missing files,
+  default `Init`, stale behavior bindings, or non-zero-arity/nonexistent TLA
+  operators.
   Clean source/projection fast configs must keep `Bug = "none"` plus
   `INIT Init` / `NEXT Next` for the same reason: positive bounded safety checks
   should not silently become mutation checks or stale-transition checks.
@@ -24067,11 +24443,13 @@ request-bound Groth16 proof tuples, and adversarial tests reject arbitrary
 noncanonical bundle bytes, bundle/public-input mismatches, bundle
 source-domain drift, and copied canonical source-chain envelopes from other
 lanes or stale same-lane bundles before local prover callbacks or production
-wrapper canonicality checks. The strict proof-request bundle/source-proof
-release inventory now also pins explicit ETH, BSC, Solana, TON, and TRON lane
-sentinels so one active launch lane cannot silently lose proof-request or
-source-proof coverage while the broader gate still passes. The strict release
-inventory pins those replay markers
+wrapper canonicality checks. Native proof-request bundle admission now also
+parses SORA-origin Nexus finality proofs and binds their commitment root,
+height, and block hash to the public inputs before local proving. The strict
+proof-request bundle/source-proof release inventory now also pins explicit ETH,
+BSC, Solana, TON, and TRON lane sentinels so one active launch lane cannot
+silently lose proof-request or source-proof coverage while the broader gate
+still passes. The strict release inventory pins those replay markers
 across the native SDKs; the native .NET fixture now reproduces the embedded
 canonical source proof byte-for-byte, and the 2026-06-29 Windows `.NET 8.0.422`
 runtime pass certifies it for this release. Future Windows recertification

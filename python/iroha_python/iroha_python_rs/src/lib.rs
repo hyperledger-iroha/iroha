@@ -27,6 +27,7 @@ use iroha_crypto::{
     PrivateKey, PublicKey, Signature, derive_keyset_from_slice, ed25519_parse_signature,
     error::ParseError,
     kex::{KeyExchangeScheme, X25519Sha256},
+    mldsa65_parse_signature,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 use iroha_data_model::{
@@ -466,10 +467,6 @@ fn parse_asset_id(value: &str) -> PyResult<AssetId> {
     Ok(AssetId::with_scope(definition, account, scope))
 }
 
-fn i105_discriminant_hint(input: &str) -> Option<u16> {
-    AccountAddress::i105_discriminant(input).ok()
-}
-
 fn ensure_ed25519_account(account: &AccountId) -> PyResult<()> {
     let (algorithm, _) = public_key_to_bytes(account.signatory(), "account signatory public key")?;
     algorithm_guard(algorithm)
@@ -587,20 +584,15 @@ fn fixed_array<const N: usize>(bytes: &[u8], context: &str) -> PyResult<[u8; N]>
     Ok(arr)
 }
 
-fn checked_signature_from_bytes(bytes: &[u8], context: &str) -> PyResult<Signature> {
-    Signature::try_from_bytes(bytes)
-        .map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
-}
-
 fn checked_signature_from_bytes_for_algorithm(
     bytes: &[u8],
     algorithm: Algorithm,
     context: &str,
 ) -> PyResult<Signature> {
-    let signature = if algorithm == Algorithm::Ed25519 {
-        ed25519_parse_signature(bytes)
-    } else {
-        Signature::try_from_bytes(bytes).map_err(iroha_crypto::Error::from)
+    let signature = match algorithm {
+        Algorithm::Ed25519 => ed25519_parse_signature(bytes),
+        Algorithm::MlDsa => mldsa65_parse_signature(bytes),
+        _ => Signature::try_from_bytes(bytes).map_err(iroha_crypto::Error::from),
     };
     signature.map_err(|err| PyValueError::new_err(format!("{context} is malformed: {err}")))
 }
@@ -6576,26 +6568,37 @@ mod tests {
     ];
 
     #[test]
-    fn checked_signature_from_bytes_rejects_empty_and_all_zero_payloads() {
+    fn checked_fallback_signature_from_bytes_rejects_empty_and_all_zero_payloads() {
         let empty = py_err_message(
-            checked_signature_from_bytes(&[], "signature").expect_err("empty signature must fail"),
+            checked_signature_from_bytes_for_algorithm(&[], Algorithm::BlsNormal, "signature")
+                .expect_err("empty signature must fail"),
         );
         assert!(
-            empty.contains("signature is malformed: signature payload must not be empty"),
+            empty.contains("signature is malformed")
+                && empty.contains("signature payload must not be empty"),
             "unexpected empty-signature error: {empty}"
         );
 
         let all_zero = py_err_message(
-            checked_signature_from_bytes(&[0u8; 64], "signature")
-                .expect_err("all-zero signature must fail"),
+            checked_signature_from_bytes_for_algorithm(
+                &[0u8; 64],
+                Algorithm::BlsNormal,
+                "signature",
+            )
+            .expect_err("all-zero signature must fail"),
         );
         assert!(
-            all_zero.contains("signature is malformed: signature payload must not be all zero"),
+            all_zero.contains("signature is malformed")
+                && all_zero.contains("signature payload must not be all zero"),
             "unexpected all-zero signature error: {all_zero}"
         );
 
-        let accepted = checked_signature_from_bytes(&[0x42; 64], "signature")
-            .expect("nonzero opaque signature material is admitted for backend verification");
+        let accepted = checked_signature_from_bytes_for_algorithm(
+            &[0x42; 64],
+            Algorithm::BlsNormal,
+            "signature",
+        )
+        .expect("nonzero opaque signature material is admitted for backend verification");
         assert_eq!(accepted.payload(), &[0x42; 64]);
     }
 
@@ -6645,6 +6648,49 @@ mod tests {
             assert!(
                 err.contains("signature is malformed"),
                 "unexpected {label} R admission error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn checked_mldsa_signature_from_bytes_rejects_malformed_lengths_before_backend() {
+        let key_pair = KeyPair::try_from_seed(
+            b"python-wallet-mldsa-signature-admission".to_vec(),
+            Algorithm::MlDsa,
+        )
+        .expect("derive checked ML-DSA wallet fixture keypair");
+        let signature = Signature::try_new(
+            key_pair.private_key(),
+            b"python wallet ML-DSA signature admission",
+        )
+        .expect("checked ML-DSA wallet fixture signature");
+        checked_signature_from_bytes_for_algorithm(
+            signature.payload(),
+            Algorithm::MlDsa,
+            "signature",
+        )
+        .expect("valid ML-DSA signature material is admitted");
+        let mut short = signature.payload().to_vec();
+        short.pop();
+        let mut overlong = signature.payload().to_vec();
+        overlong.push(0x42);
+
+        for (label, malformed) in [
+            ("short", short),
+            ("overlong", overlong),
+            ("all-zero", vec![0_u8; signature.payload().len()]),
+        ] {
+            let err = py_err_message(
+                checked_signature_from_bytes_for_algorithm(
+                    &malformed,
+                    Algorithm::MlDsa,
+                    "signature",
+                )
+                .expect_err("malformed ML-DSA signature must fail admission"),
+            );
+            assert!(
+                err.contains("signature is malformed"),
+                "unexpected {label} ML-DSA signature admission error: {err}"
             );
         }
     }
@@ -6761,6 +6807,52 @@ mod tests {
                 !verify_ed25519_py(public_key, message, &malformed)
                     .expect("Ed25519 verification returns a bool"),
                 "{label} Ed25519 signature R must fail Ed25519 wrapper admission"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_rejects_malformed_mldsa_signature_lengths_before_backend() {
+        let key_pair = KeyPair::try_from_seed(
+            b"python-native-mldsa-signature-admission".to_vec(),
+            Algorithm::MlDsa,
+        )
+        .expect("derive checked ML-DSA fixture keypair");
+        let (_, public_key) = public_key_to_bytes(key_pair.public_key(), "fixture public key")
+            .expect("fixture public key bytes");
+        let message = b"python native ML-DSA signature admission";
+        let signature = Signature::try_new(key_pair.private_key(), message)
+            .expect("checked ML-DSA fixture signature");
+
+        assert!(
+            verify_py(
+                Algorithm::MlDsa.as_static_str(),
+                public_key,
+                message,
+                signature.payload(),
+            )
+            .expect("generic ML-DSA verification returns a bool"),
+            "valid ML-DSA signature must verify through generic wrapper"
+        );
+        let mut short = signature.payload().to_vec();
+        short.pop();
+        let mut overlong = signature.payload().to_vec();
+        overlong.push(0x42);
+
+        for (label, malformed) in [
+            ("short", short),
+            ("overlong", overlong),
+            ("all-zero", vec![0_u8; signature.payload().len()]),
+        ] {
+            assert!(
+                !verify_py(
+                    Algorithm::MlDsa.as_static_str(),
+                    public_key,
+                    message,
+                    &malformed,
+                )
+                .expect("generic ML-DSA verification returns a bool"),
+                "{label} ML-DSA signature must fail generic wrapper admission"
             );
         }
     }
@@ -6891,19 +6983,25 @@ mod tests {
     #[test]
     fn i105_discriminant_hint_decodes_valid_literals_only() {
         let custom_account = custom_i105_from_seed(0x70, 42);
-        assert_eq!(i105_discriminant_hint(&custom_account), Some(42));
+        assert_eq!(
+            AccountAddress::i105_discriminant(&custom_account).ok(),
+            Some(42)
+        );
 
         let noncanonical = custom_account.replacen("n42", "n00042", 1);
-        assert_eq!(i105_discriminant_hint(&noncanonical), None);
+        assert_eq!(AccountAddress::i105_discriminant(&noncanonical).ok(), None);
 
         let mut chars = custom_account.chars().collect::<Vec<_>>();
         let last = chars.len().saturating_sub(1);
         chars[last] = if chars[last] == '1' { '2' } else { '1' };
         let tampered = chars.into_iter().collect::<String>();
-        assert_eq!(i105_discriminant_hint(&tampered), None);
-        assert_eq!(i105_discriminant_hint("n"), None);
-        assert_eq!(i105_discriminant_hint("nabc"), None);
-        assert_eq!(i105_discriminant_hint("n65536payload"), None);
+        assert_eq!(AccountAddress::i105_discriminant(&tampered).ok(), None);
+        assert_eq!(AccountAddress::i105_discriminant("n").ok(), None);
+        assert_eq!(AccountAddress::i105_discriminant("nabc").ok(), None);
+        assert_eq!(
+            AccountAddress::i105_discriminant("n65536payload").ok(),
+            None
+        );
     }
 
     #[test]
@@ -20332,10 +20430,10 @@ fn verify_py(
 ) -> PyResult<bool> {
     let algorithm = parse_algorithm_arg(algorithm)?;
     let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
-    let signature = match if algorithm == Algorithm::Ed25519 {
-        ed25519_parse_signature(signature)
-    } else {
-        Signature::try_from_bytes(signature).map_err(Into::into)
+    let signature = match match algorithm {
+        Algorithm::Ed25519 => ed25519_parse_signature(signature),
+        Algorithm::MlDsa => mldsa65_parse_signature(signature),
+        _ => Signature::try_from_bytes(signature).map_err(Into::into),
     } {
         Ok(signature) => signature,
         Err(_) => return Ok(false),

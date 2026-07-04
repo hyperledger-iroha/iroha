@@ -195,11 +195,11 @@ final class OfflineProofVerifierTests: XCTestCase {
             bundleId: String = "jp.co.soramitsu.iroha.offline",
             environment: String = "production"
         ) throws -> ToriiOfflineDeviceBinding {
-                try ToriiOfflineDeviceBinding(
-                    platform: "ios",
-                    attestationKeyId: "attestation-key",
-                    deviceId: "ios-device",
-                    offlinePublicKey: "offline-public-key",
+            try ToriiOfflineDeviceBinding(
+                platform: "ios",
+                attestationKeyId: "attestation-key",
+                deviceId: "ios-device",
+                offlinePublicKey: "offline-public-key",
                 attestationReportBase64: "not-used-for-metadata-validation",
                 iosTeamId: teamId,
                 iosBundleId: bundleId,

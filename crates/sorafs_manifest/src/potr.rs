@@ -157,6 +157,11 @@ impl PotrSignatureV1 {
                         context,
                         reason: "invalid signature material",
                     })?,
+                Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(&self.signature)
+                    .map_err(|_| PotrReceiptValidationError::InvalidSignature {
+                        context,
+                        reason: "invalid signature material",
+                    })?,
                 _ => Signature::try_from_bytes(&self.signature).map_err(|_| {
                     PotrReceiptValidationError::InvalidSignature {
                         context,

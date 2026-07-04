@@ -4646,6 +4646,7 @@ impl Actor {
         {
             self.record_round_no_progress_wake();
         }
+        self.publish_canonical_pending_finality_status(Instant::now());
         finish_timings(timings)
     }
 
@@ -5455,6 +5456,7 @@ impl Actor {
                     dwell_ms,
                     "requesting known-block pending update to recover missing commit QC"
                 );
+                self.publish_canonical_pending_finality_status(now);
                 true
             }
             super::MissingBlockFetchDecision::NoTargets => {

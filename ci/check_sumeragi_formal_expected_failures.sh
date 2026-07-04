@@ -4,6 +4,10 @@ set -euo pipefail
 root_dir="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root_dir"
 
+python3 scripts/formal/check_sumeragi_formal_coverage.py
+
+target/apalache/toolchains/v0.52.2/bin/apalache-mc --version
+
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-recovery-owner-cleanup
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-vote-queue

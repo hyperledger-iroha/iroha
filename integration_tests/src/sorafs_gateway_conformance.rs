@@ -1315,10 +1315,10 @@ pub fn verify_attestation_envelope(
     let signature_hex = attestation_str_field(attestation, "signature_hex")?;
     let signature_bytes =
         hex::decode(signature_hex).wrap_err("attestation signature is not valid hex")?;
-    let signature = if matches!(algorithm, Algorithm::Ed25519) {
-        iroha_crypto::ed25519_parse_signature(&signature_bytes)
-    } else {
-        Signature::try_from_bytes(&signature_bytes).map_err(iroha_crypto::Error::from)
+    let signature = match algorithm {
+        Algorithm::Ed25519 => iroha_crypto::ed25519_parse_signature(&signature_bytes),
+        Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(&signature_bytes),
+        _ => Signature::try_from_bytes(&signature_bytes).map_err(iroha_crypto::Error::from),
     }
     .wrap_err("invalid attestation signature material")?;
     signature

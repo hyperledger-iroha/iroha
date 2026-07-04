@@ -8737,7 +8737,7 @@ def check_mobile_offline_readiness_coverage(texts, errors):
         (
             "private struct KagemushaReadinessFamily",
             "let hasRecursiveCompactFamily = Self.containsAny(",
-            "try Self.rejectRemovedAbi7Fields(in: container)",
+            "try Self.rejectRemovedAbi7Fields(in: readinessContainer)",
             "private static func rejectRemovedAbi7Fields(",
             "private static func decodeRecursiveCompactFamily(",
             "private static func decodeRequiredExactString(",
@@ -9033,6 +9033,7 @@ def check_mobile_bearer_cash_policy_validation(texts, errors):
 def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
     swift_note_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteWallet.swift"
     swift_text_source = "IrohaSwift/Sources/IrohaSwift/OfflineBearerCashWallet.swift"
+    swift_contract_source = "IrohaSwift/Sources/IrohaSwift/OfflineNoteTextTransferContract.swift"
     swift_test = "IrohaSwift/Tests/IrohaSwiftTests/OfflineNoteTests.swift"
     java_base64_source = (
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineBase64Url.java"
@@ -9081,10 +9082,17 @@ def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
             f"{label} whitespace normalization",
             errors,
         )
-    swift_note_text = texts[swift_note_source]
-    require(
-        swift_note_text.count('guard !value.isEmpty,\n              !value.contains("="),') >= 3,
-        "Swift Offline Bearer Cash base64url text exactness source missing exact empty-payload checks",
+    require_contains(
+        texts,
+        swift_contract_source,
+        (
+            "public static func base64URLDecodedData(_ value: String) -> Data?",
+            "guard !value.isEmpty,\n              value == value.trimmingCharacters(in: .whitespacesAndNewlines),",
+            "!value.contains(\"=\")",
+            "value.unicodeScalars.allSatisfy(isBase64URLScalarAllowed)",
+            "base64URLEncodedString(decoded) == value",
+        ),
+        "Swift Offline Bearer Cash base64url text exactness source",
         errors,
     )
     require_not_regex(
@@ -9098,7 +9106,7 @@ def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
         texts,
         swift_text_source,
         "public static func payloadKind(_ text: String)",
-        "private static func isBase64UrlCharacter",
+        "private static func hasExactUnpaddedBase64UrlPayload",
         (
             "hasExactUnpaddedBase64UrlPayload(text, prefix: receiveRequestTextPrefix)",
             "hasExactUnpaddedBase64UrlPayload(text, prefix: paymentTextPrefix)",
@@ -9107,16 +9115,14 @@ def check_mobile_offline_bearer_cash_text_exactness(texts, errors):
         "Swift Offline Bearer Cash payload kind exactness source block",
         errors,
     )
-    require_block_contains(
+    require_contains(
         texts,
         swift_text_source,
-        "private static func hasExactUnpaddedBase64UrlPayload",
-        "private static func isBase64UrlCharacter",
         (
+            "private static func hasExactUnpaddedBase64UrlPayload",
             "guard text.hasPrefix(prefix)",
-            "payload.trimmingCharacters(in: .whitespacesAndNewlines) == payload",
-            "!payload.contains(\"=\")",
-            "payload.unicodeScalars.allSatisfy(isBase64UrlCharacter)",
+            "let payload = String(text.dropFirst(prefix.count))",
+            "OfflineNoteTextTransferContract.base64URLDecodedData(payload) != nil",
         ),
         "Swift Offline Bearer Cash payload kind payload exactness source block",
         errors,
@@ -9442,8 +9448,8 @@ def check_kotlin_offline_bearer_cash_text_exactness(texts, errors):
         "private fun isBase64UrlCharacter",
         (
             "if (!text.startsWith(prefix)) return false",
-            "payload.trim() == payload",
-            "!payload.contains(\"=\")",
+            "payload.trim() != payload",
+            "payload.contains(\"=\")",
             "payload.all(::isBase64UrlCharacter)",
         ),
         "Kotlin Offline Bearer Cash payload kind payload exactness source block",
@@ -9729,7 +9735,6 @@ def check_swift_transfer_text_payload_exactness(texts, errors):
         texts,
         handoff,
         (
-            "guard !value.isEmpty,\n              value == value.trimmingCharacters(in: .whitespacesAndNewlines),",
             "if value.hasPrefix(receiveRequestPrefix)",
             "encoded = value.dropFirst(receiveRequestPrefix.count)",
             "if value.hasPrefix(paymentTokenPrefix)",
@@ -9741,7 +9746,10 @@ def check_swift_transfer_text_payload_exactness(texts, errors):
             "if hasExactTextPayload(value, prefix: paymentTokenPrefix)",
             "if hasExactTextPayload(value, prefix: receiptAckPrefix)",
             "private static func hasExactTextPayload(_ value: String, prefix: String) -> Bool",
+            "guard value.hasPrefix(prefix) else { return false }",
             "base64UrlDecode(String(value.dropFirst(prefix.count))) != nil",
+            "private static func base64UrlDecode(_ value: String) -> Data?",
+            "OfflineNoteTextTransferContract.base64URLDecodedData(value)",
         ),
         "Swift transfer text payload exactness source",
         errors,
@@ -9792,7 +9800,10 @@ def check_mobile_qr_stream_text_exactness(texts, errors):
         swift_source,
         (
             "guard let stripped = value.stripPrefix(base64Prefix) else",
-            "guard let decoded = Data(base64Encoded: stripped) else",
+            "guard let decoded = decodeExactBase64(stripped) else",
+            "private static func decodeExactBase64(_ value: String) -> Data?",
+            "guard let decoded = Data(base64Encoded: value),",
+            "decoded.base64EncodedString() == value else",
         ),
         "Swift QR stream text exactness source",
         errors,
@@ -19470,6 +19481,13 @@ def check_python(texts, errors):
     torii_client = texts["python/iroha_torii_client/client.py"]
     torii_init = texts["python/iroha_torii_client/__init__.py"]
     torii_tests = texts["python/iroha_torii_client/tests/test_client.py"]
+    require_not_regex(
+        texts,
+        wrapper,
+        r"output_proof_circuit_id: str \| None = None",
+        "Python append request must require an explicit output proof circuit id",
+        errors,
+    )
     require_contains(
         texts,
         "python/iroha_torii_client/client.py",
@@ -21357,6 +21375,13 @@ def check_swift(texts, errors):
     torii_offline_cash_api_models_test = "IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashAPIModelsTests.swift"
     nfc_mobile_transport = "IrohaSwift/Sources/IrohaSwiftMobileTransports/OfflineNfcMobileTransports.swift"
     transport_ui_test = "IrohaSwift/Tests/IrohaSwiftTransportUITests/OfflineTransferWidgetTests.swift"
+    require_not_regex(
+        texts,
+        request_codecs,
+        r"outputProofCircuitId: String\? = nil|public let outputProofCircuitId: String\?",
+        "Swift append request must require an explicit output proof circuit id",
+        errors,
+    )
     require_contains(
         texts,
         offline_cash_models,
@@ -22067,7 +22092,7 @@ def check_swift(texts, errors):
         (
             "private static func supportedPlatform(",
             "switch value {",
-            'case "ios", "android":',
+            "case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:",
             "return value",
             "guard binding.platform == Self.platform else",
             "guard proof.platform == Self.platform else",
@@ -24428,6 +24453,20 @@ def check_java_kotlin(texts, errors):
     java_file_key_export_store = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/export/FileKeyExportStore.java"
     java_in_memory_key_export_store = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/export/InMemoryKeyExportStore.java"
     java_key_attestation = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyAttestation.java"
+    require_not_regex(
+        texts,
+        kotlin_request_codecs,
+        r"outputCircuitId: String\? = null|val outputProofCircuitId: String\? = null",
+        "Kotlin append request builders must require an explicit output proof circuit id",
+        errors,
+    )
+    require_regex(
+        texts,
+        java_request_codecs,
+        r"this\.outputProofCircuitId = Objects\.requireNonNull\(outputProofCircuitId, \"outputProofCircuitId\"\);",
+        "Android Java append request must require an explicit output proof circuit id",
+        errors,
+    )
     java_key_gen_parameters = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeyGenParameters.java"
     java_keystore_key_provider = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/KeystoreKeyProvider.java"
     java_system_android_keystore_backend = "java/iroha_android/src/main/java/org/hyperledger/iroha/android/crypto/keystore/SystemAndroidKeystoreBackend.java"
@@ -24680,7 +24719,7 @@ def check_java_kotlin(texts, errors):
     require_block_regex(
         texts,
         kotlin_request_codecs,
-        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String? = null,",
+        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String,",
         "    @JvmStatic\n    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        pallasOpenEnvelopes: ByteArray?,",
         r"val previousSummary = preflightAppendPreviousLineageForAutoGeneration\([\s\S]*?preflightAppendLineageKeyMaterialForAutoGeneration\([\s\S]*?outputCircuitId,[\s\S]*?lineageVerifierKey,[\s\S]*?lineageProvingKeyArchive,[\s\S]*?\)[\s\S]*?val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)",
         "Kotlin typed recursive spend append auto Pallas lineage-key material preflight",
@@ -24690,7 +24729,7 @@ def check_java_kotlin(texts, errors):
     require_block_regex(
         texts,
         kotlin_request_codecs,
-        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String?,\n        previousLineageVerifierRecord: VerifierRecordRef?,\n        previousProofOpenEnvelopes: ByteArray?,\n        lineageKeyArtifacts:",
+        "    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        hop: VerifiedFoldHopEvidence?,\n        spendableNote: SpendableNoteDescriptor?,\n        outputCircuitId: String,\n        previousLineageVerifierRecord: VerifierRecordRef?,\n        previousProofOpenEnvelopes: ByteArray?,\n        lineageKeyArtifacts:",
         "    @JvmStatic\n    @JvmOverloads\n    fun buildRecursiveSpendAppendRequest(\n        previousBundle: ByteArray?,\n        proofOutputArchive: ByteArray?,",
         r"val checkedLineageKeyArtifacts = preflightAppendLineageKeyArtifactsForAutoGeneration\([\s\S]*?outputCircuitId,[\s\S]*?lineageKeyArtifacts,[\s\S]*?\)[\s\S]*?val pallasOpenEnvelopes = buildPallasOpenEnvelopesArchiveForRecordBundle\(recordBundle\)[\s\S]*?lineageKeyArtifacts = checkedLineageKeyArtifacts",
         "Kotlin typed recursive spend append typed-artifact auto Pallas preflight",
@@ -30453,6 +30492,13 @@ def check_java_kotlin(texts, errors):
 def check_csharp(texts, errors):
     script = read(CSHARP_SDK_TEST_COMMAND)
     test_project = read("csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj")
+    require_not_regex(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+        r"string\? outputProofCircuitId = null",
+        "C# append request helpers must require an explicit output proof circuit id",
+        errors,
+    )
     require(
         'DOTNET_BIN="${KAGEMUSHA_RECURSIVE_SPEND_DOTNET_BIN:-dotnet}"' in script,
         "Kagemusha C# SDK script must keep the documented dotnet override variable",
@@ -66888,10 +66934,10 @@ if mode == "--negative-control-swift-offline-proof-platform-exactness":
     source_replacements = (
         (
             '        switch value {\n'
-            '        case "ios", "android":\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value\n",
             '        switch value.lowercased() {\n'
-            '        case "ios", "android":\n'
+            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
             "            return value.lowercased()\n",
         ),
         (

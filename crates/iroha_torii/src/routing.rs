@@ -4883,15 +4883,22 @@ pub fn verify_signed_query_request(
     query: SignedQuery,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority> {
     let iroha_data_model::query::QuerySignature(sig) = &query.signature;
-    if matches!(
-        query.payload.authority.signatory().try_algorithm(),
-        Ok(Algorithm::Ed25519)
-    ) {
-        iroha_crypto::ed25519_parse_signature(sig.payload()).map_err(|err| {
-            Error::from(ValidationFail::NotPermitted(format!(
-                "query signature material failed admission: {err}"
-            )))
-        })?;
+    match query.payload.authority.signatory().try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(sig.payload()).map_err(|err| {
+                Error::from(ValidationFail::NotPermitted(format!(
+                    "query signature material failed admission: {err}"
+                )))
+            })?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(sig.payload()).map_err(|err| {
+                Error::from(ValidationFail::NotPermitted(format!(
+                    "query signature material failed admission: {err}"
+                )))
+            })?;
+        }
+        _ => {}
     }
     sig.verify(query.payload.authority.signatory(), &query.payload)
         .map_err(|_| {
@@ -5004,6 +5011,44 @@ mod signed_query_verification_tests {
             assert!(
                 message.contains("query signature material failed admission"),
                 "{label} signed query signature R produced unexpected admission error: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn verify_signed_query_rejects_malformed_mldsa_signature_lengths() {
+        let signer = checked_routing_fixture_keypair(
+            0xe7,
+            Algorithm::MlDsa,
+            "derive signed query malformed ML-DSA signature fixture key",
+        );
+        verify_signed_query_request(signed_find_abi_version(&signer))
+            .expect("valid ML-DSA signed query should verify before mutation");
+
+        for label in ["truncated", "extended"] {
+            let mut invalid_signed = signed_find_abi_version(&signer);
+            let mut malformed_payload = invalid_signed.signature.0.payload().to_vec();
+            match label {
+                "truncated" => {
+                    malformed_payload.pop();
+                }
+                "extended" => malformed_payload.push(0),
+                _ => unreachable!("test labels are exhaustive"),
+            }
+            invalid_signed.signature = QuerySignature(SignatureOf::from_signature(
+                Signature::from_bytes(&malformed_payload),
+            ));
+
+            let err = match verify_signed_query_request(invalid_signed) {
+                Ok(_) => {
+                    panic!("malformed signed query ML-DSA signature length must fail admission")
+                }
+                Err(err) => err,
+            };
+            let message = format!("{err:?}");
+            assert!(
+                message.contains("query signature material failed admission"),
+                "{label} signed query ML-DSA signature length produced unexpected admission error: {message}"
             );
         }
     }
@@ -9448,6 +9493,7 @@ mod sccp_message_backend_tests {
     use iroha_executor_data_model::permission::{
         governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
     };
+    use nonzero_ext::nonzero;
 
     fn conversion_message(err: &crate::Error) -> Option<&str> {
         match err {
@@ -10852,6 +10898,44 @@ mod sccp_message_backend_tests {
         test_configured_sccp_zk_config_for_domains(
             iroha_sccp::SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1,
         )
+    }
+
+    #[derive(Debug, Clone, norito::JsonSerialize)]
+    struct TestSccpOnChainLaneMaterialsV1 {
+        version: u8,
+        sccp_source_verifier_materials:
+            Vec<iroha_config::parameters::actual::SccpSourceVerifierMaterial>,
+        sccp_source_adapter_engine_deployments:
+            Vec<iroha_config::parameters::actual::SccpSourceAdapterEngineDeployment>,
+        sccp_destination_rollouts: Vec<iroha_config::parameters::actual::SccpDestinationRollout>,
+        sccp_route_allowlists: Vec<iroha_config::parameters::actual::SccpRouteAllowlist>,
+    }
+
+    fn commit_sccp_lane_materials_parameter_for_test(
+        state: &CoreState,
+        zk: iroha_config::parameters::actual::Zk,
+    ) {
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let custom = iroha_data_model::parameter::CustomParameter::new(
+            iroha_data_model::parameter::CustomParameterId(
+                "sccp_lane_materials_v1".parse().expect("parameter id"),
+            ),
+            IrohaJson::new(TestSccpOnChainLaneMaterialsV1 {
+                version: 1,
+                sccp_source_verifier_materials: zk.sccp_source_verifier_materials,
+                sccp_source_adapter_engine_deployments: zk.sccp_source_adapter_engine_deployments,
+                sccp_destination_rollouts: zk.sccp_destination_rollouts,
+                sccp_route_allowlists: zk.sccp_route_allowlists,
+            }),
+        );
+        block
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(iroha_data_model::parameter::Parameter::Custom(custom));
+        block.commit().expect("commit SCCP lane-material parameter");
     }
 
     fn sample_evm_groth16_platform_payload_for_job(
@@ -13606,6 +13690,52 @@ mod sccp_message_backend_tests {
         assert!(!ton.production_readiness.source_adapter_ready);
         assert!(!ton.production_readiness.routes_allowlisted);
         assert!(!ton.production_readiness.blockers.is_empty());
+    }
+
+    #[test]
+    fn sccp_capabilities_snapshot_uses_on_chain_lane_material_parameter() {
+        let mut state = CoreState::new_for_testing(
+            iroha_core::state::World::default(),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        );
+        let mut empty_zk = state.zk_snapshot();
+        empty_zk.sccp_source_verifier_materials.clear();
+        empty_zk.sccp_source_adapter_engine_deployments.clear();
+        empty_zk.sccp_destination_rollouts.clear();
+        empty_zk.sccp_route_allowlists.clear();
+        state.set_zk(empty_zk);
+
+        commit_sccp_lane_materials_parameter_for_test(
+            &state,
+            test_configured_sccp_zk_config_for_domains([iroha_sccp::SCCP_DOMAIN_TON]),
+        );
+
+        let zk_snapshot = state.zk_snapshot();
+        assert_eq!(zk_snapshot.sccp_source_verifier_materials.len(), 1);
+        assert_eq!(
+            zk_snapshot.sccp_source_verifier_materials[0].source_domain,
+            iroha_sccp::SCCP_DOMAIN_TON
+        );
+        assert!(!zk_snapshot.sccp_source_verifier_materials[0].placeholder_material);
+
+        let snapshot = sccp_capabilities_snapshot(&state).expect("capabilities");
+        let ton = snapshot
+            .counterparties
+            .iter()
+            .find(|entry| entry.domain == iroha_sccp::SCCP_DOMAIN_TON)
+            .expect("TON counterparty");
+        assert!(ton.production_ready);
+        assert_eq!(ton.disabled_reason, None);
+        assert!(ton.production_readiness.production_ready);
+        assert!(ton.production_readiness.source_adapter_ready);
+        assert!(ton.production_readiness.routes_allowlisted);
+        assert!(
+            !ton.production_readiness
+                .source_adapter_engine
+                .source_verifier_material
+                .placeholder_material
+        );
     }
 
     #[test]
@@ -58525,6 +58655,9 @@ fn native_amx_receipt_json(receipt: &NativeAmxReceipt) -> Value {
 }
 
 fn sumeragi_v1_pending_finality(snap: &sumeragi::StatusSnapshot) -> Option<HashOf<BlockHeader>> {
+    if let Some(block_hash) = snap.canonical_pending_finality {
+        return Some(block_hash);
+    }
     let settled = snap
         .qc_deferred_resolved_total
         .saturating_add(snap.qc_deferred_expired_total);
@@ -60678,6 +60811,41 @@ mod status_tests {
             Some("permissioned_count")
         );
         assert_eq!(quorum.get("validators").and_then(Value::as_u64), Some(4));
+    }
+
+    #[test]
+    fn status_snapshot_json_uses_canonical_pending_finality_snapshot() {
+        let block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAC; Hash::LENGTH]));
+        let snap = sumeragi::StatusSnapshot {
+            membership_height: 13,
+            membership_view: 5,
+            canonical_pending_finality: Some(block_hash),
+            commit_qc: sumeragi::status::QcSnapshot {
+                height: 12,
+                view: 4,
+                validator_set_len: 4,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let canonical = payload
+            .get("canonical")
+            .and_then(Value::as_object)
+            .expect("canonical v1 status");
+        assert_eq!(canonical.get("height").and_then(Value::as_u64), Some(13));
+        assert_eq!(canonical.get("view").and_then(Value::as_u64), Some(5));
+        assert_eq!(
+            canonical.get("phase").and_then(Value::as_str),
+            Some("pending_finality")
+        );
+        let expected_block_hash = format!("{block_hash}");
+        assert_eq!(
+            canonical.get("pending_finality").and_then(Value::as_str),
+            Some(expected_block_hash.as_str())
+        );
     }
 
     #[test]

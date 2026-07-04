@@ -508,71 +508,15 @@ fn ensure_ivm_execution_vk(
     Ok(id)
 }
 
-fn publish_sccp_route_manifest(
-    config_path: PathBuf,
-    manifest_path: PathBuf,
-    gas_asset_id: Option<String>,
-    gas_limit: u64,
-    expected_route_id: Option<String>,
-    expected_asset_key: Option<String>,
-) -> Result<()> {
-    let config = load_config(&config_path)?;
-    let client = Client::new(config.clone());
-    let manifest = read_sccp_route_manifest_artifact(&manifest_path)?;
-
-    if let Some(expected) = expected_route_id.as_deref()
-        && manifest.route_id != expected
-    {
-        return Err(eyre!(
-            "route manifest id mismatch: expected `{expected}`, found `{}`",
-            manifest.route_id
-        ));
-    }
-    if let Some(expected) = expected_asset_key.as_deref()
-        && manifest.asset_key != expected
-    {
-        return Err(eyre!(
-            "route manifest asset mismatch: expected `{expected}`, found `{}`",
-            manifest.asset_key
-        ));
-    }
-    if !manifest.production_ready {
-        return Err(eyre!(
-            "route manifest `{}` is not marked production_ready",
-            manifest.route_id
-        ));
-    }
-
-    let route_id = manifest.route_id.clone();
-    let asset_key = manifest.asset_key.clone();
-    let has_source_verifier_material = manifest.source_verifier_material.is_some();
-    let has_source_adapter_engine_deployment = manifest.source_adapter_engine_deployment.is_some();
-    let has_source_adapter_engine = manifest.source_adapter_engine.is_some();
-
-    let mut metadata = tx_metadata(gas_asset_id.as_deref(), gas_limit)?;
-    insert_string_metadata(&mut metadata, "action", "publish_sccp_route_manifest")?;
-    insert_string_metadata(&mut metadata, "route_id", route_id.clone())?;
-    insert_string_metadata(&mut metadata, "asset_key", asset_key.clone())?;
-
-    let tx = TransactionBuilder::new(config.chain.clone(), config.account.clone())
-        .with_metadata(metadata)
-        .with_instructions([InstructionBox::from(UpsertSccpRouteManifest::new(manifest))]);
-    let tx = sign_governance_transaction(
-        tx,
-        &config,
-        "failed to sign SCCP route manifest upsert transaction",
-    )?;
-    let versioned_tx_bytes =
-        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
-    <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
-        &versioned_tx_bytes,
-    )
-    .wrap_err("locally encoded SCCP route manifest transaction does not decode")?;
-    let mut submit_mode = "single";
-    let tx_hash = match client.submit_transaction_blocking(&tx) {
-        Ok(hash) => hash,
+fn submit_sccp_route_manifest_transaction(
+    client: &Client,
+    config: &Config,
+    tx: &SignedTransaction,
+) -> Result<(String, &'static str)> {
+    let tx_hash = match client.submit_transaction_blocking(tx) {
+        Ok(hash) => return Ok((hash.to_string(), "single")),
         Err(err) if err.to_string().contains("length mismatch") => {
-            let payload = client.prepare_transaction_payload(&tx);
+            let payload = client.prepare_transaction_payload(tx);
             let hash = payload.hash();
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -600,32 +544,98 @@ fn publish_sccp_route_manifest(
                     wait.summary
                 ));
             }
-            submit_mode = "batch";
             hash
         }
         Err(err) => {
             return Err(err).wrap_err("failed to submit SCCP route manifest upsert transaction");
         }
     };
+    Ok((tx_hash.to_string(), "batch"))
+}
 
+fn print_sccp_route_manifest_publish_output(
+    tx_hash: &str,
+    submit_mode: &str,
+    manifest: &SccpRouteManifest,
+) -> Result<()> {
     let mut output = norito::json::Map::new();
-    output.insert("tx_hash".to_owned(), tx_hash.to_string().into());
+    output.insert("tx_hash".to_owned(), tx_hash.into());
     output.insert("submit_mode".to_owned(), submit_mode.into());
-    output.insert("route_id".to_owned(), route_id.into());
-    output.insert("asset_key".to_owned(), asset_key.into());
+    output.insert("route_id".to_owned(), manifest.route_id.clone().into());
+    output.insert("asset_key".to_owned(), manifest.asset_key.clone().into());
     output.insert(
         "source_verifier_material".to_owned(),
-        has_source_verifier_material.into(),
+        manifest.source_verifier_material.is_some().into(),
     );
     output.insert(
         "source_adapter_engine_deployment".to_owned(),
-        has_source_adapter_engine_deployment.into(),
+        manifest.source_adapter_engine_deployment.is_some().into(),
     );
     output.insert(
         "source_adapter_engine".to_owned(),
-        has_source_adapter_engine.into(),
+        manifest.source_adapter_engine.is_some().into(),
     );
     print_json_value(&norito::json::Value::Object(output))
+}
+
+fn publish_sccp_route_manifest(
+    config_path: &Path,
+    manifest_path: &Path,
+    gas_asset_id: Option<&str>,
+    gas_limit: u64,
+    expected_route_id: Option<&str>,
+    expected_asset_key: Option<&str>,
+) -> Result<()> {
+    let config = load_config(config_path)?;
+    let client = Client::new(config.clone());
+    let manifest = read_sccp_route_manifest_artifact(manifest_path)?;
+
+    if let Some(expected) = expected_route_id
+        && manifest.route_id != expected
+    {
+        return Err(eyre!(
+            "route manifest id mismatch: expected `{expected}`, found `{}`",
+            manifest.route_id
+        ));
+    }
+    if let Some(expected) = expected_asset_key
+        && manifest.asset_key != expected
+    {
+        return Err(eyre!(
+            "route manifest asset mismatch: expected `{expected}`, found `{}`",
+            manifest.asset_key
+        ));
+    }
+    if !manifest.production_ready {
+        return Err(eyre!(
+            "route manifest `{}` is not marked production_ready",
+            manifest.route_id
+        ));
+    }
+
+    let mut metadata = tx_metadata(gas_asset_id, gas_limit)?;
+    insert_string_metadata(&mut metadata, "action", "publish_sccp_route_manifest")?;
+    insert_string_metadata(&mut metadata, "route_id", manifest.route_id.clone())?;
+    insert_string_metadata(&mut metadata, "asset_key", manifest.asset_key.clone())?;
+
+    let tx = TransactionBuilder::new(config.chain.clone(), config.account.clone())
+        .with_metadata(metadata)
+        .with_instructions([InstructionBox::from(UpsertSccpRouteManifest::new(
+            manifest.clone(),
+        ))]);
+    let tx = sign_governance_transaction(
+        tx,
+        &config,
+        "failed to sign SCCP route manifest upsert transaction",
+    )?;
+    let versioned_tx_bytes =
+        <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
+    <SignedTransaction as iroha_version::codec::DecodeVersioned>::decode_all_versioned(
+        &versioned_tx_bytes,
+    )
+    .wrap_err("locally encoded SCCP route manifest transaction does not decode")?;
+    let (tx_hash, submit_mode) = submit_sccp_route_manifest_transaction(&client, &config, &tx)?;
+    print_sccp_route_manifest_publish_output(&tx_hash, submit_mode, &manifest)
 }
 
 fn ivm_request_value(
@@ -1025,12 +1035,12 @@ fn main() -> Result<()> {
             expected_route_id,
             expected_asset_key,
         } => publish_sccp_route_manifest(
-            config,
-            manifest,
-            gas_asset_id,
+            &config,
+            &manifest,
+            gas_asset_id.as_deref(),
             gas_limit,
-            expected_route_id,
-            expected_asset_key,
+            expected_route_id.as_deref(),
+            expected_asset_key.as_deref(),
         )?,
     }
     Ok(())

@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-03
+Last updated: 2026-07-04
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -78,15 +78,58 @@ ID/hash replay across Ethereum, BSC, Solana, TON, and TRON. All-lanes deployment
 admission also rejects template-derived source material hashes replayed into
 `adapter_verifier_vk_hash` or `deployment_receipt_hash`, and the release
 source-inventory gate pins those adversarial checks while the live verifier
-engine replacement remains open. Rust source-adapter deployment builders,
+engine replacement remains open. Strict release-bundle source-inventory
+verification also pins the current Java Android TRON header-proof rejection
+calls through `tronHeaderSignature(unsupportedRecoveryId)`. Rust
+source-adapter deployment builders,
 material/deployment matchers, and standalone descriptor shape gates now apply the
 same built-in template and placeholder denylist to descriptor-only hashes,
 including deployment receipts, adapter verifier commitments, and Solana/TON audit
 verifier roles. Deployment-bound source-verifier evidence common-shape validation
 also applies that denylist before rebuilt OpenVerify wrappers can return adapter
-verifier commitments. Public readiness/bundle `cryptographic_evidence` rows now
-also reject source-verifier material hashes replayed as source-adapter deployment
-hashes before copied public rows can certify deployment evidence. Release-bundle
+verifier commitments. Adapter proof and transcript hashes in source-verifier
+evidence now stay role-separated from source/deployment hashes and reject
+built-in or profile-template source-verifier component replay even on
+material-only diagnostic evidence. Source-proof envelopes now also reject
+outer hash-role aliasing between message ids, payload hashes,
+source-event digests, commitment roots, finality block/header hashes, and
+receipt/message roots before material or OpenVerify checks run, and checked
+source-proof envelope serialization now requires that same base wrapper shape
+before canonical bytes or hashes are emitted. Checked source-adapter
+statement/context encoding now also rejects zero transcript/evidence hashes,
+role-hash replays, transcript/evidence aliasing, and source-envelope header
+drift before FastPQ batch construction. Source-message
+and ETH SSZ Merkle inclusion proofs now reject non-canonical high-bit leaf
+indexes that would otherwise reconstruct the same root after unused index bits
+are shifted away, and ETH source-adapter preflight now rejects stale or
+non-fixed-depth execution payload branches before checked transcript encoding.
+BSC source-adapter preflight now rejects high-S or otherwise non-canonical
+validator-set seal signatures for both active and transition seals before
+checked transcript encoding and verifies that each seal signature recovers to
+the declared validator address. Solana source-adapter preflight now also
+reconstructs the finality-context stake, account-inclusion, bank/fork, and
+Tower replay hashes and verifies vote/stake account witness structs against
+their raw account bytes before checked transcript encoding, and checked Solana
+adapter encoding now uses the same strict OpenVerify capsule shape for present
+source-state proofs. TRON source-adapter preflight now also rejects
+transaction-source proofs whose transaction bytes
+and java-tron Merkle branch do not reconstruct the advertised transaction root,
+and solid-block header proofs whose raw headers, transaction roots, parent
+links, ancestors, or confirmations drift, plus active and transition
+witness-seal signatures that do not recover to the declared witness, and
+witness-schedule transition block hashes that are not anchored to the proven
+header chain before checked transcript encoding. TON dictionary-backed
+shard-state proofs now also canonicalize the unused
+shard-state Merkle fields by requiring a zero leaf index and empty branch, and
+TON active/transition validator signatures must pass deterministic Ed25519
+batch verification while shard-state openings and masterchain config proofs
+must verify their BOC/dictionary roots before checked transcript encoding;
+checked TON adapter encoder coverage now also pins all-zero and opaque
+source-state capsule rejection.
+Public readiness/bundle
+`cryptographic_evidence` rows now also reject source-verifier material hashes
+replayed as source-adapter deployment hashes before copied public rows can
+certify deployment evidence. Release-bundle
 pre-render validation also keeps top-level public crypto hash-role replay
 blockers visible when `source_adapter_gate_audit_hashes` is malformed, so a bad
 audit map cannot hide destination, route, source, or top-level source-gate hash
@@ -627,6 +670,15 @@ EVM live metadata, destination-binding, and route-allowlist fields before
 public summaries are rendered. Copied EVM live metadata and destination-family
 fields also reject empty required values and missing family-specific destination
 fields on diagnostic not-ready lanes, matching the strict release verifier.
+Release-bundle pre-rendering and strict verification now keep empty inactive
+future-lane nested maps as diagnostic placeholders, but still require complete
+schema for any non-empty or record-flagged copied source-record,
+destination-binding, or route-allowlist evidence.
+Readiness JSON root validation now also stops malformed copied crypto or
+user-prover lists at the root list-of-objects blocker when there are no
+inspectable object rows, while mixed malformed lists with object rows still
+surface duplicate and missing domain/lane coverage without echoing copied
+operator text.
 Copied source-adapter gates now run the same required/ready/blocker, empty
 not-required material, gate-to-audit, and hash-role semantics for diagnostic
 not-ready lanes before public summaries are rendered. Copied source-record,
@@ -1478,6 +1530,10 @@ Python, JavaScript, Swift, Kotlin/JVM, and Java Android TON proof-request builde
 mirror that descriptor-derived path: `sourceAdapterDeployment` input derives the
 binding, the request `sourceStateVerifierHash` must match the descriptor, and
 raw binding/hash overrides cannot drift from the descriptor-derived binding.
+Native proof-request bundle admission now also parses SORA-origin Nexus
+finality proofs and binds their commitment root, height, and block hash to the
+public inputs before local proving, so opaque finality bytes or stale public
+finality fields cannot ride through a canonical bundle-byte wrapper.
 Sub&#115;trate/Pol&#107;adot networks are explicitly out of scope for the current SCCP
 launch set; do not count them as production-readiness blockers until the
 launch-scope network policy is expanded.
@@ -5211,13 +5267,41 @@ redistributable schemas, and official trust/revocation bundles.
 					  council signatures reject inert all-zero payloads and malformed `R`
 					  encodings before bundle verification, SoraFS proof-token binary decode
 					  routes token signatures through the shared strict `R` parser before
-					  admission, SoraFS governance log and PoTR ML-DSA signatures now
-					  preflight ML-DSA-65 public-key and detached-signature material before
+					  admission, SoraFS governance log publisher/block/head and PoTR ML-DSA
+					  signatures now preflight ML-DSA-65 public-key and detached-signature
+					  material through `iroha_crypto::mldsa65_parse_signature` before
 					  opaque signature wrapping, shared
 					  `iroha_crypto::mldsa65_parse_signature` and Connect identifier receipt
 					  parsing now preflight ML-DSA-65 detached signatures before opaque
-					  signature storage, and Torii operator-auth ML-DSA header signatures
-					  now use the same shared parser before request verification,
+					  signature storage, JS/Python focused regressions and Kotlin/Java/Swift
+					  guarded SDK parity tests now pin valid, short, overlong, and all-zero
+					  ML-DSA behavior where the native bridge is available, and Torii
+					  operator-auth ML-DSA header signatures, P2P
+					  handshake ML-DSA signatures, and Core/Torii Soracloud provenance signatures
+					  now use the same shared parser before request, handshake-payload, or
+					  provenance-payload verification, and data-model signed transactions,
+					  submission receipts, signed queries, validation-fee policies, SoraFS
+					  moderation manifests, SoraNet ticket/proof helper and VPN usage vouchers,
+					  RAM-LFE receipts/openings, Torii app-auth single-signature/witness
+					  payloads, Torii Offline V1/V2 JSON signatures, Torii DA receipt operator
+					  signatures, Torii DA Taikai SSM publisher signatures, Torii signed query
+					  requests, Torii SoraFS repair-worker signatures, SoraFS orchestrator Taikai
+					  cache-admission envelope/gossip signatures, Core oracle observation
+					  signatures, Core SoraDNS directory-builder signatures, runtime-upgrade
+					  provenance signatures, Offline note key-certificate issuer signatures,
+					  snapshot ML-DSA signature sidecars, Core fraud-attestation signatures, JDG
+					  simple-threshold ML-DSA committee signatures, and Sumeragi direct
+					  vote/merge/RBC/VRF plus peer trust-gossip ML-DSA signatures use it before digest, typed-payload
+					  verification,
+					  governance-policy verification, moderation summary acceptance, transport
+					  accounting, provenance-payload, app-auth wrapping/validation, offline JSON,
+					  DA receipt, Taikai signing-manifest, query-payload, repair-worker-payload,
+					  cache-admission payload, observation-payload,
+					  directory-record, runtime-upgrade-provenance, offline-certificate, attestation-hash,
+					  consensus-preimage, or trust-book mutation, and the final signer-admission
+					  inventory classifies remaining raw signature constructors as fixed Ed25519
+					  formats, signer-aware generic branches, non-Ed25519 fallbacks, BLS-only
+					  checked paths, signer-context-free decode staging, or fixtures/examples,
 					  and direct byte-key/preparsed batch APIs now filter exact
 					  verify-cache hits before signature parsing and backend setup;
 	  the thread-local exact verify-ok cache now keeps two entries per exact slot
@@ -5586,7 +5670,9 @@ redistributable schemas, and official trust/revocation bundles.
 				  source-verifier template hashes and source-chain proof envelope
 				  shapes now reject unmapped source domains instead of falling back
 				  to empty source-chain keys, while
-				  diagnostic `allow_unready` builders remain available for structural fixtures; config
+				  diagnostic fixture builders remain available for structural fixtures, but
+				  `allow_unready` manifest/source-proof bypasses remain test-only and cannot
+				  be activated by non-test `test-fixtures` builds; config
 				  parsing for streaming identity, Torii receipt signer, and Torii
 				  offline issuer public keys now also uses checked algorithm access
 				  before allow-list decisions; the Nexus app

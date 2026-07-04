@@ -3518,8 +3518,14 @@ fn verify_signature_for_signer(
     signer: &PublicKey,
     payload: &[u8],
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(signer, payload)
 }
@@ -14209,6 +14215,12 @@ mod tests {
             .expect("test fixture key derivation should succeed")
     }
 
+    fn checked_test_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} Soracloud fixture key generation should succeed: {err}")
+        })
+    }
+
     fn checked_test_bls_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
             .expect("test fixture BLS key derivation should succeed")
@@ -14262,6 +14274,36 @@ mod tests {
                     .expect_err("malformed Soracloud provenance signature R must fail admission"),
                 iroha_crypto::Error::BadSignature,
                 "{label} Soracloud provenance signature R was not rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn soracloud_provenance_helper_rejects_malformed_mldsa_signature_lengths() {
+        let keypair = checked_test_keypair_with_algorithm(Algorithm::MlDsa);
+        let payload = b"torii-soracloud-provenance-mldsa";
+        let signature = checked_test_signature(keypair.private_key(), payload);
+        verify_signature_for_signer(&signature, keypair.public_key(), payload)
+            .expect("valid Soracloud ML-DSA provenance signature should verify");
+        let valid_signature = signature.payload().to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x63);
+                payload
+            }),
+        ] {
+            let malformed_signature = Signature::from_bytes(&replacement_signature);
+            assert_eq!(
+                verify_signature_for_signer(&malformed_signature, keypair.public_key(), payload)
+                    .expect_err("malformed Soracloud ML-DSA signature length must fail admission"),
+                iroha_crypto::Error::BadSignature,
+                "{label} Soracloud ML-DSA signature length was not rejected"
             );
         }
     }

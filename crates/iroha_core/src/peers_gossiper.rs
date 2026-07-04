@@ -951,13 +951,14 @@ fn process_trust_records(
     let mut newly_trusted = BTreeSet::new();
     for SignedPeerTrust { info, signature } in trust {
         let payload = PeersGossiper::trust_payload(&info);
-        let signature = if matches!(
-            from_peer.id().public_key().try_algorithm(),
-            Ok(iroha_crypto::Algorithm::Ed25519)
-        ) {
-            iroha_crypto::ed25519_parse_signature(&signature).ok()
-        } else {
-            Signature::try_from_bytes(&signature).ok()
+        let signature = match from_peer.id().public_key().try_algorithm() {
+            Ok(iroha_crypto::Algorithm::Ed25519) => {
+                iroha_crypto::ed25519_parse_signature(&signature).ok()
+            }
+            Ok(iroha_crypto::Algorithm::MlDsa) => {
+                iroha_crypto::mldsa65_parse_signature(&signature).ok()
+            }
+            _ => Signature::try_from_bytes(&signature).ok(),
         };
         let invalid_signature = signature.map_or(true, |sig| {
             sig.verify(from_peer.id().public_key(), &payload).is_err()
@@ -1167,6 +1168,11 @@ mod tests {
     fn checked_seed_keypair(seed: &[u8]) -> KeyPair {
         KeyPair::try_from_seed(seed.to_vec(), Algorithm::Ed25519)
             .expect("derive checked peers gossiper Ed25519 fixture keypair")
+    }
+
+    fn checked_seed_keypair_with_algorithm(seed: &[u8], algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(seed.to_vec(), algorithm)
+            .expect("derive checked peers gossiper fixture keypair")
     }
 
     fn checked_random_bls_keypair() -> KeyPair {
@@ -1934,6 +1940,76 @@ mod tests {
             assert!(
                 trust_book.score(from_peer.id(), now) <= -2,
                 "{label} Ed25519 trust signature R must penalize the sender"
+            );
+        }
+    }
+
+    #[test]
+    fn trust_gossip_penalizes_malformed_mldsa_signature_lengths() {
+        let kp_sender =
+            checked_seed_keypair_with_algorithm(b"trust-gossip-mldsa-sender", Algorithm::MlDsa);
+        let kp_reported = checked_seed_keypair(&[23, 24, 25, 26]);
+        let from_peer = Peer::new(
+            "127.0.0.1:9004".parse().expect("addr"),
+            kp_sender.public_key().clone(),
+        );
+        let reported_peer = Peer::new(
+            "127.0.0.1:9005".parse().expect("addr"),
+            kp_reported.public_key().clone(),
+        );
+        let info = PeerTrustInfo {
+            peer_id: reported_peer.id().clone(),
+            trusted: true,
+            score: 1,
+        };
+        let valid_signature = signed_trust_payload(&kp_sender, &info);
+        iroha_crypto::mldsa65_parse_signature(&valid_signature)
+            .expect("valid trust-gossip ML-DSA signature parses");
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x27);
+                payload
+            }),
+        ] {
+            let trust = vec![SignedPeerTrust {
+                info: info.clone(),
+                signature: replacement_signature,
+            }];
+            let now = Instant::now();
+            let mut trust_book = TrustBook::new(
+                Duration::from_millis(0),
+                TrustPenalties {
+                    bad_gossip: 4,
+                    unknown_peer: 3,
+                },
+                -2,
+            );
+            trust_book.seed([from_peer.id().clone()], now);
+
+            let outcome = process_trust_records(
+                trust,
+                &from_peer,
+                false,
+                &BTreeSet::from([reported_peer.id().clone()]),
+                &BTreeSet::from([from_peer.id().clone()]),
+                &mut trust_book,
+                now,
+            );
+
+            assert!(
+                outcome.drop_sender,
+                "{label} ML-DSA trust signature length must drop the sender"
+            );
+            assert!(outcome.newly_trusted.is_empty());
+            assert!(
+                trust_book.score(from_peer.id(), now) <= -2,
+                "{label} ML-DSA trust signature length must penalize the sender"
             );
         }
     }

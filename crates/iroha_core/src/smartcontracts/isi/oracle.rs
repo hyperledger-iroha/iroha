@@ -57,8 +57,14 @@ fn verify_typed_signature_for_signer<T: norito::codec::Encode>(
     signer: &PublicKey,
     value: &T,
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        ed25519_parse_signature(signature.payload())?;
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(signer, value)
 }
@@ -1000,6 +1006,12 @@ mod tests {
             .expect("DeFi oracle fixture key generation should succeed")
     }
 
+    fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+            panic!("{algorithm:?} oracle fixture key generation should succeed: {err}")
+        })
+    }
+
     fn provider() -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
             .expect("DeFi oracle provider fixture key generation should succeed");
@@ -1176,6 +1188,42 @@ mod tests {
             assert!(
                 matches!(err, iroha_crypto::Error::BadSignature),
                 "{label} observation signature R should fail before typed verification: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn oracle_observation_signature_rejects_malformed_mldsa_signature_lengths() {
+        let keypair = checked_keypair_with_algorithm(Algorithm::MlDsa);
+        let body = observation_body(AccountId::new(keypair.public_key().clone()));
+        let signature = SignatureOf::try_new(keypair.private_key(), &body)
+            .expect("oracle ML-DSA observation fixture signing should succeed");
+        verify_typed_signature_for_signer(&signature, keypair.public_key(), &body)
+            .expect("valid oracle ML-DSA observation signature should verify");
+        let valid_signature = signature.payload().to_vec();
+
+        for (label, replacement_signature) in [
+            (
+                "short",
+                valid_signature[..valid_signature.len() - 1].to_vec(),
+            ),
+            ("overlong", {
+                let mut payload = valid_signature.clone();
+                payload.push(0x65);
+                payload
+            }),
+        ] {
+            let malformed_signature =
+                SignatureOf::from_signature(Signature::from_bytes(&replacement_signature));
+            let err = verify_typed_signature_for_signer(
+                &malformed_signature,
+                keypair.public_key(),
+                &body,
+            )
+            .expect_err("malformed oracle ML-DSA signature length must fail admission");
+            assert!(
+                matches!(err, iroha_crypto::Error::BadSignature),
+                "{label} observation ML-DSA signature length should fail before typed verification: {err:?}"
             );
         }
     }

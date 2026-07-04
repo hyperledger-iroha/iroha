@@ -3154,7 +3154,7 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut missing_result_block =
-            SignedBlock::presigned(signature.clone(), header.clone(), vec![tx.clone()]);
+            SignedBlock::presigned(signature.clone(), header, vec![tx.clone()]);
 
         let err = missing_result_block
             .set_transaction_results(Vec::new(), &[entry_hash], Vec::new())

@@ -34,8 +34,14 @@ fn verify_signature_for_signer(
     signer: &PublicKey,
     payload: &[u8],
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(signer, payload)
 }
@@ -2436,7 +2442,11 @@ mod tests {
     }
 
     fn cache_admission_fixture_keypair() -> KeyPair {
-        KeyPair::try_from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519)
+        cache_admission_fixture_keypair_with_algorithm(Algorithm::Ed25519)
+    }
+
+    fn cache_admission_fixture_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+        KeyPair::try_from_seed(vec![0xAB; 32], algorithm)
             .expect("derive cache admission fixture key")
     }
 
@@ -2446,9 +2456,19 @@ mod tests {
         issued_ms: u64,
         ttl: Duration,
     ) -> CacheAdmissionGossip {
+        let key_pair = cache_admission_fixture_keypair();
+        cache_admission_gossip_with_key_pair(shard, sequence, issued_ms, ttl, &key_pair)
+    }
+
+    fn cache_admission_gossip_with_key_pair(
+        shard: TaikaiShardId,
+        sequence: u64,
+        issued_ms: u64,
+        ttl: Duration,
+        key_pair: &KeyPair,
+    ) -> CacheAdmissionGossip {
         let issuer = GuardDirectoryId::new("soranet/cache");
         let cached = dummy_segment(sequence, 512, QosClass::Priority);
-        let key_pair = cache_admission_fixture_keypair();
         let record = CacheAdmissionRecord::from_segment(
             shard,
             issuer,
@@ -2459,11 +2479,11 @@ mod tests {
             ttl,
         )
         .expect("record");
-        let envelope = CacheAdmissionEnvelope::sign(record, &key_pair).expect("envelope");
+        let envelope = CacheAdmissionEnvelope::sign(record, key_pair).expect("envelope");
         let mut rng = StdRng::seed_from_u64(sequence);
         let body =
             CacheAdmissionGossipBody::with_nonce(envelope, issued_ms, ttl, &mut rng).unwrap();
-        CacheAdmissionGossip::sign(body, &key_pair).expect("gossip")
+        CacheAdmissionGossip::sign(body, key_pair).expect("gossip")
     }
 
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
@@ -2542,6 +2562,48 @@ mod tests {
     }
 
     #[test]
+    fn cache_admission_envelope_rejects_malformed_mldsa_signature_lengths() {
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(30);
+        let key_pair = cache_admission_fixture_keypair_with_algorithm(Algorithm::MlDsa);
+        let envelope =
+            cache_admission_gossip_with_key_pair(TaikaiShardId(7), 45, issued_ms, ttl, &key_pair)
+                .body()
+                .envelope()
+                .clone();
+        envelope
+            .verify(issued_ms)
+            .expect("valid ML-DSA envelope verifies before mutation");
+        let (body, signer, signature) = envelope.into_parts();
+
+        let mut extended = signature.payload().to_vec();
+        extended.push(0);
+        for (label, payload) in [
+            (
+                "truncated",
+                signature.payload()[..signature.payload().len() - 1].to_vec(),
+            ),
+            ("extended", extended),
+        ] {
+            let envelope = CacheAdmissionEnvelope::from_parts(
+                body.clone(),
+                signer.clone(),
+                Signature::from_bytes(&payload),
+            );
+
+            assert!(
+                matches!(
+                    envelope.verify(issued_ms).expect_err(
+                        "malformed ML-DSA envelope signature length must fail admission"
+                    ),
+                    CacheAdmissionError::InvalidSignature
+                ),
+                "{label} envelope ML-DSA signature length must fail admission"
+            );
+        }
+    }
+
+    #[test]
     fn cache_admission_gossip_rejects_malformed_ed25519_signature_r() {
         let issued_ms = 1_726_000_200_000;
         let ttl = Duration::from_secs(30);
@@ -2565,6 +2627,45 @@ mod tests {
                     CacheAdmissionError::InvalidSignature
                 ),
                 "{label} gossip signature R must fail admission"
+            );
+        }
+    }
+
+    #[test]
+    fn cache_admission_gossip_rejects_malformed_mldsa_signature_lengths() {
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(30);
+        let key_pair = cache_admission_fixture_keypair_with_algorithm(Algorithm::MlDsa);
+        let gossip =
+            cache_admission_gossip_with_key_pair(TaikaiShardId(7), 46, issued_ms, ttl, &key_pair);
+        gossip
+            .verify(issued_ms)
+            .expect("valid ML-DSA gossip verifies before mutation");
+        let (body, signer, signature) = gossip.into_parts();
+
+        let mut extended = signature.payload().to_vec();
+        extended.push(0);
+        for (label, payload) in [
+            (
+                "truncated",
+                signature.payload()[..signature.payload().len() - 1].to_vec(),
+            ),
+            ("extended", extended),
+        ] {
+            let gossip = CacheAdmissionGossip::from_parts(
+                body.clone(),
+                signer.clone(),
+                Signature::from_bytes(&payload),
+            );
+
+            assert!(
+                matches!(
+                    gossip
+                        .verify(issued_ms)
+                        .expect_err("malformed ML-DSA gossip signature length must fail admission"),
+                    CacheAdmissionError::InvalidSignature
+                ),
+                "{label} gossip ML-DSA signature length must fail admission"
             );
         }
     }

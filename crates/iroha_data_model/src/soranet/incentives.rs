@@ -226,7 +226,7 @@ impl RelayBandwidthProofV1 {
             verified_bytes: self.verified_bytes,
             verifier_id: self.verifier_id.clone(),
             issued_at_unix: self.issued_at_unix,
-            confidence: self.confidence.clone(),
+            confidence: self.confidence,
             metadata: self.metadata.clone(),
         }
     }

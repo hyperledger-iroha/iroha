@@ -27373,13 +27373,25 @@ mod tests {
         let mut validator_set_hash_bytes = [0u8; 32];
         validator_set_hash_bytes.copy_from_slice(validator_set_hash.as_ref().as_ref());
         let validator_public_keys = vec![validator_keypair.public_key().to_string()];
+        let mut block_header = BlockHeader::new(
+            core::num::NonZeroU64::new(19).expect("non-zero finality height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        block_header.set_sccp_commitment_root(Some(commitment_root));
+        let mut block_hash = [0u8; 32];
+        block_hash.copy_from_slice(block_header.hash().as_ref().as_ref());
         let finality_proof = NexusBridgeFinalityProofV1 {
             version: 1,
             chain_id: iroha_sccp::SCCP_NEXUS_FINALITY_CHAIN_ID_V1.to_owned(),
             height: 19,
-            block_hash: [0x44; 32],
+            block_hash,
             commitment_root,
-            block_header_bytes: vec![0x01, 0x02, 0x03],
+            block_header_bytes: norito::to_bytes(&block_header)
+                .expect("encode sample Nexus block header"),
             commit_qc: NexusCommitQcV1 {
                 version: 1,
                 phase: NexusConsensusPhaseV1::Commit,
@@ -27387,14 +27399,14 @@ mod tests {
                 view: 1,
                 epoch: 1,
                 mode_tag: "normal".to_owned(),
-                subject_block_hash: [0x44; 32],
+                subject_block_hash: block_hash,
                 parent_state_root: [0u8; 32],
                 post_state_root: [0u8; 32],
                 chain_order_hash: [0u8; 32],
                 rechain_seq: 0,
                 highest_qc: None,
                 validator_set_hash: validator_set_hash_bytes,
-                validator_set_hash_version: 1,
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_public_keys,
                 validator_set_pops: vec![vec![0xAA]],
                 signers_bitmap: vec![0x01],

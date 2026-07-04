@@ -1,12 +1,7 @@
 #![cfg_attr(not(feature = "cuda"), allow(dead_code))]
 
 fn ed25519_public_key_bytes_are_invalid(pk: &[u8; 32]) -> bool {
-    if crate::signature::material_bytes_are_all_zero(pk) {
-        return true;
-    }
-    ed25519_dalek::VerifyingKey::from_bytes(pk)
-        .map(|key| crate::signature::ed25519_public_key_is_weak(&key))
-        .unwrap_or(true)
+    crate::signature::ed25519_public_key_bytes_are_invalid(pk)
 }
 
 #[cfg(feature = "cuda")]
@@ -2618,11 +2613,11 @@ mod imp {
             if !ensure_cuda_selftest() {
                 return None;
             }
-            use ed25519_dalek::{Signature, VerifyingKey};
+            use ed25519_dalek::Signature;
 
             let signature = Signature::from_slice(sig).ok()?;
             let sig_bytes = signature.to_bytes();
-            let verifying_key = VerifyingKey::from_bytes(pk).ok()?;
+            let verifying_key = crate::signature::parse_ed25519_public_key_for_verification(pk)?;
             let pk_bytes = verifying_key.to_bytes();
             let hram_bytes =
                 crate::signature::ed25519_challenge_scalar_bytes(&sig_bytes, &pk_bytes, msg);
@@ -4116,6 +4111,12 @@ mod tests {
         0xff, 0x7f,
     ];
 
+    const NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY: [u8; 32] = [
+        0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn signature_with_replacement_r(signature: &[u8; 64], replacement_r: &[u8; 32]) -> [u8; 64] {
         let mut malformed = *signature;
         malformed[..replacement_r.len()].copy_from_slice(replacement_r);
@@ -4156,6 +4157,14 @@ mod tests {
             ed25519_verify_cuda(b"message", &valid_sig, &malformed_public_key),
             Some(false)
         );
+        assert_eq!(
+            ed25519_verify_cuda(
+                b"message",
+                &valid_sig,
+                &NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY,
+            ),
+            Some(false)
+        );
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
             ("noncanonical", NONCANONICAL_ED25519_R),
@@ -4181,6 +4190,14 @@ mod tests {
         );
         assert_eq!(
             ed25519_verify_batch_cuda(&[valid_sig], &[malformed_public_key], &[hram]),
+            Some(vec![false])
+        );
+        assert_eq!(
+            ed25519_verify_batch_cuda(
+                &[valid_sig],
+                &[NONCANONICAL_NON_SMALL_ORDER_ED25519_PUBLIC_KEY],
+                &[hram],
+            ),
             Some(vec![false])
         );
         for (label, replacement_r) in [

@@ -1340,11 +1340,17 @@ fn parse_signing_key(bytes: &[u8]) -> Result<SigningKey, String> {
         32 => {
             let mut seed = [0u8; 32];
             seed.copy_from_slice(bytes);
+            if seed.iter().all(|byte| *byte == 0) {
+                return Err("signing key seed material must not be all zero".to_string());
+            }
             Ok(SigningKey::from_bytes(&seed))
         }
         64 => {
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&bytes[..32]);
+            if seed.iter().all(|byte| *byte == 0) {
+                return Err("signing key seed material must not be all zero".to_string());
+            }
             Ok(SigningKey::from_bytes(&seed))
         }
         other => Err(format!(
@@ -1515,6 +1521,25 @@ mod tests {
             err.contains("invalid transport hint"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn parse_signing_key_rejects_all_zero_seed_material() {
+        match parse_signing_key(&[0u8; 32]) {
+            Err(err) => assert!(err.contains("all zero"), "unexpected error: {err}"),
+            Ok(_) => panic!("all-zero signing seed material must fail"),
+        }
+    }
+
+    #[test]
+    fn parse_signing_key_rejects_all_zero_expanded_seed_half() {
+        let mut expanded = [0xA5u8; 64];
+        expanded[..32].fill(0);
+
+        match parse_signing_key(&expanded) {
+            Err(err) => assert!(err.contains("all zero"), "unexpected error: {err}"),
+            Ok(_) => panic!("all-zero expanded signing seed half must fail"),
+        }
     }
 
     #[test]

@@ -6339,8 +6339,14 @@ pub mod isi {
         signer: &PublicKey,
         payload: &[u8],
     ) -> Result<(), iroha_crypto::Error> {
-        if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        match signer.try_algorithm() {
+            Ok(Algorithm::Ed25519) => {
+                iroha_crypto::ed25519_parse_signature(signature.payload())?;
+            }
+            Ok(Algorithm::MlDsa) => {
+                iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+            }
+            _ => {}
         }
         signature.verify(signer, payload)
     }
@@ -16768,6 +16774,43 @@ pub mod isi {
                     )
                     .is_err(),
                     "{label} Ed25519 signature admission must reject malformed R before backend verification"
+                );
+            }
+        }
+
+        #[test]
+        fn verify_signature_for_signer_rejects_malformed_mldsa_signature_lengths() {
+            let key_pair = checked_keypair_with_algorithm(Algorithm::MlDsa);
+            let payload = b"world-isi-mldsa-signature-admission";
+            let signature = checked_signature(key_pair.private_key(), payload);
+            verify_signature_for_signer(&signature, key_pair.public_key(), payload)
+                .expect("valid runtime upgrade ML-DSA signature should verify");
+            let valid_signature = signature.payload().to_vec();
+
+            for (label, replacement_signature) in [
+                (
+                    "short",
+                    valid_signature[..valid_signature.len() - 1].to_vec(),
+                ),
+                ("overlong", {
+                    let mut payload = valid_signature.clone();
+                    payload.push(0x67);
+                    payload
+                }),
+            ] {
+                let malformed_signature = Signature::from_bytes(&replacement_signature);
+
+                assert_eq!(
+                    verify_signature_for_signer(
+                        &malformed_signature,
+                        key_pair.public_key(),
+                        payload
+                    )
+                    .expect_err(
+                        "malformed runtime upgrade ML-DSA signature length must fail admission"
+                    ),
+                    iroha_crypto::Error::BadSignature,
+                    "{label} runtime upgrade ML-DSA signature length was not rejected"
                 );
             }
         }

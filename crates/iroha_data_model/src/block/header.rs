@@ -506,12 +506,12 @@ impl TryFrom<wire::BlockSignatureWire> for BlockSignature {
     type Error = ncore::Error;
 
     fn try_from(value: wire::BlockSignatureWire) -> Result<Self, Self::Error> {
-        checked_block_signature_from_wire(value)
+        checked_block_signature_from_wire(&value)
     }
 }
 
 fn checked_block_signature_from_wire(
-    value: wire::BlockSignatureWire,
+    value: &wire::BlockSignatureWire,
 ) -> Result<BlockSignature, ncore::Error> {
     let signature = Signature::try_from_bytes(&value.1)
         .map_err(|err| ncore::Error::Message(format!("invalid block signature payload: {err}")))?;
@@ -737,7 +737,7 @@ impl<'de> ncore::NoritoDeserialize<'de> for BlockSignature {
 
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let wire_repr = wire::BlockSignatureWire::try_deserialize(archived.cast())?;
-        checked_block_signature_from_wire(wire_repr)
+        checked_block_signature_from_wire(&wire_repr)
     }
 }
 

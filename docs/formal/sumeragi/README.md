@@ -7491,6 +7491,34 @@ Static CFG and TLC runner constraints must not be literal `TRUE`/`FALSE`
 predicates or simple aliases resolving to `TRUE`/`FALSE`/`TypeInvariant`, so a
 state-space bound cannot accidentally disable the model or prune every
 behavior.
+TLC runner constraint injections stay on documented singleton-or-empty families:
+only the pure candidate-enumeration families listed above may inject
+`TlcSingletonOrEmpty`, and each of their `*-fast` and `*-bug-*` TLC runner
+branches must keep that exact constraint so no future TLC mode can silently
+narrow its proof obligation with an undocumented bound.
+The TLC runner must keep an empty top-level tlc_constraint default, so
+unconstrained TLC modes cannot inherit a hidden global state-space bound.
+The top-level Sumeragi proof CFGs must remain unconstrained: root fast, deep,
+TLC-fast, and focused Byzantine top CFGs may rely on explicit constants and
+proof checks, but not static CFG `CONSTRAINT` directives that would silently
+prune the checked state space.
+The non-temporal top-level Sumeragi CFGs must not bind CHECK_DEADLOCK: root
+fast, deep, and focused Byzantine top CFGs keep the transition-safety surface
+free of TLC temporal deadlock policy, while the TLC-fast temporal root remains
+the only top-level root CFG that pins `CHECK_DEADLOCK FALSE`.
+The top-level sentinel CFG proof-check sets must remain exact: `Sumeragi_fast`
+checks only `TypeInvariant` plus
+`SumeragiConsensusCoreFastCorrectnessEnvelope`, and the focused Byzantine top
+CFGs check only `TypeInvariant`, `TlcByzantineDirectCommitCorridor`, and their
+documented direct top envelope/corridor obligations.
+Aggregate proof root conjuncts must stay named zero-arity operators unless a
+documented wrapper operator is covered by a dedicated implication or temporal
+spec-shape guard: root and envelope contracts cannot add inline literals,
+formulas, or anonymous wrappers that would escape the named conjunct contract.
+The top-level Sumeragi CFG constant sets must remain exact: those same root and
+focused Byzantine top CFGs may bind only the documented quorum, fault, stake,
+view, and RBC chunk constants, so a new model knob cannot silently change the
+proof envelope.
 
 `SumeragiValidatorSetTransition.tla` captures the validator-set activation
 gate for one scheduled reconfiguration:
@@ -13851,7 +13879,9 @@ Temporal properties:
 - `SumeragiConsensusCoreStateMatchesEnvelope` factors the non-type state-safety
   obligations behind one named predicate and is used directly by the temporal
   state-safety check, while `TypeInvariant` stays as a direct
-  correctness-envelope conjunct.
+  correctness-envelope conjunct. The named state-safety temporal wrapper stays
+  fixed as `[] SumeragiConsensusCoreStateMatchesEnvelope` so the aggregate
+  state+temporal theorem cannot swap in a weaker alias or compound formula.
 - `LiveCommitGateCanCommitState` names the live commit-gate commit condition so
   temporal equivalence helpers do not reach a parameterized `CanCommit(...)`
   call through allowlisted temporal chains.
@@ -16685,6 +16715,9 @@ reason. The guard pins the three top-level Byzantine CFG check surfaces.
 It also pins the direct conjunct/implication contracts of their `Sumeragi.tla`
 aggregate bridge operators, so the typecheck-only corridor cannot silently
 drift away from the intended bridge surface.
+The formal coverage guard also requires Apalache-only top-level corridor modes
+to remain typecheck-only unless they gain TLC evidence and leave the
+Apalache-only allowlist.
 
 ```bash
 bash scripts/formal/sumeragi_apalache.sh fast
@@ -18294,6 +18327,160 @@ The runner sets an explicit Apalache `--length` for each mode:
 
 `APALACHE_LENGTH=<n>` overrides the per-mode default when locally exploring a
 counterexample or widening a bounded proof.
+Sumeragi formal proof commands must not set APALACHE_LENGTH; CI, workflow, and
+counted README commands use the documented per-mode bounds.
+Sumeragi formal proof commands must not set toolchain override variables such
+as `APALACHE_BIN`, `APALACHE_VERSION`, `APALACHE_DOCKER_IMAGE`, `TLC_JAR`, or
+`TLA2TOOLS_JAR`; evidence uses the pinned installed model-checker toolchain.
+CI, workflow, and README formal commands must use strict Apalache/TLC runner shapes,
+so direct runner invocations cannot hide extra arguments or malformed mode tokens
+outside the central scripts.
+README formal runner commands must be standalone command lines,
+so inline prose, `echo`, or backtick mentions cannot satisfy documented mode
+coverage.
+README formal runner commands must live in shell fenced code blocks,
+so standalone prose outside command blocks cannot satisfy documented mode
+coverage.
+README shell fences containing formal runner commands must be closed,
+so one opening fence cannot make later prose count as command evidence.
+YAML `run:` formal commands are only accepted in workflow files,
+so shell scripts and Markdown cannot use workflow syntax to satisfy proof
+inventory or ordering checks.
+Workflow and baseline formal entrypoint commands must be active run/script lines,
+so commented commands or prose mentions cannot satisfy CI proof-entrypoint
+coverage.
+Workflow active command extraction must ignore block-scalar bodies,
+so a command hidden inside `run: |` cannot satisfy single-line workflow
+entrypoint coverage.
+Formal preflight, sweep, and success ordering checks must use exact command lines,
+so preflight-looking commands with extra arguments cannot satisfy proof
+ordering before the real guard runs.
+CI and workflow mode inventories must count only active direct runner commands,
+so comments, prose, or `echo` lines cannot satisfy proof-mode coverage.
+Active CI/workflow TLC modes must be supported by the TLC runner and documented by README TLC commands,
+so direct TLC evidence cannot drift outside the checked inventory.
+Active CI/workflow TLC modes must be duplicate-free,
+so repeated TLC invocations cannot inflate or obscure the direct TLC evidence
+inventory.
+Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands,
+so stale inventory wiring cannot execute proof jobs before the guard fails.
+Formal workflow triggers must keep the checked PR and scheduled/manual surfaces,
+so PR evidence remains on `pull_request` for `main` and nightly evidence remains
+both manually dispatchable and scheduled at the reviewed cron.
+Formal workflow path filters must keep the reviewed ignored-path set,
+so PR proof evidence cannot be skipped for formal specs, scripts, or workflow
+edits by adding broader `paths_ignore` entries.
+Workflow Apalache install and toolchain version pins must come from active commands,
+so comments or step names cannot satisfy the pinned model-checker install contract.
+Formal workflows must verify the pinned Apalache binary before running proof jobs,
+so scheduled and PR evidence both record the local toolchain selected by the
+installer.
+Formal baseline script must verify the pinned Apalache binary after coverage and before proof jobs,
+so direct baseline runs record the same model-checker binary before producing
+proof evidence.
+Expected-failure script must verify coverage and the pinned Apalache binary before mutation proof jobs,
+so standalone mutation sweeps cannot produce counterexample evidence under stale
+inventory or an unrecorded model-checker binary.
+Standalone expected-failure script must stay Apalache-only,
+so direct TLC evidence remains in the checked PR/README TLC inventory instead
+of drifting into the standalone mutation sweep.
+Formal baseline script must run the expected-failure sweep after all positive Apalache and TLC proof commands,
+so the baseline cannot report mutation evidence before completing the clean
+proof surface.
+Formal baseline success marker must run after all proof and mutation evidence commands,
+so the success line cannot appear before a later proof or counterexample sweep
+can still fail.
+Expected-failure success marker must run after all mutation evidence commands,
+so the standalone mutation sweep cannot print success before a later mutation
+counterexample check can still fail.
+Formal CI proof scripts must stay linear and free of shell control-flow blocks,
+so proof commands cannot be made conditional while still satisfying inventory
+coverage.
+Formal CI proof scripts must not contain here-documents,
+so command-shaped text inside shell data blocks cannot satisfy proof inventory.
+Formal CI proof scripts must not contain early exits or error-handling overrides,
+so proof commands cannot become unreachable and proof failures cannot be masked
+after the strict shell preflight.
+Formal CI proof scripts may contain only allowlisted direct evidence commands,
+so unrelated shell commands or shell-composed substitutes cannot change proof
+runtime behavior while satisfying inventory checks.
+Formal workflow proof jobs may contain only single-line allowlisted run commands,
+so workflow block scripts or shell-composed run steps cannot wrap, skip, or
+mask the pinned formal evidence entrypoints.
+Formal workflow run steps must set `run` at most once and cannot combine `run` with `uses`,
+so ambiguous YAML keys cannot inflate proof-command inventory or hide whether
+GitHub Actions executes a shell command or an action step.
+Formal workflow run inventories must match the checked proof jobs,
+so PR evidence runs only install/version/baseline and scheduled evidence runs
+install/version/baseline/frontier/docs-metadata in the reviewed order.
+Formal workflow proof jobs may use only allowlisted action steps,
+so arbitrary marketplace or local actions cannot mutate the checked workspace,
+toolchain, or proof environment while leaving the visible proof commands
+unchanged.
+Formal workflow action steps must set `uses` at most once,
+so duplicate action keys cannot hide which setup or reporting action GitHub
+Actions will execute.
+Formal workflow action inventories must match the checked proof jobs,
+so PR evidence uses only checkout/setup-java and scheduled evidence uses
+checkout/setup-java/report-upload in the reviewed order.
+Formal workflow action inputs must match the pinned proof environment,
+so checkout cannot switch refs or paths, Java setup cannot drift from Temurin 17,
+and report upload cannot silently change the evidence artifact contract. Inline
+`with:` values count as input drift, so same-line YAML maps cannot bypass the
+pinned input contract.
+Formal workflow setup action steps must not use conditionals, execution modifiers, or continue-on-error,
+so checkout and Java setup cannot be skipped, masked, or run under
+workflow-local environment overrides while the later proof commands remain
+unchanged.
+Formal workflow proof jobs must use the pinned runner label,
+so PR and scheduled/manual proof evidence stays on the reviewed
+`ubuntu-latest` GitHub-hosted environment instead of silently moving to a
+self-hosted or otherwise different runner.
+Formal workflow proof jobs must keep pinned timeout budgets,
+so PR proof evidence keeps its 45-minute budget and scheduled proof evidence
+keeps its 90-minute budget.
+Formal workflow proof jobs must not use dependency or environment gates,
+so checked proof evidence cannot be skipped behind unrelated `needs` jobs or
+GitHub environment approvals.
+Formal workflow proof jobs must not set job-level token permissions,
+so checkout and artifact actions use the reviewed default token scope rather
+than a workflow-local permission override.
+Formal workflow proof entrypoints must stay inside the checked formal jobs,
+so required install, version-probe, baseline, and nightly proof commands cannot
+be satisfied by unrelated workflow jobs.
+Formal workflow proof commands must not appear outside checked formal jobs in any workflow,
+so unrelated workflow files or jobs cannot run hidden formal proof entrypoints
+outside the guarded install, version, ordering, and inventory contracts.
+Formal workflow job scoping must only recognize jobs under the top-level jobs block,
+so same-named keys in `env`, `on`, or other workflow sections cannot satisfy or
+hide formal proof jobs.
+Formal workflow job scoping must normalize top-level and job-name YAML key spacing,
+so `jobs :` and `frontier-nightly :` cannot hide or drop checked formal jobs.
+Formal workflow proof steps must not use job or step conditionals, execution modifiers, or continue-on-error,
+so checked proof evidence cannot be skipped or reported green after a proof
+command fails, and cannot run under workflow-local `env`, `defaults`, `shell`,
+`working-directory`, step-level `timeout-minutes`, `container`, `services`, or
+`strategy` overrides, job-level dependency or environment gates, or job-level
+`permissions` overrides. Job-level timeouts
+remain pinned workflow budgets. The guard
+normalizes YAML field spacing around colons, so `run :`, `if :`, and
+`continue-on-error :` cannot hide proof evidence or failure-masking controls.
+Formal workflow mode and toolchain inventories must stay scoped to checked formal jobs,
+so unrelated workflow jobs cannot satisfy pinned-toolchain evidence or add
+scheduled/manual formal modes to the proof inventory.
+Formal singleton evidence commands must appear at most once,
+so coverage audits, pinned-version probes, formal workflow entrypoints,
+expected-failure sweeps, and success markers cannot duplicate evidence with an
+ambiguous transcript.
+Formal shell entrypoints must use `set -euo pipefail`, so failed proof,
+installation, or piped evidence commands stop the script instead of being
+masked by later commands.
+Apalache runner proof invocations must route through `run_with_expected_status`,
+so positive proofs and expected counterexample checks cannot bypass the shared
+exit-status contract in local, installed-binary, or Docker execution paths.
+TLC runner proof invocations must preserve the `PIPESTATUS[0]` status-capture contract,
+so piped TLC output remains logged while the expected-failure branch still
+interprets the model checker exit status, not `tee` success.
 
 `scripts/formal/sumeragi_tlc.sh frontier-fast` uses the fast frontier constants
 with `SpecTlcFast`, a canonical seven-witness initial set that covers the
@@ -31168,11 +31355,15 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Reachable aggregate temporal property roots recursively use the same top-level `PROPERTY` coverage rule.
   Finalized certificate retention names the Byzantine commit-vote closure property directly.
   Root coverage checks require each selected deep/TLC-fast CFG to carry every protected conjunct independently.
+  Top-level Apalache/TLC CFG proof checks must stay in parity, so a deep-only
+  or TLC-only top-level obligation cannot count as shared consensus-core
+  evidence.
   Correctness-root reachability requires the root property in every selected deep/TLC-fast CFG.
   Correctness-root direct TypeInvariant stays a top-level `INVARIANT` in every selected deep/TLC-fast CFG.
   Correctness-root direct temporal obligations stay top-level `PROPERTY` checks in every selected deep/TLC-fast CFG.
   `EventuallyCommit` must keep the direct `[] (gst => <> committed)` liveness shape with exact lowercase state-variable names.
   `CommitNeverRevoked` must keep the direct `[] (committed => [] committed)` finality-latch monotonicity shape with exact lowercase state-variable names.
+  `SumeragiConsensusCoreAlwaysMatchesStateSafetyEnvelope` must keep the direct `[] SumeragiConsensusCoreStateMatchesEnvelope` wrapper shape.
   Finality `AlwaysMatches` temporal wrappers must keep direct `[]` shapes over their matching zero-arity predicates.
   `TimeoutTickGateNeverBypassesStalledProgress` must keep the direct `[] TimeoutTickGateMatchesStalledProgress` timeout-gate wrapper shape.
   Pre-commit handoff `Never`/`Always` predicate wrappers must keep direct `[] Predicate` shapes over their documented zero-arity predicates.
@@ -31238,7 +31429,9 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   as dependencies only and cannot satisfy CFG/TLC proof-target references.
   Local TLA dependency files are followed transitively and checked with the
   same module-header, declaration, and assumption/proof guards as runner-selected
-  modules.
+  modules. Every local TLA module must pass module validation, so orphaned or
+  newly added modules cannot bypass the same header, dependency, declaration,
+  namespace, variable-surface, and assumption/proof-free checks.
   `ASSUME`,
   `ASSUMPTION`, and `AXIOM`
   directives, plus theorem/proof directives such as `THEOREM`, `PROOF`, and
@@ -31250,21 +31443,69 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   continuation line and cannot be empty. Behavior directives, static
   `CONSTRAINT` directives, and invariant/property check entries must not be
   duplicated, and the same operator name must not be reused across behavior,
-  constraint, and proof-check roles. The formal guard also pins that temporal CFGs bind their documented behavior operators: root fast/deep CFGs must use
+  constraint, and proof-check roles. CFG directive surfaces must be globally well-formed:
+  every CFG in the formal corpus must be non-empty, use only
+  supported top-level directives, avoid malformed directive starts, avoid
+  duplicate `CHECK_DEADLOCK`, define a behavior, and include at least one proof
+  check. The formal guard also pins that temporal CFGs bind their documented behavior operators: root fast/deep CFGs must use
   `INIT Init` with `NEXT Next`, root TLC fast must use `SPECIFICATION Spec`,
   TLC progress CFGs must use their named `SPECIFICATION`, and the top-level
   Byzantine corridor CFGs must use `INIT Init` with the corridor-specific
   `NEXT`. The same guard requires that temporal CFGs keep CHECK_DEADLOCK FALSE
   for the root TLC-fast and source/projection progress proof configs, so
   fairness/liveness runs do not silently switch to a different TLC deadlock
-  obligation. It also requires that top-level Sumeragi CFG constants pin quorum and fault envelopes for the root fast, deep, and TLC-fast coverage configs.
+  obligation. CFGs must define exactly one behavior surface: either a single
+  `SPECIFICATION` binding or exactly one `INIT` plus one `NEXT` binding.
+  CFGs must check TypeInvariant and a semantic proof target: every formal CFG
+  must include `INVARIANT TypeInvariant` plus at least one non-`TypeInvariant`
+  invariant or property.
+  CFG filenames must belong to inferred owning modules, so a CFG can only
+  count as evidence for the module named by its own stem or documented suffix
+  fallback.
+  CFG operator references must resolve to zero-arity non-trivial targets:
+  every behavior, constraint, invariant, and property reference must resolve to
+  a zero-arity operator on the CFG's owning TLA module, and non-`TypeInvariant`
+  proof checks plus constraints must not be literal or `TypeInvariant` aliases.
+  Apalache-only top-level corridor modes must stay typecheck-only unless listed as the bounded deep exception.
+  CFG operator references must be duplicate-free and role-disjoint: singleton
+  behavior and constraint directives cannot repeat, proof checks cannot repeat
+  or switch between invariant/property roles, and a target operator cannot be
+  reused across behavior, constraint, and proof-check roles.
+  fast CFGs must use model-specific correctness envelopes: every clean
+  `_fast.cfg` must avoid generic correctness checks and include a
+  model-specific `*CorrectnessEnvelope` invariant or property.
+  CFG proof-target shapes must preserve correctness-envelope/direct-exactness structure:
+  clean fast correctness envelopes must compose `TypeInvariant` and direct
+  model-specific `*Exactness` conjuncts, direct exactness checks must inline
+  concrete model predicates, and every checked direct exactness target must be
+  composed by a checked correctness envelope in the same CFG.
+  CFG constant bindings must match owning module declarations: every CFG
+  constant assignment must bind a declared constant exactly once, and every
+  declared constant on the owning TLA module must be assigned by the CFG.
+  SPECIFICATION CFGs must set CHECK_DEADLOCK FALSE under the same
+  rule, so newly added temporal CFGs cannot reintroduce TLC deadlock checking
+  outside the documented liveness obligation. It also requires that top-level Sumeragi CFG constants pin quorum and fault envelopes for the root fast, deep, and TLC-fast coverage configs.
   The same guard requires that top-level Byzantine CFG constants pin quorum and fault envelopes for the delivered-first, vote-first, and combined direct top corridors.
   It also requires that clean temporal progress CFGs bind Bug = "none",
   so clean liveness runs cannot accidentally load a mutation constant.
+  The clean CFG mutation selectors must remain disabled wherever a non-mutation
+  CFG binds them: exact string selectors use `Bug = "none"`, legacy numeric
+  selectors use `Bug = 0`, and boolean `Bug...` selectors use `FALSE`.
   Expected-failure progress mutation CFGs have the complementary rule:
   progress mutation CFGs bind Bug to their file suffix, so each mutation mode
   checks the fault named by its CFG filename. The safety mutation CFGs bind Bug to their file suffix under the same rule for source safety and projection bridge
-  mutation modes. The safety mutation CFGs bind INIT Init and NEXT Next so
+  mutation modes. The mutation CFGs must check INVARIANT TypeInvariant, so expected-failure counterexamples cannot escape the model's typed state envelope. The mutation CFGs must check at least one non-TypeInvariant invariant/property in addition to TypeInvariant, so expected-failure coverage cannot pass with only a typed-state envelope. Mutation CFG semantic proof targets must resolve to zero-arity non-trivial operators on the owning TLA module, so a typo, parameterized helper, literal alias, or TypeInvariant alias cannot satisfy mutation coverage. The mutation CFGs bind the expected behavior surface: bounded safety mutations use `INIT`/`NEXT`, progress mutations use their named progress `SPECIFICATION`, and documented frontier-recovery seed mutations use their explicit bug initializers with `NEXT Next`. The custom mutation INIT exceptions must stay live, necessary, and exact: each entry must point at an existing INIT/NEXT mutation CFG, use a non-default zero-arity initializer defined by the owning module, and keep `NEXT Next`. More generally, quoted-string mutation CFG Bug constants match their file suffix while legacy numeric bug selectors remain numeric.
+  The quoted mutation CFG Bug selectors must be used by reachable TLA Bug expressions, including local modules reached through `EXTENDS` and `INSTANCE`, so a quoted selector cannot be satisfied by an incidental string literal outside the model branch it configures.
+  The guard also requires that numeric mutation CFG Bug selectors must be used by reachable TLA Bug relations, either as direct numeric operands or through named numeric operands. The numeric mutation CFG Bug selectors are unique per family, so legacy selector-based mutation modes cannot alias one another or point at values the model never selects.
+  It also requires that mutation CFGs use exactly one Bug selector style, so
+  mutation configs cannot mix exact `Bug` selectors with boolean `Bug...`
+  switches or omit selector bindings entirely. The mutation CFG Bug selector constants are duplicate-free, so repeated selector bindings cannot shadow or contradict the intended injected fault. The exact mutation CFG Bug selector values must be quoted or decimal, preserving the split between quoted suffix selectors and legacy numeric selectors. The numeric mutation CFG Bug selectors use canonical decimal values, so alternate spellings cannot bypass selector uniqueness checks. The numeric mutation CFG Bug selectors must be positive, reserving zero outside expected-failure mutation coverage.
+  For CFGs that use boolean `Bug...` switches instead of the exact `Bug`
+  selector, boolean mutation CFG selectors remain one-hot: exactly one
+  selector must be `TRUE`, except for the documented
+  `SumeragiForkSafety_bug_double_sign.cfg` compound mutation that enables both
+  double-signing gates. The boolean mutation CFG TRUE selectors match their file suffixes by normalized selector name or by an explicit alias entry, so one-hot CFGs cannot silently enable a different boolean fault. The guard also requires that boolean mutation CFG TRUE selectors are unique per family, so selector-based boolean mutation modes cannot alias one another, and boolean mutation CFG selectors must be declared by their TLA modules, so CFG typos cannot become latent selector assignments. The boolean mutation CFG selectors bind every declared boolean selector from their owning module, so an omitted selector cannot become an implicit default. The boolean mutation CFG selectors must be used by reachable TLA expressions outside declarations, so a CFG assignment cannot be satisfied by a dead constant, comment, or string literal. The exact mutation CFG Bug selectors must be declared by their TLA modules under the same rule, including `_progress` and `_tlc` CFG fallbacks to the owning base module. The boolean selector exception tables must stay live, necessary, and exact, so alias and compound exceptions cannot point at missing or non-mutation CFG files, duplicate default matching, or describe selectors the CFG does not actually enable.
+  The safety mutation CFGs bind INIT Init and NEXT Next so
   bounded expected-failure safety modes cannot keep the right checks while
   running a stale transition surface. The clean safety CFGs bind Bug = "none"
   and the clean safety CFGs bind INIT Init and NEXT Next for the same source and
@@ -31624,6 +31865,159 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   malformed, or empty-purpose length-table rows are rejected so a repeated mode,
   invalid bound, or undocumented purpose cannot hide a contradictory
   declaration.
+  Sumeragi formal proof commands must not set APALACHE_LENGTH, so evidence
+  commands cannot silently shrink the documented per-mode bounds.
+  Sumeragi formal proof commands must not set toolchain override variables, so
+  CI, workflow, and counted README evidence cannot silently swap the pinned
+  Apalache/TLC installation.
+  CI, workflow, and README formal commands must use strict Apalache/TLC runner shapes,
+  so direct runner invocations cannot hide extra arguments or malformed mode tokens
+  outside the central scripts.
+  README formal runner commands must be standalone command lines,
+  so inline prose, `echo`, or backtick mentions cannot satisfy documented mode
+  coverage.
+  README formal runner commands must live in shell fenced code blocks,
+  so standalone prose outside command blocks cannot satisfy documented mode
+  coverage.
+  README shell fences containing formal runner commands must be closed,
+  so one opening fence cannot make later prose count as command evidence.
+  YAML `run:` formal commands are only accepted in workflow files,
+  so shell scripts and Markdown cannot use workflow syntax to satisfy proof
+  inventory or ordering checks.
+  Workflow and baseline formal entrypoint commands must be active run/script lines,
+  so commented commands or prose mentions cannot satisfy CI proof-entrypoint
+  coverage.
+  Workflow active command extraction must ignore block-scalar bodies,
+  so a command hidden inside `run: |` cannot satisfy single-line workflow
+  entrypoint coverage.
+  Formal preflight, sweep, and success ordering checks must use exact command lines,
+  so preflight-looking commands with extra arguments cannot satisfy proof
+  ordering before the real guard runs.
+  CI and workflow mode inventories must count only active direct runner commands,
+  so comments, prose, or `echo` lines cannot satisfy proof-mode coverage.
+  Active CI/workflow TLC modes must be supported by the TLC runner and documented by README TLC commands,
+  so direct TLC evidence cannot drift outside the checked inventory.
+  Active CI/workflow TLC modes must be duplicate-free,
+  so repeated TLC invocations cannot inflate or obscure the direct TLC evidence
+  inventory.
+  Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands,
+  so stale inventory wiring cannot execute proof jobs before the guard fails.
+  Formal workflow triggers must keep the checked PR and scheduled/manual surfaces,
+  so PR evidence remains on `pull_request` for `main` and nightly evidence remains
+  both manually dispatchable and scheduled at the reviewed cron.
+  Workflow Apalache install and toolchain version pins must come from active commands,
+  so comments or step names cannot satisfy the pinned model-checker install
+  contract.
+  Formal workflows must verify the pinned Apalache binary before running proof jobs,
+  so scheduled and PR evidence both record the local toolchain selected by the
+  installer.
+  Formal baseline script must verify the pinned Apalache binary after coverage and before proof jobs,
+  so direct baseline runs record the same model-checker binary before producing
+  proof evidence.
+  Expected-failure script must verify coverage and the pinned Apalache binary before mutation proof jobs,
+  so standalone mutation sweeps cannot produce counterexample evidence under
+  stale inventory or an unrecorded model-checker binary.
+  Standalone expected-failure script must stay Apalache-only,
+  so direct TLC evidence remains in the checked PR/README TLC inventory instead
+  of drifting into the standalone mutation sweep.
+  Formal baseline script must run the expected-failure sweep after all positive Apalache and TLC proof commands,
+  so the baseline cannot report mutation evidence before completing the clean
+  proof surface.
+  Formal baseline success marker must run after all proof and mutation evidence commands,
+  so the success line cannot appear before a later proof or counterexample
+  sweep can still fail.
+  Expected-failure success marker must run after all mutation evidence commands,
+  so the standalone mutation sweep cannot print success before a later mutation
+  counterexample check can still fail.
+  Formal CI proof scripts must stay linear and free of shell control-flow blocks,
+  so proof commands cannot be made conditional while still satisfying inventory
+  coverage.
+  Formal CI proof scripts must not contain here-documents,
+  so command-shaped text inside shell data blocks cannot satisfy proof inventory.
+  Formal CI proof scripts must not contain early exits or error-handling overrides,
+  so proof commands cannot become unreachable and proof failures cannot be masked
+  after the strict shell preflight.
+  Formal CI proof scripts may contain only allowlisted direct evidence commands,
+  so unrelated shell commands or shell-composed substitutes cannot change proof
+  runtime behavior while satisfying inventory checks.
+  Formal workflow proof jobs may contain only single-line allowlisted run commands,
+  so workflow block scripts or shell-composed run steps cannot wrap, skip, or
+  mask the pinned formal evidence entrypoints.
+  Formal workflow run steps must set `run` at most once and cannot combine `run` with `uses`,
+  so ambiguous YAML keys cannot inflate proof-command inventory or hide whether
+  GitHub Actions executes a shell command or an action step.
+  Formal workflow run inventories must match the checked proof jobs,
+  so PR evidence runs only install/version/baseline and scheduled evidence runs
+  install/version/baseline/frontier/docs-metadata in the reviewed order.
+  Formal workflow proof jobs may use only allowlisted action steps,
+  so arbitrary marketplace or local actions cannot mutate the checked workspace,
+  toolchain, or proof environment while leaving the visible proof commands
+  unchanged.
+  Formal workflow action steps must set `uses` at most once,
+  so duplicate action keys cannot hide which setup or reporting action GitHub
+  Actions will execute.
+  Formal workflow action inventories must match the checked proof jobs,
+  so PR evidence uses only checkout/setup-java and scheduled evidence uses
+  checkout/setup-java/report-upload in the reviewed order.
+  Formal workflow action inputs must match the pinned proof environment,
+  so checkout cannot switch refs or paths, Java setup cannot drift from Temurin
+  17, and report upload cannot silently change the evidence artifact contract.
+  Inline `with:` values count as input drift, so same-line YAML maps cannot
+  bypass the pinned input contract.
+  Formal workflow setup action steps must not use conditionals, execution modifiers, or continue-on-error,
+  so checkout and Java setup cannot be skipped, masked, or run under
+  workflow-local environment overrides while the later proof commands remain
+  unchanged.
+  Formal workflow proof jobs must use the pinned runner label,
+  so PR and scheduled/manual proof evidence stays on the reviewed
+  `ubuntu-latest` GitHub-hosted environment instead of silently moving to a
+  self-hosted or otherwise different runner.
+  Formal workflow proof jobs must keep pinned timeout budgets,
+  so PR proof evidence keeps its 45-minute budget and scheduled proof evidence
+  keeps its 90-minute budget.
+  Formal workflow proof jobs must not use dependency or environment gates,
+  so checked proof evidence cannot be skipped behind unrelated `needs` jobs or
+  GitHub environment approvals.
+  Formal workflow proof jobs must not set job-level token permissions,
+  so checkout and artifact actions use the reviewed default token scope rather
+  than a workflow-local permission override.
+  Formal workflow proof entrypoints must stay inside the checked formal jobs,
+  so required install, version-probe, baseline, and nightly proof commands
+  cannot be satisfied by unrelated workflow jobs.
+  Formal workflow proof commands must not appear outside checked formal jobs in any workflow,
+  so unrelated workflow files or jobs cannot run hidden formal proof
+  entrypoints outside the guarded install, version, ordering, and inventory
+  contracts.
+  Formal workflow job scoping must only recognize jobs under the top-level jobs block,
+  so same-named keys in `env`, `on`, or other workflow sections cannot satisfy
+  or hide formal proof jobs.
+  Formal workflow job scoping must normalize top-level and job-name YAML key spacing,
+  so `jobs :` and `frontier-nightly :` cannot hide or drop checked formal jobs.
+  Formal workflow proof steps must not use job or step conditionals, execution modifiers, or continue-on-error,
+  so checked proof evidence cannot be skipped or reported green after a proof
+  command fails, and cannot run under workflow-local `env`, `defaults`,
+  `shell`, `working-directory`, step-level `timeout-minutes`, `container`,
+  `services`, or `strategy` overrides, job-level dependency or environment
+  gates, or job-level `permissions` overrides.
+  Job-level timeouts remain pinned workflow budgets. The guard normalizes YAML field spacing around colons, so
+  `run :`, `if :`, and `continue-on-error :` cannot hide proof evidence or
+  failure-masking controls.
+  Formal workflow mode and toolchain inventories must stay scoped to checked formal jobs,
+  so unrelated workflow jobs cannot satisfy pinned-toolchain evidence or add
+  scheduled/manual formal modes to the proof inventory.
+  Formal singleton evidence commands must appear at most once,
+  so coverage audits, pinned-version probes, formal workflow entrypoints,
+  expected-failure sweeps, and success markers cannot duplicate evidence with
+  an ambiguous transcript.
+  Formal shell entrypoints must use `set -euo pipefail`, so failed proof,
+  installation, or piped evidence commands stop the script instead of being
+  masked by later commands.
+  Apalache runner proof invocations must route through `run_with_expected_status`,
+  so positive proofs and expected counterexample checks cannot bypass the shared
+  exit-status contract in local, installed-binary, or Docker execution paths.
+  TLC runner proof invocations must preserve the `PIPESTATUS[0]` status-capture contract,
+  so piped TLC output remains logged while the expected-failure branch still
+  interprets the model checker exit status, not `tee` success.
   It also checks that
   every validated length-table `*-fast` row has a matching
   `scripts/formal/sumeragi_tlc.sh` command and TLC runner branch, and that
@@ -31636,6 +32030,32 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   single-line or multi-line boolean-only `TRUE`/`FALSE` wrappers, or simple
   alias chains resolving to `TRUE`/`FALSE`/`TypeInvariant`, so TLC-only bounds
   cannot silently erase the checked state space.
+  TLC runner constraint injections stay on documented singleton-or-empty families:
+  only the documented candidate-enumeration `*-fast` and `*-bug-*` branches may
+  inject `TlcSingletonOrEmpty`, and those branches must keep that exact
+  constraint so arbitrary TLC modes cannot silently narrow their proof
+  obligations.
+  The TLC runner must keep an empty top-level tlc_constraint default, so modes
+  without explicit documented constraints cannot inherit a hidden global
+  state-space bound.
+  The top-level Sumeragi proof CFGs must remain unconstrained: root fast, deep,
+  TLC-fast, and focused Byzantine top CFGs must not bind static CFG
+  `CONSTRAINT` directives, so their correctness checks cannot be satisfied only
+  under a silently pruned state space.
+  The non-temporal top-level Sumeragi CFGs must not bind CHECK_DEADLOCK:
+  root fast, deep, and focused Byzantine top CFGs keep no deadlock directive,
+  leaving `CHECK_DEADLOCK FALSE` only on the TLC-fast temporal root.
+  The top-level sentinel CFG proof-check sets must remain exact:
+  `Sumeragi_fast` checks only `TypeInvariant` plus
+  `SumeragiConsensusCoreFastCorrectnessEnvelope`, and focused Byzantine top
+  CFGs check only their documented direct top proof obligations.
+  Aggregate proof root conjuncts must stay named zero-arity operators unless a
+  documented wrapper operator is covered by a dedicated implication or temporal
+  spec-shape guard: inline literals, formulas, or anonymous wrappers cannot
+  satisfy aggregate root contracts.
+  The top-level Sumeragi CFG constant sets must remain exact: root fast, deep,
+  TLC-fast, and focused Byzantine top CFGs may bind only the documented quorum,
+  fault, stake, view, and RBC chunk constants.
   Static CFG `CONSTRAINT` operator references are checked against the same
   trivial-chain rule, so checked configs cannot erase behavior with a vacuous
   local bound.

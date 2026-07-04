@@ -2819,6 +2819,7 @@ pub mod trigger {
 
             let permission = Permission::from(AnyPermission::CanUseFeeSponsor(CanUseFeeSponsor {
                 sponsor: sponsor.clone(),
+                policy: "default".parse().expect("fee sponsor policy name is valid"),
             }));
 
             assert!(

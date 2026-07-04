@@ -65,6 +65,7 @@ public enum OfflineNoteTextTransferContract {
 
     public static func base64URLDecodedData(_ value: String) -> Data? {
         guard !value.isEmpty,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.contains("="),
               value.unicodeScalars.allSatisfy(isBase64URLScalarAllowed) else {
             return nil

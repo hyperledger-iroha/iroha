@@ -107,6 +107,11 @@ fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("test fixture random key generation should succeed")
 }
 
+fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+    KeyPair::try_random_with_algorithm(algorithm)
+        .expect("test fixture algorithm-specific random key generation should succeed")
+}
+
 #[test]
 fn checked_fixture_ed25519_keypair_uses_fallible_seed_derivation() {
     assert_eq!(
@@ -1130,6 +1135,26 @@ fn build_ssm_bytes(
     generated_at_unix: u64,
     expires_at_hint: u64,
 ) -> Vec<u8> {
+    build_ssm_bytes_with_publisher_algorithm(
+        manifest_hash,
+        car_digest,
+        envelope_hash,
+        segment_sequence,
+        generated_at_unix,
+        expires_at_hint,
+        Algorithm::Ed25519,
+    )
+}
+
+fn build_ssm_bytes_with_publisher_algorithm(
+    manifest_hash: BlobDigest,
+    car_digest: BlobDigest,
+    envelope_hash: BlobDigest,
+    segment_sequence: u64,
+    generated_at_unix: u64,
+    expires_at_hint: u64,
+    publisher_algorithm: Algorithm,
+) -> Vec<u8> {
     let alias_proof = encode_alias_proof_bytes(
         "sora",
         "docs",
@@ -1144,7 +1169,7 @@ fn build_ssm_bytes(
         namespace: "sora".into(),
         proof: alias_proof,
     };
-    let publisher = checked_random_keypair();
+    let publisher = checked_random_keypair_with_algorithm(publisher_algorithm);
     let publisher_account = ALICE_ID.clone();
     let body = TaikaiSegmentSigningBodyV1::new(
         1,
@@ -3716,6 +3741,100 @@ fn validate_taikai_ssm_rejects_malformed_ed25519_signature_r() {
         assert!(
             message.contains("publisher signature material malformed"),
             "{label} malformed SSM signature R should fail admission: {message}"
+        );
+    }
+}
+
+#[test]
+fn validate_taikai_ssm_rejects_malformed_mldsa_signature_lengths() {
+    let mut request = sample_request();
+    request.metadata = taikai_metadata();
+    let canonical = normalize_payload(&request).expect("normalize payload");
+    let chunk_store = build_chunk_store(&request, canonical.as_slice());
+    let metadata =
+        encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encrypt");
+    let rent_policy = DaRentPolicyV1::default();
+    let manifest = resolve_manifest(
+        &request,
+        &chunk_store,
+        canonical.as_slice(),
+        &metadata,
+        &request.retention_policy,
+        1,
+        &rent_policy,
+    )
+    .expect("manifest");
+    let taikai = taikai_ingest::build_envelope(
+        &request,
+        &manifest,
+        &chunk_store,
+        canonical.as_slice(),
+        None,
+    )
+    .expect("envelope");
+    let now_secs = crate::sorafs::unix_now_secs();
+    let ssm_bytes = build_ssm_bytes_with_publisher_algorithm(
+        manifest.manifest_hash,
+        taikai.car_digest,
+        BlobDigest::from_hash(blake3_hash(&taikai.envelope_bytes)),
+        taikai.telemetry.segment_sequence,
+        now_secs,
+        now_secs + 600,
+        Algorithm::MlDsa,
+    );
+    let signing_manifest: TaikaiSegmentSigningManifestV1 =
+        norito::decode_from_bytes(&ssm_bytes).expect("decode ML-DSA signing manifest");
+    let alias_policy = crate::sorafs::AliasCachePolicy::new(
+        Duration::from_secs(600),
+        Duration::from_secs(60),
+        Duration::from_secs(1_200),
+        Duration::from_secs(60),
+        Duration::from_secs(120),
+        Duration::from_secs(10_000),
+        Duration::from_secs(60),
+        Duration::from_secs(60),
+    );
+    let (_, telemetry) = telemetry_handle_for_tests();
+    taikai::validate_taikai_ssm(
+        &ssm_bytes,
+        &manifest.manifest_hash,
+        &taikai.car_digest,
+        &taikai.envelope_bytes,
+        taikai.telemetry.segment_sequence,
+        &alias_policy,
+        &telemetry,
+    )
+    .expect("valid ML-DSA SSM should verify before mutation");
+
+    let mut extended = signing_manifest.signature.payload().to_vec();
+    extended.push(0);
+    for (label, signature_payload) in [
+        (
+            "truncated",
+            signing_manifest.signature.payload()[..signing_manifest.signature.payload().len() - 1]
+                .to_vec(),
+        ),
+        ("extended", extended),
+    ] {
+        let mut malformed = signing_manifest.clone();
+        malformed.signature =
+            SignatureOf::from_signature(Signature::from_bytes(&signature_payload));
+        let malformed_ssm = to_bytes(&malformed).expect("encode malformed ML-DSA signing manifest");
+        let err = taikai::validate_taikai_ssm(
+            &malformed_ssm,
+            &manifest.manifest_hash,
+            &taikai.car_digest,
+            &taikai.envelope_bytes,
+            taikai.telemetry.segment_sequence,
+            &alias_policy,
+            &telemetry,
+        )
+        .expect_err("malformed Taikai SSM ML-DSA signature length must fail");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        let message = &err.1;
+        assert!(
+            message.contains("publisher signature material malformed"),
+            "{label} malformed SSM ML-DSA signature length should fail admission: {message}"
         );
     }
 }

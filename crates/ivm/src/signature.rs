@@ -5,7 +5,9 @@ use curve25519_dalek::edwards::CompressedEdwardsY;
 /// callers can choose between classical Ed25519 and post-quantum ML-DSA
 /// (Crystals Dilithium) verification.
 use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey as Ed25519VerifyingKey};
-use iroha_crypto::{EcdsaSecp256k1Sha256, ed25519_verify_batch_deterministic};
+use iroha_crypto::{
+    EcdsaSecp256k1Sha256, ed25519_parse_public_key, ed25519_verify_batch_deterministic,
+};
 use pqcrypto_mldsa::mldsa65 as dilithium;
 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 use sha2::{Digest as _, Sha512};
@@ -82,10 +84,19 @@ pub(crate) fn signature_has_invalid_ed25519_r(signature: &[u8]) -> bool {
     point.is_small_order() || point.compress().as_bytes() != &r_bytes
 }
 
-/// Returns true when an Ed25519 public key is weak and must not reach a verifier.
+/// Parse an Ed25519 public key after rejecting inert, weak, and noncanonical encodings.
 #[must_use]
-pub(crate) fn ed25519_public_key_is_weak(public_key: &Ed25519VerifyingKey) -> bool {
-    public_key.is_weak()
+pub(crate) fn parse_ed25519_public_key_for_verification(
+    public_key: &[u8; 32],
+) -> Option<Ed25519VerifyingKey> {
+    let parsed = ed25519_parse_public_key(public_key).ok()?;
+    Ed25519VerifyingKey::from_bytes(parsed.as_bytes()).ok()
+}
+
+/// Returns true when Ed25519 public-key bytes must not reach a verifier.
+#[must_use]
+pub(crate) fn ed25519_public_key_bytes_are_invalid(public_key: &[u8; 32]) -> bool {
+    parse_ed25519_public_key_for_verification(public_key).is_none()
 }
 
 /// Ed25519 batch verification input.
@@ -120,9 +131,10 @@ pub(crate) fn ed25519_challenge_scalar_bytes(
 }
 
 /// Verify `signature` on `message` with `public_key` using the selected
-/// `scheme`. Returns `true` if the signature is valid. For secp256k1, only
-/// canonical compressed SEC1 public keys are accepted and high-S signatures
-/// are rejected.
+/// `scheme`. Returns `true` if the signature is valid. For Ed25519, public keys
+/// must be canonical, non-weak compressed points and signatures must carry a
+/// canonical, non-small-order `R`. For secp256k1, only canonical compressed
+/// SEC1 public keys are accepted and high-S signatures are rejected.
 pub fn verify_signature(
     scheme: SignatureScheme,
     message: &[u8],
@@ -135,16 +147,9 @@ pub fn verify_signature(
                 Ok(b) => b,
                 Err(_) => return false,
             };
-            if material_bytes_are_all_zero(pk_bytes) {
+            let Some(pk) = parse_ed25519_public_key_for_verification(pk_bytes) else {
                 return false;
-            }
-            let pk = match Ed25519VerifyingKey::from_bytes(pk_bytes) {
-                Ok(pk) => pk,
-                Err(_) => return false,
             };
-            if ed25519_public_key_is_weak(&pk) {
-                return false;
-            }
             if signature_bytes_are_all_zero(signature) {
                 return false;
             }
@@ -222,14 +227,7 @@ pub fn verify_ed25519_batch(
             .as_slice()
             .try_into()
             .map_err(|_| Ed25519BatchError::InvalidEntry { index })?;
-        if material_bytes_are_all_zero(pk_bytes) {
-            return Err(Ed25519BatchError::InvalidEntry { index });
-        }
-        let pk = match Ed25519VerifyingKey::from_bytes(pk_bytes) {
-            Ok(pk) => pk,
-            Err(_) => return Err(Ed25519BatchError::InvalidEntry { index }),
-        };
-        if ed25519_public_key_is_weak(&pk) {
+        if ed25519_public_key_bytes_are_invalid(pk_bytes) {
             return Err(Ed25519BatchError::InvalidEntry { index });
         }
     }
@@ -269,16 +267,9 @@ pub fn verify_ed25519_batch(
                     .as_slice()
                     .try_into()
                     .map_err(|_| Ed25519BatchError::InvalidEntry { index })?;
-                if material_bytes_are_all_zero(pk_bytes) {
+                let Some(pk) = parse_ed25519_public_key_for_verification(pk_bytes) else {
                     return Err(Ed25519BatchError::InvalidEntry { index });
-                }
-                let pk = match Ed25519VerifyingKey::from_bytes(pk_bytes) {
-                    Ok(pk) => pk,
-                    Err(_) => return Err(Ed25519BatchError::InvalidEntry { index }),
                 };
-                if ed25519_public_key_is_weak(&pk) {
-                    return Err(Ed25519BatchError::InvalidEntry { index });
-                }
                 if pk.verify_strict(entry.message.as_slice(), &sig).is_err() {
                     return Err(Ed25519BatchError::SignatureFailed { index });
                 }
@@ -325,18 +316,10 @@ pub fn verify_ed25519_batch_items(items: &[Ed25519BatchItem<'_>]) -> Vec<bool> {
             parsed.push(None);
             continue;
         };
-        if material_bytes_are_all_zero(&item.public_key) {
-            parsed.push(None);
-            continue;
-        }
-        let Ok(pk) = Ed25519VerifyingKey::from_bytes(&item.public_key) else {
+        let Some(pk) = parse_ed25519_public_key_for_verification(&item.public_key) else {
             parsed.push(None);
             continue;
         };
-        if ed25519_public_key_is_weak(&pk) {
-            parsed.push(None);
-            continue;
-        }
 
         #[cfg(all(target_os = "macos", feature = "metal"))]
         if let Some((ref mut sigs, ref mut pks, ref mut hrams, ref mut map)) = metal_inputs {
@@ -427,6 +410,23 @@ mod tests {
         verify_ed25519_batch_items, verify_signature,
     };
 
+    const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+
+    const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
+    const ED25519_NONCANONICAL_NON_SMALL_ORDER_POINT: [u8; 32] = [
+        0xf0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     #[test]
     fn ed25519_challenge_scalar_bytes_matches_cuda_selftest_vector() {
         let key = SigningKey::from_bytes(&[9u8; 32]);
@@ -480,27 +480,60 @@ mod tests {
     }
 
     #[test]
+    fn ed25519_verifiers_reject_noncanonical_or_small_order_public_key_material() {
+        let key = SigningKey::from_bytes(&[0x33; 32]);
+        let message = b"ivm-ed25519-malformed-public-key";
+        let signature = key.sign(message).to_bytes();
+
+        for (label, public_key) in [
+            ("small-order", ED25519_SMALL_ORDER_POINT),
+            ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
+            (
+                "noncanonical-non-small-order",
+                ED25519_NONCANONICAL_NON_SMALL_ORDER_POINT,
+            ),
+        ] {
+            assert!(
+                !verify_signature(SignatureScheme::Ed25519, message, &signature, &public_key),
+                "{label} public key must reject in single verification"
+            );
+
+            let request = Ed25519BatchRequest {
+                seed: [0xC3; 32],
+                entries: vec![Ed25519BatchEntry {
+                    message: message.to_vec(),
+                    signature: signature.to_vec(),
+                    public_key: public_key.to_vec(),
+                }],
+            };
+            assert_eq!(
+                verify_ed25519_batch(&request, 1),
+                Err(Ed25519BatchError::InvalidEntry { index: 0 }),
+                "{label} public key must reject as malformed in Norito batch verification"
+            );
+
+            let items = [Ed25519BatchItem {
+                message,
+                signature,
+                public_key,
+            }];
+            assert_eq!(
+                verify_ed25519_batch_items(&items),
+                vec![false],
+                "{label} public key must reject in item batch verification"
+            );
+        }
+    }
+
+    #[test]
     fn ed25519_verifiers_reject_malformed_signature_r() {
         let key = SigningKey::from_bytes(&[0x32; 32]);
         let message = b"ivm-ed25519-malformed-r";
         let public_key = key.verifying_key().to_bytes();
 
         for (label, replacement_r) in [
-            (
-                "small-order",
-                [
-                    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0,
-                ],
-            ),
-            (
-                "noncanonical",
-                [
-                    0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-                    0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
-                ],
-            ),
+            ("small-order", ED25519_SMALL_ORDER_POINT),
+            ("noncanonical", ED25519_NONCANONICAL_IDENTITY),
         ] {
             let mut signature = key.sign(message).to_bytes();
             signature[..replacement_r.len()].copy_from_slice(&replacement_r);

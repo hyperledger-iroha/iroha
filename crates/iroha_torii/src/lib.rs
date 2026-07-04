@@ -30612,15 +30612,22 @@ fn enforce_sorafs_repair_worker_auth(
             ),
         ));
     };
-    if matches!(
-        signatory.try_algorithm(),
-        Ok(iroha_crypto::Algorithm::Ed25519)
-    ) {
-        iroha_crypto::ed25519_parse_signature(signature.payload()).map_err(|err| {
-            Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
-                "repair worker signature material malformed: {err}",
-            )))
-        })?;
+    match signatory.try_algorithm() {
+        Ok(iroha_crypto::Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload()).map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
+                    "repair worker signature material malformed: {err}",
+                )))
+            })?;
+        }
+        Ok(iroha_crypto::Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload()).map_err(|err| {
+                Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
+                    "repair worker signature material malformed: {err}",
+                )))
+            })?;
+        }
+        _ => {}
     }
     signature.verify(signatory, &payload).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
@@ -65483,6 +65490,74 @@ mod tests {
                     assert!(
                         reason.contains("signature material malformed"),
                         "{label} repair worker signature R produced unexpected rejection reason: {reason}"
+                    );
+                }
+                other => panic!("unexpected repair worker auth result: {other:?}"),
+            }
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_repair_worker_auth_rejects_malformed_mldsa_signature_lengths() {
+        let app = mk_app_state_for_tests();
+        let report = repair_report("REP-900C", [0x13; 32], [0x24; 32], 1_701_000_040);
+        app.sorafs_node
+            .enqueue_repair_report(&report)
+            .expect("enqueue report");
+
+        let worker_key = KeyPair::try_from_seed(vec![0x8b; 32], Algorithm::MlDsa)
+            .expect("derive Sorafs malformed ML-DSA repair worker fixture key");
+        let worker_id = AccountId::new(worker_key.public_key().clone());
+        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
+        let worker_id_literal = "repair-mldsa@universal";
+        bind_account_alias_for_test(&app, &worker_id, worker_id_literal);
+
+        let claimed_at = report.submitted_at_unix + 10;
+        let idempotency_key = "claim-900c";
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            worker_id: worker_id_literal.to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            action: RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+        };
+        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
+            .expect("sign repair worker malformed ML-DSA signature fixture");
+
+        let mut extended = signature.payload().to_vec();
+        extended.push(0);
+        for (label, signature_payload) in [
+            (
+                "truncated",
+                signature.payload()[..signature.payload().len() - 1].to_vec(),
+            ),
+            ("extended", extended),
+        ] {
+            let malformed_signature = SignatureOf::from_signature(
+                iroha_crypto::Signature::from_bytes(&signature_payload),
+            );
+
+            let auth = enforce_sorafs_repair_worker_auth(
+                &app,
+                &report.ticket_id,
+                &hex::encode(report.evidence.manifest_digest),
+                worker_id_literal,
+                idempotency_key,
+                RepairWorkerActionV1::Claim {
+                    claimed_at_unix: claimed_at,
+                },
+                &malformed_signature,
+            );
+            match auth {
+                Err(Error::Query(ValidationFail::NotPermitted(reason))) => {
+                    assert!(
+                        reason.contains("signature material malformed"),
+                        "{label} repair worker ML-DSA signature length produced unexpected rejection reason: {reason}"
                     );
                 }
                 other => panic!("unexpected repair worker auth result: {other:?}"),

@@ -69,8 +69,14 @@ fn verify_signature_for_signer(
     signer: &PublicKey,
     payload: &[u8],
 ) -> Result<(), iroha_crypto::Error> {
-    if matches!(signer.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(signature.payload())?;
+    match signer.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(signature.payload())?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
+        }
+        _ => {}
     }
     signature.verify(signer, payload)
 }
@@ -5371,6 +5377,12 @@ pub mod isi {
                 .expect("fixture seed must derive a valid keypair")
         }
 
+        fn fixture_key_pair_with_algorithm(algorithm: Algorithm) -> KeyPair {
+            KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
+                panic!("{algorithm:?} offline fixture key generation should succeed: {err}")
+            })
+        }
+
         fn sample_account(seed: u8) -> AccountId {
             let keypair = fixture_key_pair(seed);
             AccountId::new(keypair.public_key().clone())
@@ -6788,6 +6800,41 @@ pub mod isi {
                     &issuer_account,
                 )
                 .expect_err("malformed certificate signature R must be rejected");
+                assert_offline_rejection(err, "invalid_issuer_cert", "signature");
+                let _ = label;
+            }
+        }
+
+        #[test]
+        fn offline_note_certificate_signature_rejects_malformed_mldsa_signature_lengths() {
+            let issuer = fixture_key_pair_with_algorithm(Algorithm::MlDsa);
+            let issuer_account = AccountId::new(issuer.public_key().clone());
+            let certificate =
+                signed_sample_certificate(&issuer, sample_account(0x03), 0xAC, "mldsa-length");
+            ensure_offline_note_certificate_signature(&certificate, &issuer_account)
+                .expect("valid ML-DSA offline note certificate signature verifies");
+            let valid_signature = certificate.issuer_signature.payload().to_vec();
+
+            for (label, replacement_signature) in [
+                (
+                    "short",
+                    valid_signature[..valid_signature.len() - 1].to_vec(),
+                ),
+                ("overlong", {
+                    let mut payload = valid_signature.clone();
+                    payload.push(0x68);
+                    payload
+                }),
+            ] {
+                let mut invalid_certificate = certificate.clone();
+                invalid_certificate.issuer_signature =
+                    Signature::from_bytes(&replacement_signature);
+
+                let err = ensure_offline_note_certificate_signature(
+                    &invalid_certificate,
+                    &issuer_account,
+                )
+                .expect_err("malformed ML-DSA certificate signature length must be rejected");
                 assert_offline_rejection(err, "invalid_issuer_cert", "signature");
                 let _ = label;
             }

@@ -608,9 +608,16 @@ fn verify_receipt_signature(
     signer_public_key: &PublicKey,
 ) -> eyre::Result<()> {
     let unsigned_bytes = unsigned_receipt_bytes(receipt, sequence)?;
-    if matches!(signer_public_key.try_algorithm(), Ok(Algorithm::Ed25519)) {
-        iroha_crypto::ed25519_parse_signature(receipt.operator_signature.payload())
-            .map_err(|err| eyre!("DA receipt signature material is malformed: {err}"))?;
+    match signer_public_key.try_algorithm() {
+        Ok(Algorithm::Ed25519) => {
+            iroha_crypto::ed25519_parse_signature(receipt.operator_signature.payload())
+                .map_err(|err| eyre!("DA receipt signature material is malformed: {err}"))?;
+        }
+        Ok(Algorithm::MlDsa) => {
+            iroha_crypto::mldsa65_parse_signature(receipt.operator_signature.payload())
+                .map_err(|err| eyre!("DA receipt signature material is malformed: {err}"))?;
+        }
+        _ => {}
     }
     receipt
         .operator_signature
@@ -1388,6 +1395,12 @@ mod temp_artifact_tests {
         })
     }
 
+    fn checked_mldsa_keypair(context: &str) -> KeyPair {
+        KeyPair::try_random_with_algorithm(Algorithm::MlDsa).unwrap_or_else(|err| {
+            panic!("{context}: checked ML-DSA random key generation failed: {err}")
+        })
+    }
+
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
@@ -1499,6 +1512,47 @@ mod temp_artifact_tests {
                 message.contains("DA receipt signature verification failed")
                     && message.contains("signature material is malformed"),
                 "{label} DA receipt signature R produced unexpected admission error: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn da_receipt_log_rejects_malformed_mldsa_signature_lengths() {
+        let dir = tempdir().expect("tempdir");
+        let cursor_store =
+            Arc::new(ReplayCursorStore::empty(dir.path().join("cursors")).expect("cursor store"));
+        let signer = checked_mldsa_keypair("DA receipt malformed ML-DSA signature fixture");
+        let log = DaReceiptLog::open(
+            dir.path().join("receipts"),
+            cursor_store,
+            signer.public_key().clone(),
+        )
+        .expect("receipt log");
+        let lane_epoch = LaneEpoch::new(LaneId::new(9), 14);
+        let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xB3);
+
+        let mut extended = receipt.operator_signature.payload().to_vec();
+        extended.push(0);
+        for (label, malformed_payload) in [
+            (
+                "truncated",
+                receipt.operator_signature.payload()
+                    [..receipt.operator_signature.payload().len() - 1]
+                    .to_vec(),
+            ),
+            ("extended", extended),
+        ] {
+            let mut invalid_receipt = receipt.clone();
+            invalid_receipt.operator_signature = Signature::from_bytes(&malformed_payload);
+
+            let err = log
+                .append(lane_epoch, 1, invalid_receipt, test_fingerprint(0xB3))
+                .expect_err("DA receipt log must reject malformed ML-DSA signature length");
+            let message = format!("{err:?}");
+            assert!(
+                message.contains("DA receipt signature verification failed")
+                    && message.contains("signature material is malformed"),
+                "{label} DA receipt ML-DSA signature length produced unexpected admission error: {message}"
             );
         }
     }

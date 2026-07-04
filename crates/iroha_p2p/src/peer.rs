@@ -8260,6 +8260,7 @@ mod state {
                 iroha_crypto::Algorithm::Ed25519 => {
                     iroha_crypto::ed25519_parse_signature(&signature)
                 }
+                iroha_crypto::Algorithm::MlDsa => iroha_crypto::mldsa65_parse_signature(&signature),
                 _ => {
                     Signature::try_from_bytes(&signature).map_err(iroha_crypto::error::Error::from)
                 }
@@ -8429,7 +8430,7 @@ mod tests {
     };
 
     use iroha_crypto::{
-        KeyGenOption, KeyPair, Signature,
+        Algorithm, KeyGenOption, KeyPair, Signature,
         encryption::ChaCha20Poly1305,
         kex::{KeyExchangeScheme, X25519Sha256 as KexAlgo},
     };
@@ -8475,6 +8476,80 @@ mod tests {
         fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
             Poll::Ready(Ok(()))
         }
+    }
+
+    async fn read_crafted_handshake_hello(
+        key_pair: &KeyPair,
+        signature: Vec<u8>,
+        addr: SocketAddr,
+        sender_kx: <KexAlgo as KeyExchangeScheme>::PublicKey,
+        receiver_kx: <KexAlgo as KeyExchangeScheme>::PublicKey,
+        cryptographer: Cryptographer<ChaCha20Poly1305>,
+    ) -> Result<Ready<ChaCha20Poly1305>, crate::Error> {
+        use tokio::io::AsyncWriteExt;
+
+        let (algorithm, public_key) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("fixture public key must be valid");
+        let hello = HandshakeHelloV1 {
+            algorithm,
+            public_key: public_key.to_vec(),
+            signature,
+            addr,
+            relay: RelayRole::Disabled,
+            consensus: HandshakeConsensusMeta {
+                mode_tag: None,
+                proto_version: None,
+                consensus_fingerprint: None,
+                config: None,
+            },
+            confidential: HandshakeConfidentialMeta {
+                enabled: None,
+                assume_valid: None,
+                verifier_backend: None,
+                features: None,
+            },
+            crypto: HandshakeCryptoMeta {
+                sm_enabled: None,
+                sm_openssl_preview: None,
+            },
+            trust: HandshakeTrustMeta {
+                trust_gossip: true,
+                scion_supported: false,
+            },
+        };
+        let encoded =
+            encode_handshake_message(&cryptographer, &hello).expect("encode crafted hello");
+        let hello_len = u16::try_from(encoded.len()).expect("crafted hello fits handshake frame");
+
+        let (stream_a, stream_b) = tokio::io::duplex(encoded.len() + 2);
+        let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+        sender_write
+            .write_u16(hello_len)
+            .await
+            .expect("write hello length");
+        sender_write
+            .write_all(&encoded)
+            .await
+            .expect("write hello bytes");
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split(15, receiver_read, receiver_write),
+            expected_peer_id: None,
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+        GetKey::read_their_public_key(get_key).await
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -9083,10 +9158,19 @@ mod tests {
         );
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn handshake_rejects_all_zero_signature_material() {
+    async fn write_framed_handshake<W>(writer: &mut W, encoded: &[u8])
+    where
+        W: tokio::io::AsyncWrite + Unpin,
+    {
         use tokio::io::AsyncWriteExt;
 
+        let len = u16::try_from(encoded.len()).expect("fixture handshake message length fits u16");
+        writer.write_u16(len).await.expect("write hello length");
+        writer.write_all(encoded).await.expect("write hello bytes");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_all_zero_signature_material() {
         let kx = KexAlgo::new();
         let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
         let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
@@ -9131,14 +9215,7 @@ mod tests {
         let (stream_a, stream_b) = tokio::io::duplex(4096);
         let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
         let (receiver_read, receiver_write) = tokio::io::split(stream_b);
-        sender_write
-            .write_u16(encoded.len() as u16)
-            .await
-            .expect("write hello length");
-        sender_write
-            .write_all(&encoded)
-            .await
-            .expect("write hello bytes");
+        write_framed_handshake(&mut sender_write, &encoded).await;
 
         let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
             connection: Connection::from_split(15, receiver_read, receiver_write),
@@ -9167,8 +9244,6 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn handshake_rejects_malformed_ed25519_signature_r() {
-        use tokio::io::AsyncWriteExt;
-
         const SMALL_ORDER_R: [u8; 32] = [
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0,
@@ -9241,14 +9316,7 @@ mod tests {
             let (stream_a, stream_b) = tokio::io::duplex(4096);
             let (_sender_read, mut sender_write) = tokio::io::split(stream_a);
             let (receiver_read, receiver_write) = tokio::io::split(stream_b);
-            sender_write
-                .write_u16(encoded.len() as u16)
-                .await
-                .expect("write hello length");
-            sender_write
-                .write_all(&encoded)
-                .await
-                .expect("write hello bytes");
+            write_framed_handshake(&mut sender_write, &encoded).await;
 
             let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
                 connection: Connection::from_split(15, receiver_read, receiver_write),
@@ -9272,6 +9340,73 @@ mod tests {
             assert!(
                 matches!(err, crate::Error::Keys(_)),
                 "expected {label} signature parse failure, got {err:?}"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_malformed_mldsa_signature_lengths() {
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1443".parse().unwrap();
+        let key_pair = KeyPair::try_from_seed(
+            b"p2p-handshake-mldsa-signature-admission".to_vec(),
+            Algorithm::MlDsa,
+        )
+        .expect("derive checked ML-DSA handshake fixture keypair");
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[14u8; 32]).unwrap();
+        let payload = handshake_signature_payload::<KexAlgo, ChaCha20Poly1305>(
+            &cryptographer,
+            &addr,
+            &sender_kx,
+            &receiver_kx,
+            None,
+            None,
+        );
+        let valid_signature = Signature::try_new(key_pair.private_key(), &payload)
+            .expect("checked ML-DSA handshake fixture signature")
+            .payload()
+            .to_vec();
+
+        read_crafted_handshake_hello(
+            &key_pair,
+            valid_signature.clone(),
+            addr.clone(),
+            sender_kx.clone(),
+            receiver_kx.clone(),
+            cryptographer.clone(),
+        )
+        .await
+        .expect("valid ML-DSA handshake signature must verify");
+
+        let mut short = valid_signature.clone();
+        short.pop();
+        let mut overlong = valid_signature.clone();
+        overlong.push(0x42);
+
+        for (label, signature) in [
+            ("short", short),
+            ("overlong", overlong),
+            ("all-zero", vec![0_u8; valid_signature.len()]),
+        ] {
+            let err = match read_crafted_handshake_hello(
+                &key_pair,
+                signature,
+                addr.clone(),
+                sender_kx.clone(),
+                receiver_kx.clone(),
+                cryptographer.clone(),
+            )
+            .await
+            {
+                Ok(_) => panic!("{label} ML-DSA handshake signature unexpectedly verified"),
+                Err(err) => err,
+            };
+            assert!(
+                matches!(err, crate::Error::Keys(_)),
+                "expected {label} ML-DSA signature parse failure, got {err:?}"
             );
         }
     }

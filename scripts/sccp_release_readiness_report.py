@@ -10925,7 +10925,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
             "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, BSC proof-artifact remote-prover marker rejection, adversarial manifest coverage, and redacted native payload artifact-path diagnostics.",
             "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, copied-summary scalar exactness, and bundled-manifest drift rejection before published bundle readiness can pass.",
-            "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
+            "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte, SORA Nexus-finality binding, SORA-empty source-proof, and decoded non-SORA source-proof binding gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, Java Android, and C#/.NET.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
             "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, phase-local ordered non-negated/non-diagnostic shell-xtrace-free completion/success output after required commands in per-phase and full-corridor logs, phase-specific traced command shapes with exact pytest positional inputs, option-bound selectors, exact Gradle test command parsing, exact Kotlin Gradle selector list, exact Swift filter commands, exact Java Android harness class list including TRON, exact Node test/check command files, exact .NET project/filter/nologo commands, exact no-suffix cargo/bash/java commands, and without bare-fragment shortcuts or shell-comment-hidden fragments, restricted cd wrappers, dry-run rejection, failure-marker scans, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
             "- SCCP release bundle source-copy source inventory must pin symlink, control-character, non-ASCII filename, and secret-looking filename rejection for evidence inputs, phase evidence, native EVM prover manifests, and native prover payload sources before bundle copy can run.",
@@ -10937,7 +10937,7 @@ def _render_markdown(report: Any, *, max_blockers_per_lane: int) -> str:
             "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, row-key and audit-key classification, lane-field binding, canonical row recomputation, Markdown row-domain/audit-key suppression, and active route-canary binding rejection before published bundle readiness can pass.",
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
-            "- SCCP unready transparent-proof source inventory must pin the removed runtime/config surface, keep the `allow_unready` manifest and source-proof bypasses effective only under `cfg(any(test, feature = \"test-fixtures\"))`, keep Torii route/proof `allow_unready` bypasses effective only under `cfg(test)`, keep `test-fixtures` out of production SCCP dependencies and release/corridor Rust commands, reject case-variant, split-token, and source-escaped environment override names, reject reintroduced runtime config fields, and require BSC/TRON route configs to reject the removed `--allow-unready` option while stripping stale merged config keys.",
+            "- SCCP unready transparent-proof source inventory must pin the removed runtime/config surface, keep the `allow_unready` manifest and source-proof bypasses effective only under `cfg(test)`, keep Torii route/proof `allow_unready` bypasses effective only under `cfg(test)`, keep `test-fixtures` out of production SCCP dependencies and release/corridor Rust commands, reject case-variant, split-token, and source-escaped environment override names, reject reintroduced runtime config fields, and require BSC/TRON route configs to reject the removed `--allow-unready` option while stripping stale merged config keys.",
             "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean and public-DNS endpoint rejection before TRON deploy helper evidence can satisfy production readiness.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
@@ -11371,10 +11371,61 @@ def _public_input_artifact_errors(value: Any) -> list[str]:
     return errors
 
 
-def _public_corridor_evidence_artifact_duplicate_path_errors(value: Any) -> list[str]:
+def _corridor_uses_shared_full_run_artifact(
+    evidence_artifacts: Any,
+    phases: Any,
+    known_phases: list[str],
+) -> bool:
+    """Return whether every passed phase is bound to one shared transcript."""
+
+    if not isinstance(evidence_artifacts, dict) or not isinstance(phases, dict):
+        return False
+    passed_phases = [
+        phase for phase in known_phases if phases.get(phase) == "passed"
+    ]
+    if not passed_phases:
+        return False
+    if set(evidence_artifacts) != set(passed_phases):
+        return False
+
+    shared_artifact: tuple[str, int, str] | None = None
+    for phase in passed_phases:
+        artifact = evidence_artifacts.get(phase)
+        if not isinstance(artifact, dict):
+            return False
+        artifact_path = artifact.get("path")
+        artifact_bytes = artifact.get("bytes")
+        artifact_sha256 = artifact.get("sha256")
+        if (
+            not _native_evm_markdown_path_is_safe(artifact_path)
+            or type(artifact_bytes) is not int
+            or artifact_bytes <= 0
+            or _sha256_text_errors("evidence_artifact", artifact_sha256)
+        ):
+            return False
+        artifact_tuple = (artifact_path, artifact_bytes, artifact_sha256)
+        if shared_artifact is None:
+            shared_artifact = artifact_tuple
+        elif artifact_tuple != shared_artifact:
+            return False
+    return True
+
+
+def _public_corridor_evidence_artifact_duplicate_path_errors(
+    value: Any,
+    *,
+    phases: Any = None,
+    known_phases: list[str] | None = None,
+) -> list[str]:
     """Return duplicate-path blockers from inspectable corridor artifacts."""
 
     if not isinstance(value, dict):
+        return []
+    if known_phases is not None and _corridor_uses_shared_full_run_artifact(
+        value,
+        phases,
+        known_phases,
+    ):
         return []
     seen_paths: set[str] = set()
     duplicate_path_count = 0
@@ -11540,7 +11591,9 @@ def _public_corridor_errors(value: Any) -> list[str]:
                 )
         errors.extend(
             _public_corridor_evidence_artifact_duplicate_path_errors(
-                evidence_artifacts
+                evidence_artifacts,
+                phases=phases,
+                known_phases=known_phases,
             )
         )
 
@@ -13234,12 +13287,13 @@ def _public_report_payload(report: Any) -> dict[str, Any]:
             root_errors[field] = message
             continue
         if not all(isinstance(item, dict) for item in value):
-            if field == "cryptographic_evidence":
-                blockers.extend(
-                    _public_cryptographic_evidence_duplicate_domain_errors(value)
-                )
-            elif field == "user_prover_submission_surfaces":
-                blockers.extend(_public_user_prover_duplicate_lane_errors(value))
+            if any(isinstance(item, dict) for item in value):
+                if field == "cryptographic_evidence":
+                    blockers.extend(
+                        _public_cryptographic_evidence_duplicate_domain_errors(value)
+                    )
+                elif field == "user_prover_submission_surfaces":
+                    blockers.extend(_public_user_prover_duplicate_lane_errors(value))
             root_errors[field] = message
     if (
         ("inputs" in root_errors or "input_artifacts" in root_errors)
