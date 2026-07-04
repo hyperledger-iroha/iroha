@@ -6296,8 +6296,9 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
                 block_timestamp=block_timestamp,
                 log_index=transaction["log_index"],
                 verifier_address20=verifier_payload[1:],
-                call_data_sha256=_parse_hex32(
-                    str(call_summary["call_data_sha256"]),
+                call_data_sha256=_parse_summary_hex32(
+                    call_summary,
+                    "call_data_sha256",
                     label="route canary call data SHA-256",
                 ),
                 message_id=_parse_summary_hex32(
@@ -6307,8 +6308,9 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
                 ),
                 source_domain=transaction_source_domain,
                 target_domain=call_summary["public_inputs_target_domain"],
-                payload_hash=_parse_hex32(
-                    str(call_summary["public_inputs_payload_hash"]),
+                payload_hash=_parse_summary_hex32(
+                    call_summary,
+                    "public_inputs_payload_hash",
                     label="route canary payload hash",
                 ),
                 commitment_root=_parse_summary_hex32(
@@ -6316,12 +6318,14 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
                     "commitment_root",
                     label="route canary commitment root",
                 ),
-                finality_height=_parse_hex32(
-                    str(call_summary["public_inputs_finality_height"]),
+                finality_height=_parse_summary_hex32(
+                    call_summary,
+                    "public_inputs_finality_height",
                     label="route canary finality height",
                 ),
-                finality_block_hash=_parse_hex32(
-                    str(call_summary["public_inputs_finality_block_hash"]),
+                finality_block_hash=_parse_summary_hex32(
+                    call_summary,
+                    "public_inputs_finality_block_hash",
                     label="route canary finality block hash",
                 ),
                 statement_hash=_parse_summary_hex32(
@@ -7672,8 +7676,9 @@ def collect_live_evidence(
             route_allowlist_hash=route_allowlist_hash,
             destination_verifier=summary["destination_verifier"],
         )
-        route_canary_message_id = _parse_hex32(
-            str(route_canary_transaction["message_id"]),
+        route_canary_message_id = _parse_summary_hex32(
+            route_canary_transaction,
+            "message_id",
             label="route-canary accepted message id",
         )
         route_canary_transaction.update(
@@ -7708,63 +7713,76 @@ def collect_live_evidence(
         derived_canary_hash_bytes = _tron_route_canary_transaction_evidence_hash(
             route_allowlist_hash=route_allowlist_hash,
             transaction_id=route_canary_transaction_id,
-            transaction_owner_address=_parse_tron_payload_hex(
-                trigger_contract["owner_address"],
+            transaction_owner_address=_parse_summary_tron_payload_hex(
+                trigger_contract,
+                "owner_address",
                 label="route-canary transaction owner address",
             ),
             block_number=route_canary_transaction["block_number"],
             block_timestamp=route_canary_transaction["block_timestamp"],
             log_index=route_canary_transaction["log_index"],
-            verifier_address20=parse_tron_address_payload(
-                str(summary["destination_verifier"]["address"]),
+            verifier_address20=_parse_summary_tron_address(
+                summary["destination_verifier"],
+                "address",
                 label="destination verifier address",
             )[1:],
-            call_data_sha256=_parse_hex32(
-                str(trigger_contract["call_data_sha256"]),
+            call_data_sha256=_parse_summary_hex32(
+                trigger_contract,
+                "call_data_sha256",
                 label="route-canary call data SHA-256",
             ),
-            message_id=_parse_hex32(
-                str(route_canary_transaction["message_id"]),
+            message_id=_parse_summary_hex32(
+                route_canary_transaction,
+                "message_id",
                 label="route-canary accepted message id",
             ),
             source_domain=route_canary_transaction["source_domain"],
             target_domain=trigger_contract["public_inputs_target_domain"],
-            payload_hash=_parse_hex32(
-                str(trigger_contract["public_inputs_payload_hash"]),
+            payload_hash=_parse_summary_hex32(
+                trigger_contract,
+                "public_inputs_payload_hash",
                 label="route-canary payload hash",
             ),
-            commitment_root=_parse_hex32(
-                str(route_canary_transaction["commitment_root"]),
+            commitment_root=_parse_summary_hex32(
+                route_canary_transaction,
+                "commitment_root",
                 label="route-canary commitment root",
             ),
-            finality_height=_parse_hex32(
-                str(trigger_contract["public_inputs_finality_height"]),
+            finality_height=_parse_summary_hex32(
+                trigger_contract,
+                "public_inputs_finality_height",
                 label="route-canary finality height",
             ),
-            finality_block_hash=_parse_hex32(
-                str(trigger_contract["public_inputs_finality_block_hash"]),
+            finality_block_hash=_parse_summary_hex32(
+                trigger_contract,
+                "public_inputs_finality_block_hash",
                 label="route-canary finality block hash",
             ),
-            statement_hash=_parse_hex32(
-                str(route_canary_transaction["statement_hash"]),
+            statement_hash=_parse_summary_hex32(
+                route_canary_transaction,
+                "statement_hash",
                 label="route-canary statement hash",
             ),
             proof_version=trigger_contract["proof_version"],
             proof_source_domain=trigger_contract["proof_source_domain"],
-            destination_binding_hash=_parse_hex32(
-                str(route_canary_transaction["destination_binding_hash"]),
+            destination_binding_hash=_parse_summary_hex32(
+                route_canary_transaction,
+                "destination_binding_hash",
                 label="route-canary destination binding hash",
             ),
-            verifier_backend_hash=_parse_hex32(
-                str(route_canary_transaction["verifier_backend_hash"]),
+            verifier_backend_hash=_parse_summary_hex32(
+                route_canary_transaction,
+                "verifier_backend_hash",
                 label="route-canary verifier backend hash",
             ),
-            proof_family_hash=_parse_hex32(
-                str(route_canary_transaction["proof_family_hash"]),
+            proof_family_hash=_parse_summary_hex32(
+                route_canary_transaction,
+                "proof_family_hash",
                 label="route-canary proof family hash",
             ),
-            network_id=_parse_hex32(
-                str(route_canary_transaction["network_id"]),
+            network_id=_parse_summary_hex32(
+                route_canary_transaction,
+                "network_id",
                 label="route-canary network id",
             ),
             used_message_proof=route_canary_transaction["message_proof_used"] is True,
@@ -7772,12 +7790,14 @@ def collect_live_evidence(
                 "raw_data_owner_matches_transaction"
             ]
             is True,
-            signature_sha256=_parse_hex32(
-                str(trigger_contract["signature_sha256"]),
+            signature_sha256=_parse_summary_hex32(
+                trigger_contract,
+                "signature_sha256",
                 label="route-canary signature hash",
             ),
-            signature_recovered_address=_parse_tron_payload_hex(
-                trigger_contract["signature_recovered_address"],
+            signature_recovered_address=_parse_summary_tron_payload_hex(
+                trigger_contract,
+                "signature_recovered_address",
                 label="route-canary signature recovered address",
             ),
             signature_recovers_to_owner=trigger_contract["signature_recovers_to_owner"]
@@ -7786,10 +7806,7 @@ def collect_live_evidence(
         route_canary_transaction["route_canary_evidence_hash"] = _hex(
             derived_canary_hash_bytes
         )
-        derived_canary_hash = _parse_hex32(
-            str(route_canary_transaction["route_canary_evidence_hash"]),
-            label="derived route canary evidence hash",
-        )
+        derived_canary_hash = derived_canary_hash_bytes
         if (
             route_canary_evidence_hash is not None
             and route_canary_evidence_hash != derived_canary_hash
