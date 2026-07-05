@@ -8311,7 +8311,7 @@ mod tests {
             nonce,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
@@ -8382,7 +8382,8 @@ mod tests {
 
     #[test]
     fn proposal_sccp_collection_ignores_records_when_nexus_disabled() {
-        let state = blank_state();
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = false;
         let tx = accepted_sccp_record_transaction(1);
         let routing = vec![RoutingDecision::default()];
         let nexus = state.nexus_snapshot();

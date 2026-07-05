@@ -12947,7 +12947,7 @@ pub(crate) mod valid {
                 nonce: 1,
                 asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
                 asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-                asset_id: b"xor#universal".to_vec(),
+                asset_id: b"xor".to_vec(),
                 amount: 10,
                 sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
                 sender: b"bridge@sora".to_vec(),

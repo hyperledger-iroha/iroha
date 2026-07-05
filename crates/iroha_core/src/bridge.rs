@@ -176,17 +176,10 @@ pub(crate) struct ValidatedRecordedSccpMessage {
     pub commitment: SccpHubCommitmentV1,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RecordedSccpPayloadEncoding {
-    Canonical,
-    LowerHexAlias,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RecordedSccpMessageCandidate {
     instruction_index: usize,
     validated: ValidatedRecordedSccpMessage,
-    encoding: RecordedSccpPayloadEncoding,
 }
 
 /// Failure while validating a recorded outbound SCCP message.
@@ -259,18 +252,8 @@ pub(crate) fn validate_recorded_sccp_message_payload_bytes(
 
 fn validate_recorded_sccp_message_payload_bytes_for_block_collection(
     payload_bytes: &[u8],
-) -> Result<
-    (ValidatedRecordedSccpMessage, RecordedSccpPayloadEncoding),
-    RecordedSccpMessageValidationError,
-> {
-    if let Some(payload) = decode_recorded_sccp_payload_bytes(payload_bytes) {
-        return validate_recorded_sccp_payload(payload)
-            .map(|validated| (validated, RecordedSccpPayloadEncoding::Canonical));
-    }
-    let payload = decode_lowercase_hex_sccp_payload_alias(payload_bytes)
-        .ok_or(RecordedSccpMessageValidationError::InvalidPayload)?;
-    validate_recorded_sccp_payload(payload)
-        .map(|validated| (validated, RecordedSccpPayloadEncoding::LowerHexAlias))
+) -> Result<ValidatedRecordedSccpMessage, RecordedSccpMessageValidationError> {
+    validate_recorded_sccp_message_payload_bytes(payload_bytes)
 }
 
 pub(crate) fn sccp_outbound_message_key(payload: &SccpPayloadV1) -> SccpOutboundMessageKey {
@@ -665,17 +648,14 @@ fn sccp_message_candidates_from_executable(
         .enumerate()
         .filter_map(|(instruction_index, instruction)| {
             let record = recorded_sccp_message_instruction(instruction)?;
-            let Ok((validated, encoding)) =
-                validate_recorded_sccp_message_payload_bytes_for_block_collection(
-                    &record.payload_bytes,
-                )
-            else {
+            let Ok(validated) = validate_recorded_sccp_message_payload_bytes_for_block_collection(
+                &record.payload_bytes,
+            ) else {
                 return None;
             };
             Some(RecordedSccpMessageCandidate {
                 instruction_index,
                 validated,
-                encoding,
             })
         })
         .collect()
@@ -767,8 +747,6 @@ fn collect_sccp_messages_from_signed_block_with_deduplication(
 ) -> Vec<RecordedSccpMessage> {
     let mut messages = Vec::new();
     let mut seen = BTreeSet::new();
-    let mut canonical_keys = BTreeSet::new();
-    let mut entrypoint_candidates = Vec::new();
     for (entrypoint_index, entrypoint) in block.external_entrypoints_cloned().enumerate() {
         let transaction = match entrypoint {
             TransactionEntrypoint::External(transaction) => transaction,
@@ -781,23 +759,8 @@ fn collect_sccp_messages_from_signed_block_with_deduplication(
             continue;
         }
         let candidates = sccp_message_candidates_from_executable(transaction.instructions());
-        canonical_keys.extend(
-            candidates
-                .iter()
-                .filter(|candidate| candidate.encoding == RecordedSccpPayloadEncoding::Canonical)
-                .map(|candidate| candidate.validated.key.clone()),
-        );
-        entrypoint_candidates.push((entrypoint_index, candidates));
-    }
-
-    for (tx_index, candidates) in entrypoint_candidates {
         for candidate in candidates {
             let key = candidate.validated.key.clone();
-            if candidate.encoding == RecordedSccpPayloadEncoding::LowerHexAlias
-                && canonical_keys.contains(&key)
-            {
-                continue;
-            }
             if deduplicate {
                 if seen.contains(&key) {
                     continue;
@@ -805,7 +768,7 @@ fn collect_sccp_messages_from_signed_block_with_deduplication(
                 seen.insert(key);
             }
             messages.push(RecordedSccpMessage {
-                tx_index,
+                tx_index: entrypoint_index,
                 instruction_index: candidate.instruction_index,
                 commitment: candidate.validated.commitment,
                 payload: candidate.validated.payload,

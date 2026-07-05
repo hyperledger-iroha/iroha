@@ -1943,7 +1943,7 @@ fn assert_stake_amount_matches_spec(
 
 #[cfg(test)]
 mod tests {
-    use core::num::NonZeroU64;
+    use core::num::{NonZeroU32, NonZeroU64};
     use std::time::Duration;
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
@@ -2052,7 +2052,36 @@ mod tests {
     fn setup_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        State::new(World::default(), kura, query_handle)
+        let mut state = State::new(World::default(), kura, query_handle);
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = staking_test_lane_catalog();
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        state
+            .set_nexus(nexus)
+            .expect("staking test lane catalog should be valid");
+        state
+    }
+
+    fn staking_test_lane_catalog() -> LaneCatalog {
+        let lane_count = NonZeroU32::new(256).expect("non-zero lane count");
+        let lanes = (0..lane_count.get())
+            .map(|id| {
+                let lane_id = LaneId::new(id);
+                LaneConfig {
+                    id: lane_id,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                    alias: if lane_id == LaneId::SINGLE {
+                        "default".to_string()
+                    } else {
+                        format!("staking-test-lane-{id}")
+                    },
+                    ..LaneConfig::default()
+                }
+            })
+            .collect();
+        LaneCatalog::new(lane_count, lanes).expect("valid staking test lane catalog")
     }
 
     fn set_transaction_lane_catalog(stx: &mut StateTransaction<'_, '_>, lane_catalog: LaneCatalog) {

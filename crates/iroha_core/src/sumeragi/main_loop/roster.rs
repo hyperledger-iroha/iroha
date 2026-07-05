@@ -675,20 +675,26 @@ pub(super) fn apply_roster_indices_to_manager(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use core::num::NonZeroU32;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
         state::{CellVecExt, State, World},
     };
-    use iroha_config::parameters::actual::ConsensusMode;
+    use iroha_config::parameters::actual::{ConsensusMode, LaneConfig as RuntimeLaneConfig};
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
         account::AccountId,
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus},
+        da::commitment::DaProofScheme,
         metadata::Metadata,
-        nexus::{LaneId, PublicLaneValidatorRecord, PublicLaneValidatorStatus},
+        nexus::{
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+            LaneStorageProfile, LaneVisibility, PublicLaneValidatorRecord,
+            PublicLaneValidatorStatus,
+        },
         peer::Peer,
     };
     use iroha_primitives::numeric::Numeric;
@@ -730,6 +736,64 @@ mod tests {
             block.consensus_keys_by_pk.insert(pk_label, by_pk);
         }
         block.commit();
+    }
+
+    fn seed_active_nexus_lanes<I>(state: &State, lane_ids: I)
+    where
+        I: IntoIterator<Item = LaneId>,
+    {
+        let lane_ids = lane_ids.into_iter().collect::<BTreeSet<_>>();
+        let first_lane = lane_ids.iter().next().copied().unwrap_or(LaneId::SINGLE);
+        let lane_count = lane_ids
+            .iter()
+            .map(|lane_id| lane_id.as_u32())
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1)
+            .max(1);
+        let lanes = lane_ids
+            .iter()
+            .map(|lane_id| LaneConfig {
+                id: *lane_id,
+                dataspace_id: DataSpaceId::new(u64::from(lane_id.as_u32())),
+                alias: format!("lane{}", lane_id.as_u32()),
+                description: None,
+                visibility: LaneVisibility::Public,
+                lane_type: None,
+                governance: None,
+                settlement: None,
+                storage: LaneStorageProfile::FullReplica,
+                proof_scheme: DaProofScheme::default(),
+                metadata: BTreeMap::new(),
+            })
+            .collect();
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(lane_count).expect("test lane count is nonzero"),
+            lanes,
+        )
+        .expect("test Nexus lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(
+            lane_ids
+                .iter()
+                .map(|lane_id| {
+                    let id = DataSpaceId::new(u64::from(lane_id.as_u32()));
+                    DataSpaceMetadata {
+                        id,
+                        alias: format!("dataspace{}", id.as_u64()),
+                        description: None,
+                        fault_tolerance: 1,
+                    }
+                })
+                .collect(),
+        )
+        .expect("test Nexus dataspace catalog");
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.routing_policy.default_lane = first_lane;
+        nexus.routing_policy.default_dataspace = DataSpaceId::new(u64::from(first_lane.as_u32()));
+        nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
+        nexus.lane_catalog = lane_catalog;
+        nexus.dataspace_catalog = dataspace_catalog;
     }
 
     fn bls_keypairs(prefix: &str, count: usize) -> Vec<KeyPair> {
@@ -1524,6 +1588,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
+        seed_active_nexus_lanes(&state, [LaneId::new(4)]);
 
         let lane4_local = checked_bls_keypair();
         let lane4_peer_b = checked_bls_keypair();
@@ -1731,6 +1796,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
+        seed_active_nexus_lanes(&state, [LaneId::new(1), LaneId::new(2), LaneId::new(3)]);
 
         let keypairs: Vec<KeyPair> = checked_bls_keypairs(3);
         let accounts: Vec<AccountId> = keypairs
@@ -1874,6 +1940,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
+        seed_active_nexus_lanes(&state, [LaneId::new(2)]);
 
         let keypair_active_a = checked_bls_keypair();
         let keypair_active_b = checked_bls_keypair();
@@ -2099,6 +2166,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
+        seed_active_nexus_lanes(&state, [LaneId::new(1)]);
 
         let keypair_active_a = checked_bls_keypair();
         let keypair_active_b = checked_bls_keypair();
