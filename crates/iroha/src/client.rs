@@ -23493,6 +23493,8 @@ mod tests {
             lane_block_height: 3,
             lane_block_view: 2,
             subject_hash,
+            qc_mode_tag: relay_envelope
+                .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v1"),
             accepted_candidate_indices: vec![0, 2],
             payload_ownership_hash: Hash::prehashed([0xBC; Hash::LENGTH]),
             rbc_instance_hash: Hash::prehashed([0xBD; Hash::LENGTH]),
