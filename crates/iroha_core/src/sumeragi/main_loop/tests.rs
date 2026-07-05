@@ -90328,6 +90328,80 @@ fn plan_missing_block_fetch_strict_signers_does_not_fallback_to_topology() {
 }
 
 #[test]
+fn plan_missing_block_fetch_targetless_strict_attempt_enables_topology_fallback() {
+    let mut requests = BTreeMap::new();
+    let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xE4; 32]));
+    let height = 9;
+    let window = Duration::from_millis(20);
+    let now = Instant::now();
+
+    let peer_a = PeerId::new(checked_keypair().public_key().clone());
+    let peer_b = PeerId::new(checked_keypair().public_key().clone());
+    let peers = vec![peer_a, peer_b];
+    let topology = super::network_topology::Topology::new(peers.clone());
+    let fallback_after = 1;
+
+    assert!(matches!(
+        super::plan_missing_block_fetch_with_mode(
+            &mut requests,
+            hash,
+            height,
+            0,
+            Phase::Commit,
+            super::MissingBlockPriority::Consensus,
+            &BTreeSet::new(),
+            &topology,
+            now,
+            window,
+            Some(window),
+            fallback_after,
+            super::MissingBlockFetchMode::StrictSigners,
+            false,
+        ),
+        super::MissingBlockFetchDecision::NoTargets
+    ));
+    assert_eq!(
+        requests
+            .get(&hash)
+            .expect("request entry recorded")
+            .attempts,
+        fallback_after,
+        "targetless strict signer rounds must count toward the fallback threshold"
+    );
+
+    match super::plan_missing_block_fetch_with_mode(
+        &mut requests,
+        hash,
+        height,
+        0,
+        Phase::Commit,
+        super::MissingBlockPriority::Consensus,
+        &BTreeSet::new(),
+        &topology,
+        now + window,
+        window,
+        Some(window),
+        fallback_after,
+        super::MissingBlockFetchMode::Default,
+        false,
+    ) {
+        super::MissingBlockFetchDecision::Requested {
+            targets,
+            target_kind,
+        } => {
+            assert_eq!(targets, peers);
+            assert_eq!(
+                target_kind,
+                crate::telemetry::MissingBlockFetchTargetKind::Topology
+            );
+        }
+        other => {
+            panic!("expected topology fallback after targetless strict attempt, got {other:?}")
+        }
+    }
+}
+
+#[test]
 fn missing_block_view_change_triggers_once_after_dwell() {
     let mut requests = BTreeMap::new();
     let hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEE; 32]));
