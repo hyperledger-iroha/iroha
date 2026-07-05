@@ -2521,6 +2521,30 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
   if (!isRecord(manifest)) {
     return [];
   }
+  const materialManifestAliasGroups = [
+    ["generatedAt", "generated_at"],
+    ["routeId", "route_id"],
+    ["assetKey", "asset_key"],
+    ["bscNetwork", "bsc_network", "network"],
+    ["chainIdHex", "chain_id_hex"],
+    ["networkIdHex", "network_id_hex"],
+    ["proofBackend", "proof_backend"],
+    ["proofFamily", "proof_family"],
+    ["sourceDomain", "source_domain"],
+    ["targetDomain", "target_domain"],
+    ["circuitProfile", "circuit_profile"],
+    ["publicInputCount", "public_input_count"],
+    ["publicSignalNames", "public_signal_names"],
+    ["verifierKeyHash", "verifier_key_hash"],
+    ["proofArtifactHash", "proof_artifact_hash"],
+    ["provingKeyHash", "proving_key_hash"],
+    ["productionReady", "production_ready"],
+    ["productionBlockers", "production_blockers"],
+    ["trustedSetup", "trusted_setup"],
+    ["selfChecks", "self_checks"],
+    ["attestationTrustPolicy", "attestation_trust_policy"],
+    ["nextStep", "next_step"],
+  ];
   const blockers = [
     ...unknownFieldBlockers(
       manifest,
@@ -2579,32 +2603,10 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
     ),
     ...aliasFieldBlockers(
       manifest,
-      [
-        ["generatedAt", "generated_at"],
-        ["routeId", "route_id"],
-        ["assetKey", "asset_key"],
-        ["bscNetwork", "bsc_network", "network"],
-        ["chainIdHex", "chain_id_hex"],
-        ["networkIdHex", "network_id_hex"],
-        ["proofBackend", "proof_backend"],
-        ["proofFamily", "proof_family"],
-        ["sourceDomain", "source_domain"],
-        ["targetDomain", "target_domain"],
-        ["circuitProfile", "circuit_profile"],
-        ["publicInputCount", "public_input_count"],
-        ["publicSignalNames", "public_signal_names"],
-        ["verifierKeyHash", "verifier_key_hash"],
-        ["proofArtifactHash", "proof_artifact_hash"],
-        ["provingKeyHash", "proving_key_hash"],
-        ["productionReady", "production_ready"],
-        ["productionBlockers", "production_blockers"],
-        ["trustedSetup", "trusted_setup"],
-        ["selfChecks", "self_checks"],
-        ["attestationTrustPolicy", "attestation_trust_policy"],
-        ["nextStep", "next_step"],
-      ],
+      materialManifestAliasGroups,
       label,
     ),
+    ...retiredAliasFieldBlockers(manifest, materialManifestAliasGroups, label),
   ];
 
   const artifacts = ownValue(manifest, "artifacts");
@@ -3092,6 +3094,22 @@ function aliasFieldBlockers(record, groups, label) {
     if (present.length > 1) {
       blockers.push(
         `${label} ${group[0]} must not use multiple aliases: ${present.join(", ")}`,
+      );
+    }
+  }
+  return blockers;
+}
+
+function retiredAliasFieldBlockers(record, groups, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const blockers = [];
+  for (const group of groups) {
+    const present = group.filter((key) => ownValue(record, key) !== undefined);
+    if (present.length === 1 && present[0] !== group[0]) {
+      blockers.push(
+        `${label} ${group[0]} must not use retired alias ${present[0]}; use ${group[0]}`,
       );
     }
   }

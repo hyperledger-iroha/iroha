@@ -187,9 +187,10 @@ fails closed for request-bound audit statement hash replays and audited-role
 verifier hash drift before proof matching. BSC mainnet destination binding now
 accepts only the mainnet chain-id word, and BSC placeholder material-only
 openings must bind the decoded OpenVerify verifier key, schema, public-input
-columns, and FastPQ public I/O hash. BSC material-only source material no
-longer satisfies production source-proof or local-admission gates without
-governed deployment evidence.
+columns, and FastPQ public I/O hash. That placeholder opening is now explicitly
+`cfg(test)`-only; production builds must use the normal FastPQ verification
+path, and BSC material-only source material still cannot satisfy production
+source-proof or local-admission gates without governed deployment evidence.
 
 TON source-adapter readiness now stays aligned with the governed
 full-light-client audit policy: readiness-positive test fixtures use the
@@ -8588,8 +8589,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `probes[].delivery_id` inventory, require reviewed
   `ai-prescreen-notification-delivery-*` labels without non-production markers,
   require unique dedup keys bound to each reviewed delivery ID, and require
-  shipped `commit`/`reveal` actions plus non-empty case, round, and juror
-  identifiers. Transparency publication artifacts bind `probe_count`,
+  shipped `submit_commit`/`submit_reveal` actions plus non-empty case, round,
+  and juror identifiers. Transparency publication artifacts bind `probe_count`,
   `passed_probe_count`, and `source_entry_probe_count` to the unique canonical
   `probes[].source_kind` inventory, so malformed or duplicate delivery rows or
   duplicate/unknown source-entry probe rows cannot inflate readiness.
@@ -19634,6 +19635,12 @@ digest-bound pending-XSD source probe summaries for reviewed
   Apalache/TLC CFG module-binding diagnostics must stay line-aware, so
   runner-selected CFG ownership and operator-reference failures identify the
   runner case line before module-binding errors are grouped.
+  Apalache/TLC CFG constant-binding diagnostics must stay line-aware, so
+  runner-selected CFG constant bindings identify the runner case line before
+  constant-binding errors are grouped.
+  Apalache/TLC CFG trivial-target diagnostics must stay line-aware, so
+  runner-selected trivial CFG checks identify the runner case line before
+  trivial-target errors are grouped.
   TLC non-mutation expected-failure diagnostics must stay line-aware, so
   non-mutation TLC modes with unexpected `expect_failure=1` identify the
   README or CI command line and the TLC runner case line.
@@ -29841,7 +29848,8 @@ validation path.
   Apalache/TLC CFG shape diagnostics, line-aware Apalache/TLC TLA validation
   diagnostics, line-aware Apalache/TLC CFG inventory diagnostics, line-aware
   Apalache/TLC CFG proof-target diagnostics, line-aware Apalache/TLC CFG
-  module-binding diagnostics,
+  module-binding diagnostics, line-aware Apalache/TLC CFG constant-binding
+  diagnostics, line-aware Apalache/TLC CFG trivial-target diagnostics,
   expected-failure counterexample semantics,
   baseline expected-failure marker rejection, well-formed
   non-append/non-declaration/non-array/shell-builtin-mutation-free

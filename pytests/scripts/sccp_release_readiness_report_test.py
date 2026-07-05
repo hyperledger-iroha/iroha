@@ -13167,6 +13167,7 @@ def test_release_readiness_phase_command_matchers_reject_extra_suffix_arguments(
             "contract-smoke",
             "+ node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs "
             "scripts/sccp_tron_taira_xor_deploy.test.mjs "
+            "scripts/sccp_solana_taira_xor_deploy.test.mjs "
             "scripts/sccp_taira_xor_contract.test.mjs scripts/unscoped_extra.test.mjs",
             "scripts/sccp_taira_xor_contract.test.mjs",
         ),

@@ -220,6 +220,7 @@ CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS = (
     "TRON CLI rejects positional arguments without echoing values",
     "TRON evidence CLI rejects bare valued options before work",
     "deployment doctor rejects legacy or drifted deployer secret network metadata",
+    "Solana route-manifest accepts only literal production_ready true",
     "route manifest draft binds deployment evidence, verifier material, and TAIRA burn-record contract",
     "Solana route-manifest rejects unsafe browser prover module URLs",
     "Solana route-manifest CLI rejects positional arguments without echoing values",
@@ -8150,8 +8151,9 @@ SOLANA_ROUTE_MANIFEST_CLI_MARKERS = (
             "const mode = normalizeProposalMode(args.mode);",
             "const outputPath = args.output ? requireOption(args, \"output\") : null;",
             "`Solana route-manifest template must not use retired ${field}; use ${replacement}.`",
-            "if (value !== true && value !== false)",
-            "route manifest production_ready",
+            "if (value !== true)",
+            "throw new Error(`${label} must be the boolean true`);",
+            "manifest.production_ready = normalizeRequiredBooleanField(",
             "manifest.version = normalizeSafeInteger",
             "const normalizeOptionalString = (value, label) => {",
             "const normalizeOptionalObject = (value, label) => {",
@@ -8161,7 +8163,7 @@ SOLANA_ROUTE_MANIFEST_CLI_MARKERS = (
             "throw new Error(`${label} must be an object`);",
             '"source_adapter_engine_deployment"',
             'Object.prototype.hasOwnProperty.call(manifest, "taira_xor_bridge_address")',
-            "route-manifest refuses to publish production_ready=false",
+            "Solana route-manifest template must not use retired ${field}; use ${replacement}.",
             "const main = async (argv = process.argv.slice(2)) => {",
             "if (process.argv[1] && path.resolve(process.argv[1]) === SCRIPT_PATH)",
             "normalizeManifest,",
@@ -8257,7 +8259,7 @@ SOLANA_ROUTE_MANIFEST_CLI_MARKERS = (
             'counterparty_domain: "3"',
             'verifier_code_hash: hex32("AA")',
             "expected_exports: [7]",
-            "/route manifest production_ready must be true or false/u",
+            "/production_ready must be the boolean true/u",
             "/Solana route-manifest template must not use retired productionReady; use production_ready\\./u",
             "/Solana route-manifest template must not use retired routeId; use route_id\\./u",
             "await assert.rejects(() => stat(outputPath), /ENOENT/u);",
@@ -26277,6 +26279,8 @@ def _phase_success_fragment_required_command_fragments(
     if phase == "contract-smoke":
         if fragment == "sccp_message_bridge_smoke: ok":
             return ("bash scripts/sccp_evm_contract_smoke.sh",)
+        if fragment == "Solana route-manifest accepts only literal production_ready true":
+            return ("scripts/sccp_solana_taira_xor_deploy.test.mjs",)
         if fragment in CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS:
             return ("scripts/sccp_taira_xor_contract.test.mjs",)
     if phase == "dotnet-sdk":

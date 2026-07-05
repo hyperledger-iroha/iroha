@@ -2768,6 +2768,35 @@ test("package SCCP entrypoint and declarations cover public source exports", () 
   );
 });
 
+test("package SCCP exports do not expose TON finality fixture builders", () => {
+  const declarationExports = declarationExportNames();
+  const forbidden = [
+    "sccpBuildTonMessageBundleSourceProofWithDeployment",
+    "sccpTonFixtureValidatorSetHash",
+  ];
+  const packageTexts = [
+    ["src/index.js", INDEX_SOURCE_TEXT],
+    ["src/sccp.js", SCCP_SOURCE_TEXT],
+    ["dist/index.js", DIST_INDEX_TEXT],
+    ["dist/sccp.js", DIST_SCCP_TEXT],
+  ];
+
+  for (const name of forbidden) {
+    assert.equal(
+      declarationExports.has(name),
+      false,
+      `${name} must not be declared as a public API`,
+    );
+    for (const [label, text] of packageTexts) {
+      assert.doesNotMatch(
+        text,
+        new RegExp(`\\b${name}\\b`, "u"),
+        `${name} must not be exported from ${label}`,
+      );
+    }
+  }
+});
+
 test("package dist entrypoint exports Kagemusha recursive spend helpers", () => {
   const declarationExports = declarationExportNames();
   const expected = [

@@ -18464,6 +18464,12 @@ before proof-target errors are grouped.
 Apalache/TLC CFG module-binding diagnostics must stay line-aware,
 so runner-selected CFG ownership and operator-reference failures identify the
 runner case line before module-binding errors are grouped.
+Apalache/TLC CFG constant-binding diagnostics must stay line-aware,
+so runner-selected CFG constant bindings identify the runner case line before
+constant-binding errors are grouped.
+Apalache/TLC CFG trivial-target diagnostics must stay line-aware,
+so runner-selected trivial CFG checks identify the runner case line before
+trivial-target errors are grouped.
 TLC non-mutation expected-failure diagnostics must stay line-aware,
 so non-mutation TLC modes with unexpected `expect_failure=1` identify the
 README or CI command line and the TLC runner case line.
@@ -32256,6 +32262,12 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Apalache/TLC CFG module-binding diagnostics must stay line-aware,
   so runner-selected CFG ownership and operator-reference failures identify
   the runner case line before module-binding errors are grouped.
+  Apalache/TLC CFG constant-binding diagnostics must stay line-aware,
+  so runner-selected CFG constant bindings identify the runner case line before
+  constant-binding errors are grouped.
+  Apalache/TLC CFG trivial-target diagnostics must stay line-aware,
+  so runner-selected trivial CFG checks identify the runner case line before
+  trivial-target errors are grouped.
   TLC non-mutation expected-failure diagnostics must stay line-aware,
   so non-mutation TLC modes with unexpected `expect_failure=1` identify the
   README or CI command line and the TLC runner case line.

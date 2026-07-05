@@ -509,13 +509,13 @@ const normalizeOptionalHex32 = (value, label) => {
 
 const normalizeRequiredBooleanField = (record, key, label) => {
   if (!Object.prototype.hasOwnProperty.call(record, key)) {
-    throw new Error(`${label} is required`);
+    throw new Error(`${label} must be the boolean true`);
   }
   const value = record[key];
-  if (value !== true && value !== false) {
-    throw new Error(`${label} must be true or false`);
+  if (value !== true) {
+    throw new Error(`${label} must be the boolean true`);
   }
-  return value;
+  return true;
 };
 
 const assertNoRetiredFieldAliases = (record, aliases, label) => {
@@ -642,7 +642,7 @@ const normalizeManifest = (template, evidence) => {
   manifest.production_ready = normalizeRequiredBooleanField(
     manifest,
     "production_ready",
-    "route manifest production_ready",
+    "production_ready",
   );
   manifest.network_id_hex = normalizeRequiredString(
     manifest.network_id_hex ?? SOLANA_TESTNET_CHAIN_ID_HEX,
@@ -749,9 +749,6 @@ const normalizeManifest = (template, evidence) => {
     throw new Error(
       "manifest is not the canonical taira_sol_xor Solana testnet route",
     );
-  }
-  if (!manifest.production_ready) {
-    throw new Error("route-manifest refuses to publish production_ready=false");
   }
   return manifest;
 };

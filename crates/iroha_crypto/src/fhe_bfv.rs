@@ -12134,10 +12134,11 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_r
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvCiphertext, BfvError> {
-    let rns_chain = registered_bfv_rns_modulus_chain(params)?;
-    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
     validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
+    let rns_chain = registered_bfv_rns_modulus_chain(params)?;
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
     let (mut c0, mut c1) =
         full_bootstrap_sample_extraction_switch_initial_ciphertext(params, sample);
     for (coefficient_entry, &sample_coefficient) in key
@@ -12177,18 +12178,16 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_ke
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
+    validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        return Err(err);
+    }
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     let decomposition_chain =
         registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
-    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
-        validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
-        validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
-        return Err(err);
-    }
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
-    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
-    validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
     let (mut c0, mut c1) =
         full_bootstrap_sample_extraction_switch_initial_ciphertext(params, sample);
     for (coefficient_entry, &sample_coefficient) in key
@@ -12274,8 +12273,8 @@ pub(crate) fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_outp
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     raw_sample_noise_bound: u128,
 ) -> Result<u128, BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
     if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
         return Err(err);
     }
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
@@ -34243,8 +34242,8 @@ pub fn full_bootstrap_ciphertext_registered_rns_exact_v1(
     bootstrap_key: &BfvBootstrapKey,
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
-    let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
+    let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     Err(full_bootstrap_artifacts_required_error())
 }
 
@@ -34329,8 +34328,8 @@ pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
     bootstrap_key: &BfvBootstrapKey,
     input_bound: u128,
 ) -> Result<u128, BfvError> {
-    let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
+    let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
     validate_exact_residual_bound_within_centered_capacity(
         params,
         input_bound,
@@ -34425,14 +34424,13 @@ pub fn full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_ex
     bootstrap_key: &BfvBootstrapKey,
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     let _decomposition_chain =
         registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
         return Err(err);
     }
-    validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
     Err(full_bootstrap_artifacts_required_error())
 }
 
@@ -34521,12 +34519,12 @@ pub fn bfv_full_bootstrap_bounded_noise_output_bound_v1(
     input_noise_bound: u128,
 ) -> Result<u128, BfvError> {
     validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
-    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
-    let _decomposition_chain =
-        registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
         return Err(err);
     }
+    let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
+    let _decomposition_chain =
+        registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
     validate_bounded_noise_bound_within_decoding_capacity(
         params,

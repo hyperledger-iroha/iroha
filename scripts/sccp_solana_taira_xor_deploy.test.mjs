@@ -117,7 +117,7 @@ const retiredBrowserProverAliases = [
   ["boundProofHash", "bound_proof_hash"],
 ];
 
-test("Solana route-manifest normalizes exact boolean production_ready", () => {
+test("Solana route-manifest accepts only literal production_ready true", () => {
   const manifest = normalizeManifest(validTemplate(), validEvidence());
   assert.equal(manifest.production_ready, true);
   assert.equal(
@@ -195,7 +195,7 @@ test("Solana route-manifest rejects malformed production_ready values", () => {
           validTemplate({ production_ready: value }),
           validEvidence(),
         ),
-      /route manifest production_ready must be true or false/u,
+      /production_ready must be the boolean true/u,
       `accepted malformed production_ready value ${String(value)}`,
     );
   }
@@ -523,7 +523,7 @@ test("Solana route-manifest rejects missing, false, and retired production flags
   delete missing.production_ready;
   assert.throws(
     () => normalizeManifest(missing, validEvidence()),
-    /route manifest production_ready is required/u,
+    /production_ready must be the boolean true/u,
   );
   assert.throws(
     () =>
@@ -531,7 +531,7 @@ test("Solana route-manifest rejects missing, false, and retired production flags
         validTemplate({ production_ready: false }),
         validEvidence(),
       ),
-    /route-manifest refuses to publish production_ready=false/u,
+    /production_ready must be the boolean true/u,
   );
   assert.throws(
     () =>
@@ -562,9 +562,36 @@ test("Solana route-manifest CLI rejects truthy production_ready before writing o
           "--output",
           outputPath,
         ]),
-      /route manifest production_ready must be true or false/u,
+      /production_ready must be the boolean true/u,
     );
     await assert.rejects(() => stat(outputPath), /ENOENT/u);
+  });
+});
+
+test("Solana route-manifest CLI does not overwrite output on malformed production_ready", async () => {
+  await withTempDir(async (dir) => {
+    const templatePath = join(dir, "template.json");
+    const evidencePath = join(dir, "evidence.json");
+    const outputPath = join(dir, "manifest.json");
+    const sentinel = "sentinel:existing-manifest\n";
+    await writeJson(templatePath, validTemplate({ production_ready: "false" }));
+    await writeJson(evidencePath, validEvidence());
+    await writeFile(outputPath, sentinel);
+
+    await assert.rejects(
+      () =>
+        main([
+          "route-manifest",
+          "--template",
+          templatePath,
+          "--evidence",
+          evidencePath,
+          "--output",
+          outputPath,
+        ]),
+      /production_ready must be the boolean true/u,
+    );
+    assert.equal(await readFile(outputPath, "utf8"), sentinel);
   });
 });
 

@@ -26100,6 +26100,51 @@ def test_cfg_trivial_check_operator_errors_rejects_trivial_constraints(
     ]
 
 
+def test_runner_cfg_trivial_check_operator_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "SafetyInvariant == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANTS TypeInvariant SafetyInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = module.display_path(module.APALACHE_RUNNER)
+
+    assert module.runner_cfg_trivial_check_operator_errors(
+        "frontier-fast",
+        module.RunnerCase("frontier-fast", "", 59),
+        tla,
+        cfg,
+        module.APALACHE_RUNNER,
+        "Apalache",
+    ) == [
+        f"Apalache runner {runner} case 'frontier-fast' at line 59: "
+        f"frontier-fast: Apalache cfg {cfg}:3 references INVARIANTS check "
+        f"SafetyInvariant, but {tla}:5 defines it as literal TRUE"
+    ]
+
+
 def test_cfg_trivial_check_operator_errors_rejects_malformed_check_surface(
     tmp_path: Path,
 ) -> None:

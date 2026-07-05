@@ -4,8 +4,8 @@ direction: rtl
 source: docs/source/sorafs_commit_reveal_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 98b24c04757b46996ec0a4a312514b05ec49e7a9d2311cbc881b20d67b9f9042
-source_last_modified: "2026-07-04T15:05:52.498664+00:00"
+source_hash: 1cb8d684ffc7c896c64f6b094090dd0291d5e419b1e173193ca5c4d64f9669fe
+source_last_modified: "2026-07-04T15:39:59.807879+00:00"
 translation_last_reviewed: 2026-07-04
 ---
 
@@ -97,9 +97,9 @@ durable service or contract-backed workflow.
   `limit` (default 50, max 500) while preserving full counts and truncation
   metadata.
 - `iroha::client` and `iroha sorafs moderation ballots
-  list|get|events|commit|reveal|tally` wrap the local readback and signed
-  committee lifecycle endpoints, validating JSON or Norito commit/reveal payloads
-  and submitting canonical Norito bytes to Torii.
+  list|get|no-show-plan|events|commit|reveal|tally` wrap the local readback and
+  signed committee lifecycle endpoints, validating JSON or Norito commit/reveal
+  payloads and submitting canonical Norito bytes to Torii.
 - `iroha sorafs moderation ballots execute|executor-bundle|executor-canary`
   provide local payload-free commit/reveal executor automation and scheduled-job
   bundle/canary evidence without copying private commit or reveal payload files.

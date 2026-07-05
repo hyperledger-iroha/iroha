@@ -172,6 +172,10 @@ def test_builds_payload_free_notification_transport_canary(tmp_path: Path) -> No
         "ai-prescreen-notification-delivery-01",
         "ai-prescreen-notification-delivery-02",
     ]
+    assert [probe["action"] for probe in payload["probes"]] == [
+        "submit_commit",
+        "submit_reveal",
+    ]
     assert payload["payload_bytes_included"] is False
     assert payload["private_payloads_included"] is False
     kind, errors = CHECKER.validate_evidence_payload(payload)

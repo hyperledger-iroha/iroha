@@ -2335,6 +2335,7 @@ CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS = (
     "TRON CLI rejects positional arguments without echoing values",
     "TRON evidence CLI rejects bare valued options before work",
     "deployment doctor rejects legacy or drifted deployer secret network metadata",
+    "Solana route-manifest accepts only literal production_ready true",
     "route manifest draft binds deployment evidence, verifier material, and TAIRA burn-record contract",
     "Solana route-manifest rejects unsafe browser prover module URLs",
     "Solana route-manifest CLI rejects positional arguments without echoing values",
@@ -6349,6 +6350,8 @@ def _phase_success_fragment_required_command_fragments(
     if phase == "contract-smoke":
         if fragment == "sccp_message_bridge_smoke: ok":
             return ("bash scripts/sccp_evm_contract_smoke.sh",)
+        if fragment == "Solana route-manifest accepts only literal production_ready true":
+            return ("scripts/sccp_solana_taira_xor_deploy.test.mjs",)
         if fragment in CONTRACT_SMOKE_NODE_SUCCESS_FRAGMENTS:
             return ("scripts/sccp_taira_xor_contract.test.mjs",)
     if phase == "dotnet-sdk":

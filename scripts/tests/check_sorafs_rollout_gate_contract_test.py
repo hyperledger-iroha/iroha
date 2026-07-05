@@ -11104,7 +11104,8 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert "test_notification_dedup_key_must_bind_delivery_id" in checker_test
     assert (
         "Each probe's dedup key must also be unique, bound to its reviewed "
-        "delivery ID, and accompanied by a shipped `commit` or `reveal` action"
+        "delivery ID, and accompanied by a shipped `submit_commit` or "
+        "`submit_reveal` action"
         in normalized_plan
     )
     assert "test_executor_artifact_count_must_match_unique_artifacts" in checker_test

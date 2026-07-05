@@ -1816,6 +1816,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Apalache/TLC CFG proof-target diagnostics must stay line-aware",
     "Apalache/TLC CFG module-binding diagnostics must stay line-aware",
     "Apalache/TLC CFG constant-binding diagnostics must stay line-aware",
+    "Apalache/TLC CFG trivial-target diagnostics must stay line-aware",
     "TLC non-mutation expected-failure diagnostics must stay line-aware",
     "Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands",
     "Formal workflow triggers must keep the checked PR and scheduled/manual surfaces",
@@ -23493,6 +23494,25 @@ def cfg_trivial_check_operator_errors(
     return errors
 
 
+def runner_cfg_trivial_check_operator_errors(
+    mode: str,
+    case: RunnerCase,
+    module_path: Path,
+    cfg_path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return trivial CFG target errors with runner case source context."""
+
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in cfg_trivial_check_operator_errors(
+            mode, module_path, cfg_path, runner_name
+        )
+    ]
+
+
 def unreferenced_formal_file_errors(referenced_paths: set[Path]) -> list[str]:
     referenced_formal_paths = {
         path for path in referenced_paths if path.suffix in FORMAL_FILE_SUFFIXES
@@ -28944,8 +28964,13 @@ def main() -> int:
                     )
                 )
                 reference_errors.extend(
-                    cfg_trivial_check_operator_errors(
-                        mode, spec_files[0], cfg_file, "Apalache"
+                    runner_cfg_trivial_check_operator_errors(
+                        mode,
+                        case,
+                        spec_files[0],
+                        cfg_file,
+                        APALACHE_RUNNER,
+                        "Apalache",
                     )
                 )
                 reference_errors.extend(
@@ -29432,8 +29457,13 @@ def main() -> int:
                         )
                     )
                     tlc_reference_errors.extend(
-                        cfg_trivial_check_operator_errors(
-                            mode, module_files[0], cfg_file, "TLC"
+                        runner_cfg_trivial_check_operator_errors(
+                            mode,
+                            case,
+                            module_files[0],
+                            cfg_file,
+                            TLC_RUNNER,
+                            "TLC",
                         )
                     )
                     tlc_reference_errors.extend(
