@@ -152,6 +152,8 @@ def _read_program_bytes_file(path: Path, *, label: str) -> bytes:
 def parse_program_bytes_file(value: str, *, label: str) -> bytes:
     """Parse non-empty Solana program bytes from a raw binary file."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     path = Path(value).expanduser()
     raw = _read_program_bytes_file(path, label=label)
     if not raw:
@@ -283,6 +285,8 @@ def _require_distinct_hash_roles(
 
 
 def _require_solana_program_id(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise ValueError(f"{label} metadata must be an exact string") from None
     try:
         return normalize_solana_program_id(value, label=label)
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -714,17 +718,19 @@ def solana_route_canary_evidence_hash(
 
 
 def _toml_string(value: str) -> str:
+    if type(value) is not str:
+        raise TypeError("unsupported TOML string value")
     return json.dumps(value)
 
 
 def _toml_line(key: str, value: object) -> str:
-    if isinstance(value, bool):
+    if type(value) is bool:
         rendered = "true" if value else "false"
-    elif isinstance(value, int):
+    elif type(value) is int:
         rendered = str(value)
-    elif isinstance(value, str):
+    elif type(value) is str:
         rendered = _toml_string(value)
-    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+    elif type(value) is list and all(type(item) is str for item in value):
         rendered = "[" + ", ".join(_toml_string(item) for item in value) + "]"
     else:
         raise TypeError(f"unsupported TOML value for {key}")
@@ -732,8 +738,24 @@ def _toml_line(key: str, value: object) -> str:
 
 
 def _destination_rollout_lines(args: argparse.Namespace) -> Iterable[str]:
-    program_account_data = solana_upgradeable_program_account_data(args.programdata_address)
-    programdata_metadata = solana_immutable_programdata_metadata(args.programdata_slot)
+    programdata_address = _require_solana_program_id(
+        args.programdata_address,
+        label="programdata_address",
+    )
+    programdata_slot = _require_positive_u64(
+        args.programdata_slot,
+        label="programdata_slot",
+    )
+    program_account_context_slot = _require_positive_u64(
+        args.program_account_context_slot,
+        label="program_account_context_slot",
+    )
+    programdata_account_context_slot = _require_positive_u64(
+        args.programdata_account_context_slot,
+        label="programdata_account_context_slot",
+    )
+    program_account_data = solana_upgradeable_program_account_data(programdata_address)
+    programdata_metadata = solana_immutable_programdata_metadata(programdata_slot)
     verifier_program_bytes_base64 = getattr(args, "verifier_program_bytes_base64_text", None)
     if verifier_program_bytes_base64 is None:
         verifier_program_bytes_base64 = base64.b64encode(
@@ -759,16 +781,16 @@ def _destination_rollout_lines(args: argparse.Namespace) -> Iterable[str]:
         "solana_program_account_data_base64",
         base64.b64encode(program_account_data).decode("ascii"),
     )
-    yield _toml_line("solana_programdata_address", str(args.programdata_address))
-    yield _toml_line("solana_programdata_slot", str(args.programdata_slot))
-    yield _toml_line("solana_expected_programdata_slot", str(args.programdata_slot))
+    yield _toml_line("solana_programdata_address", programdata_address)
+    yield _toml_line("solana_programdata_slot", str(programdata_slot))
+    yield _toml_line("solana_expected_programdata_slot", str(programdata_slot))
     yield _toml_line(
         "solana_program_account_context_slot",
-        str(args.program_account_context_slot),
+        str(program_account_context_slot),
     )
     yield _toml_line(
         "solana_programdata_account_context_slot",
-        str(args.programdata_account_context_slot),
+        str(programdata_account_context_slot),
     )
     yield _toml_line(
         "solana_programdata_metadata_blake2b256",
@@ -1148,10 +1170,26 @@ def render_toml(
         args,
         output="toml",
     )
+    programdata_address = _require_solana_program_id(
+        args.programdata_address,
+        label="programdata_address",
+    )
+    programdata_slot = _require_positive_u64(
+        args.programdata_slot,
+        label="programdata_slot",
+    )
+    program_account_context_slot = _require_positive_u64(
+        args.program_account_context_slot,
+        label="program_account_context_slot",
+    )
+    programdata_account_context_slot = _require_positive_u64(
+        args.programdata_account_context_slot,
+        label="programdata_account_context_slot",
+    )
     program_account_data_base64 = base64.b64encode(
-        solana_upgradeable_program_account_data(args.programdata_address)
+        solana_upgradeable_program_account_data(programdata_address)
     ).decode("ascii")
-    programdata_metadata = solana_immutable_programdata_metadata(args.programdata_slot)
+    programdata_metadata = solana_immutable_programdata_metadata(programdata_slot)
     programdata_metadata_base64 = base64.b64encode(programdata_metadata).decode("ascii")
     programdata_metadata_hash = hashlib.blake2b(
         programdata_metadata,
@@ -1168,15 +1206,15 @@ def render_toml(
         "# sccp_solana_program_account_data_base64 = "
         + json.dumps(program_account_data_base64),
         "# sccp_solana_programdata_address = "
-        + json.dumps(str(args.programdata_address)),
+        + json.dumps(programdata_address),
         "# sccp_solana_programdata_slot = "
-        + json.dumps(str(args.programdata_slot)),
+        + json.dumps(str(programdata_slot)),
         "# sccp_solana_expected_programdata_slot = "
-        + json.dumps(str(args.programdata_slot)),
+        + json.dumps(str(programdata_slot)),
         "# sccp_solana_program_account_context_slot = "
-        + json.dumps(str(args.program_account_context_slot)),
+        + json.dumps(str(program_account_context_slot)),
         "# sccp_solana_programdata_account_context_slot = "
-        + json.dumps(str(args.programdata_account_context_slot)),
+        + json.dumps(str(programdata_account_context_slot)),
         "# sccp_solana_programdata_metadata_blake2b256 = "
         + json.dumps(_hex(programdata_metadata_hash)),
         "# sccp_solana_programdata_metadata_base64 = "

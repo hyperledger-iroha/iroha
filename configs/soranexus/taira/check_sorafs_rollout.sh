@@ -14,6 +14,7 @@ ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
 ROLLOUT_CANARY_STATUS_TIMEOUT_MS="${ROLLOUT_CANARY_STATUS_TIMEOUT_MS:-120000}"
 ROLLOUT_CANARY_GAS_ASSET_ID="${ROLLOUT_CANARY_GAS_ASSET_ID:-6TEAJqbb8oEPmLncoNiMRbLEK6tw}"
+ROLLOUT_CANARY_SKIP_FAUCET="${ROLLOUT_CANARY_SKIP_FAUCET:-auto}"
 DECLARED_CAPACITY_GIB="${DECLARED_CAPACITY_GIB:-1}"
 STAKE_AMOUNT="${STAKE_AMOUNT:-1}"
 DECLARATION_VALID_BLOCKS="${DECLARATION_VALID_BLOCKS:-10000}"
@@ -60,7 +61,10 @@ When `--write-config` is omitted, the script bootstraps a runtime-only canary
 config automatically, preferring `/run/secrets/taira-canary-client.toml` when
 that directory is writable and otherwise falling back to the local temp
 directory. The bootstrap onboards a fresh ordinary account on Taira before
-running the capacity declaration canary.
+running the capacity declaration canary. When a gas asset is configured, the
+bootstrap passes that asset to onboarding and skips faucet funding by default,
+so the canary proves the sponsored-fee path directly. Set
+`ROLLOUT_CANARY_SKIP_FAUCET=0` to require an initial faucet claim.
 When `--write-config` is supplied, that runtime-only signer config is read
 as-is and is never overwritten by bootstrap.
 Use `--skip-write-canary` only for read-only validation.
@@ -92,6 +96,24 @@ import sys
 
 print(os.path.realpath(sys.argv[1]))
 PY
+}
+
+should_skip_canary_faucet() {
+  case "$ROLLOUT_CANARY_SKIP_FAUCET" in
+    auto|"")
+      [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]
+      ;;
+    1|true|TRUE|yes|YES)
+      return 0
+      ;;
+    0|false|FALSE|no|NO)
+      return 1
+      ;;
+    *)
+      echo "ROLLOUT_CANARY_SKIP_FAUCET must be auto, 1, 0, true, false, yes, or no" >&2
+      exit 1
+      ;;
+  esac
 }
 
 while [[ $# -gt 0 ]]; do
@@ -463,9 +485,56 @@ canonical_height = first_int(
     payload.get("canonical_height"),
     dig(payload, "canonical", "height"),
 )
+canonical_phase = str(
+    dig(payload, "canonical", "phase") or payload.get("canonical_phase") or ""
+).strip().lower()
+canonical_view = first_int(
+    payload.get("canonical_view"),
+    dig(payload, "canonical", "view"),
+    dig(payload, "membership", "view"),
+)
+membership_height = first_int(
+    payload.get("membership_height"),
+    dig(payload, "membership", "height"),
+)
+worker_stage = str(
+    dig(payload, "worker_loop", "stage") or payload.get("worker_stage") or ""
+).strip().lower()
 validator_set_len = first_int(
     payload.get("commit_qc_validator_set_len"),
     dig(payload, "commit_qc", "validator_set_len"),
+)
+tx_queue_depth = first_int(
+    payload.get("tx_queue_depth"),
+    dig(payload, "tx_queue", "depth"),
+)
+tx_queue_capacity = first_int(
+    payload.get("tx_queue_capacity"),
+    dig(payload, "tx_queue", "capacity"),
+)
+tx_queue_saturated_by_age = payload.get("tx_queue_saturated_by_age")
+if not isinstance(tx_queue_saturated_by_age, bool):
+    tx_queue_saturated_by_age = dig(payload, "tx_queue", "saturated_by_age")
+if not isinstance(tx_queue_saturated_by_age, bool):
+    tx_queue_saturated_by_age = None
+tx_queue_oldest_queued_age_ms = first_int(
+    payload.get("tx_queue_oldest_queued_age_ms"),
+    dig(payload, "tx_queue", "oldest_queued_age_ms"),
+)
+view_change_last_cause = dig(payload, "view_change_causes", "last_cause")
+canonical_rbc_status = str(
+    dig(payload, "canonical", "rbc_status")
+    or payload.get("canonical_rbc_status")
+    or ""
+).strip().lower()
+canonical_pending_finality = (
+    dig(payload, "canonical", "pending_finality")
+    if isinstance(dig(payload, "canonical"), dict)
+    else payload.get("canonical_pending_finality")
+)
+pending_rbc_sessions = first_int(
+    payload.get("pending_rbc_sessions"),
+    dig(payload, "pending_rbc", "sessions"),
 )
 
 if commit_qc_height is None or commit_qc_height < 1:
@@ -496,6 +565,60 @@ if validator_set_len < 4:
         "sumeragi/status reported only "
         f"{validator_set_len} validators in the commit QC set; Taira rollout expects at least 4"
     )
+if (
+    membership_height is not None
+    and commit_qc_height is not None
+    and membership_height > commit_qc_height
+):
+    cause = view_change_last_cause or "unknown"
+    pending_finality_present = canonical_pending_finality not in (None, False, "", "false", "0")
+    rbc_waiting = canonical_rbc_status not in (
+        "",
+        "0",
+        "false",
+        "none",
+        "null",
+        "idle",
+        "disabled",
+        "ready",
+        "complete",
+        "completed",
+        "delivered",
+    )
+    one_ahead_prepare = (
+        canonical_phase == "prepare"
+        and canonical_height == membership_height == commit_qc_height + 1
+        and highest_qc_height == commit_qc_height
+        and locked_qc_height == commit_qc_height
+    )
+    stalled_one_ahead_idle = (
+        one_ahead_prepare
+        and worker_stage == "idle"
+        and canonical_view is not None
+        and canonical_view > 1
+    )
+    if not (
+        one_ahead_prepare
+        and not stalled_one_ahead_idle
+        and not pending_finality_present
+        and not rbc_waiting
+        and (pending_rbc_sessions in (None, 0))
+        and cause not in ("missing_qc", "quorum_timeout", "stake_quorum_timeout")
+        and tx_queue_saturated_by_age is not True
+    ):
+        raise SystemExit(
+            "sumeragi/status reports a finality fault "
+            f"({cause}) with membership height ahead of commit QC "
+            f"({membership_height} > {commit_qc_height}); "
+            f"queue depth={tx_queue_depth!r}, capacity={tx_queue_capacity!r}, "
+            f"saturated_by_age={tx_queue_saturated_by_age!r}, "
+            f"oldest_queued_age_ms={tx_queue_oldest_queued_age_ms!r}, "
+            f"phase={canonical_phase!r}, worker_stage={worker_stage!r}, "
+            f"canonical_view={canonical_view!r}, "
+            f"pending_finality={canonical_pending_finality!r}, "
+            f"rbc_status={canonical_rbc_status!r}, "
+            f"pending_rbc_sessions={pending_rbc_sessions!r}"
+        )
 PY
 }
 
@@ -611,6 +734,12 @@ ensure_write_canary_config() {
 
   if [[ -n "$IROHA_BIN" ]]; then
     bootstrap_cmd+=(--iroha-bin "$IROHA_BIN")
+  fi
+  if [[ -n "$ROLLOUT_CANARY_GAS_ASSET_ID" ]]; then
+    bootstrap_cmd+=(--gas-asset-id "$ROLLOUT_CANARY_GAS_ASSET_ID")
+  fi
+  if should_skip_canary_faucet; then
+    bootstrap_cmd+=(--skip-faucet)
   fi
 
   echo "==> canary bootstrap: ${WRITE_CONFIG}" >&2

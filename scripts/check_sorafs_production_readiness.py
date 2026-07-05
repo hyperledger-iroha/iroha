@@ -2555,6 +2555,48 @@ def validate_payload_free_object_list_string_field_policies(
                 )
 
 
+def validate_payload_free_deployment_context_metadata(
+    path: str,
+    value: Any,
+    errors: list[str],
+) -> None:
+    """Reject non-production deployment contexts in payload-free metadata."""
+
+    if not isinstance(value, dict):
+        return
+    deployment_id = canonical_string(value.get("deployment_id"))
+    if deployment_id is not None:
+        require_production_deployment_id_value(
+            deployment_id,
+            errors,
+            f"{path}.deployment_id",
+        )
+    environment = canonical_string(value.get("environment"))
+    if environment is not None and not is_production_ready_environment(environment):
+        errors.append(f"{path}.environment must be production")
+
+
+def validate_payload_free_object_list_deployment_context_metadata(
+    field: str,
+    value: Any,
+    schema: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Reject non-production deployment contexts in object-list metadata."""
+
+    string_fields = schema.get("strings", frozenset())
+    if not {"deployment_id", "environment"} <= set(string_fields):
+        return
+    if not isinstance(value, list):
+        return
+    for index, item in enumerate(value):
+        validate_payload_free_deployment_context_metadata(
+            f"{field}[{index}]",
+            item,
+            errors,
+        )
+
+
 def validate_payload_free_string_list_count_binding(
     gate: GateSummaryKind,
     payload: dict[str, Any],
@@ -3765,6 +3807,12 @@ def validate_payload_free_summary_metadata(
                 value,
                 errors,
             )
+            validate_payload_free_object_list_deployment_context_metadata(
+                field,
+                value,
+                object_list_schema,
+                errors,
+            )
             continue
         binding_fields = PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS.get(field)
         if binding_fields is not None:
@@ -3838,6 +3886,7 @@ def validate_payload_free_summary_metadata(
         object_fields = PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.get(field)
         if object_fields is not None:
             validate_payload_free_object_metadata(field, value, object_fields, errors)
+            validate_payload_free_deployment_context_metadata(field, value, errors)
             continue
         errors.append(f"{field} validator is not configured for `{gate.name}`")
     validate_payload_free_cross_metadata_bindings(gate, payload, errors)

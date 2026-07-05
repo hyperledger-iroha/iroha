@@ -8611,6 +8611,76 @@ def test_deployment_context_metadata_entries_are_validated(
     assert "runtime-only-key-material" not in errors
 
 
+def test_payload_free_deployment_context_rejects_nonproduction_without_echo(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (
+            "moderation_panel",
+            "moderation-panel-staging-a",
+            ENVIRONMENT,
+            "deployment_context.deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "moderation-panel-staging-a",
+        ),
+        (
+            "appeal_finance",
+            "appeal-finance-staging-a",
+            ENVIRONMENT,
+            "valid_multi_peer_runs[0].deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "appeal-finance-staging-a",
+        ),
+        (
+            "hedging_billing",
+            DEPLOYMENT_ID,
+            "dev",
+            "valid_billing_cycles[0].environment must be production",
+            "dev",
+        ),
+        (
+            "reserve_rent",
+            "reserve-notproductionready-a",
+            ENVIRONMENT,
+            "valid_provider_bakes[0].deployment_id must not contain "
+            "non-reviewed deployment markers ['notproductionready']",
+            "reserve-notproductionready-a",
+        ),
+    ]
+
+    for index, (
+        gate_name,
+        deployment_id,
+        environment,
+        expected_error,
+        raw_label,
+    ) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}"
+        root.mkdir()
+        payload = gate_summary(
+            gate_name,
+            deployment_id=deployment_id,
+            environment=environment,
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert expected_error in errors
+        assert raw_label not in errors
+
+
 def test_object_list_metadata_deployment_context_mismatch_fails(
     tmp_path: Path,
 ) -> None:

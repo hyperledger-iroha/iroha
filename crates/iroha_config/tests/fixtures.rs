@@ -919,6 +919,11 @@ fn minimal_config_snapshot() {
                         cycle_seconds: 604800,
                         publish_delay_seconds: 3600,
                     },
+                    evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule {
+                        enabled: false,
+                        cycle_seconds: 86400,
+                        publish_delay_seconds: 3600,
+                    },
                     reserve_lifecycle: SorafsReserveLifecycleSchedule {
                         enabled: false,
                         interval_seconds: 3600,

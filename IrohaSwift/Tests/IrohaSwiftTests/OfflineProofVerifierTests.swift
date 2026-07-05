@@ -86,7 +86,7 @@ final class OfflineProofVerifierTests: XCTestCase {
 
     func testCounterpartyVerifierRoutesIosAppAttestThroughIosVerifier() throws {
         let binding = try ToriiOfflineDeviceBinding(
-            platform: "ios-appattest",
+            platform: "ios",
             attestationKeyId: "attestation-key",
             deviceId: "ios-device",
             offlinePublicKey: "offline-public-key",
@@ -110,7 +110,7 @@ final class OfflineProofVerifierTests: XCTestCase {
     func testCounterpartyVerifierRoutesIosAppAttestProofThroughIosVerifier() throws {
         let keyId = Data(repeating: 0x01, count: 32).base64EncodedString()
         let binding = try ToriiOfflineDeviceBinding(
-            platform: "ios-appattest",
+            platform: "ios",
             attestationKeyId: keyId,
             deviceId: "ios-device",
             offlinePublicKey: "offline-public-key",
@@ -137,7 +137,7 @@ final class OfflineProofVerifierTests: XCTestCase {
     }
 
     func testCounterpartyVerifierRejectsRemovedPlatformAliasesBeforeDispatch() throws {
-        for platform in ["ios-app-attest", "android-keymint"] {
+        for platform in ["ios-appattest", "ios-app-attest", "android-keymint"] {
             XCTAssertThrowsError(try ToriiOfflineDeviceBinding(
                 platform: platform,
                 attestationKeyId: "attestation-key",
@@ -310,7 +310,7 @@ final class OfflineProofVerifierTests: XCTestCase {
         }
     }
 
-    func testIosVerifierRejectsMixedIosPlatformPairBeforeProofParsing() throws {
+    func testIosVerifierAcceptsIosBindingWithAppAttestProofPlatformBeforeAssertionParsing() throws {
         let keyId = Data(repeating: 0x02, count: 32).base64EncodedString()
         let binding = try ToriiOfflineDeviceBinding(
             platform: "ios",
@@ -335,7 +335,7 @@ final class OfflineProofVerifierTests: XCTestCase {
         ) { error in
             XCTAssertEqual(
                 (error as? OfflineProofVerifierError)?.errorDescription,
-                "Offline device proof does not match the device binding."
+                "Offline device proof assertion is invalid."
             )
         }
     }

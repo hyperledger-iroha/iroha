@@ -12,6 +12,7 @@
 //   variable such as SCCP_BSC_DEPLOYER_PRIVATE_KEY.
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import {
   createPublicKey,
   verify as verifyDetachedSignature,
@@ -745,7 +746,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material toolchain-fingerprint [--transcript <reproducible-build-transcript.json>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out <json>]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material transcript-template --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] [--witness-wasm <circuit.wasm>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out-dir <transcript-dir>] [--overwrite true]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material materialize --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] [--witness-wasm <circuit.wasm>] --trusted-setup-transcript <json> --reproducible-build-transcript <json> [--snarkjs-bin snarkjs] [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
-	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test --manifest <groth16-material.manifest.json> [--witness-wasm <circuit.wasm>] [--snarkjs-bin snarkjs] [--allow-unready-candidate true|--allow-unready-mainnet-candidate true] [--out <proof-self-test.json>]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test --manifest <groth16-material.manifest.json> [--witness-wasm <circuit.wasm>] [--snarkjs-bin snarkjs] [--out <proof-self-test.json>]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material evidence-template --manifest <candidate-groth16-material.manifest.json> [--out-dir <review-evidence-dir>] [--overwrite true]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-request --manifest <candidate-groth16-material.manifest.json> --semantic-review-evidence <semantic-review-evidence.json> --circuit-security-audit-evidence <circuit-security-audit-evidence.json> [--out <attestation-request.json>]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material handoff-bundle --manifest <candidate-groth16-material.manifest.json> [--transcript-template-package <json>] [--evidence-template-package <json>] [--request <attestation-request.json>] [--out <handoff.json>]
@@ -768,7 +769,7 @@ has installed its temporary dependencies, or install equivalent local packages.
 This helper writes only public deployment evidence and public prover-bundle
 metadata. It reads deployer key material only from the named environment
 variable at runtime and never writes it. Diagnostic verifier material is refused
-by deploy unless --allow-diagnostic-verifier true is supplied explicitly.`;
+by deploy; production deployments must use non-diagnostic verifier material.`;
 }
 
 const COMMAND_HELP = Object.freeze({
@@ -783,7 +784,7 @@ NODE_PATH. This command does not broadcast transactions.`,
 Deploys the BSC SCCP token, bridge, source bridge, and verifier contracts and
 writes public deployment evidence. The deployer key is read only from the named
 environment variable at runtime and is never written to disk. Diagnostic
-verifier material is refused unless explicitly allowed for non-production use.`,
+verifier material is always refused; use production verifier material.`,
   evidence: `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --bsc-network testnet|mainnet --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
 
@@ -819,11 +820,10 @@ negative-test surfaces. The report is public and contains only file hashes and
 marker evidence.`,
   "groth16-material": `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material generate --bsc-network testnet --ptau <phase2.ptau> [--out-dir output/sccp-bsc-production/groth16-material/testnet] [--circom-bin circom2] [--snarkjs-bin snarkjs]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material generate --bsc-network testnet --create-local-ptau-power 8 --allow-local-testnet-setup true [--out-dir output/sccp-bsc-production/groth16-material/testnet]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material toolchain-fingerprint [--transcript <reproducible-build-transcript.json>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out <json>]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material transcript-template --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] [--witness-wasm <circuit.wasm>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out-dir <transcript-dir>] [--overwrite true]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material materialize --bsc-network testnet|mainnet --r1cs <file.r1cs> --zkey <file.zkey> --ptau <powersOfTau28_hez_final_22.ptau> --snarkjs-verifier-key <verification_key.json> [--circuit-source <full-message.circom>] [--witness-wasm <circuit.wasm>] --trusted-setup-transcript <json> --reproducible-build-transcript <json> [--snarkjs-bin snarkjs] [--out-dir ${DEFAULT_NATIVE_EVM_PROVER_ARTIFACT_ROOT}/testnet]
-  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test --manifest <groth16-material.manifest.json> [--witness-wasm <circuit.wasm>] [--snarkjs-bin snarkjs] [--allow-unready-candidate true|--allow-unready-mainnet-candidate true] [--out <proof-self-test.json>]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material proof-self-test --manifest <groth16-material.manifest.json> [--witness-wasm <circuit.wasm>] [--snarkjs-bin snarkjs] [--out <proof-self-test.json>]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material evidence-template --manifest <candidate-groth16-material.manifest.json> [--out-dir <review-evidence-dir>] [--overwrite true]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material attestation-request --manifest <candidate-groth16-material.manifest.json> --semantic-review-evidence <semantic-review-evidence.json> --circuit-security-audit-evidence <circuit-security-audit-evidence.json> [--out <attestation-request.json>]
   node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material handoff-bundle --manifest <candidate-groth16-material.manifest.json> [--transcript-template-package <json>] [--evidence-template-package <json>] [--request <attestation-request.json>] [--out <handoff.json>]
@@ -852,11 +852,9 @@ transcript, signature, and
 trusted-signer readiness without writing outputs; and
 finalize-attestations refuses productionReady output unless every signed
 attestation matches the request package and trusted signer policy.
-proof-self-test requires productionReady material by default;
---allow-unready-candidate true only refreshes testnet candidate evidence, while
---allow-unready-mainnet-candidate true is the separate explicit opt-in for
-mainnet candidate evidence. Neither mode makes candidate material
-production-ready.`,
+proof-self-test requires productionReady material; the previous unready
+candidate refresh flags were removed so public proof-self-test reports cannot
+be emitted from blocked material.`,
   "route-config": `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
 
@@ -901,20 +899,137 @@ const isHelpToken = (token) =>
 
 const trim = (value) => String(value ?? "").trim();
 
-function parseArgs(argv) {
+const HELP_OPTION = "help";
+const CLI_OPTION_PATTERN = /--([A-Za-z][A-Za-z0-9-]*)/gu;
+
+const optionsFromCommandHelp = (command) =>
+  new Set(
+    [
+      ...[...(COMMAND_HELP[command] ?? "").matchAll(CLI_OPTION_PATTERN)].map(
+        (match) => match[1],
+      ),
+      HELP_OPTION,
+    ].filter(Boolean),
+  );
+
+const EXTRA_COMMAND_OPTIONS = Object.freeze({
+  deploy: Object.freeze([
+    "confirm-testnet",
+    "allow-local-rpc",
+    "allow-diagnostic-verifier",
+  ]),
+  evidence: Object.freeze(["allow-local-rpc"]),
+  "route-manifest": Object.freeze([
+    "bsc-network",
+    "deployment-evidence",
+    "live-evidence",
+    "native-evm-prover-bundle",
+    "bsc-native-prover-bundle",
+    "bsc-native-evm-prover-bundle",
+    "destinationBrowserProverManifest",
+    "destination-prover-manifest",
+    "sourceBrowserProverManifest",
+    "source-prover-manifest",
+    "prover-artifact-hash",
+    "circuit-artifact-hash",
+    "vk-backend",
+    "vk-name",
+  ]),
+  "native-prover-bundle": Object.freeze(["evidence", "deployment-evidence"]),
+  "source-parity-attestation": Object.freeze([]),
+  "route-config": Object.freeze(["allow-unready"]),
+  requirements: Object.freeze([]),
+});
+
+const COMMAND_OPTION_ALLOWLISTS = Object.freeze(
+  Object.fromEntries(
+    Object.keys(COMMAND_HELP).map((command) => {
+      const allowlist = optionsFromCommandHelp(command);
+      for (const option of EXTRA_COMMAND_OPTIONS[command] ?? []) {
+        allowlist.add(option);
+      }
+      return [command, allowlist];
+    }),
+  ),
+);
+
+const BOOLEAN_COMMAND_OPTIONS = Object.freeze({
+  deploy: new Set([
+    "broadcast",
+    "confirm-mainnet",
+    "allow-local-rpc",
+    "allow-diagnostic-verifier",
+    HELP_OPTION,
+  ]),
+  "route-manifest": new Set([
+    "production-ready",
+    "full-toml-ready",
+    "live-readback-checked",
+    "confirm-mainnet",
+    HELP_OPTION,
+  ]),
+  "publish-route-manifest": new Set(["submit", "wait-for-commit", HELP_OPTION]),
+  "publish-burn-record-vk": new Set(["submit", "wait-for-commit", HELP_OPTION]),
+});
+
+const OPTIONAL_VALUE_COMMAND_OPTIONS = Object.freeze({
+  "route-config": new Set(["write-offline-full-toml-evidence"]),
+});
+
+function assertKnownCommand(command) {
+  if (!hasOwn(COMMAND_HELP, command)) {
+    throw new Error("Unknown command.");
+  }
+}
+
+function assertKnownOption(command, key) {
+  if (!COMMAND_OPTION_ALLOWLISTS[command]?.has(key)) {
+    throw new Error("Unknown option.");
+  }
+}
+
+function parseArgs(command, argv) {
   const args = {};
+  const booleanOptions = BOOLEAN_COMMAND_OPTIONS[command] ?? new Set([HELP_OPTION]);
+  const optionalValueOptions =
+    OPTIONAL_VALUE_COMMAND_OPTIONS[command] ?? new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
-    if (!token.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${token}`);
+    if (token === "-h") {
+      if (hasOwn(args, HELP_OPTION)) {
+        throw new Error("Option must be specified at most once.");
+      }
+      args[HELP_OPTION] = "true";
+      continue;
     }
-    const key = token.slice(2);
+    if (!token.startsWith("--")) {
+      throw new Error("Unexpected positional argument.");
+    }
+    const equalsIndex = token.indexOf("=");
+    const key =
+      equalsIndex === -1 ? token.slice(2) : token.slice(2, equalsIndex);
+    assertKnownOption(command, key);
     if (hasOwn(args, key)) {
-      throw new Error(`Duplicate option: --${key}`);
+      throw new Error("Option must be specified at most once.");
+    }
+    if (key === HELP_OPTION) {
+      if (equalsIndex !== -1) {
+        throw new Error("Help option must not have a value.");
+      }
+      args[key] = "true";
+      continue;
+    }
+    if (equalsIndex !== -1) {
+      args[key] = token.slice(equalsIndex + 1);
+      continue;
     }
     const next = argv[index + 1];
     if (!next || next.startsWith("--")) {
-      args[key] = "true";
+      if (booleanOptions.has(key) || optionalValueOptions.has(key)) {
+        args[key] = "true";
+      } else {
+        throw new Error(`--${key} must be specified with an explicit value.`);
+      }
     } else {
       args[key] = next;
       index += 1;
@@ -931,27 +1046,29 @@ export function parseBoolean(value, label = "boolean option") {
 }
 
 export function normalizeBscNetworkProfile(value = "testnet") {
-  const normalized = trim(value || "testnet")
-    .toLowerCase()
-    .replace(/_/gu, "-");
-  if (
-    !normalized ||
-    ["testnet", "bsc-testnet", "chapel", "bsc-chapel"].includes(normalized)
-  ) {
+  const candidate = value === undefined || value === null ? "testnet" : value;
+  if (candidate === "testnet") {
     return BSC_NETWORK_PROFILES.testnet;
   }
-  if (["mainnet", "bsc-mainnet", "bnb-mainnet", "bsc"].includes(normalized)) {
+  if (candidate === "mainnet") {
     return BSC_NETWORK_PROFILES.mainnet;
   }
-  throw new Error("--bsc-network must be testnet or mainnet.");
+  throw new Error("--bsc-network must be exactly testnet or mainnet.");
+}
+
+function normalizeBscChainProfile(value, label = "BSC chain") {
+  if (value === BSC_NETWORK_PROFILES.testnet.chain) {
+    return BSC_NETWORK_PROFILES.testnet;
+  }
+  if (value === BSC_NETWORK_PROFILES.mainnet.chain) {
+    return BSC_NETWORK_PROFILES.mainnet;
+  }
+  throw new Error(`${label} must be bsc-testnet or bsc-mainnet.`);
 }
 
 const bscNetworkProfileFromOptions = (options = {}) =>
   normalizeBscNetworkProfile(
-    ownValue(options, "bsc-network") ??
-      ownValue(options, "network") ??
-      process.env.SCCP_BSC_NETWORK ??
-      "testnet",
+    ownValue(options, "bsc-network") ?? "testnet",
   );
 
 const productionRequirementInput = ({
@@ -2115,11 +2232,12 @@ async function readBscRouteBrowserProverManifestRef(
   if (!isRecord(manifest)) {
     throw new Error(`--${optionKey} must contain a JSON object.`);
   }
+  const label = `${direction} browser prover manifest`;
+  assertNoRetiredBscNetworkAlias(manifest, label);
   const reason = unsafeSecretReason(manifest, `--${optionKey}`);
   if (reason) {
     throw new Error(reason);
   }
-  const label = `${direction} browser prover manifest`;
   const schema = readRequiredString(manifest, ["schema"], `${label}.schema`);
   if (schema !== BSC_BROWSER_PROVER_MANIFEST_SCHEMA) {
     throw new Error(
@@ -2141,7 +2259,7 @@ async function readBscRouteBrowserProverManifestRef(
   }
   const bscNetwork = readRequiredString(
     manifest,
-    ["bscNetwork", "bsc_network", "network"],
+    ["bscNetwork", "bsc_network"],
     `${label}.bscNetwork`,
   );
   if (normalizeBscTestnetKey(bscNetwork, `${label}.bscNetwork`) !== profile.key) {
@@ -2942,6 +3060,25 @@ function ownArrayValues(value) {
   return values;
 }
 
+function bscNetworkAliasProblem(record, label) {
+  if (!hasOwn(record, "network")) {
+    return "";
+  }
+  return `${label} network alias was removed; use bscNetwork.`;
+}
+
+function bscNetworkAliasProblems(record, label) {
+  const problem = bscNetworkAliasProblem(record, label);
+  return problem ? [problem] : [];
+}
+
+function assertNoRetiredBscNetworkAlias(record, label) {
+  const problem = bscNetworkAliasProblem(record, label);
+  if (problem) {
+    throw new Error(problem);
+  }
+}
+
 function hasAnyOwnManifestKey(record, keys) {
   return isRecord(record) && keys.some((key) => hasOwn(record, key));
 }
@@ -3276,6 +3413,10 @@ function offlineFullTomlEvidenceProductionProblems(record, label) {
   }
 
   const problems = [];
+  const retiredNetworkAlias = bscNetworkAliasProblem(record, label);
+  if (retiredNetworkAlias) {
+    problems.push(retiredNetworkAlias);
+  }
   const forbiddenPayloadField = offlineFullTomlEvidenceForbiddenPayloadField(
     record,
     label,
@@ -3328,14 +3469,17 @@ function offlineFullTomlEvidenceProductionProblems(record, label) {
     }
   }
 
-  const networkText =
-    readFirstString(record, "bscNetwork", "bsc_network", "network") ||
-    readFirstString(record, "chain") ||
-    "testnet";
+  const networkText = readFirstString(record, "bscNetwork", "bsc_network");
+  const chainText = readFirstString(record, "chain");
+  const profile = networkText
+    ? normalizeBscNetworkProfile(networkText)
+    : chainText
+      ? normalizeBscChainProfile(chainText, `${label} chain`)
+      : BSC_NETWORK_PROFILES.testnet;
   try {
     normalizeBscOfflineFullTomlEvidence(
       record,
-      normalizeBscNetworkProfile(networkText),
+      profile,
     );
   } catch (error) {
     problems.push(
@@ -3696,8 +3840,33 @@ function assertBscCanonicalProductionOutputSafe(pathName, value, label) {
   }
 }
 
+function canonicalPathForCollision(pathName) {
+  const resolved = resolve(pathName);
+  if (resolved.includes("\0")) {
+    return resolved;
+  }
+  try {
+    return realpathSync(resolved);
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  try {
+    return resolve(realpathSync(dirname(resolved)), basename(resolved));
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  return resolved;
+}
+
 function assertDistinctResolvedPaths(leftPath, leftLabel, rightPath, rightLabel) {
-  if (resolve(leftPath) === resolve(rightPath)) {
+  if (
+    resolve(leftPath) === resolve(rightPath) ||
+    canonicalPathForCollision(leftPath) === canonicalPathForCollision(rightPath)
+  ) {
     throw new Error(`${leftLabel} must not be the same path as ${rightLabel}.`);
   }
 }
@@ -5356,9 +5525,11 @@ async function writeJsonNoSecrets(pathName, value) {
   }
   const resolved = resolve(pathName);
   await mkdir(dirname(resolved), { recursive: true });
-  const temp = `${resolved}.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  await writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o644 });
-  await rename(temp, resolved);
+  await replaceWithTemporaryFile(
+    resolved,
+    `${JSON.stringify(value, null, 2)}\n`,
+    0o644,
+  );
 }
 
 async function writeTextNoSecrets(pathName, value, mode = 0o644) {
@@ -5368,10 +5539,38 @@ async function writeTextNoSecrets(pathName, value, mode = 0o644) {
   }
   const resolved = resolve(pathName);
   await mkdir(dirname(resolved), { recursive: true });
-  const temp = `${resolved}.tmp-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  await writeFile(temp, value, { mode });
-  await rename(temp, resolved);
+  await replaceWithTemporaryFile(resolved, value, mode);
   return resolved;
+}
+
+function temporaryOutputPath(out) {
+  return `${out}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+}
+
+async function replaceWithTemporaryFile(out, value, mode) {
+  let lastCollision = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const temp = temporaryOutputPath(out);
+    let created = false;
+    try {
+      await writeFile(temp, value, { flag: "wx", mode });
+      created = true;
+      await rename(temp, out);
+      return;
+    } catch (error) {
+      if (created) {
+        await rm(temp, { force: true }).catch(() => {});
+      }
+      if (error?.code === "EEXIST") {
+        lastCollision = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastCollision ?? new Error("unable to allocate temporary output file");
 }
 
 function runCommand(command, args, options = {}) {
@@ -6017,6 +6216,7 @@ function extractBscBundleRouteBinding(record, label) {
   if (!isRecord(record)) {
     throw new Error(`${label} must be a JSON object.`);
   }
+  assertNoRetiredBscNetworkAlias(record, label);
   const destinationRollout =
     readFirstRecord(record, "destinationRollout", "destination_rollout") ?? {};
   const destinationBinding =
@@ -6029,11 +6229,11 @@ function extractBscBundleRouteBinding(record, label) {
   if (assetKey !== ASSET_KEY) {
     throw new Error(`${label} assetKey must be ${ASSET_KEY}.`);
   }
-  const profile = normalizeBscNetworkProfile(
-    readFirstString(record, "chain") ||
-      readFirstString(record, "bscNetwork", "bsc_network", "network") ||
-      "testnet",
-  );
+  const chainText = readFirstString(record, "chain");
+  const networkText = readFirstString(record, "bscNetwork", "bsc_network");
+  const profile = chainText
+    ? normalizeBscChainProfile(chainText, `${label} chain`)
+    : normalizeBscNetworkProfile(networkText || "testnet");
   const networkIdHex = readConsistentNormalizedString(
     [
       {
@@ -6381,6 +6581,7 @@ function groth16ManifestOptionalIntegerProblem(record, keys, expected, label) {
 
 function bscGroth16MaterialManifestShapeProblems(manifest) {
   const problems = [
+    ...bscNetworkAliasProblems(manifest, "Groth16 material manifest"),
     ...unknownGroth16ProofSelfTestFields(
       manifest,
       new Set([
@@ -6393,7 +6594,6 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
         "asset_key",
         "bscNetwork",
         "bsc_network",
-        "network",
         "chain",
         "chainIdHex",
         "chain_id_hex",
@@ -6442,7 +6642,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
         ["generatedAt", ["generatedAt", "generated_at"]],
         ["routeId", ["routeId", "route_id"]],
         ["assetKey", ["assetKey", "asset_key"]],
-        ["bscNetwork", ["bscNetwork", "bsc_network", "network"]],
+        ["bscNetwork", ["bscNetwork", "bsc_network"]],
         ["chainIdHex", ["chainIdHex", "chain_id_hex"]],
         ["networkIdHex", ["networkIdHex", "network_id_hex"]],
         ["proofBackend", ["proofBackend", "proof_backend"]],
@@ -7605,6 +7805,7 @@ function groth16AttestationBodyProblems({
   reproducibleBuildToolchainSha256,
 }) {
   const problems = [
+    ...bscNetworkAliasProblems(record, label),
     ...groth16AttestationUnknownFieldProblems(record, expectedSchema, label),
     ...productionEvidenceTextProblems(record, label),
     groth16ManifestStringProblem(record, ["schema"], expectedSchema, `${label} schema`),
@@ -7612,7 +7813,7 @@ function groth16AttestationBodyProblems({
     groth16ManifestStringProblem(record, ["assetKey", "asset_key"], ASSET_KEY, `${label} assetKey`),
     groth16ManifestStringProblem(
       record,
-      ["bscNetwork", "bsc_network", "network"],
+      ["bscNetwork", "bsc_network"],
       profile.key,
       `${label} bscNetwork`,
     ),
@@ -8649,7 +8850,7 @@ function validateBscGroth16MaterialManifest({
       : `Groth16 material manifest assetKey must be ${ASSET_KEY}`,
   );
   addCheck(() =>
-    readFirstString(manifest, "bscNetwork", "bsc_network", "network") ===
+    readFirstString(manifest, "bscNetwork", "bsc_network") ===
     profile.key
       ? ""
       : `Groth16 material manifest bscNetwork must be ${profile.key}`,
@@ -9127,6 +9328,7 @@ function groth16ProofSelfTestAliasProblems(record, groups, label) {
 
 function bscGroth16ProofSelfTestShapeProblems(report) {
   const problems = [
+    ...bscNetworkAliasProblems(report, "Groth16 proof self-test report"),
     ...unknownGroth16ProofSelfTestFields(
       report,
       new Set([
@@ -9137,7 +9339,6 @@ function bscGroth16ProofSelfTestShapeProblems(report) {
         "asset_key",
         "bscNetwork",
         "bsc_network",
-        "network",
         "chain",
         "chainIdHex",
         "chain_id_hex",
@@ -9174,7 +9375,7 @@ function bscGroth16ProofSelfTestShapeProblems(report) {
       [
         ["routeId", ["routeId", "route_id"]],
         ["assetKey", ["assetKey", "asset_key"]],
-        ["bscNetwork", ["bscNetwork", "bsc_network", "network"]],
+        ["bscNetwork", ["bscNetwork", "bsc_network"]],
         ["chainIdHex", ["chainIdHex", "chain_id_hex"]],
         ["networkIdHex", ["networkIdHex", "network_id_hex"]],
         ["circuitProfile", ["circuitProfile", "circuit_profile"]],
@@ -9534,7 +9735,7 @@ function validateBscGroth16ProofSelfTestReport({
       : `Groth16 proof self-test assetKey must be ${ASSET_KEY}`,
   );
   check(() =>
-    readFirstString(report, "bscNetwork", "bsc_network", "network") ===
+    readFirstString(report, "bscNetwork", "bsc_network") ===
     profile.key
       ? ""
       : `Groth16 proof self-test bscNetwork must be ${profile.key}`,
@@ -10779,11 +10980,12 @@ export function buildDeploymentEvidence(input = {}) {
 }
 
 function normalizeBscRouteEvidenceProfile(record, options = {}) {
+  assertNoRetiredBscNetworkAlias(record, "BSC deployment evidence");
   assertSingleStringAliasPerSource(
     [
       {
         record,
-        keys: ["bscNetwork", "bsc_network", "network"],
+        keys: ["bscNetwork", "bsc_network"],
         pathName: "BSC deployment evidence",
       },
     ],
@@ -10813,7 +11015,7 @@ function normalizeBscRouteEvidenceProfile(record, options = {}) {
     ...Object.fromEntries(ownRecordEntries(options)),
     "bsc-network":
       ownValue(options, "bsc-network") ??
-      readFirstString(record, "bscNetwork", "bsc_network", "network") ??
+      readFirstString(record, "bscNetwork", "bsc_network") ??
       readFirstString(record, "chain"),
   });
   const routeId = readRequiredString(
@@ -10859,6 +11061,7 @@ function normalizeBscDeploymentEvidenceForRouteManifest(record, options = {}) {
   if (!isRecord(record)) {
     throw new Error("BSC deployment evidence must be a JSON object.");
   }
+  assertNoRetiredBscNetworkAlias(record, "BSC deployment evidence");
   const reason = unsafeSecretReason(record, "BSC deployment evidence");
   if (reason) {
     throw new Error(reason);
@@ -11595,6 +11798,7 @@ function normalizeBscOfflineFullTomlEvidence(record, profile) {
   if (!isRecord(record)) {
     throw new Error("BSC offline full TOML evidence must be a JSON object.");
   }
+  assertNoRetiredBscNetworkAlias(record, "BSC offline full TOML evidence");
   const reason = unsafeSecretReason(record, "BSC offline full TOML evidence");
   if (reason) {
     throw new Error(reason);
@@ -11633,7 +11837,7 @@ function normalizeBscOfflineFullTomlEvidence(record, profile) {
     [
       {
         record,
-        keys: ["bscNetwork", "bsc_network", "network"],
+        keys: ["bscNetwork", "bsc_network"],
         pathName: "BSC offline full TOML evidence",
       },
     ],
@@ -11643,13 +11847,14 @@ function normalizeBscOfflineFullTomlEvidence(record, profile) {
     record,
     "bscNetwork",
     "bsc_network",
-    "network",
   );
   const chainText = readFirstString(record, "chain");
   if (!networkText && !chainText) {
     throw new Error("BSC offline full TOML evidence network is required.");
   }
-  const evidenceProfile = normalizeBscNetworkProfile(networkText || chainText);
+  const evidenceProfile = networkText
+    ? normalizeBscNetworkProfile(networkText)
+    : normalizeBscChainProfile(chainText, "BSC offline full TOML evidence chain");
   if (chainText) {
     if (chainText !== profile.chain) {
       throw new Error(
@@ -12175,6 +12380,7 @@ function readRequiredString(record, keys, label) {
         .join(", ")}.`,
     );
   }
+  assertNoRetiredRouteManifestAlias(entries, keys, label, label);
   const value = readFirstString(record, ...keys);
   if (!value) {
     throw new Error(`${label} is required.`);
@@ -12262,14 +12468,48 @@ function collectRecordEntries(record, keys, pathName) {
   return entries;
 }
 
+function isRouteManifestPath(pathName) {
+  return typeof pathName === "string" && pathName.startsWith("route manifest");
+}
+
+function isGeneratedBscAddressLabel(label) {
+  return [
+    "route manifest BSC token address",
+    "route manifest BSC bridge address",
+    "route manifest BSC source bridge address",
+    "route manifest BSC verifier address",
+  ].includes(label);
+}
+
+function assertNoRetiredRouteManifestAlias(entries, keys, pathName, label) {
+  if (
+    entries.length === 1 &&
+    keys.length > 1 &&
+    entries[0].key !== keys[0] &&
+    isRouteManifestPath(pathName) &&
+    !isGeneratedBscAddressLabel(label)
+  ) {
+    throw new Error(
+      `${label} must not use retired alias ${entries[0].key} in ${pathName}; use ${keys[0]}.`,
+    );
+  }
+}
+
 function readConsistentNormalizedString(sources, label, normalizeValue) {
   let selected = null;
   for (const source of sources) {
-    for (const entry of collectStringEntries(
+    const entries = collectStringEntries(
       source.record,
       source.keys,
       source.pathName,
-    )) {
+    );
+    assertNoRetiredRouteManifestAlias(
+      entries,
+      source.keys,
+      source.pathName,
+      label,
+    );
+    for (const entry of entries) {
       const normalized = normalizeValue(entry.value, label);
       if (!selected) {
         selected = { ...entry, normalized };
@@ -12300,6 +12540,12 @@ function assertSingleStringAliasPerSource(sources, label, options = {}) {
           .join(", ")}.`,
       );
     }
+    assertNoRetiredRouteManifestAlias(
+      entries,
+      source.keys,
+      source.pathName,
+      label,
+    );
   }
 }
 
@@ -12312,6 +12558,7 @@ function assertSingleRecordAlias(record, keys, pathName, label) {
         .join(", ")}.`,
     );
   }
+  assertNoRetiredRouteManifestAlias(entries, keys, pathName, label);
 }
 
 function assertNoForbiddenStringAliases(record, keys, pathName, label) {
@@ -12343,6 +12590,16 @@ function assertSingleValueAlias(record, keys, pathName, label) {
   if (presentKeys.length > 1) {
     throw new Error(
       `${label} must not use multiple aliases in ${pathName}: ${presentKeys.join(", ")}.`,
+    );
+  }
+  if (
+    presentKeys.length === 1 &&
+    keys.length > 1 &&
+    presentKeys[0] !== keys[0] &&
+    isRouteManifestPath(pathName)
+  ) {
+    throw new Error(
+      `${label} must not use retired alias ${presentKeys[0]} in ${pathName}; use ${keys[0]}.`,
     );
   }
 }
@@ -12518,6 +12775,7 @@ function normalizeRouteManifestForConfig(manifest) {
   if (schema !== ROUTE_MANIFEST_SCHEMA && schema !== TON_ROUTE_MANIFEST_SCHEMA) {
     throw new Error(`route manifest schema must be ${ROUTE_MANIFEST_SCHEMA}.`);
   }
+  assertNoRetiredBscNetworkAlias(record, "route manifest");
   const reason = unsafeSecretReason(record, "route manifest");
   if (reason) {
     throw new Error(reason);
@@ -12587,14 +12845,14 @@ function normalizeRouteManifestForConfig(manifest) {
     [
       {
         record,
-        keys: ["bscNetwork", "bsc_network", "network"],
+        keys: ["bscNetwork", "bsc_network"],
         pathName: "route manifest",
       },
     ],
     "route manifest bscNetwork",
   );
   const bscNetworkText =
-    readFirstString(record, "bscNetwork", "bsc_network", "network") ||
+    readFirstString(record, "bscNetwork", "bsc_network") ||
     readFirstString(record, "chain") ||
     "testnet";
   if (
@@ -13891,13 +14149,13 @@ export function buildMergedBscTairaXorRouteConfigToml(
   manifest,
   options = {},
 ) {
+  const { routeLines } = routeConfigOverlayParts(manifest, options);
   const baseConfig = String(baseConfigText ?? "").replace(/\r\n?/gu, "\n");
   if (/^\s*\[\[zk\.sccp_route_manifests\]\]\s*$/mu.test(baseConfig)) {
     throw new Error(
       "base TAIRA config already contains zk.sccp_route_manifests; merge route manifests manually to avoid duplicate routes.",
     );
   }
-  const { routeLines } = routeConfigOverlayParts(manifest, options);
   const lines = baseConfig.split("\n");
   const zkStart = lines.findIndex((line) => line.trim() === "[zk]");
   const mergedRouteLines = [
@@ -14036,10 +14294,11 @@ async function commandDeploy(options) {
   }
   const out = resolve(options.out ?? defaultDeploymentEvidenceOut(profile));
   assertDistinctResolvedPaths(out, "--out", options.verifier, "--verifier");
-  const allowDiagnosticVerifier = parseBoolean(
-    options["allow-diagnostic-verifier"],
-    "--allow-diagnostic-verifier",
-  );
+  if (options["allow-diagnostic-verifier"] !== undefined) {
+    throw new Error(
+      "--allow-diagnostic-verifier was removed; deploy requires production verifier material.",
+    );
+  }
   const verifierMaterial = normalizeVerifierMaterial(
     await readJson(options.verifier),
     profile,
@@ -14049,12 +14308,9 @@ async function commandDeploy(options) {
       "deploy refuses deterministic smoke-test Groth16 fixture BSC verifier material.",
     );
   }
-  if (
-    verifierMaterial.diagnosticVerifierReasons.length > 0 &&
-    !allowDiagnosticVerifier
-  ) {
+  if (verifierMaterial.diagnosticVerifierReasons.length > 0) {
     throw new Error(
-      `deploy refuses diagnostic BSC verifier material without --allow-diagnostic-verifier true: ${verifierMaterial.diagnosticVerifierReasons.join("; ")}.`,
+      `deploy refuses diagnostic BSC verifier material: ${verifierMaterial.diagnosticVerifierReasons.join("; ")}.`,
     );
   }
   const privateKeyEnv = normalizePrivateKeyEnvName(
@@ -14395,7 +14651,7 @@ async function commandRouteConfig(options) {
   const manifest = await readJson(manifestPath, "BSC route manifest");
   const profile =
     BSC_NETWORK_PROFILES[
-      readFirstValue(manifest, "bscNetwork", "bsc_network", "network")
+      readFirstValue(manifest, "bscNetwork", "bsc_network")
     ] ?? BSC_NETWORK_PROFILES.testnet;
   const toml = baseConfigPath
     ? buildMergedBscTairaXorRouteConfigToml(
@@ -15421,17 +15677,27 @@ async function commandSelfTest() {
 
 export async function main(argv = process.argv.slice(2)) {
   const [command, ...rest] = argv;
-  if (!command || isHelpToken(command)) {
-    const requestedCommand = command === "help" ? rest[0] : undefined;
+  if (!command || command === "--help" || command === "-h") {
+    return { help: usage() };
+  }
+  if (command === "help") {
+    const requestedCommand = rest[0];
+    if (requestedCommand !== undefined) {
+      assertKnownCommand(requestedCommand);
+    }
     return { help: requestedCommand ? commandUsage(requestedCommand) : usage() };
   }
-  if (rest.some(isHelpToken)) {
-    return { help: commandUsage(command) };
-  }
+  assertKnownCommand(command);
   if (command === "groth16-material") {
+    if (rest.some(isHelpToken)) {
+      return { help: commandUsage(command) };
+    }
     return commandGroth16Material(rest);
   }
-  const options = parseArgs(rest);
+  const options = parseArgs(command, rest);
+  if (options.help === "true") {
+    return { help: commandUsage(command) };
+  }
   switch (command) {
     case "compile":
       return commandCompile(options);

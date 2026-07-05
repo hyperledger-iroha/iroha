@@ -42,6 +42,56 @@ class HostileExpectedRecordHash:
         raise AssertionError("secret-token ETH expected record hash was compared")
 
 
+class HostileDeploymentBlockNumber:
+    def __str__(self):
+        raise AssertionError("secret-token ETH deployment block number was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token ETH deployment block number was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token ETH deployment block number was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token ETH deployment block number was compared")
+
+
+class HostileTomlString(str):
+    def __new__(cls):
+        return str.__new__(cls, "blocked")
+
+    def __str__(self):
+        raise AssertionError("secret-token ETH source TOML string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token ETH source TOML string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token ETH source TOML string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token ETH source TOML string was compared")
+
+
+class HostileTomlInt(int):
+    def __new__(cls):
+        return int.__new__(cls, 1)
+
+    def __str__(self):
+        raise AssertionError("secret-token ETH source TOML integer was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token ETH source TOML integer was repr'd")
+
+
+class HostileTomlList(list):
+    def __iter__(self):
+        raise AssertionError("secret-token ETH source TOML list was iterated")
+
+    def __repr__(self):
+        raise AssertionError("secret-token ETH source TOML list was repr'd")
+
+
 def eth_args(module):
     return SimpleNamespace(
         source_domain=1,
@@ -272,10 +322,40 @@ def test_eth_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
     directory_input.mkdir()
     missing_input = tmp_path / "secret-token-eth-runtime-missing.hex"
 
-    for path in (symlink_input, directory_input, missing_input):
+    class HostileRuntimeBytecodePath(str):
+        def __new__(cls):
+            return str.__new__(cls, str(outside))
+
+        def __str__(self):
+            raise AssertionError("secret-token ETH runtime path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token ETH runtime path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token ETH runtime path was coerced")
+
+    class HostileRuntimeBytecodePathLike:
+        def __str__(self):
+            raise AssertionError("secret-token ETH runtime path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token ETH runtime path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token ETH runtime path-like was coerced")
+
+    for path in (
+        str(symlink_input),
+        str(directory_input),
+        str(missing_input),
+        outside,
+        HostileRuntimeBytecodePath(),
+        HostileRuntimeBytecodePathLike(),
+    ):
         try:
             module.parse_runtime_bytecode_file(
-                str(path),
+                path,
                 label="source bridge runtime bytecode",
             )
         except module.argparse.ArgumentTypeError as exc:
@@ -755,6 +835,85 @@ def test_eth_source_evidence_rejects_deployment_transaction_readback_drift():
             raise AssertionError(f"ETH source TOML accepted drifted {field}")
 
         assert module._toml_receipt_metadata_ready(args) is False
+
+
+def test_eth_source_rejects_non_integer_deployment_block_numbers_without_stringifying(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    runtime_bytecode = bytes.fromhex("6080604052")
+
+    for field, expected_error in (
+        (
+            "deployment_transaction_block_number",
+            "--deployment-transaction-block-number must be positive",
+        ),
+        (
+            "deployment_receipt_block_number",
+            "--deployment-receipt-block-number must be positive",
+        ),
+    ):
+        args = eth_args(module)
+        args.source_bridge_emitter_code_hash = module.runtime_bytecode_hash(
+            runtime_bytecode
+        )
+        args.source_bridge_runtime_bytecode_hex = runtime_bytecode
+        args.source_bridge_runtime_bytecode_file = None
+        args.expected_source_verifier_material_hash = (
+            module.eth_source_verifier_material_record_hash(args)
+        )
+        args.expected_source_adapter_engine_deployment_hash = (
+            module.eth_source_adapter_engine_deployment_record_hash(args)
+        )
+        setattr(args, field, HostileDeploymentBlockNumber())
+
+        try:
+            module.render_toml(args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_error
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"ETH source TOML accepted hostile {field}")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_toml_receipt_metadata_ready", lambda _args: True)
+            try:
+                module._json_summary(args)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_error
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError(f"ETH source JSON accepted hostile {field}")
+
+
+def test_eth_source_toml_renderer_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    cases = (
+        lambda: module._toml_string(HostileTomlString()),
+        lambda: module._toml_line("source_chain", HostileTomlString()),
+        lambda: module._toml_line("version", HostileTomlInt()),
+        lambda: module._toml_line("blockers", HostileTomlList(["blocked"])),
+    )
+
+    for render in cases:
+        try:
+            render()
+        except TypeError as exc:
+            rendered = str(exc)
+            assert "unsupported TOML" in rendered
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "ETH source TOML renderer accepted hostile subclass value"
+            )
 
 
 def test_eth_source_evidence_requires_receipt_block_receipts_root_for_toml():

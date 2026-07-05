@@ -65,6 +65,42 @@ class HostileExpectedRecordHash:
         raise AssertionError("secret-token Solana expected record hash was compared")
 
 
+class HostileTomlString(str):
+    def __new__(cls):
+        return str.__new__(cls, "blocked")
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana source TOML string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana source TOML string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana source TOML string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana source TOML string was compared")
+
+
+class HostileTomlInt(int):
+    def __new__(cls):
+        return int.__new__(cls, 1)
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana source TOML integer was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana source TOML integer was repr'd")
+
+
+class HostileTomlList(list):
+    def __iter__(self):
+        raise AssertionError("secret-token Solana source TOML list was iterated")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana source TOML list was repr'd")
+
+
 def solana_args(module):
     return SimpleNamespace(
         source_domain=3,
@@ -373,6 +409,30 @@ def test_solana_toml_rendering_carries_mainnet_profile_ids():
     assert 'deployment_receipt_hash = "0x' + "aa" * 32 + '"' in rendered
     assert "# full_light_client_evidence_ready = true" in rendered
     assert "sccp:sol:light-client:tower-replay-mainnet-beta:v1" in rendered
+
+
+def test_solana_source_state_toml_renderer_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    cases = (
+        lambda: module._toml_string(HostileTomlString()),
+        lambda: module._toml_line("source_chain", HostileTomlString()),
+        lambda: module._toml_line("version", HostileTomlInt()),
+        lambda: module._toml_line("blockers", HostileTomlList(["blocked"])),
+    )
+
+    for render in cases:
+        try:
+            render()
+        except TypeError as exc:
+            rendered = str(exc)
+            assert "unsupported TOML" in rendered
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "Solana source-state TOML renderer accepted hostile subclass value"
+            )
 
 
 def test_solana_source_state_evidence_rejects_boolean_target_domain():

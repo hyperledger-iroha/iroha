@@ -3208,12 +3208,12 @@ fn serialize_xml(message: &IsoMessage, schema: Option<&'static MessageSchema>) -
     let _ = write!(out, "<ISO20022 message=\"{}\">", message.message_type);
     for (key, value, _) in collect_fields_in_order(message, schema) {
         let path = escape_xml_attr(key);
-        if let Ok(text) = core::str::from_utf8(value) {
-            if contains_only_xml_characters(text) {
-                let escaped = escape_xml_text(text);
-                let _ = write!(out, "<Field path=\"{path}\">{escaped}</Field>");
-                continue;
-            }
+        if let Ok(text) = core::str::from_utf8(value)
+            && contains_only_xml_characters(text)
+        {
+            let escaped = escape_xml_text(text);
+            let _ = write!(out, "<Field path=\"{path}\">{escaped}</Field>");
+            continue;
         }
         let encoded = encode_base64(value);
         let encoded_str = String::from_utf8(encoded).unwrap_or_default();
@@ -4017,15 +4017,15 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             skip_depth += 1;
         }
 
-        if skip_depth == 0 {
-            if let Some(path) = current_path(&stack) {
-                for (attr_name, value) in &attrs {
-                    if attr_name.starts_with("xmlns") {
-                        continue;
-                    }
-                    let attr_path = format!("{path}/@{}", local_name(attr_name));
-                    msg_set(&attr_path, value.as_bytes());
+        if skip_depth == 0
+            && let Some(path) = current_path(&stack)
+        {
+            for (attr_name, value) in &attrs {
+                if attr_name.starts_with("xmlns") {
+                    continue;
                 }
+                let attr_path = format!("{path}/@{}", local_name(attr_name));
+                msg_set(&attr_path, value.as_bytes());
             }
         }
 

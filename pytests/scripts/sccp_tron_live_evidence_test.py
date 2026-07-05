@@ -53,6 +53,25 @@ class HostileImportedScalar:
         raise AssertionError("secret-token imported TRON metadata was stringified")
 
 
+class HostileDecimalText(str):
+    """String subclass that decimal parsers must reject without invoking hooks."""
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON live decimal text was compared")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON live decimal text was indexed")
+
+    def __hash__(self):
+        raise AssertionError("secret-token TRON live decimal text was hashed")
+
+    def isascii(self):
+        raise AssertionError("secret-token TRON live decimal text isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token TRON live decimal text isdecimal ran")
+
+
 def transaction_info_field(default, override):
     return default if override is DEFAULT_TRANSACTION_INFO_FIELD else override
 
@@ -604,6 +623,35 @@ def test_tron_api_rejects_duplicate_json_keys():
 def test_tron_node_url_rejects_hidden_request_state():
     module = load_live_module()
 
+    class HostileTronNodeUrl(str):
+        def __new__(cls):
+            return str.__new__(cls, "https://tron.example")
+
+        def __str__(self):
+            raise AssertionError("secret-token TRON node URL was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TRON node URL was repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token TRON node URL was compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token TRON node URL was compared")
+
+        def __iter__(self):
+            raise AssertionError("secret-token TRON node URL was iterated")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token TRON node URL was stripped")
+
+    class HostileTronNodeUrlLabel:
+        def __str__(self):
+            raise AssertionError("secret-token TRON node URL label was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TRON node URL label was repr'd")
+
     assert module._normalize_tron_node_url("https://tron.example") == (
         "https://tron.example"
     )
@@ -630,6 +678,8 @@ def test_tron_node_url_rejects_hidden_request_state():
         ("https://bad_host.tron.example", "public DNS"),
         (" https://tron.example", "exact http(s) URL"),
         ("https://tron.example\nsecret", "exact http(s) URL"),
+        (HostileTronNodeUrl(), "exact http(s) URL"),
+        (HostileTronNodeUrlLabel(), "exact http(s) URL"),
     ):
         try:
             module._post_json(
@@ -1095,6 +1145,79 @@ def test_tron_live_runtime_files_reject_unreadable_file_shapes(tmp_path):
         symlink_parent.symlink_to(real_parent, target_is_directory=True)
         missing = tmp_path / f"secret-token-{prefix}-missing"
         return (symlink, directory, symlink_parent / "input", missing)
+
+    api_key_file = tmp_path / "secret-token-tron-api-key-valid"
+    api_key_file.write_text("runtime-secret-key\n", encoding="utf-8")
+    payload_file = tmp_path / "secret-token-witness-payload-valid"
+    payload_file.write_text("0x01\n", encoding="utf-8")
+    transition_file = tmp_path / "secret-token-witness-transition-valid"
+    transition_file.write_text("{}\n", encoding="utf-8")
+
+    class HostileRuntimeFile(str):
+        def __new__(cls, value):
+            return str.__new__(cls, value)
+
+        def __str__(self):
+            raise AssertionError("secret-token TRON runtime file was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TRON runtime file was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token TRON runtime file fspath ran")
+
+    class HostileRuntimePathLike:
+        def __str__(self):
+            raise AssertionError("secret-token TRON runtime path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TRON runtime path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token TRON runtime path-like fspath ran")
+
+    hidden_file_cases = (
+        (
+            "--tron-pro-api-key-file cannot be read",
+            lambda value: module._runtime_tron_pro_api_key(
+                SimpleNamespace(tron_pro_api_key=None, tron_pro_api_key_file=value)
+            ),
+            (api_key_file, HostileRuntimeFile(str(api_key_file)), HostileRuntimePathLike()),
+        ),
+        (
+            "--witness-schedule-payload-file cannot be read",
+            lambda value: module._runtime_witness_schedule_payload(
+                SimpleNamespace(
+                    witness_schedule_payload_hex=None,
+                    witness_schedule_payload_file=value,
+                )
+            ),
+            (payload_file, HostileRuntimeFile(str(payload_file)), HostileRuntimePathLike()),
+        ),
+        (
+            "--witness-schedule-transition-json 0 must be JSON text",
+            lambda value: module._runtime_witness_schedule_transitions(
+                SimpleNamespace(witness_schedule_transition_json=[value])
+            ),
+            (
+                transition_file,
+                HostileRuntimeFile(f"@{transition_file}"),
+                HostileRuntimePathLike(),
+            ),
+        ),
+    )
+    for expected_message, action, hidden_files in hidden_file_cases:
+        for hidden_file in hidden_files:
+            try:
+                action(hidden_file)
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+                assert exc.__suppress_context__ is True
+            else:
+                raise AssertionError("non-exact TRON runtime file path was accepted")
 
     cases = (
         (
@@ -2354,6 +2477,47 @@ def test_tron_live_cli_parsers_reject_non_string_values_without_stringification(
             raise AssertionError("non-string TRON live parser value was accepted")
 
 
+def test_tron_live_decimal_parsers_reject_string_subclasses_without_hooks():
+    module = load_live_module()
+    hostile = HostileDecimalText("5")
+
+    cases = (
+        (
+            lambda: module._parse_canonical_u32(hostile, label="source domain"),
+            ValueError,
+            "source domain must be a u32",
+        ),
+        (
+            lambda: module._parse_protobuf_nonnegative_int(
+                hostile,
+                label="source-event transaction ret[0].fee",
+            ),
+            RuntimeError,
+            "source-event transaction ret[0].fee must fit non-negative int64",
+        ),
+        (
+            lambda: module._parse_transaction_enum(
+                hostile,
+                {"TransferContract": 1},
+                label="source-event transaction contract type",
+            ),
+            RuntimeError,
+            "source-event transaction contract type enum is unsupported",
+        ),
+    )
+
+    for parser, exception_type, expected_message in cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TRON live decimal parser accepted hostile text")
+
+
 def test_live_tron_collectors_reject_malformed_contract_metadata_gate_before_rpc():
     module = load_live_module()
     fake = fake_opener_for(module)
@@ -2676,6 +2840,53 @@ def test_live_evidence_source_event_replay_args_reject_non_string_copied_metadat
     tampered = json.loads(json.dumps(transaction_result.summary))
     tampered["source_event_transaction"]["transaction_id"] = HostileImportedScalar()
     assert module._offline_source_event_args(tampered) is None
+
+
+def test_live_evidence_source_event_collection_rejects_non_string_source_bridge_metadata_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    original_collect = module.collect_source_bridge_evidence
+
+    for field in ("address", "source_bridge_owner_base58", "source_bridge_owner_address"):
+
+        def tampered_collect(*collect_args, _field=field, **collect_kwargs):
+            summary = original_collect(*collect_args, **collect_kwargs)
+            summary[_field] = HostileImportedScalar()
+            return summary
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "collect_source_bridge_evidence", tampered_collect)
+            try:
+                module.collect_live_evidence(
+                    SimpleNamespace(
+                        tron_node_url="https://tron.example",
+                        source_bridge_address=fake.bridge,
+                        destination_verifier_address=None,
+                        caller_address=None,
+                        no_getcontract=False,
+                        source_event_digest=bytes.fromhex(
+                            TRON_SOURCE_EVENT_DIGEST_VECTOR
+                        ),
+                        full_toml=False,
+                        timeout=1.0,
+                    ),
+                    opener=fake.opener,
+                )
+            except (
+                module.argparse.ArgumentTypeError,
+                RuntimeError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                rendered = str(exc)
+                assert "must be an exact non-empty string" in rendered, field
+                assert "secret-token" not in rendered
+            else:
+                raise AssertionError(
+                    f"source-event collection accepted hostile {field} metadata"
+                )
 
 
 def test_live_evidence_rejects_already_submitted_source_event_digest():
@@ -8804,6 +9015,77 @@ def test_live_evidence_source_record_preflight_rejects_non_string_metadata_witho
         else:
             raise AssertionError(
                 f"TRON source-record preflight accepted hostile {field} metadata"
+            )
+
+
+def test_live_evidence_rejects_hostile_endpoint_metadata_without_stringifying(monkeypatch):
+    module = load_live_module()
+    fake = fake_opener_for(module)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module, "_constant_endpoint", lambda _args: HostileImportedScalar())
+        try:
+            module.collect_live_evidence(
+                SimpleNamespace(
+                    tron_node_url="https://tron.example",
+                    source_bridge_address=fake.bridge,
+                    destination_verifier_address=None,
+                    caller_address=None,
+                    no_getcontract=False,
+                    timeout=1.0,
+                ),
+                opener=fake.opener,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "TRON constant endpoint must be an exact non-empty string"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("TRON live collection accepted hostile endpoint metadata")
+
+
+def test_live_evidence_source_record_inputs_reject_non_string_collected_hash_without_stringifying(
+    monkeypatch,
+):
+    module = load_live_module()
+    setup = route_canary_full_rollout_setup(module)
+    source_record_args = live_full_rollout_args(
+        setup.fake,
+        setup.expected,
+        source_code_hash=setup.source_code_hash,
+    )
+    original_collect = module._collect_source_record_hashes
+
+    def hostile_source_record_hashes(source_bridge, args):
+        records = original_collect(source_bridge, args)
+        assert records is not None
+        records["adapter_verifier_vk_hash"] = HostileImportedScalar()
+        return records
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            module,
+            "_collect_source_record_hashes",
+            hostile_source_record_hashes,
+        )
+        try:
+            module.collect_live_evidence(
+                source_record_args,
+                opener=setup.fake.opener,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == (
+                "source adapter verifier VK hash must be an exact non-empty string"
+            )
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "TRON source-record inputs accepted hostile adapter verifier hash"
             )
 
 

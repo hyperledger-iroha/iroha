@@ -7511,6 +7511,9 @@ checks only `TypeInvariant` plus
 `SumeragiConsensusCoreFastCorrectnessEnvelope`, and the focused Byzantine top
 CFGs check only `TypeInvariant`, `TlcByzantineDirectCommitCorridor`, and their
 documented direct top envelope/corridor obligations.
+Byzantine top auxiliary CFG contract inventories must stay duplicate-free, so
+focused top behavior and constant-envelope rows cannot be overwritten while
+the checker maps them by CFG filename.
 Aggregate proof root conjuncts must stay named zero-arity operators unless a
 documented wrapper operator is covered by a dedicated implication or temporal
 spec-shape guard: root and envelope contracts cannot add inline literals,
@@ -18335,6 +18338,17 @@ as `APALACHE_BIN`, `APALACHE_VERSION`, `APALACHE_DOCKER_IMAGE`, `TLC_JAR`, or
 CI, workflow, and README formal commands must use strict Apalache/TLC runner shapes,
 so direct runner invocations cannot hide extra arguments or malformed mode tokens
 outside the central scripts.
+Apalache/TLC runner case inventories must stay duplicate-free,
+so repeated runner branches cannot overwrite or obscure the checked proof mode body.
+Apalache runner-mode CI reachability diagnostics must stay line-aware,
+so exact runner branches missing PR or formal CI identify the runner case line
+before runner inventories are collapsed.
+README Apalache command support diagnostics must stay line-aware,
+so unsupported documented Apalache commands identify the README command line
+before README mode sets are collapsed.
+README TLC command support diagnostics must stay line-aware,
+so unsupported documented TLC commands identify the README command line before
+README mode sets are collapsed.
 README formal runner commands must be standalone command lines,
 so inline prose, `echo`, or backtick mentions cannot satisfy documented mode
 coverage.
@@ -18359,9 +18373,106 @@ CI and workflow mode inventories must count only active direct runner commands,
 so comments, prose, or `echo` lines cannot satisfy proof-mode coverage.
 Active CI/workflow TLC modes must be supported by the TLC runner and documented by README TLC commands,
 so direct TLC evidence cannot drift outside the checked inventory.
+Active CI/workflow TLC inventory diagnostics must stay line-aware,
+so unsupported or undocumented active TLC commands identify the offending proof
+surface command before mode sets are collapsed.
+Active CI/workflow Apalache support diagnostics must stay line-aware,
+so unsupported active Apalache commands identify the offending proof surface
+command before mode sets are collapsed.
+Active CI/workflow Apalache README coverage diagnostics must stay line-aware,
+so active Apalache commands missing README documentation identify the offending
+proof surface command before mode sets are collapsed.
+PR baseline TLC cross-check diagnostics must stay line-aware,
+so missing TLC parity identifies the Apalache runner case line and unexpected
+Apalache-only TLC evidence identifies the TLC runner or README command line.
+Active CI/workflow Apalache modes must be duplicate-free,
+so repeated active Apalache invocations cannot inflate or obscure PR,
+expected-failure, or scheduled/manual proof evidence.
 Active CI/workflow TLC modes must be duplicate-free,
-so repeated TLC invocations cannot inflate or obscure the direct TLC evidence
-inventory.
+so repeated active TLC invocations cannot inflate or obscure the direct TLC
+evidence inventory.
+Active CI/workflow Apalache modes must not overlap across proof surfaces,
+so an Apalache proof mode cannot count in more than one of PR,
+expected-failure, or scheduled/manual evidence.
+Active CI/workflow TLC modes must not overlap across proof surfaces,
+so a TLC proof mode cannot count in more than one of PR, expected-failure, or
+scheduled/manual evidence.
+README Apalache/TLC command inventories must stay duplicate-free,
+so repeated documented command rows cannot collapse before proof-mode coverage
+is compared.
+README Apalache length table modes must stay duplicate-free,
+so repeated mode rows cannot collapse before runner-length comparison.
+README Apalache length table coverage diagnostics must stay line-aware,
+so missing PR-baseline rows identify the runner case line and unsupported rows
+identify the length-table line before length mode sets are collapsed.
+README Apalache length mismatch diagnostics must stay line-aware,
+so documented length drift identifies both the README length-table line and the
+Apalache runner case line before row maps are collapsed.
+README fast-mode table modes must stay duplicate-free,
+so repeated fast-mode rows cannot collapse before TLC fast coverage comparison.
+README fast-mode table TLC support diagnostics must stay line-aware,
+so unsupported TLC-runner rows and rows missing README TLC commands identify
+the fast-mode table line before table mode sets are collapsed.
+TLC exact fast-mode README coverage diagnostics must stay line-aware,
+so exact TLC `*-fast` runner cases missing from the README fast-mode table
+identify the TLC runner case line before runner mode sets are collapsed.
+README mutation-mode TLC runner support diagnostics must stay line-aware,
+so documented mutation modes unsupported by TLC identify the README command
+line before Apalache/TLC bug-mode sets are collapsed.
+README mutation-mode TLC expected-failure diagnostics must stay line-aware,
+so documented mutation modes missing `expect_failure=1` identify both the
+README command line and the TLC runner case line.
+README mutation-mode expected-failure CI coverage diagnostics must stay line-aware,
+so README mutation commands missing from expected-failure CI identify the
+README command line before mutation mode sets are collapsed.
+Apalache expected-failure CI marker diagnostics must stay line-aware,
+so expected-failure CI Apalache modes missing `expect_failure=1` identify the
+expected-failure CI command line and the Apalache runner case line.
+Apalache baseline expected-failure diagnostics must stay line-aware,
+so PR or scheduled/manual Apalache modes with unexpected `expect_failure=1`
+identify the CI command line and the Apalache runner case line.
+Apalache CI mutation-surface diagnostics must stay line-aware,
+so PR CI mutation modes and expected-failure CI non-mutation modes identify the
+active CI command line before CI mode sets are collapsed.
+README mutation CFG equivalence diagnostics must stay line-aware,
+so documented mutation modes with Apalache/TLC CFG drift identify the README
+command line before mutation mode sets are collapsed.
+README mutation CFG-name diagnostics must stay line-aware,
+so documented mutation modes with CFG filename drift identify the README
+command line before mutation mode sets are collapsed.
+TLC module identity diagnostics must stay line-aware,
+so Apalache/TLC module drift identifies the README or CI command line before
+TLC mode sets are collapsed.
+Apalache/TLC unused runner-case diagnostics must stay line-aware,
+so stale runner branches identify the runner case line before used-case sets
+are collapsed.
+Apalache/TLC missing formal-file diagnostics must stay line-aware,
+so missing spec, CFG, or TLC module references identify the runner case line
+before missing-file sets are collapsed.
+Apalache/TLC CFG shape diagnostics must stay line-aware,
+so malformed runner-selected CFGs identify the runner case line before
+CFG-shape errors are grouped.
+Apalache/TLC TLA validation diagnostics must stay line-aware,
+so malformed runner-selected TLA modules identify the runner case line before
+module validation errors are grouped.
+Apalache/TLC CFG inventory diagnostics must stay line-aware,
+so duplicate runner-selected CFG bindings and proof targets identify the runner
+case line before inventory errors are grouped.
+Apalache/TLC CFG proof-target diagnostics must stay line-aware,
+so weak runner-selected CFG semantic checks identify the runner case line
+before proof-target errors are grouped.
+Apalache/TLC CFG module-binding diagnostics must stay line-aware,
+so runner-selected CFG ownership and operator-reference failures identify the
+runner case line before module-binding errors are grouped.
+Apalache/TLC CFG constant-binding diagnostics must stay line-aware,
+so runner-selected CFG constant bindings identify the runner case line before
+constant-binding errors are grouped.
+Apalache/TLC CFG trivial-target diagnostics must stay line-aware,
+so runner-selected trivial CFG checks identify the runner case line before
+trivial-target errors are grouped.
+TLC non-mutation expected-failure diagnostics must stay line-aware,
+so non-mutation TLC modes with unexpected `expect_failure=1` identify the
+README or CI command line and the TLC runner case line.
 Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands,
 so stale inventory wiring cannot execute proof jobs before the guard fails.
 Formal workflow triggers must keep the checked PR and scheduled/manual surfaces
@@ -18371,49 +18482,96 @@ dispatchable and scheduled at the reviewed cron.
 Formal workflow names must stay exact,
 so the `${{ github.workflow }}` concurrency group and evidence identity cannot
 drift while proof commands stay unchanged.
+Formal workflow name inventories must stay duplicate-free,
+so duplicate workflow rows cannot collapse or contradict the reviewed proof
+workflow identity.
 Formal workflow header key inventories must stay exact,
 so `run-name`, duplicate `env`, or other unreviewed top-level controls cannot
 change proof metadata or inherited workflow behavior.
+Formal workflow header-key contract rows must stay duplicate-free,
+so duplicate workflow rows or expected header keys cannot collapse before
+header-only proof workflow controls are validated.
 Formal workflow full top-level key inventories must stay exact,
 so post-`jobs` `permissions`, `defaults`, duplicate `jobs`, or other late
 top-level controls cannot bypass the header-only proof workflow guards.
+Formal workflow full top-level key contract rows must stay duplicate-free,
+so duplicate workflow rows or expected top-level keys cannot collapse before
+late top-level proof workflow controls are validated.
 Formal workflow trigger event inventories must stay exact,
 so extra `push`, `pull_request_target`, or inline trigger forms cannot run
 checked proof jobs outside the reviewed PR and scheduled/manual surfaces.
+Formal workflow trigger block inventories must stay duplicate-free,
+so duplicate workflow trigger rows or expected trigger lines cannot collapse
+before exact trigger block validation.
+Formal workflow trigger event inventories must stay duplicate-free,
+so duplicate workflow trigger-event rows or expected events cannot collapse
+before checked trigger surfaces are validated.
 Formal workflow path filters must keep the reviewed ignored-path set,
 so PR proof evidence cannot be skipped for formal specs, scripts, or workflow
 edits by adding broader `paths_ignore` entries.
+Formal workflow path-filter inventories must stay duplicate-free,
+so duplicate workflow path-filter rows or expected ignored paths cannot
+collapse before PR proof path filtering is validated.
 Formal workflow concurrency must keep reviewed cancellation behavior as an exact
 top-level block, so PR evidence can supersede stale branch pushes while
 scheduled/manual nightly evidence cannot be canceled by an extra, duplicate, or
 drifted concurrency policy.
+Formal workflow concurrency inventories must stay duplicate-free,
+so duplicate workflow concurrency rows or expected concurrency lines cannot
+collapse before proof-run cancellation behavior is validated.
 Formal workflow headers must not set defaults or token permissions,
 so checked proof jobs cannot inherit a different shell, working directory, or
 workflow-wide token scope while their job-level proof commands stay unchanged.
+Formal workflow header-control job inventories must stay duplicate-free,
+so duplicate workflow rows or checked-job names cannot collapse before
+inherited header controls are scanned.
 Formal workflow top-level env keys must stay reviewed,
 so checked proof jobs inherit only the approved PR CI variables and no
 scheduled/manual nightly workflow environment.
+Formal workflow top-level env key inventories must stay duplicate-free,
+so duplicate workflow rows or expected env keys cannot collapse before
+inherited environment keys are validated.
 Formal workflow top-level env bindings must stay exact,
 so approved inherited PR CI variables cannot change values while keeping the
 same keys.
+Formal workflow top-level env binding inventories must stay duplicate-free,
+so duplicate workflow rows or expected env bindings cannot collapse before
+inherited environment values are validated.
 Formal workflow step-name inventories must stay exact,
 so GitHub proof transcript labels cannot drift while the underlying checked
 actions and proof commands remain pinned.
+Formal workflow step-name contract rows must stay duplicate-free,
+so duplicate workflow/job rows or checked-job names cannot collapse or
+contradict the reviewed proof transcript labels.
 Formal workflow job key inventories must stay exact,
 so checked proof jobs cannot gain job-level metadata, outputs, concurrency, or
 duplicate `steps` blocks while runner, timeout, and command guards still pass.
+Formal workflow job-key contract rows must stay duplicate-free,
+so duplicate workflow/job rows, checked-job names, or expected job keys cannot
+collapse or contradict the reviewed proof-job metadata surface.
 Formal workflow step key inventories must stay exact,
 so checked proof steps cannot gain `id` metadata or other step-level fields
 while the reviewed names, actions, inputs, and commands remain unchanged.
+Formal workflow step-key contract rows must stay duplicate-free,
+so duplicate workflow/job rows or checked-job names cannot collapse or
+contradict the reviewed proof step structure.
 Formal workflow checked job declarations must stay singular,
 so PR and nightly formal evidence cannot disappear or be shadowed by duplicate
 `sumeragi_formal` or `frontier-nightly` declarations while unrelated PR jobs
 remain allowed.
+Formal workflow checked-job declaration inventories must stay duplicate-free,
+so duplicate workflow rows or checked-job names cannot collapse before checked
+job singularity is validated.
 Formal nightly workflow job inventory must stay exact,
 so scheduled/manual formal evidence cannot gain unrelated reporting, publishing,
 or status jobs beside `frontier-nightly`.
+Formal nightly workflow job inventory rows must stay duplicate-free,
+so duplicate nightly workflow rows or expected job names cannot collapse before
+the dedicated scheduled/manual proof-job inventory check runs.
 Workflow Apalache install and toolchain version pins must come from active commands,
-so comments or step names cannot satisfy the pinned model-checker install contract.
+so comments, step names, duplicate checked-job names, or duplicate active/static
+install and toolchain pins cannot satisfy the pinned model-checker install
+contract.
 Formal workflows must verify the pinned Apalache binary before running proof jobs,
 so scheduled and PR evidence both record the local toolchain selected by the
 installer.
@@ -18452,6 +18610,9 @@ mask the pinned formal evidence entrypoints.
 Formal workflow run steps must set `run` at most once and cannot combine `run` with `uses`,
 so ambiguous YAML keys cannot inflate proof-command inventory or hide whether
 GitHub Actions executes a shell command or an action step.
+Formal workflow run-command job inventories must stay duplicate-free,
+so duplicate workflow rows or checked-job names cannot collapse before
+single-line run-command and ambiguous-step validation.
 Formal workflow run inventories must match the checked proof jobs,
 so PR evidence runs only install/version/baseline and scheduled evidence runs
 install/version/baseline/frontier/docs-metadata in the reviewed order.
@@ -18459,6 +18620,9 @@ Formal workflow proof jobs may use only allowlisted action steps,
 so arbitrary marketplace or local actions cannot mutate the checked workspace,
 toolchain, or proof environment while leaving the visible proof commands
 unchanged.
+Formal workflow action-step job inventories must stay duplicate-free,
+so duplicate workflow rows or checked-job names cannot collapse before
+allowlisted action scanning runs.
 Formal workflow action steps must set `uses` at most once,
 so duplicate action keys cannot hide which setup or reporting action GitHub
 Actions will execute.
@@ -18470,17 +18634,29 @@ so checkout cannot switch refs or paths, Java setup cannot drift from Temurin 17
 and report upload cannot silently change the evidence artifact contract. Inline
 `with:` values count as input drift, so same-line YAML maps cannot bypass the
 pinned input contract.
+Formal workflow action-input job inventories must stay duplicate-free,
+so duplicate workflow rows or checked-job names cannot collapse before pinned
+action inputs are validated.
 Formal workflow setup action steps must not use conditionals, execution modifiers, or continue-on-error,
 so checkout and Java setup cannot be skipped, masked, or run under
 workflow-local environment overrides while the later proof commands remain
 unchanged.
+Formal workflow setup-action job inventories must stay duplicate-free,
+so duplicate workflow rows or checked-job names cannot collapse before setup
+action controls are scanned.
 Formal workflow proof jobs must use the pinned runner label,
 so PR and scheduled/manual proof evidence stays on the reviewed
 `ubuntu-latest` GitHub-hosted environment instead of silently moving to a
 self-hosted or otherwise different runner.
+Formal workflow runner-label inventories must stay duplicate-free,
+so duplicate workflow/job rows cannot collapse before the checked proof runner
+environment is validated.
 Formal workflow proof jobs must keep pinned timeout budgets,
 so PR proof evidence keeps its 45-minute budget and scheduled proof evidence
 keeps its 90-minute budget.
+Formal workflow timeout contract rows must stay duplicate-free,
+so duplicate workflow/job timeout rows or checked-job names cannot collapse or
+contradict the reviewed proof-job budget.
 Formal workflow proof jobs must not use dependency or environment gates,
 so checked proof evidence cannot be skipped behind unrelated `needs` jobs or
 GitHub environment approvals.
@@ -18490,6 +18666,9 @@ than a workflow-local permission override.
 Formal workflow proof entrypoints must stay inside the checked formal jobs,
 so required install, version-probe, baseline, and nightly proof commands cannot
 be satisfied by unrelated workflow jobs.
+Formal workflow entrypoint inventories must stay duplicate-free,
+so duplicate workflow/job rows, checked-job names, required proof commands, or
+order pairs cannot collapse before entrypoint scoping and ordering checks run.
 Formal workflow proof commands must not appear outside checked formal jobs in any workflow,
 so unrelated workflow files or jobs cannot run hidden formal proof entrypoints
 outside the guarded install, version, ordering, and inventory contracts.
@@ -18507,9 +18686,13 @@ command fails, and cannot run under workflow-local `env`, `defaults`, `shell`,
 remain pinned workflow budgets. The guard
 normalizes YAML field spacing around colons, so `run :`, `if :`, and
 `continue-on-error :` cannot hide proof evidence or failure-masking controls.
+Formal workflow proof-step control job inventories must stay duplicate-free,
+so duplicate workflow rows or checked-job names cannot collapse before proof
+step and proof-job control fields are scanned.
 Formal workflow mode and toolchain inventories must stay scoped to checked formal jobs,
 so unrelated workflow jobs cannot satisfy pinned-toolchain evidence or add
-scheduled/manual formal modes to the proof inventory.
+scheduled/manual formal modes to the proof inventory, and modes cannot overlap
+across PR, expected-failure, and scheduled/manual CI surfaces.
 Formal singleton evidence commands must appear at most once,
 so coverage audits, pinned-version probes, formal workflow entrypoints,
 expected-failure sweeps, and success markers cannot duplicate evidence with an
@@ -18889,7 +19072,7 @@ that common core plus the delivered-without-finality wait obligations. The
 formal guard also requires that the top/projection Byzantine direct-commit contracts stay aligned: every projected delivered-first,
 vote-first, and combined top-corridor aggregate must remain the projected
 counterpart of its central `Sumeragi.tla` contract, including the ordered
-corridor bridge implication antecedent. The guard also requires
+corridor bridge implication antecedent. Byzantine top/projection operator alignment inventories must stay duplicate-free, so duplicate source or projected operator mapping rows cannot collapse before mirror validation. Byzantine top/projection implication inventories must stay duplicate-free, so duplicate source or projection implication rows cannot collapse before antecedent mirror validation. Byzantine top/projection literal conjunct inventories must stay duplicate-free, so duplicate literal source or projected literal rows cannot collapse before projected-conjunct derivation. The guard also requires
 `ProjectionBridgeMatchesInterleavingCore` to mirror
 `ByzantineCommitInterleavingExactness`, keeping the projected bridge core tied
 to the source Byzantine interleaving proof surface. The projection bridge interleaving exactness composes projected direct-top and source core obligations, and the guard derives that full bridge surface from
@@ -31382,6 +31565,13 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   operator references, so standalone state predicates cannot drift outside the
   state-safety envelope.
   The consensus-core aggregate proof roots must keep their exact direct conjunct contracts.
+  Static aggregate conjunct contract inventories must stay duplicate-free before
+  set-based contract comparisons run.
+  Source/projection static alignment contract inventories must stay duplicate-free
+  before set-based contract comparisons run.
+  Static fairness action contract inventories must stay duplicate-free before
+  set-based fairness comparisons run.
+  `WF_vars` fairness operands must stay named zero-arity operators.
   The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,
   `SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly.
   The state+temporal, exactness, and fast roots keep their documented direct conjuncts.
@@ -31397,9 +31587,14 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Reachable aggregate temporal property roots recursively use the same top-level `PROPERTY` coverage rule.
   Finalized certificate retention names the Byzantine commit-vote closure property directly.
   Root coverage checks require each selected deep/TLC-fast CFG to carry every protected conjunct independently.
+  Root CFG coverage checks must consume duplicate-free proof-target inventories before set-based reachability and direct-conjunct coverage analysis.
+  Correctness-root CFG role checks must propagate malformed proof-target inventories
+  before role comparisons run.
   Top-level Apalache/TLC CFG proof checks must stay in parity, so a deep-only
   or TLC-only top-level obligation cannot count as shared consensus-core
   evidence.
+  Top-level Apalache/TLC CFG parity checks must propagate malformed proof-target inventories
+  before comparing shared checks.
   Correctness-root reachability requires the root property in every selected deep/TLC-fast CFG.
   Correctness-root direct TypeInvariant stays a top-level `INVARIANT` in every selected deep/TLC-fast CFG.
   Correctness-root direct temporal obligations stay top-level `PROPERTY` checks in every selected deep/TLC-fast CFG.
@@ -31498,9 +31693,20 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   fairness/liveness runs do not silently switch to a different TLC deadlock
   obligation. CFGs must define exactly one behavior surface: either a single
   `SPECIFICATION` binding or exactly one `INIT` plus one `NEXT` binding.
+  CFG required behavior inventories must stay duplicate-free before expected
+  behavior contracts compare a CFG's bound transition or temporal surface.
   CFGs must check TypeInvariant and a semantic proof target: every formal CFG
   must include `INVARIANT TypeInvariant` plus at least one non-`TypeInvariant`
   invariant or property.
+  CFG semantic proof-target checks must propagate malformed operator inventories
+  before deciding whether a CFG has semantic coverage.
+  CFG normalized proof-target inventories must stay duplicate-free:
+  normalized `INVARIANT`/`INVARIANTS` and `PROPERTY`/`PROPERTIES` entries are
+  rejected when they repeat a proof target or assign the same proof target to
+  both invariant and property roles before downstream CFG coverage can collapse
+  them.
+  CFG required proof-check inventories must stay duplicate-free before
+  required-check and exact-check-set contracts compare expected obligations.
   CFG filenames must belong to inferred owning modules, so a CFG can only
   count as evidence for the module named by its own stem or documented suffix
   fallback.
@@ -31509,13 +31715,24 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   a zero-arity operator on the CFG's owning TLA module, and non-`TypeInvariant`
   proof checks plus constraints must not be literal or `TypeInvariant` aliases.
   Apalache-only top-level corridor modes must stay typecheck-only unless listed as the bounded deep exception.
+  Apalache-only proof-mode inventories must stay duplicate-free, so repeated
+  allowlist, typecheck-only, or bounded-exception rows cannot be collapsed
+  before TLC-parity and typecheck-contract validation. Apalache typecheck-only runner inventories must stay duplicate-free, so repeated typecheck-only runner allowance rows cannot be collapsed before runner-case validation.
   CFG operator references must be duplicate-free and role-disjoint: singleton
   behavior and constraint directives cannot repeat, proof checks cannot repeat
   or switch between invariant/property roles, and a target operator cannot be
   reused across behavior, constraint, and proof-check roles.
+  CFG duplicate and non-trivial operator guards must propagate malformed operator inventories
+  before checking role-disjointness or trivial target chains.
   fast CFGs must use model-specific correctness envelopes: every clean
   `_fast.cfg` must avoid generic correctness checks and include a
   model-specific `*CorrectnessEnvelope` invariant or property.
+  Fast generic-check guards must propagate malformed operator inventories before
+  deciding whether a fast CFG has model-specific correctness-envelope coverage.
+  Correctness-envelope shape guards must propagate malformed operator inventories
+  before validating envelope structure.
+  Direct-exactness shape and pairing guards must propagate malformed operator inventories
+  before validating exactness bodies or envelope pairing.
   CFG proof-target shapes must preserve correctness-envelope/direct-exactness structure:
   clean fast correctness envelopes must compose `TypeInvariant` and direct
   model-specific `*Exactness` conjuncts, direct exactness checks must inline
@@ -31524,6 +31741,10 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   CFG constant bindings must match owning module declarations: every CFG
   constant assignment must bind a declared constant exactly once, and every
   declared constant on the owning TLA module must be assigned by the CFG.
+  CFG duplicate constant-binding guards must propagate malformed binding inventories
+  before checking duplicate assignments.
+  CFG required constant-value inventories must stay duplicate-free before
+  required-value and exact-set constant envelope checks run.
   SPECIFICATION CFGs must set CHECK_DEADLOCK FALSE under the same
   rule, so newly added temporal CFGs cannot reintroduce TLC deadlock checking
   outside the documented liveness obligation. It also requires that top-level Sumeragi CFG constants pin quorum and fault envelopes for the root fast, deep, and TLC-fast coverage configs.
@@ -31536,7 +31757,7 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Expected-failure progress mutation CFGs have the complementary rule:
   progress mutation CFGs bind Bug to their file suffix, so each mutation mode
   checks the fault named by its CFG filename. The safety mutation CFGs bind Bug to their file suffix under the same rule for source safety and projection bridge
-  mutation modes. The mutation CFGs must check INVARIANT TypeInvariant, so expected-failure counterexamples cannot escape the model's typed state envelope. The mutation CFGs must check at least one non-TypeInvariant invariant/property in addition to TypeInvariant, so expected-failure coverage cannot pass with only a typed-state envelope. Mutation CFG semantic proof targets must resolve to zero-arity non-trivial operators on the owning TLA module, so a typo, parameterized helper, literal alias, or TypeInvariant alias cannot satisfy mutation coverage. The mutation CFGs bind the expected behavior surface: bounded safety mutations use `INIT`/`NEXT`, progress mutations use their named progress `SPECIFICATION`, and documented frontier-recovery seed mutations use their explicit bug initializers with `NEXT Next`. The custom mutation INIT exceptions must stay live, necessary, and exact: each entry must point at an existing INIT/NEXT mutation CFG, use a non-default zero-arity initializer defined by the owning module, and keep `NEXT Next`. More generally, quoted-string mutation CFG Bug constants match their file suffix while legacy numeric bug selectors remain numeric.
+  mutation modes. The mutation CFGs must check INVARIANT TypeInvariant, so expected-failure counterexamples cannot escape the model's typed state envelope. The mutation CFGs must check at least one non-TypeInvariant invariant/property in addition to TypeInvariant, so expected-failure coverage cannot pass with only a typed-state envelope. Mutation CFG semantic proof targets must resolve to zero-arity non-trivial operators on the owning TLA module, so a typo, parameterized helper, literal alias, or TypeInvariant alias cannot satisfy mutation coverage. The mutation CFGs bind the expected behavior surface: bounded safety mutations use `INIT`/`NEXT`, progress mutations use their named progress `SPECIFICATION`, and documented frontier-recovery seed mutations use their explicit bug initializers with `NEXT Next`. The custom mutation INIT exceptions must stay live, necessary, and exact: each entry must point at an existing INIT/NEXT mutation CFG, use a non-default zero-arity initializer defined by the owning module, and keep `NEXT Next`. Custom mutation INIT exception inventories must stay duplicate-free, so no duplicate exception row can be collapsed before behavior validation. More generally, quoted-string mutation CFG Bug constants match their file suffix while legacy numeric bug selectors remain numeric.
   The quoted mutation CFG Bug selectors must be used by reachable TLA Bug expressions, including local modules reached through `EXTENDS` and `INSTANCE`, so a quoted selector cannot be satisfied by an incidental string literal outside the model branch it configures.
   The guard also requires that numeric mutation CFG Bug selectors must be used by reachable TLA Bug relations, either as direct numeric operands or through named numeric operands. The numeric mutation CFG Bug selectors are unique per family, so legacy selector-based mutation modes cannot alias one another or point at values the model never selects.
   It also requires that mutation CFGs use exactly one Bug selector style, so
@@ -31546,13 +31767,13 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   selector, boolean mutation CFG selectors remain one-hot: exactly one
   selector must be `TRUE`, except for the documented
   `SumeragiForkSafety_bug_double_sign.cfg` compound mutation that enables both
-  double-signing gates. The boolean mutation CFG TRUE selectors match their file suffixes by normalized selector name or by an explicit alias entry, so one-hot CFGs cannot silently enable a different boolean fault. The guard also requires that boolean mutation CFG TRUE selectors are unique per family, so selector-based boolean mutation modes cannot alias one another, and boolean mutation CFG selectors must be declared by their TLA modules, so CFG typos cannot become latent selector assignments. The boolean mutation CFG selectors bind every declared boolean selector from their owning module, so an omitted selector cannot become an implicit default. The boolean mutation CFG selectors must be used by reachable TLA expressions outside declarations, so a CFG assignment cannot be satisfied by a dead constant, comment, or string literal. The exact mutation CFG Bug selectors must be declared by their TLA modules under the same rule, including `_progress` and `_tlc` CFG fallbacks to the owning base module. The boolean selector exception tables must stay live, necessary, and exact, so alias and compound exceptions cannot point at missing or non-mutation CFG files, duplicate default matching, or describe selectors the CFG does not actually enable.
+  double-signing gates. The boolean mutation CFG TRUE selectors match their file suffixes by normalized selector name or by an explicit alias entry, so one-hot CFGs cannot silently enable a different boolean fault. The guard also requires that boolean mutation CFG TRUE selectors are unique per family, so selector-based boolean mutation modes cannot alias one another, and boolean mutation CFG selectors must be declared by their TLA modules, so CFG typos cannot become latent selector assignments. The boolean mutation CFG selectors bind every declared boolean selector from their owning module, so an omitted selector cannot become an implicit default. The boolean mutation CFG selectors must be used by reachable TLA expressions outside declarations, so a CFG assignment cannot be satisfied by a dead constant, comment, or string literal. The exact mutation CFG Bug selectors must be declared by their TLA modules under the same rule, including `_progress` and `_tlc` CFG fallbacks to the owning base module. Boolean mutation selector alias inventories must stay duplicate-free, so duplicate alias rows cannot be collapsed before selector-name validation. Boolean mutation compound selector inventories must stay duplicate-free, so duplicate compound rows or selector rows cannot be collapsed before one-hot validation. The boolean selector exception tables must stay live, necessary, and exact, so alias and compound exceptions cannot point at missing or non-mutation CFG files, duplicate default matching, or describe selectors the CFG does not actually enable.
   The safety mutation CFGs bind INIT Init and NEXT Next so
   bounded expected-failure safety modes cannot keep the right checks while
   running a stale transition surface. The clean safety CFGs bind Bug = "none"
   and the clean safety CFGs bind INIT Init and NEXT Next for the same source and
   projection fast corridors, so positive bounded safety checks cannot silently
-  run a mutation or stale transition relation.
+  run a mutation or stale transition relation. Progress safety-only mutation allowlists must stay duplicate-free, so duplicate safety-only suffix rows cannot be collapsed before source and projection mutation-family alignment. Source progress safety alignment inventories must stay duplicate-free, so duplicate source envelope-alignment rows cannot inflate the progress-safety coverage surface.
   Non-bug `_fast.cfg` configs must check a
   model-specific `*CorrectnessEnvelope` invariant or property, so PR-fast
   corridors cannot regress to generic `NoBugInvariant`, `Safety`, or
@@ -31915,6 +32136,17 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   CI, workflow, and README formal commands must use strict Apalache/TLC runner shapes,
   so direct runner invocations cannot hide extra arguments or malformed mode tokens
   outside the central scripts.
+  Apalache/TLC runner case inventories must stay duplicate-free,
+  so repeated runner branches cannot overwrite or obscure the checked proof mode body.
+  Apalache runner-mode CI reachability diagnostics must stay line-aware,
+  so exact runner branches missing PR or formal CI identify the runner case line
+  before runner inventories are collapsed.
+  README Apalache command support diagnostics must stay line-aware,
+  so unsupported documented Apalache commands identify the README command line
+  before README mode sets are collapsed.
+  README TLC command support diagnostics must stay line-aware,
+  so unsupported documented TLC commands identify the README command line before
+  README mode sets are collapsed.
   README formal runner commands must be standalone command lines,
   so inline prose, `echo`, or backtick mentions cannot satisfy documented mode
   coverage.
@@ -31939,16 +32171,114 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   so comments, prose, or `echo` lines cannot satisfy proof-mode coverage.
   Active CI/workflow TLC modes must be supported by the TLC runner and documented by README TLC commands,
   so direct TLC evidence cannot drift outside the checked inventory.
+  Active CI/workflow TLC inventory diagnostics must stay line-aware,
+  so unsupported or undocumented active TLC commands identify the offending proof
+  surface command before mode sets are collapsed.
+  Active CI/workflow Apalache support diagnostics must stay line-aware,
+  so unsupported active Apalache commands identify the offending proof surface
+  command before mode sets are collapsed.
+  Active CI/workflow Apalache README coverage diagnostics must stay line-aware,
+  so active Apalache commands missing README documentation identify the offending
+  proof surface command before mode sets are collapsed.
+  PR baseline TLC cross-check diagnostics must stay line-aware,
+  so missing TLC parity identifies the Apalache runner case line and unexpected
+  Apalache-only TLC evidence identifies the TLC runner or README command line.
+  Active CI/workflow Apalache modes must be duplicate-free,
+  so repeated active Apalache invocations cannot inflate or obscure PR,
+  expected-failure, or scheduled/manual proof evidence.
   Active CI/workflow TLC modes must be duplicate-free,
-  so repeated TLC invocations cannot inflate or obscure the direct TLC evidence
-  inventory.
+  so repeated active TLC invocations cannot inflate or obscure the direct TLC
+  evidence inventory.
+  Active CI/workflow Apalache modes must not overlap across proof surfaces,
+  so an Apalache proof mode cannot count in more than one of PR,
+  expected-failure, or scheduled/manual evidence.
+  Active CI/workflow TLC modes must not overlap across proof surfaces,
+  so a TLC proof mode cannot count in more than one of PR, expected-failure, or
+  scheduled/manual evidence.
+  README Apalache/TLC command inventories must stay duplicate-free,
+  so repeated documented command rows cannot collapse before proof-mode coverage
+  is compared.
+  README Apalache length table modes must stay duplicate-free,
+  so repeated mode rows cannot collapse before runner-length comparison.
+  README Apalache length table coverage diagnostics must stay line-aware,
+  so missing PR-baseline rows identify the runner case line and unsupported rows
+  identify the length-table line before length mode sets are collapsed.
+  README Apalache length mismatch diagnostics must stay line-aware,
+  so documented length drift identifies both the README length-table line and
+  the Apalache runner case line before row maps are collapsed.
+  README fast-mode table modes must stay duplicate-free,
+  so repeated fast-mode rows cannot collapse before TLC fast coverage comparison.
+  README fast-mode table TLC support diagnostics must stay line-aware,
+  so unsupported TLC-runner rows and rows missing README TLC commands identify
+  the fast-mode table line before table mode sets are collapsed.
+  TLC exact fast-mode README coverage diagnostics must stay line-aware,
+  so exact TLC `*-fast` runner cases missing from the README fast-mode table
+  identify the TLC runner case line before runner mode sets are collapsed.
+  README mutation-mode TLC runner support diagnostics must stay line-aware,
+  so documented mutation modes unsupported by TLC identify the README command
+  line before Apalache/TLC bug-mode sets are collapsed.
+  README mutation-mode TLC expected-failure diagnostics must stay line-aware,
+  so documented mutation modes missing `expect_failure=1` identify both the
+  README command line and the TLC runner case line.
+  README mutation-mode expected-failure CI coverage diagnostics must stay line-aware,
+  so README mutation commands missing from expected-failure CI identify the
+  README command line before mutation mode sets are collapsed.
+  Apalache expected-failure CI marker diagnostics must stay line-aware,
+  so expected-failure CI Apalache modes missing `expect_failure=1` identify the
+  expected-failure CI command line and the Apalache runner case line.
+  Apalache baseline expected-failure diagnostics must stay line-aware,
+  so PR or scheduled/manual Apalache modes with unexpected `expect_failure=1`
+  identify the CI command line and the Apalache runner case line.
+  Apalache CI mutation-surface diagnostics must stay line-aware,
+  so PR CI mutation modes and expected-failure CI non-mutation modes identify
+  the active CI command line before CI mode sets are collapsed.
+  README mutation CFG equivalence diagnostics must stay line-aware,
+  so documented mutation modes with Apalache/TLC CFG drift identify the README
+  command line before mutation mode sets are collapsed.
+  README mutation CFG-name diagnostics must stay line-aware,
+  so documented mutation modes with CFG filename drift identify the README
+  command line before mutation mode sets are collapsed.
+  TLC module identity diagnostics must stay line-aware,
+  so Apalache/TLC module drift identifies the README or CI command line before
+  TLC mode sets are collapsed.
+  Apalache/TLC unused runner-case diagnostics must stay line-aware,
+  so stale runner branches identify the runner case line before used-case sets
+  are collapsed.
+  Apalache/TLC missing formal-file diagnostics must stay line-aware,
+  so missing spec, CFG, or TLC module references identify the runner case line
+  before missing-file sets are collapsed.
+  Apalache/TLC CFG shape diagnostics must stay line-aware,
+  so malformed runner-selected CFGs identify the runner case line before
+  CFG-shape errors are grouped.
+  Apalache/TLC TLA validation diagnostics must stay line-aware,
+  so malformed runner-selected TLA modules identify the runner case line before
+  module validation errors are grouped.
+  Apalache/TLC CFG inventory diagnostics must stay line-aware,
+  so duplicate runner-selected CFG bindings and proof targets identify the
+  runner case line before inventory errors are grouped.
+  Apalache/TLC CFG proof-target diagnostics must stay line-aware,
+  so weak runner-selected CFG semantic checks identify the runner case line
+  before proof-target errors are grouped.
+  Apalache/TLC CFG module-binding diagnostics must stay line-aware,
+  so runner-selected CFG ownership and operator-reference failures identify
+  the runner case line before module-binding errors are grouped.
+  Apalache/TLC CFG constant-binding diagnostics must stay line-aware,
+  so runner-selected CFG constant bindings identify the runner case line before
+  constant-binding errors are grouped.
+  Apalache/TLC CFG trivial-target diagnostics must stay line-aware,
+  so runner-selected trivial CFG checks identify the runner case line before
+  trivial-target errors are grouped.
+  TLC non-mutation expected-failure diagnostics must stay line-aware,
+  so non-mutation TLC modes with unexpected `expect_failure=1` identify the
+  README or CI command line and the TLC runner case line.
   Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands,
   so stale inventory wiring cannot execute proof jobs before the guard fails.
   Formal workflow triggers must keep the checked PR and scheduled/manual surfaces,
   so PR evidence remains on `pull_request` for `main` and nightly evidence remains
   both manually dispatchable and scheduled at the reviewed cron.
   Workflow Apalache install and toolchain version pins must come from active commands,
-  so comments or step names cannot satisfy the pinned model-checker install
+  so comments, step names, duplicate checked-job names, or duplicate active/static
+  install and toolchain pins cannot satisfy the pinned model-checker install
   contract.
   Formal workflows must verify the pinned Apalache binary before running proof jobs,
   so scheduled and PR evidence both record the local toolchain selected by the
@@ -31991,6 +32321,9 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Formal workflow run inventories must match the checked proof jobs,
   so PR evidence runs only install/version/baseline and scheduled evidence runs
   install/version/baseline/frontier/docs-metadata in the reviewed order.
+Formal workflow run inventories must stay duplicate-free, so duplicate
+workflow/job rows, checked-job names, or expected run commands cannot be
+collapsed before exact proof-transcript checks run.
   Formal workflow proof jobs may use only allowlisted action steps,
   so arbitrary marketplace or local actions cannot mutate the checked workspace,
   toolchain, or proof environment while leaving the visible proof commands
@@ -32001,9 +32334,15 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Formal workflow action inventories must match the checked proof jobs,
   so PR evidence uses only checkout/setup-java and scheduled evidence uses
   checkout/setup-java/report-upload in the reviewed order.
+Formal workflow action inventories must stay duplicate-free, so duplicate
+workflow/job rows, checked-job names, or expected action steps cannot be
+collapsed before exact setup-action transcript checks run.
   Formal workflow action inputs must match the pinned proof environment,
   so checkout cannot switch refs or paths, Java setup cannot drift from Temurin
   17, and report upload cannot silently change the evidence artifact contract.
+  Formal workflow action input inventories must stay duplicate-free, so
+  duplicate action rows or pinned input lines cannot be collapsed before proof
+  environment input checks run.
   Inline `with:` values count as input drift, so same-line YAML maps cannot
   bypass the pinned input contract.
   Formal workflow setup action steps must not use conditionals, execution modifiers, or continue-on-error,
@@ -32026,10 +32365,15 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Formal workflow proof entrypoints must stay inside the checked formal jobs,
   so required install, version-probe, baseline, and nightly proof commands
   cannot be satisfied by unrelated workflow jobs.
+  Formal workflow entrypoint inventories must stay duplicate-free, so duplicate
+  workflow/job rows, required proof commands, or order pairs cannot be
+  collapsed before entrypoint scoping and ordering checks run.
   Formal workflow proof commands must not appear outside checked formal jobs in any workflow,
   so unrelated workflow files or jobs cannot run hidden formal proof
   entrypoints outside the guarded install, version, ordering, and inventory
-  contracts.
+  contracts. Formal workflow allowed-job inventories must stay duplicate-free,
+  so duplicate workflow-path or checked-job rows cannot be collapsed before
+  proof-command scoping checks run.
   Formal workflow job scoping must only recognize jobs under the top-level jobs block,
   so same-named keys in `env`, `on`, or other workflow sections cannot satisfy
   or hide formal proof jobs.
@@ -32046,11 +32390,15 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   failure-masking controls.
   Formal workflow mode and toolchain inventories must stay scoped to checked formal jobs,
   so unrelated workflow jobs cannot satisfy pinned-toolchain evidence or add
-  scheduled/manual formal modes to the proof inventory.
+  scheduled/manual formal modes to the proof inventory, and modes cannot overlap
+  across PR, expected-failure, and scheduled/manual CI surfaces.
   Formal singleton evidence commands must appear at most once,
   so coverage audits, pinned-version probes, formal workflow entrypoints,
   expected-failure sweeps, and success markers cannot duplicate evidence with
   an ambiguous transcript.
+  Formal CI singleton command inventories must stay duplicate-free, so
+  duplicate script rows or singleton command rows cannot be collapsed before
+  duplicate-command validation runs.
   Formal shell entrypoints must use `set -euo pipefail`, so failed proof,
   installation, or piped evidence commands stop the script instead of being
   masked by later commands.
@@ -32103,8 +32451,8 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   local bound.
   CI/README Apalache and TLC command lines must also provide exactly one static
   mode token after the runner path.
-  Duplicate fast-mode rows or duplicated TLC commands are rejected so one
-  repeated mode cannot hide a missing one, and
+  Duplicate fast-mode rows or duplicated Apalache/TLC commands are rejected so
+  one repeated mode cannot hide a missing one, and
   malformed Apalache/TLC runner case labels, malformed case terminators,
   unindented case-block content, duplicate Apalache/TLC runner case labels,
   shell-case wildcard shadowing, or CI/README Apalache commands, including

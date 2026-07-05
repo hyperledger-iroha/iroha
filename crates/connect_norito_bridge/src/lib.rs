@@ -3901,7 +3901,8 @@ fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult
         .and_then(JsonValue::as_str)
         .ok_or(BridgeError::IdentifierReceipt)?;
     let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
-    Signature::try_from_bytes(&signature_bytes).map_err(|_| BridgeError::IdentifierReceipt)
+    iroha_crypto::ed25519_parse_signature(&signature_bytes)
+        .map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn parse_identifier_receipt_signature_for_algorithm(
@@ -33023,9 +33024,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_identifier_receipt_output_opening_rejects_malformed_ed25519_r_on_verify() {
-        let opening_signer = checked_identifier_receipt_ed25519_key_fixture();
-
+    fn parse_identifier_receipt_rejects_malformed_output_opening_signature_r() {
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
             ("noncanonical", NONCANONICAL_ED25519_R),
@@ -33034,23 +33033,24 @@ mod tests {
             let mut signature = payload.opening.signature.payload().to_vec();
             signature[..replacement_r.len()].copy_from_slice(&replacement_r);
             payload.opening.signature = Signature::from_bytes(&signature);
-            let receipt =
+            let err =
                 parse_identifier_receipt_value(sample_identifier_signed_receipt_json(&payload))
-                    .expect("receipt with outer-valid malformed opening should parse");
-            receipt
-                .verify(sample_identifier_receipt_attestation_signer().public_key())
-                .expect("outer receipt attestation remains valid for mutated payload");
-
-            let err = receipt
-                .payload
-                .opening
-                .verify_signature(opening_signer.public_key())
-                .expect_err("malformed output-opening signature R must reject on verification");
+                    .expect_err("malformed output-opening signature R must reject while parsing");
             assert!(
-                matches!(err, iroha_crypto::Error::BadSignature),
-                "{label} output-opening signature R produced unexpected error: {err:?}"
+                matches!(err, BridgeError::IdentifierReceipt),
+                "{label} output-opening signature R produced unexpected parse error: {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn parse_identifier_receipt_rejects_all_zero_output_opening_signature() {
+        let mut payload = sample_identifier_receipt_payload();
+        payload.opening.signature = Signature::from_bytes(&[0_u8; 64]);
+
+        let err = parse_identifier_receipt_value(sample_identifier_signed_receipt_json(&payload))
+            .expect_err("all-zero output-opening signature must reject while parsing");
+        assert!(matches!(err, BridgeError::IdentifierReceipt));
     }
 
     #[test]

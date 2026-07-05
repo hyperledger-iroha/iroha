@@ -220,11 +220,15 @@ TON live account-snapshot imports now also require exact string address, hash,
 and code BoC metadata before parser dispatch, and the hostile non-string
 regression proves copied evidence cannot trigger stringification or leak
 operator-controlled scalar text while the live TON verifier deployment evidence
-remains open.
+remains open. TON live full-TOML comments now reuse the exact account hash,
+logical-time, transaction hash, code hash, and code BoC root parsers before
+comment rendering.
 Solana live account/program imports now enforce the same boundary for verifier
 program id, ProgramData address, verifier code hash, ProgramData metadata hash,
 and copied base64 account/program bytes, with hostile non-string regressions
 pinning that copied evidence cannot be stringified into production metadata.
+Solana live full-TOML comments now also reuse exact commitment, owner,
+ProgramData, slot, metadata-hash, and base64 helpers before rendering comments.
 Solana live JSON-RPC `--rpc-url` inputs now also require exact URL text and
 public-DNS HTTPS except loopback HTTP for local development; credentialed,
 query/fragment-bearing, localhost, IP-literal, single-label, `.local`,
@@ -255,7 +259,15 @@ exactly before event matching or used-message-proof checks. TRON route-canary
 evidence-hash reconstruction now also parses accepted transaction,
 trigger-call, and verifier address metadata through exact summary parsers
 instead of `str(...)`, with hostile non-string regressions pinned for
-collection and replay verification. TRON optional live
+collection and replay verification. TRON source-event collection now reparses
+source bridge address and owner metadata through the same exact TRON summary
+helpers before `submittedSourceEvents` calls, trigger request rendering, or
+transaction proof checks, and rejects mismatched owner encodings before any
+replay arguments are emitted. TRON live collection now also validates
+internally selected endpoint paths through exact summary-string helpers before
+source bridge, destination verifier, source-event, or route-canary follow-up
+calls, and source-record input summaries reparse collected emitter/adaptor
+hashes before public summary emission. TRON optional live
 hex argument helpers now also reject non-string namespace values before
 delegating to bytes32 or blob parsers, so fixture or runtime callers cannot
 stringify hostile objects into route, witness-seal, or receipt-proof arguments.
@@ -272,6 +284,10 @@ destination, source-record, route allowlist, route-canary, and Torii query
 fields: copied non-string hashes or addresses are rejected before parser
 dispatch or generated TOML argument emission, with hostile-object coverage
 pinning that no operator scalar text is stringified. EVM destination-live
+offline TOML comments now also reparse block tags, RPC chain ids, bridge and
+verifier runtime hashes/bytecode, verifier key hashes, backend hashes, and proof
+family hashes through exact copied-summary helpers before comment rendering.
+EVM destination-live
 runtime namespace inputs now also validate optional bytes32 hashes and
 route-canary integer pins before RPC, so direct callers cannot smuggle
 non-bytes or hostile objects into expected-network, destination-binding,
@@ -281,7 +297,11 @@ also parses event and call-summary hashes through exact string metadata gates,
 with hostile non-string regressions pinned before route-canary evidence hashes
 can be derived; receipt block number, log index, target domain, and proof
 version/domain scalars use exact integer gates with hostile coercion
-regressions. Collected EVM route-canary transaction summaries are now
+regressions. Offline EVM destination route-canary evidence now also requires
+exact u64 receipt and transaction block-number locals before TOML comments,
+JSON summaries, or direct route-canary evidence hashes are rendered, so hostile
+direct namespace values cannot be stringified into post-deploy route evidence.
+Collected EVM route-canary transaction summaries are now
 revalidated through the same exact hex and integer helpers before
 offline/full-TOML arguments are generated, so imported or post-collector hostile
 metadata cannot run string or integer coercion hooks. EVM source-live runtime
@@ -289,6 +309,23 @@ namespace inputs now apply the same pre-RPC bytes32 validation to expected
 source bridge code hashes, deployment transaction pins, source component hashes,
 adapter verifier keys, deployment receipt hashes,
 and expected source-record hashes before live source bridge evidence collection.
+EVM source-live generated offline arguments now also reparse copied runtime
+bytecode with the same exact summary helper before source TOML arguments are
+built, so hostile runtime metadata cannot be stringified during generated-args
+emission. EVM source-live domain handling now also requires exact ETH/BSC
+source-lane integers before default block-tag selection, direct live collection,
+evidence module loading, source-record hashing, or generated offline arguments,
+so hostile namespace domains cannot trigger equality/hash/string hooks or be
+stringified into `--source-domain`. EVM source-live offline TOML comments now
+derive block tags, chain
+ids, source bridge addresses, runtime hashes/bytecode, deployment transaction
+hashes, receipt status, receipt block numbers, and finality pins from exact
+copied-summary parsers before rendering, so copied metadata cannot hide behind
+prerequisite blockers or comment-time `str(...)` coercion. EVM source-live
+deployment receipt finality checks now also require exact copied block-number
+and block-hash metadata before comparing against the finalized execution head,
+so hostile integer or string coercion hooks cannot run during finality
+revalidation.
 EVM receipt-proof direct collector inputs now validate transaction hashes,
 source bridge addresses, receipt-only mode, and explicit expected chain ids
 before RPC, so malformed namespace values cannot trigger provider calls or be
@@ -305,6 +342,10 @@ comparison or TOML readiness can open.
 ETH/BSC source-bridge expected source verifier material and source-adapter
 deployment record hashes now normalize before summary comparison and TOML
 readiness, so hostile equality hooks cannot mark direct source records ready.
+ETH/BSC offline source-bridge evidence now also emits deployment transaction
+and receipt block-number metadata only from exact positive integer locals,
+including JSON summaries whose readiness helper has drifted, so hostile
+namespace values cannot be stringified into source deployment evidence.
 Solana/TON source-state expected material, deployment, and full-light-client
 gate hashes now use the same normalized non-zero bytes32 boundary before
 readiness comparisons can run.
@@ -439,6 +480,10 @@ failures to the same fixed public categories used for other decoder failures.
 Direct ETH/BSC/TRON source-bridge fixed-hex and runtime-bytecode parser helpers
 now also normalize delegated `argparse.ArgumentTypeError` failures behind fixed
 hex diagnostics, with release inventory markers pinning the no-leak regressions.
+TRON source-bridge u32/u64 decimal parser helpers now also require exact `str`
+instances or exact `int` values before canonical decimal validation, so hostile
+string subclasses cannot run equality, indexing, ASCII, or decimal hooks while
+public scalar arguments are checked.
 Release-bundle and standalone readiness strict hex/Solana public-key helpers now
 also collapse delegated `argparse.ArgumentTypeError` failures to canonical
 public hex/base58 diagnostics, so parser details cannot leak through copied
@@ -469,6 +514,17 @@ TON live generated offline arguments now mirror that boundary for copied
 destination-binding, route-allowlist, and route-canary evidence hashes, and
 also reparse emitted live account hashes and logical time before argument
 emission.
+Solana and TON live destination argument builders now also reparse their
+validated-live metadata with exact string, hash, and decimal helpers, so direct
+builder calls cannot stringify hostile slot, account-state, or code-hash
+metadata. Solana ProgramData slot comparisons now compare exact parsed u64
+values rather than stringified slot text. Offline Solana destination evidence
+rendering now applies the same exact ProgramData address and u64 slot locals
+before TOML or JSON summary emission, so direct namespace callers cannot
+stringify hostile ProgramData metadata outside live collection. Offline TON
+destination evidence rendering now also routes last-transaction logical time
+through the exact positive-decimal helper before TOML, route-canary, or JSON
+summary emission.
 The Python TON live CLI parser helpers now apply that boundary to verifier raw
 addresses and bytes32 evidence hashes before delegated TON parser helpers can
 run string-like hooks. The Python TRON live CLI parser helpers now apply the
@@ -476,8 +532,11 @@ same boundary to TRON address payloads and bytes32 evidence hashes before
 delegated address or hex parser helpers can run string-like hooks, including
 optional hex namespace helpers and inline witness-schedule payload inputs used
 by live evidence collection; source-inclusion branch lists are shape-checked
-before hex entry parsing, and repeated witness-seal signature / schedule
-transition inputs reject scalar containers before item parsing.
+before hex entry parsing, repeated witness-seal signature / schedule transition
+inputs reject scalar containers before item parsing, and live decimal/enum
+parsers for source domains, protobuf ints, and transaction enum values now
+reject string subclasses before canonical decimal or mapping checks can invoke
+hostile hooks.
 TRON live `--tron-node-url` inputs now also require exact URL text and
 public-DNS HTTPS except loopback HTTP for local development; credentialed,
 query/fragment-bearing, localhost, IP-literal, single-label, `.local`,
@@ -5331,11 +5390,16 @@ redistributable schemas, and official trust/revocation bundles.
 					  cache-admission payload, observation-payload,
 					  directory-record, runtime-upgrade-provenance, offline-certificate, attestation-hash,
 					  consensus-preimage, or trust-book mutation, and the final signer-admission
-					  inventory classifies remaining raw signature constructors as fixed Ed25519
-					  formats, signer-aware generic branches, non-Ed25519 fallbacks, BLS-only
-					  checked paths, signer-context-free decode staging, or fixtures/examples,
-					  and direct byte-key/preparsed batch APIs now filter exact
-					  verify-cache hits before signature parsing and backend setup;
+						  inventory classifies remaining raw signature constructors as fixed Ed25519
+						  formats, signer-aware generic branches, non-Ed25519 fallbacks, BLS-only
+						  checked paths, signer-context-free decode staging, or fixtures/examples,
+							  the production-readiness corridor records focused crypto/route-sensitive
+							  validation plus full workspace clippy as passing, reruns the final
+							  constructor/algorithm inventories with no new production signer-aware gap,
+							  and closes the prior non-crypto consensus/DA blocker with the full
+							  serialized `consensus_and_da` target green locally,
+						  and direct byte-key/preparsed batch APIs now filter exact
+						  verify-cache hits before signature parsing and backend setup;
 	  the thread-local exact verify-ok cache now keeps two entries per exact slot
 	  to reduce collision churn for 32-byte transaction-hash verification tuples
 	  without returning to a process-wide cache;
@@ -9953,9 +10017,11 @@ redistributable schemas, and official trust/revocation bundles.
     manifest write failures after state commit are reported as sidecar
     warnings, not ledger data loss or commit rollback.
   - The broad `integration_tests --test consensus_and_da` target is green after
-    the memory-only WSV sidecar changes, including DA restart/rehydration and
-    the mode-cutover and vote-QC regressions exposed by the first workspace
-    rerun.
+    the memory-only WSV sidecar changes and the July 5 crypto-readiness
+    corridor closure, including DA restart/rehydration, READY telemetry
+    sampling, committed mode/status reconciliation, cached proposal marker
+    cleanup, and the mode-cutover and vote-QC regressions exposed by the first
+    workspace rerun.
   - The replay validation fixture now replays multiple route-sensitive legacy
     blocks into a fresh state and compares canonical WSV snapshot bytes against
     the originally committed WSV, covering account, domain, alias, and asset

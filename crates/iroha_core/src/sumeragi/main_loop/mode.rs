@@ -8,6 +8,35 @@ use iroha_logger::prelude::*;
 use super::*;
 
 impl Actor {
+    pub(super) fn publish_epoch_status_for_current_mode(&self) {
+        let (length_blocks, commit_offset, reveal_offset) = match self.consensus_mode {
+            ConsensusMode::Permissioned => (0, 0, 0),
+            ConsensusMode::Npos => self.epoch_manager.as_ref().map_or_else(
+                || {
+                    let world = self.state.world_view();
+                    let params =
+                        super::load_npos_epoch_params_from_world(&world, &self.config.npos);
+                    (
+                        params.epoch_length_blocks,
+                        params.commit_deadline_offset,
+                        params.reveal_deadline_offset,
+                    )
+                },
+                |manager| {
+                    (
+                        manager.epoch_length_blocks(),
+                        manager.commit_window_end(),
+                        manager.reveal_window_end(),
+                    )
+                },
+            ),
+        };
+        super::status::set_epoch_parameters(length_blocks, commit_offset, reveal_offset);
+        #[cfg(feature = "telemetry")]
+        self.telemetry
+            .set_epoch_parameters(length_blocks, commit_offset, reveal_offset);
+    }
+
     #[allow(clippy::unnecessary_wraps)]
     fn rebuild_npos_state(&mut self) -> Result<Option<[u8; 32]>> {
         let height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
@@ -328,6 +357,7 @@ impl Actor {
             let params = world.parameters().sumeragi();
             super::staged_mode_info(params)
         };
+        self.publish_epoch_status_for_current_mode();
         super::status::set_mode_tags(
             self.mode_tag(),
             staged_mode_tag,

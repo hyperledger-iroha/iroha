@@ -9,9 +9,18 @@
 // - `solc` and `ethers` on NODE_PATH for compile/deploy commands.
 // - Optional `TRON_PRO_API_KEY` or `TRON_GRID_API_KEY` for TronGrid calls.
 import { createRequire } from "node:module";
-import { lstat, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { isIP } from "node:net";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { secp256k1 } from "../javascript/iroha_js/node_modules/@noble/curves/secp256k1.js";
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
@@ -1098,43 +1107,216 @@ function tronAddressFromPrivateKey(privateKey) {
   return tronAddressFromPublicKey(secp256k1.getPublicKey(privateKey, false));
 }
 
-function parseArgs(argv) {
-  const [command, ...rest] = argv;
+const COMMAND_OPTION_ALLOWLISTS = Object.freeze({
+  "generate-deployer": new Set(["tron-network", "out", "force"]),
+  doctor: new Set([
+    "tron-network",
+    "secret",
+    "verifier",
+    "endpoint",
+    "check-account",
+    "require-secret",
+    "require-verifier",
+    "require-optional-packages",
+    "fee-limit",
+    "trigger-fee-limit",
+    "origin-energy-limit",
+    "safety-margin-percent",
+    "funding-mode",
+    "api-key",
+  ]),
+  "estimate-budget": new Set([
+    "tron-network",
+    "secret",
+    "fee-limit",
+    "trigger-fee-limit",
+    "origin-energy-limit",
+    "safety-margin-percent",
+    "funding-mode",
+  ]),
+  "account-status": new Set([
+    "tron-network",
+    "secret",
+    "endpoint",
+    "fee-limit",
+    "trigger-fee-limit",
+    "origin-energy-limit",
+    "safety-margin-percent",
+    "funding-mode",
+    "api-key",
+  ]),
+  compile: new Set(["out"]),
+  "compile-taira-contract": new Set(["out"]),
+  deploy: new Set([
+    "verifier",
+    "tron-network",
+    "secret",
+    "endpoint",
+    "out",
+    "funding-mode",
+    "broadcast",
+    "confirm-mainnet",
+    "confirm-testnet",
+    "artifacts-out",
+    "fee-limit",
+    "trigger-fee-limit",
+    "origin-energy-limit",
+    "safety-margin-percent",
+    "poll-attempts",
+    "poll-ms",
+    "api-key",
+  ]),
+  "sign-transaction": new Set([
+    "secret",
+    "transaction",
+    "step",
+    "step-key",
+    "tron-network",
+    "out",
+  ]),
+  broadcast: new Set([
+    "transaction",
+    "tron-network",
+    "endpoint",
+    "confirm-mainnet",
+    "confirm-testnet",
+    "out",
+    "api-key",
+  ]),
+  evidence: new Set([
+    "tron-network",
+    "token",
+    "bridge",
+    "source-bridge",
+    "verifier",
+    "out",
+  ]),
+  "route-manifest": new Set([
+    "settlement-asset-definition-id",
+    "verifier-code-hash",
+    "verifier-key-hash",
+    "verifier",
+    "vk-backend",
+    "vk-name",
+    "tron-network",
+    "evidence",
+    "taira-contract",
+    "live-evidence",
+    "expected-destination-binding-hash",
+    "destination-binding-hash",
+    "expected-destination-binding-key",
+    "destination-binding-key",
+    "gas-limit",
+    "production-ready",
+    "live-readback-checked",
+    "confirm-mainnet",
+    "out",
+  ]),
+  "route-config": new Set(["manifest", "base-config", "out", "allow-unready"]),
+  "self-test": new Set(),
+});
+
+function assertKnownCommand(command) {
+  if (!Object.hasOwn(COMMAND_OPTION_ALLOWLISTS, command)) {
+    throw new Error("Unknown command.");
+  }
+}
+
+function parseArgs(command, rest) {
   const options = {};
   for (let index = 0; index < rest.length; index += 1) {
     const entry = rest[index];
     if (!entry.startsWith("--")) {
-      throw new Error(`Unexpected argument: ${entry}`);
+      throw new Error("Unexpected positional argument.");
     }
-    const key = entry.slice(2);
+    const equalsIndex = entry.indexOf("=");
+    const key = equalsIndex === -1 ? entry.slice(2) : entry.slice(2, equalsIndex);
+    if (!COMMAND_OPTION_ALLOWLISTS[command].has(key)) {
+      throw new Error("Unknown option.");
+    }
+    if (Object.hasOwn(options, key)) {
+      throw new Error("Option must be specified at most once.");
+    }
+    if (equalsIndex !== -1) {
+      options[key] = entry.slice(equalsIndex + 1);
+      continue;
+    }
     const value = rest[index + 1];
     if (!value || value.startsWith("--")) {
-      throw new Error(`Missing value for --${key}`);
+      throw new Error(`--${key} must be specified with an explicit value.`);
     }
     options[key] = value;
     index += 1;
   }
-  return { command, options };
+  return options;
+}
+
+function temporaryOutputPath(out) {
+  return `${out}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+}
+
+async function writeTemporaryFile(temp, value, mode) {
+  await writeFile(temp, value, { flag: "wx", mode });
+}
+
+async function replaceWithTemporaryFile(out, value, mode) {
+  const temp = temporaryOutputPath(out);
+  try {
+    await writeTemporaryFile(temp, value, mode);
+    await rename(temp, out);
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 async function writeJson(path, value, mode = 0o600) {
   const out = resolve(path);
   await mkdir(dirname(out), { recursive: true });
-  await writeFile(`${out}.tmp`, `${JSON.stringify(value, null, 2)}\n`, { mode });
-  await rename(`${out}.tmp`, out);
+  await replaceWithTemporaryFile(
+    out,
+    `${JSON.stringify(value, null, 2)}\n`,
+    mode,
+  );
   return out;
 }
 
 async function writeText(path, value, mode = 0o600) {
   const out = resolve(path);
   await mkdir(dirname(out), { recursive: true });
-  await writeFile(`${out}.tmp`, value, { mode });
-  await rename(`${out}.tmp`, out);
+  await replaceWithTemporaryFile(out, value, mode);
   return out;
 }
 
+function canonicalPathForCollision(pathName) {
+  const resolved = resolve(pathName);
+  if (resolved.includes("\0")) {
+    return resolved;
+  }
+  try {
+    return realpathSync(resolved);
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  try {
+    return resolve(realpathSync(dirname(resolved)), basename(resolved));
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  return resolved;
+}
+
 function assertDistinctResolvedPaths(leftPath, leftLabel, rightPath, rightLabel) {
-  if (resolve(leftPath) === resolve(rightPath)) {
+  if (
+    resolve(leftPath) === resolve(rightPath) ||
+    canonicalPathForCollision(leftPath) === canonicalPathForCollision(rightPath)
+  ) {
     throw new Error(`${leftLabel} must not be the same path as ${rightLabel}.`);
   }
 }
@@ -1290,15 +1472,27 @@ async function generateDeployer(options) {
 }
 
 function assertDeployerSecretNetwork(deployer, profile, label = "deployer secret") {
-  if (deployer.tronNetwork && deployer.tronNetwork !== profile.key) {
-    throw new Error(`${label} tron_network ${deployer.tronNetwork} does not match ${profile.key}`);
+  const requiredString = (value, field) => {
+    if (typeof value !== "string" || value.length === 0) {
+      throw new Error(`${label} ${field} is required`);
+    }
+    return value;
+  };
+  const tronNetwork = requiredString(deployer.tronNetwork, "tron_network");
+  const network = requiredString(deployer.network, "network");
+  const chainIdHex = requiredString(deployer.chainIdHex, "chain_id_hex");
+  const networkIdHex = requiredString(deployer.networkIdHex, "network_id_hex");
+  if (tronNetwork !== profile.key) {
+    throw new Error(`${label} tron_network does not match ${profile.key}`);
   }
-  if (deployer.network && deployer.network !== profile.network) {
-    throw new Error(`${label} network ${deployer.network} does not match ${profile.network}`);
+  if (network !== profile.network) {
+    throw new Error(`${label} network does not match ${profile.network}`);
+  }
+  if (chainIdHex !== profile.chainIdHex) {
+    throw new Error(`${label} chain_id_hex does not match ${profile.network}`);
   }
   if (
-    deployer.networkIdHex &&
-    normalizeBytes32(deployer.networkIdHex, `${label} network_id_hex`) !== profile.networkIdHex
+    normalizeBytes32(networkIdHex, `${label} network_id_hex`) !== profile.networkIdHex
   ) {
     throw new Error(`${label} network_id_hex does not match ${profile.network}`);
   }
@@ -3644,6 +3838,11 @@ function routeManifestValue(record, keys, label, { required = true } = {}) {
   if (present.length > 1) {
     throw new Error(`${label} must not use multiple aliases: ${present.join(", ")}`);
   }
+  if (present.length === 1 && keys.length > 1 && present[0] !== keys[0]) {
+    throw new Error(
+      `${label} must not use retired alias ${present[0]}; use ${keys[0]}`,
+    );
+  }
   if (present.length === 0) {
     if (required) {
       throw new Error(`${label} is required`);
@@ -4437,13 +4636,13 @@ function buildMergedTairaXorRouteConfigToml(
   manifest,
   options = {},
 ) {
+  const { routeLines } = routeConfigOverlayParts(manifest, options);
   const baseConfig = String(baseConfigText ?? "").replace(/\r\n?/gu, "\n");
   if (/^\s*\[\[zk\.sccp_route_manifests\]\]\s*$/mu.test(baseConfig)) {
     throw new Error(
       "base TAIRA config already contains zk.sccp_route_manifests; merge route manifests manually to avoid duplicate routes",
     );
   }
-  const { routeLines } = routeConfigOverlayParts(manifest, options);
   const lines = baseConfig.split("\n");
   const zkStart = lines.findIndex((line) => line.trim() === "[zk]");
   const mergedRouteLines = [
@@ -4678,12 +4877,14 @@ function selfTest() {
   console.log("sccp_tron_taira_xor_deploy: self-test ok");
 }
 
-async function main() {
-  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+async function main(argv = process.argv.slice(2)) {
+  if (argv.includes("--help") || argv.includes("-h")) {
     console.log(usage());
     return;
   }
-  const { command, options } = parseArgs(process.argv.slice(2));
+  const [command, ...rest] = argv;
+  assertKnownCommand(command);
+  const options = parseArgs(command, rest);
   if (command === "generate-deployer") return generateDeployer(options);
   if (command === "doctor") return doctorCommand(options);
   if (command === "estimate-budget") return estimateBudgetCommand(options);
@@ -4697,7 +4898,7 @@ async function main() {
   if (command === "route-manifest") return routeManifestCommand(options);
   if (command === "route-config") return routeConfigCommand(options);
   if (command === "self-test") return selfTest();
-  throw new Error(usage());
+  throw new Error("Unknown command.");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === SCRIPT_PATH) {

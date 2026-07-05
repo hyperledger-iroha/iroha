@@ -21930,6 +21930,7 @@ impl Actor {
             effective_mode,
             self.consensus_mode,
         );
+        self.publish_epoch_status_for_current_mode();
         super::status::set_mode_tags(
             self.mode_tag(),
             staged_mode_tag,
@@ -23037,6 +23038,13 @@ impl Actor {
             );
             commit_pipeline_cost = commit_pipeline_timings.total;
             progress = true;
+        }
+        if self.config.mode_flip.enabled
+            && self.pending_mode_flip.is_some()
+            && self.subsystems.commit.inflight.is_none()
+            && self.pending.pending_processing.get().is_none()
+        {
+            progress |= self.tick_mode_management();
         }
         let proposal_backpressure = {
             let _view_ctx = StateViewContextGuard::new("sumeragi.tick.proposal_backpressure");
@@ -28013,12 +28021,18 @@ impl Actor {
                 self.schedule_background(BackgroundRequest::Broadcast {
                     msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                 });
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_rbc_ready_broadcasts();
+                }
             }
             let msg = Arc::new(BlockMessage::RbcReady(ready));
             let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
             self.schedule_background(BackgroundRequest::Broadcast {
                 msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
             });
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.inc_rbc_ready_broadcasts();
+            }
         }
 
         if local_ready_emitted {

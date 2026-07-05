@@ -64,6 +64,59 @@ class HostileExpectedDestinationBindingHash:
         )
 
 
+class HostileLastTransactionLt:
+    def __str__(self):
+        raise AssertionError("secret-token TON destination LT was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON destination LT was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON destination LT was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TON destination LT was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token TON destination LT was stripped")
+
+
+class HostileTomlString(str):
+    def __new__(cls):
+        return str.__new__(cls, "blocked")
+
+    def __str__(self):
+        raise AssertionError("secret-token TON destination TOML string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON destination TOML string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON destination TOML string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TON destination TOML string was compared")
+
+
+class HostileTomlInt(int):
+    def __new__(cls):
+        return int.__new__(cls, 1)
+
+    def __str__(self):
+        raise AssertionError("secret-token TON destination TOML integer was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON destination TOML integer was repr'd")
+
+
+class HostileTomlList(list):
+    def __iter__(self):
+        raise AssertionError("secret-token TON destination TOML list was iterated")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TON destination TOML list was repr'd")
+
+
 def test_ton_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
@@ -768,14 +821,40 @@ def test_ton_code_boc_file_rejects_unreadable_file_shapes(tmp_path):
     parent_symlink_input = parent_link / "code.boc"
     missing_input = tmp_path / "secret-token-ton-code-missing.boc"
 
+    class HostileCodeBocPath(str):
+        def __new__(cls):
+            return str.__new__(cls, str(outside))
+
+        def __str__(self):
+            raise AssertionError("secret-token TON code path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TON code path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token TON code path was coerced")
+
+    class HostileCodeBocPathLike:
+        def __str__(self):
+            raise AssertionError("secret-token TON code path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TON code path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token TON code path-like was coerced")
+
     for path in (
-        symlink_input,
-        directory_input,
-        parent_symlink_input,
-        missing_input,
+        str(symlink_input),
+        str(directory_input),
+        str(parent_symlink_input),
+        str(missing_input),
+        outside,
+        HostileCodeBocPath(),
+        HostileCodeBocPathLike(),
     ):
         try:
-            module.parse_code_boc_file(str(path), label="code BoC")
+            module.parse_code_boc_file(path, label="code BoC")
         except module.argparse.ArgumentTypeError as exc:
             rendered = str(exc)
             suppress_context = exc.__suppress_context__
@@ -922,6 +1001,66 @@ def test_ton_route_canary_rejects_boolean_last_transaction_lt():
         assert exc.__suppress_context__ is True
     else:
         raise AssertionError("boolean TON route-canary last_transaction_lt was accepted")
+
+
+def test_ton_destination_rejects_non_string_last_transaction_lt_without_stringifying():
+    module = load_evidence_module()
+    destination_binding_hash = bytes.fromhex(TON_DESTINATION_BINDING_VECTOR)
+
+    toml_args = ton_args(module)
+    toml_args.last_transaction_lt = HostileLastTransactionLt()
+    try:
+        module.render_toml(toml_args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "--toml requires --last-transaction-lt"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError(
+            "TON destination TOML accepted hostile last transaction LT"
+        )
+
+    summary_args = ton_args(module)
+    summary_args.last_transaction_lt = HostileLastTransactionLt()
+    try:
+        module._json_summary(summary_args, destination_binding_hash, True)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "last_transaction_lt must be a positive decimal"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError(
+            "TON destination JSON accepted hostile last transaction LT"
+        )
+
+
+def test_ton_destination_toml_renderer_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    cases = (
+        lambda: module._toml_string(HostileTomlString()),
+        lambda: module._toml_line("verifier_identity", HostileTomlString()),
+        lambda: module._toml_line("blockers", [HostileTomlString()]),
+        lambda: module._toml_line("version", HostileTomlInt()),
+        lambda: module._toml_line("blockers", HostileTomlList(["blocked"])),
+    )
+
+    for render in cases:
+        try:
+            render()
+        except TypeError as exc:
+            rendered = str(exc)
+            assert "unsupported TOML" in rendered
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "TON destination TOML renderer accepted hostile subclass value"
+            )
 
 
 def test_ton_destination_account_metadata_redacts_parser_causes(monkeypatch):
