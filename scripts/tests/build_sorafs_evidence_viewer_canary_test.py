@@ -217,8 +217,20 @@ def test_builds_payload_free_evidence_viewer_canary(tmp_path: Path) -> None:
     ]
     for claim in MODULE.VERIFIED_TRUE_CLAIMS:
         assert payload[claim] is True
+    assert payload["audit_log_tamper_rejected"] is True
+    assert payload["watermark_metadata_mismatch_rejected"] is True
     for claim in MODULE.FORBIDDEN_PAYLOAD_CLAIMS:
         assert payload[claim] is False
+    assert MODULE.DIGEST_FIELDS == (
+        "session_manifest_digest_hex",
+        "watermark_metadata_digest_hex",
+        "access_log_digest_hex",
+        "legal_hold_receipt_digest_hex",
+        "transparency_report_digest_hex",
+        "audit_digest_hex",
+    )
+    for field in MODULE.DIGEST_FIELDS:
+        assert payload[field] == DIGEST
     assert "raw_evidence" not in payload
     assert "session_token" not in payload
     assert "signed_url" not in payload

@@ -820,6 +820,18 @@ pub enum LaneRelayError {
         /// Height carried by the stale relay.
         new_height: u64,
     },
+    /// Relay belongs to an older incarnation of a lane that has since been reset.
+    #[error(
+        "stale lane relay for {lane}: lane reset at height {reset_height}, received height {relay_height}"
+    )]
+    StaleLaneIncarnation {
+        /// Lane identifier associated with the relay.
+        lane: LaneId,
+        /// Committed height where the lane incarnation was reset.
+        reset_height: u64,
+        /// Height carried by the stale relay.
+        relay_height: u64,
+    },
     /// Conflicting relay detected for the same lane/height with a different payload.
     #[error("conflicting lane relay for {lane} at height {height}")]
     ConflictingRelay {
@@ -1011,6 +1023,18 @@ impl PartialEq for LaneRelayError {
                     new_height: b_new,
                 },
             ) => a_lane == b_lane && a_latest == b_latest && a_new == b_new,
+            (
+                StaleLaneIncarnation {
+                    lane: a_lane,
+                    reset_height: a_reset,
+                    relay_height: a_relay,
+                },
+                StaleLaneIncarnation {
+                    lane: b_lane,
+                    reset_height: b_reset,
+                    relay_height: b_relay,
+                },
+            ) => a_lane == b_lane && a_reset == b_reset && a_relay == b_relay,
             _ => false,
         }
     }
@@ -1028,6 +1052,7 @@ impl LaneRelayError {
             LaneRelayError::UnknownDataspace(_) => "unknown_dataspace",
             LaneRelayError::DataspaceMismatch { .. } => "dataspace_mismatch",
             LaneRelayError::StaleRelay { .. } => "stale_height",
+            LaneRelayError::StaleLaneIncarnation { .. } => "stale_lane_incarnation",
             LaneRelayError::ConflictingRelay { .. } => "conflicting_relay",
             LaneRelayError::SettlementHashMismatch => "settlement_hash_mismatch",
             LaneRelayError::SettlementTotalsMismatch => "settlement_totals_mismatch",

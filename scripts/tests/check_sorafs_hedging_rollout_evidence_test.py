@@ -233,6 +233,18 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+CYCLE_BOUND_FIXTURES = (
+    ("statement_publication", "statement-publication.json", statement_publication),
+    ("reconciliation", "reconciliation.json", reconciliation),
+    ("metrics_alerts", "metrics-alerts.json", metrics_alerts),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -277,6 +289,26 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["feed_collector"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in CYCLE_BOUND_FIXTURES)
+        == MODULE.CYCLE_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(route["name"] for route in statement_publication()["routes"]) == (
+        MODULE.REQUIRED_PUBLICATION_ROUTES
+    )
+    assert tuple(source["name"] for source in reconciliation()["sources"]) == (
+        MODULE.REQUIRED_RECONCILIATION_SOURCES
+    )
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -943,6 +975,32 @@ def test_billing_cycle_id_rejects_non_production_markers(tmp_path: Path) -> None
     )
 
 
+def test_billing_cycle_id_non_production_marker_stdout_does_not_echo_cycle_id(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_complete_evidence(tmp_path)
+    invalid_cycle_id = "billing-cycle-prod-placeholder"
+    payload = billing_cycle(invalid_cycle_id, 1)
+    write_json(tmp_path / "billing-cycle-1.json", payload)
+
+    assert run_gate(tmp_path) == 1
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert (
+        "cycle_id must not contain non-production markers ['placeholder']"
+        in diagnostics
+    )
+    assert invalid_cycle_id not in diagnostics
+    assert (
+        "cycle_id must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert invalid_cycle_id not in captured.err
+
+
 def test_billing_cycle_id_accepts_future_production_label(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = billing_cycle("billing-cycle-prod-a-202607", 1)
@@ -992,6 +1050,32 @@ def test_governance_policy_digest_must_match_valid_billing_cycle(tmp_path: Path)
         "governance_approval policy_digest_hex must reference a valid "
         "billing_cycle policy_digest_hex"
     ]
+
+
+def test_all_policy_bound_artifacts_reject_billing_cycle_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must reference a valid "
+            "billing_cycle policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_policy_bound_subset_requires_billing_cycle_anchor(tmp_path: Path) -> None:
@@ -1048,6 +1132,31 @@ def test_reconciliation_cycle_binding_must_match_billing_cycle(tmp_path: Path) -
         "reconciliation statement_bundle_digest_hex and reconciliation_digest_hex "
         "must match a valid billing_cycle artifact"
     ]
+
+
+def test_all_cycle_bound_artifacts_reject_billing_cycle_tuple_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in CYCLE_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["reconciliation_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} statement_bundle_digest_hex and reconciliation_digest_hex "
+            "must match a valid billing_cycle artifact"
+        ) in artifact["errors"]
 
 
 def test_cycle_bound_subset_requires_billing_cycle_anchor(tmp_path: Path) -> None:
@@ -1544,6 +1653,37 @@ def test_native_bridge_release_requires_minimum_artifact_set(
     assert "artifact_count must be at least 2" in artifact["errors"]
 
 
+def test_native_bridge_artifacts_must_cover_reviewed_families(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "native-bridge-release.json",
+        native_bridge_release(
+            artifacts=[
+                {
+                    "id": "hedging-native-artifact-swift-xcframework",
+                    "sha256": DIGEST,
+                },
+                {
+                    "id": "hedging-native-artifact-swift-ios-simulator",
+                    "sha256": "ef" * 32,
+                },
+            ]
+        ),
+    )
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["native_bridge_release"]["artifacts"][0]
+    assert (
+        "artifacts must include at least one native bridge artifact for every "
+        "reviewed bridge family"
+    ) in artifact["errors"]
+
+
 def test_native_bridge_artifacts_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = native_bridge_release()
@@ -1572,6 +1712,28 @@ def test_native_bridge_artifact_ids_must_use_reviewed_family(tmp_path: Path) -> 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["native_bridge_release"]["artifacts"][0]
     assert MODULE.NATIVE_BRIDGE_ARTIFACT_ID_ERROR in artifact["errors"]
+
+
+def test_native_bridge_artifact_ids_must_use_reviewed_family_prefix(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = native_bridge_release()
+    artifact_id = "hedging-native-artifact-rust-bridge"
+    payload["artifacts"][0]["id"] = artifact_id
+    write_json(tmp_path / "native-bridge-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["native_bridge_release"]["artifacts"][0]
+    errors = "\n".join(artifact["errors"])
+    assert (
+        "artifacts[].id must start with a reviewed native bridge family prefix"
+        in errors
+    )
+    assert artifact_id not in errors
 
 
 def test_native_bridge_artifact_ids_reject_non_production_markers(

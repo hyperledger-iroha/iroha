@@ -66,7 +66,17 @@ Implemented locally:
   The summary exports the sorted reviewed `metrics` inventory plus
   `metric_count_values`, and the aggregate production-readiness gate requires
   those fields to match the observability artifact fingerprint before final
-  promotion can report ready.
+  promotion can report ready. Governance/repair artifacts fingerprint
+  `repair_handoff_digest_hex`, the summary exports
+  `valid_repair_handoff_digests`, and the aggregate production-readiness gate
+  requires those values to match governance/repair artifact fingerprints before
+  final promotion can report ready. Aggregate promotion also rechecks the
+  lane-proven PDP digest relationships: proof-summary-bound artifact
+  fingerprints must match `valid_proof_summary_digests`, policy-bound artifact
+  fingerprints must match `valid_policy_digests`, provider-roster-bound
+  artifact fingerprints must match `valid_provider_roster_digests`, and
+  repair-handoff metadata must match `valid_repair_handoff_digests` before
+  final promotion can report ready.
   Proof-summary mismatches are recorded on the offending artifact in the JSON
   summary before required-kind validity is reported. Policy and provider-roster
   mismatches are recorded on the offending governance approval artifact through
@@ -90,6 +100,7 @@ Implemented locally:
   inventories match their scalar counts, rejects duplicate or non-production
   provider/challenge/proof names before writing, integer route/proof latency thresholds,
   explicit `--route-body-blake3-hex` evidence for provider transport routes,
+  `--repair-handoff-digest-hex` evidence for governance/repair handoff,
   config-backed governance metadata, and reviewed policy and provider-roster
   digest input for proof-generation and governance-approval canaries, then
   validates every generated artifact through
@@ -293,6 +304,10 @@ Completed local foundations:
 - Require provider-transport route latency evidence to be non-negative and
   proof-generation max-latency evidence to be positive before either value can
   satisfy the SF-13 rollout threshold.
+- Require governance/repair evidence to carry a reviewed
+  `repair_handoff_digest_hex` that is fingerprinted, exported as
+  `valid_repair_handoff_digests`, and tethered in aggregate production
+  readiness.
 
 Remaining production gates:
 
@@ -302,9 +317,10 @@ Remaining production gates:
 - Collect deployed provider-transport, proof-generation, validator-replay,
   governance/repair, observability, and governed-approval evidence that passes
   the SF-13 rollout gate with replay/governance/observability evidence bound to
-  the same proof-generation summary digest and any binding failure marked on the
-  offending artifact in the emitted summary. Provider-transport latency values
-  must be non-negative and proof-generation max-latency values must be positive,
-  so impossible negative timings cannot satisfy rollout thresholds.
+  the same proof-generation summary digest, governance/repair evidence carrying
+  `repair_handoff_digest_hex`, and any binding failure marked on the offending
+  artifact in the emitted summary. Provider-transport latency values must be
+  non-negative and proof-generation max-latency values must be positive, so
+  impossible negative timings cannot satisfy rollout thresholds.
 - Ship operator CLI commands and SDK validators.
 - Update OpenAPI/portal docs and remove the Torii PDP fail-closed guard.

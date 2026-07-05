@@ -279,6 +279,7 @@ TALLY_BOUND_KINDS = (
     "metrics_alerts",
     "governance_approval",
 )
+POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
     "account_private_key",
@@ -442,9 +443,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "offline_mode_disabled",
         "per_session_access_logged",
         "append_only_log_verified",
+        "audit_log_tamper_rejected",
         "anomaly_events_recorded",
         "watermark_overlay_rendered",
         "watermark_metadata_hashed",
+        "watermark_metadata_mismatch_rejected",
         "audit_digest_exported",
         "transparency_report_exported",
         "daily_digest_published",
@@ -937,9 +940,11 @@ def validate_evidence_viewer(
     require_bool_true(payload, "offline_mode_disabled", errors)
     require_bool_true(payload, "per_session_access_logged", errors)
     require_bool_true(payload, "append_only_log_verified", errors)
+    require_bool_true(payload, "audit_log_tamper_rejected", errors)
     require_bool_true(payload, "anomaly_events_recorded", errors)
     require_bool_true(payload, "watermark_overlay_rendered", errors)
     require_bool_true(payload, "watermark_metadata_hashed", errors)
+    require_bool_true(payload, "watermark_metadata_mismatch_rejected", errors)
     require_bool_true(payload, "audit_digest_exported", errors)
     require_bool_true(payload, "transparency_report_exported", errors)
     require_bool_true(payload, "daily_digest_published", errors)
@@ -1639,7 +1644,7 @@ def build_summary(
                 e2e_candidate_artifacts.append(artifact)
             elif kind_name == "evidence_viewer":
                 evidence_viewer_candidate_artifacts.append(artifact)
-            elif kind_name == "governance_approval":
+            elif kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
@@ -1729,7 +1734,7 @@ def build_summary(
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
-        missing_anchor_required_kinds=("e2e_panel", "governance_approval"),
+        missing_anchor_required_kinds=("e2e_panel",) + POLICY_BOUND_KINDS,
         bound_artifacts=policy_bound_artifacts,
         valid_anchor_digests=valid_policy_digests,
         digest_field="policy_digest_hex",

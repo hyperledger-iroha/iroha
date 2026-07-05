@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_ai_prescreen_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e240f51641404628b191dae244fe585c1b6bbcd10db32fdb6d3c8277655966cf
-source_last_modified: "2026-07-04T06:16:53.097169+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: "2026-07-04T06:16:53.097169+00:00"
+source_hash: b881b2bd09756568ff90b9858b459c1e1730ebc8aee3f6b38c0f93d297eeb2e9
+source_last_modified: "2026-07-05T00:35:19.764235+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: "2026-07-05T00:35:19.764235+00:00"
 ---
 
 # SoraFS AI Pre-screening & Quarantine
@@ -66,12 +66,18 @@ actually deployed. Runner evidence must carry both `evidence_digest_hex` and
 binding. Runner-bound, workflow-bound, and policy-bound mismatches mark the
 offending artifact invalid in the summary instead of only blocking the top-level
 promotion status. Valid juror-notification transport artifacts now
-also surface their `manifest_body_blake3` values as
+also surface their `manifest_body_blake3_hex` values as
 `valid_notification_manifest_digests`, and valid commit/reveal executor
 artifacts surface their execution-summary digests as
 `valid_executor_summary_digests`, so the final aggregate production gate can
 bind deployed transport and executor proof facts back to recognized artifact
-fingerprints instead of trusting summary-only metadata.
+fingerprints instead of trusting summary-only metadata. The aggregate
+production-readiness gate also replays those lane-proven runner, workflow, and
+policy bindings over recognized artifact fingerprints before final promotion:
+committee artifacts must match `valid_runner_bindings`, workflow-bound operator,
+notification, executor, transparency, and Governance DAG artifacts must match
+`valid_workflow_digests`, and policy-bound Governance DAG artifacts must match
+`valid_policy_digests`.
 Committee artifacts also bind `result_count` to the unique canonical
 `results[].name` inventory, require reviewed
 `ai-prescreen-committee-result-*` labels without non-production markers, and
@@ -101,8 +107,9 @@ Juror notification transport artifacts also bind `probe_count` and
 require reviewed `ai-prescreen-notification-delivery-*` labels without
 non-production markers and at least one accepted notification delivery before
 promotion can report ready. Each probe's dedup key must also be unique, bound
-to its reviewed delivery ID, and accompanied by a shipped `commit` or `reveal`
-action plus non-empty case, round, and juror identifiers. Notification probe
+to its reviewed delivery ID, and accompanied by a shipped `submit_commit` or
+`submit_reveal` action plus non-empty case, round, and juror identifiers.
+Notification probe
 byte counts must also be well-formed: notification bodies require positive byte
 counts, webhook response byte counts must be non-negative, and malformed
 byte-count evidence blocks the artifact before promotion can report ready.
@@ -120,9 +127,11 @@ Commit/reveal executor artifacts also bind `artifact_count` and
 `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and
 require the reviewed executor bundle to cover `executor.env` and `run.sh`.
 The checker also binds `executor.env` to an `env` artifact at `executor.env`
-and `run.sh` to a `script` artifact at `run.sh`. Duplicate or unknown artifact
-entries are rejected before promotion can report ready. Swapped-path or
-mislabeled artifact entries are also rejected before promotion can report
+and `run.sh` to a `script` artifact at `run.sh`. Commit/reveal executor
+evidence must also use the reviewed `sorafs-moderation-ballots-executor`
+service identity before promotion can report ready. Duplicate or unknown
+artifact entries are rejected before promotion can report ready. Swapped-path
+or mislabeled artifact entries are also rejected before promotion can report
 ready. Executor bundle metadata, bundle artifact byte counts, execution-summary
 byte counts, and commit/reveal/tally action counts are validated, and the
 per-action counts must sum to `action_count` before executor evidence can be
@@ -912,7 +921,12 @@ Completed local foundations:
   workflow, juror notification transport, commit/reveal executor, moderation
   transparency source-entry, Governance DAG, and end-to-end workflow evidence;
   cross-artifact runner/workflow binding failures are reflected on the
-  offending artifacts in the emitted summary. Committee artifacts also bind
+  offending artifacts in the emitted summary. The aggregate
+  production-readiness gate rechecks those exported summary relationships before
+  final promotion: runner-bound committee fingerprints must match
+  `valid_runner_bindings`, workflow-bound fingerprints must match
+  `valid_workflow_digests`, and policy-bound Governance DAG fingerprints must
+  match `valid_policy_digests`. Committee artifacts also bind
   `result_count` to the unique canonical `results[].name` inventory, require
   reviewed `ai-prescreen-committee-result-*` labels without non-production
   markers, and reject duplicate committee-result entries before promotion can
@@ -931,8 +945,9 @@ Completed local foundations:
   delivery with positive notification byte counts and non-negative webhook
   response byte counts, commit/reveal executor artifacts require the reviewed
   `executor.env` and `run.sh` bundle files with exact path and kind bindings
-  while rejecting unknown, swapped-path, mislabeled artifact names, malformed
-  bundle metadata byte counts, invalid execution-summary byte counts, and
+  plus the reviewed `sorafs-moderation-ballots-executor` service identity while
+  rejecting unknown, swapped-path, mislabeled artifact names, malformed bundle
+  metadata byte counts, invalid execution-summary byte counts, and
   commit/reveal/tally action totals that do not sum to `action_count`,
   transparency publication artifacts require every required source-entry
   probe, reject unknown source kinds, and validate request/response byte counts.

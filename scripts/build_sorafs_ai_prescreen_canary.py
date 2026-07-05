@@ -30,6 +30,7 @@ from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
     KIND_BY_NAME,
     NOTIFICATION_DELIVERY_LABEL_PATTERN,
     REQUIRED_E2E_STEPS,
+    REQUIRED_EXECUTOR_SERVICE_NAME,
     REQUIRED_GOVERNANCE_EDGE_COUNT,
     REQUIRED_GOVERNANCE_PRODUCERS,
     REQUIRED_OPERATOR_CONTENT_TYPES,
@@ -581,7 +582,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "source": "juror-notifications",
                 "manifest_path": args.manifest_path,
                 "workflow_digest_hex": args.workflow_digest_hex,
-                "manifest_body_blake3": args.body_digest_hex,
+                "manifest_body_blake3_hex": args.body_digest_hex,
                 "webhook_url": args.webhook_url,
                 "probe_count": len(probes),
                 "accepted_count": len(probes),
@@ -897,6 +898,13 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             label="--execution-summary-path",
             errors=errors,
         )
+        validate_canonical_string(
+            args.service_name,
+            label="--service-name",
+            errors=errors,
+        )
+        if args.service_name != REQUIRED_EXECUTOR_SERVICE_NAME:
+            errors.append("--service-name must match the reviewed executor service")
     elif args.kind == "transparency_publication":
         require_kind_options(
             args,

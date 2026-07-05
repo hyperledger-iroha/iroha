@@ -159,6 +159,7 @@ FAILURE_BOUND_KINDS = (
     "event_streams",
     "governance_handoff",
 )
+HANDOFF_BOUND_KINDS = ("governance_approval",)
 POLICY_BOUND_KINDS = ("governance_approval",)
 
 SENSITIVE_KEYS = {
@@ -790,7 +791,7 @@ def build_summary(
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
                     valid_policy_digests.add(policy_digest.lower())
-            if kind_name == "governance_approval":
+            if kind_name in HANDOFF_BOUND_KINDS:
                 valid_handoff_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 valid_policy_bound_artifacts.append((kind_name, artifact))
@@ -849,7 +850,7 @@ def build_summary(
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
-        missing_anchor_required_kinds=("governance_handoff", "governance_approval"),
+        missing_anchor_required_kinds=("governance_handoff",) + HANDOFF_BOUND_KINDS,
         bound_artifacts=valid_handoff_bound_artifacts,
         valid_anchor_digests=valid_handoff_digests,
         digest_field="handoff_digest_hex",

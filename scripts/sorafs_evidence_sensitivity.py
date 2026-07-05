@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
 from collections.abc import Iterable, Mapping
 from html import unescape
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import urlsplit, unquote
 
 
 COMMON_SENSITIVE_KEYS = frozenset(
@@ -77,6 +79,28 @@ PAYLOAD_FREE_SENSITIVE_REFERENCE_SUFFIXES = frozenset(
 )
 MAX_SENSITIVE_FIELD_DEPTH = 128
 MAX_SENSITIVE_KEY_DECODE_PASSES = 4
+SECRET_VALUE_AUTH_PREFIXES = (
+    "authorization: bearer ",
+    "authorization: basic ",
+    "bearer ",
+    "basic ",
+)
+SECRET_VALUE_COOKIE_PREFIXES = (
+    "cookie:",
+    "set-cookie:",
+)
+SECRET_VALUE_PEM_MARKERS = (
+    "-----begin private key-----",
+    "-----begin rsa private key-----",
+    "-----begin ec private key-----",
+    "-----begin openssh private key-----",
+)
+JWT_LIKE_VALUE_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])"
+    r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    r"(?![A-Za-z0-9_-])"
+)
+URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 
 
 def _require_error_list(errors: Any) -> list[str]:
@@ -128,6 +152,11 @@ def normalize_sensitive_key(key: str) -> str:
     return "".join(char.lower() for char in key if char.isalnum())
 
 
+COMMON_SENSITIVE_KEY_NORMALIZED = frozenset(
+    normalize_sensitive_key(key) for key in COMMON_SENSITIVE_KEYS
+)
+
+
 def _decoded_key_variants(key: str) -> tuple[str, ...]:
     """Return raw plus bounded percent/HTML-decoded key variants."""
 
@@ -141,6 +170,26 @@ def _decoded_key_variants(key: str) -> tuple[str, ...]:
         variants.append(decoded)
         seen.add(decoded)
         current = decoded
+    return tuple(variants)
+
+
+def _value_scan_variants(value: str) -> tuple[str, ...]:
+    """Return decoded value variants plus Unicode format-control-free aliases."""
+
+    variants: list[str] = []
+    seen: set[str] = set()
+    for decoded in _decoded_key_variants(value):
+        for candidate in (
+            decoded,
+            "".join(
+                character
+                for character in decoded
+                if unicodedata.category(character) != "Cf"
+            ),
+        ):
+            if candidate not in seen:
+                variants.append(candidate)
+                seen.add(candidate)
     return tuple(variants)
 
 
@@ -277,6 +326,151 @@ def _is_canonical_path_segment(value: str) -> bool:
             continue
         return False
     return True
+
+
+def _text_component_is_secret_like(value: str) -> bool:
+    for variant in _decoded_key_variants(value):
+        normalized = normalize_sensitive_key(variant)
+        if not normalized:
+            continue
+        if (
+            variant.lower() in COMMON_SENSITIVE_KEYS
+            or normalized in COMMON_SENSITIVE_KEY_NORMALIZED
+            or any(
+                fragment in normalized
+                and not _is_payload_free_sensitive_reference(normalized)
+                for fragment in HIGH_RISK_SENSITIVE_KEY_FRAGMENTS
+            )
+            or "@" in variant
+        ):
+            return True
+    return False
+
+
+def _url_query_has_secret_like_name(query: str) -> bool:
+    if not query:
+        return False
+    for part in query.split("&"):
+        key, _separator, _value = part.partition("=")
+        if _text_component_is_secret_like(key):
+            return True
+    return False
+
+
+def _has_sensitive_assignment_key(value: str) -> bool:
+    """Return whether a scalar line starts with a sensitive assignment key."""
+
+    for separator in ("=", ":"):
+        key, found, _raw_assignment_value = value.partition(separator)
+        if found and _text_component_is_secret_like(key.strip().lstrip("-")):
+            return True
+    return False
+
+
+def _multiline_value_has_folded_secret(lines: tuple[str, ...]) -> bool:
+    """Return whether multiline copied text folds a secret header value."""
+
+    for index, line in enumerate(lines[:-1]):
+        if not _has_sensitive_assignment_key(line):
+            continue
+        for next_line in lines[index + 1 :]:
+            if next_line:
+                return True
+    return False
+
+
+def _scalar_value_is_secret_like(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    lines = tuple(line.strip() for line in stripped.splitlines() if line.strip())
+    if len(lines) > 1 and _multiline_value_has_folded_secret(lines):
+        return True
+    if len(lines) > 1 and any(_scalar_value_is_secret_like(line) for line in lines):
+        return True
+    for separator in ("=", ":"):
+        key, found, raw_assignment_value = stripped.partition(separator)
+        if found and _text_component_is_secret_like(key.strip().lstrip("-")):
+            if raw_assignment_value.strip():
+                return True
+    lowered = stripped.lower()
+    for prefix in SECRET_VALUE_AUTH_PREFIXES:
+        if lowered.startswith(prefix):
+            token = stripped[len(prefix) :].strip()
+            if len(token) >= 8:
+                return True
+    for prefix in SECRET_VALUE_COOKIE_PREFIXES:
+        if lowered.startswith(prefix) and "=" in stripped[len(prefix) :]:
+            return True
+    if any(marker in lowered for marker in SECRET_VALUE_PEM_MARKERS):
+        return True
+    return JWT_LIKE_VALUE_RE.search(stripped) is not None
+
+
+def _url_query_has_secret_like_value(query: str) -> bool:
+    if not query:
+        return False
+    for part in query.split("&"):
+        _key, separator, value = part.partition("=")
+        if not separator or not value:
+            continue
+        for variant in _decoded_key_variants(value):
+            if (
+                _scalar_value_is_secret_like(variant)
+                or _text_component_is_secret_like(variant)
+            ):
+                return True
+    return False
+
+
+def _url_value_is_secret_like(value: str) -> bool:
+    if URL_SCHEME_RE.match(value) is None:
+        return False
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return False
+    if not parsed.scheme or not (parsed.netloc or parsed.path or parsed.query):
+        return False
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or "@" in parsed.netloc
+    ):
+        return True
+    if (
+        _url_query_has_secret_like_name(parsed.query)
+        or _url_query_has_secret_like_value(parsed.query)
+    ):
+        return True
+    host = parsed.hostname or ""
+    for component in host.split("."):
+        if component and _text_component_is_secret_like(component):
+            return True
+    for component in parsed.path.split("/"):
+        if component and _text_component_is_secret_like(component):
+            return True
+    return False
+
+
+def _is_secret_like_value(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    return any(
+        _url_value_is_secret_like(variant) or _scalar_value_is_secret_like(variant)
+        for variant in _value_scan_variants(stripped)
+    )
+
+
+def _is_redacted_diagnostic_path(path: str) -> bool:
+    return any(
+        segment in path
+        for segment in (
+            "<sensitive-key>",
+            "<sensitive-inclusion-marker>",
+        )
+    )
 
 
 def _diagnostic_path_segment(key: Any) -> str:
@@ -443,6 +637,15 @@ def _visit_sensitive_fields(
                 evidence_label=evidence_label,
                 depth=depth + 1,
             )
+    elif (
+        isinstance(value, str)
+        and not _is_redacted_diagnostic_path(path)
+        and _is_secret_like_value(value)
+    ):
+        errors.append(
+            f"{path or '<root>'} must not contain secret-looking values in "
+            f"{evidence_label}"
+        )
 
 
 def visit_sensitive_fields(

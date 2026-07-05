@@ -643,8 +643,8 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 ),
                 "appeal_cycle_count": args.appeal_cycle_count,
                 "appeal_cycles": build_cycle_records(args.appeal_cycles, "reviewed"),
-                "scheduled_lifecycle_canary_last_tick_unix": (
-                    args.scheduled_lifecycle_canary_last_tick_unix
+                "scheduled_lifecycle_canary_last_tick_at_unix": (
+                    args.scheduled_lifecycle_canary_last_tick_at_unix
                 ),
                 "scheduled_lifecycle_canary_tick_count": (
                     args.scheduled_lifecycle_canary_tick_count
@@ -660,6 +660,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     elif args.kind == "governance_approval":
         payload.update(
             {
+                "bake_id": args.bake_id,
                 "downstream_compliance_consumer_count": (
                     args.downstream_compliance_consumer_count
                 ),
@@ -941,7 +942,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                 ("--appeal-cycle-count", args.appeal_cycle_count),
                 (
                     "--scheduled-lifecycle-canary-last-tick-unix",
-                    args.scheduled_lifecycle_canary_last_tick_unix,
+                    args.scheduled_lifecycle_canary_last_tick_at_unix,
                 ),
                 (
                     "--scheduled-lifecycle-canary-tick-count",
@@ -1063,12 +1064,14 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             args,
             errors,
             (
+                ("--bake-id", args.bake_id),
                 (
                     "--downstream-compliance-consumer-count",
                     args.downstream_compliance_consumer_count,
                 ),
             ),
         )
+        validate_bake_id_arg(args.bake_id, errors=errors)
         args.downstream_compliance_consumers = validate_unique_values(
             split_csv_values(args.downstream_compliance_consumer),
             option="--downstream-compliance-consumer",
@@ -1249,6 +1252,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--appeal-cycle", action="append", default=[])
     parser.add_argument(
         "--scheduled-lifecycle-canary-last-tick-unix",
+        dest="scheduled_lifecycle_canary_last_tick_at_unix",
         type=positive_int_arg,
     )
     parser.add_argument("--scheduled-lifecycle-canary-tick-count", type=positive_int_arg)

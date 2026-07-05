@@ -93,9 +93,57 @@ REQUIRED_KINDS_HELPER = SCRIPTS_DIR / "sorafs_required_kinds.py"
 CHECKERS = sorted(SCRIPTS_DIR.glob("check_sorafs_*rollout_evidence.py")) + [
     SCRIPTS_DIR / "check_sorafs_reference_sdk_release_evidence.py"
 ]
+SUMMARY_CHECKERS = [*CHECKERS, PRODUCTION_READINESS_CHECKER]
 RUNNERS = sorted(SCRIPTS_DIR.glob("run_sorafs_*rollout_evidence.py")) + [
     SCRIPTS_DIR / "run_sorafs_reference_sdk_release_evidence.py"
 ]
+COLLECTION_RUNNERS = [*RUNNERS, PRODUCTION_READINESS_RUNNER]
+FINGERPRINT_FIELD_TYPED_SUFFIXES = (
+    "_hex",
+    "_digest",
+    "_digest_hex",
+    "_hash_hex",
+    "_root_hex",
+    "_id_hex",
+    "_at_unix",
+    "_count",
+    "_counts",
+)
+FINGERPRINT_FIELD_ALLOWED_NAMES = frozenset(
+    {
+        "schema",
+        "generated_at_unix",
+        "deployment_id",
+        "environment",
+        "deployment_context_reviewed",
+        "metric_count",
+        "metrics",
+        "provider_count",
+        "cycle_index",
+        "statement_count",
+        "started_at_unix",
+        "completed_at_unix",
+    }
+)
+RUNNER_PLAN_CONSTANT_NAMES = (
+    "PLAN_FIELDS",
+    "PLAN_REQUIRED_THRESHOLD_FIELDS",
+    "PLAN_POSITIVE_THRESHOLD_FIELDS",
+    "PLAN_NON_NEGATIVE_THRESHOLD_FIELDS",
+    "PLAN_THRESHOLD_FIELDS_LABEL",
+    "PLAN_EXTERNAL_EVIDENCE_FIELDS",
+    "EXTERNAL_EVIDENCE_FIELDS",
+    "PLAN_DEPLOYMENT_CONTEXT_FIELDS",
+)
+CHECKER_EVIDENCE_CONTRACT_CONSTANT_NAMES = (
+    "EVIDENCE_KINDS",
+    "COMMON_EVIDENCE_REQUIRED_FIELDS",
+    "COMMON_CANARY_REQUIRED_FIELDS",
+    "COMMON_GOVERNANCE_REQUIRED_FIELDS",
+    "FRESH_EVIDENCE_REQUIRED_FIELDS",
+    "E2E_RUN_DETAIL_FIELDS",
+    "EVIDENCE_VIEWER_DIGEST_SET_FIELDS",
+)
 COMMON_SENSITIVE_KEYS = (
     "access_key",
     "access_token",
@@ -290,6 +338,60 @@ def sensitive_key_literal_entries(path: Path) -> tuple[list[str], list[str]]:
     return values, errors
 
 
+def exported_inventory_constant_names(path: Path) -> list[str]:
+    """Return exported inventory constants that must be named in local tests."""
+
+    module = ast.parse(read(path))
+    names: list[str] = []
+    for node in module.body:
+        if not isinstance(node, ast.Assign) or not isinstance(
+            node.value,
+            (ast.Tuple, ast.List, ast.Set, ast.Call, ast.BinOp, ast.Dict),
+        ):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            name = target.id
+            if (
+                name.startswith(("REQUIRED_", "ALLOWED_"))
+                or name.endswith("_BOUND_KINDS")
+                or (path.name.startswith("build_sorafs_") and name.endswith("_KINDS"))
+                or (
+                    path == PRODUCTION_READINESS_CHECKER
+                    and (
+                        name.endswith(("_FIELDS", "_KINDS", "_SCHEMAS"))
+                        or "REQUIRED" in name
+                        or "ALLOWED" in name
+                    )
+                )
+            ):
+                names.append(name)
+    return names
+
+
+def checker_required_field_constant_names(path: Path) -> list[str]:
+    """Return checker field-tuple constants that define evidence contracts."""
+
+    module = ast.parse(read(path))
+    names: list[str] = []
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            name = target.id
+            if name == "EVIDENCE_REQUIRED_FIELDS":
+                continue
+            if name.endswith("REQUIRED_FIELDS") or name in {
+                "E2E_RUN_DETAIL_FIELDS",
+                "EVIDENCE_VIEWER_DIGEST_SET_FIELDS",
+            }:
+                names.append(name)
+    return names
+
+
 def is_call(node: ast.AST, function_name: str) -> bool:
     return (
         isinstance(node, ast.Call)
@@ -321,6 +423,13 @@ def checker_names() -> list[str]:
 
 def runner_names() -> list[str]:
     return [path.name for path in RUNNERS]
+
+
+def fingerprint_field_name_is_typed(field_name: str) -> bool:
+    return (
+        field_name in FINGERPRINT_FIELD_ALLOWED_NAMES
+        or field_name.endswith(FINGERPRINT_FIELD_TYPED_SUFFIXES)
+    )
 
 
 def is_active_sorafs_todo_discovery_candidate(path: Path) -> bool:
@@ -648,9 +757,25 @@ def test_canary_builder_tests_cover_output_path_adversarial_cases() -> None:
 
     for path in sorted((SCRIPTS_DIR / "tests").glob("build_sorafs_*_canary_test.py")):
         source = read(path)
-        if "must not be a symlink" not in source:
+        module = ast.parse(source)
+        test_sources = [
+            ast.get_source_segment(source, node) or ""
+            for node in module.body
+            if isinstance(node, ast.FunctionDef)
+        ]
+        if not any(
+            "--out" in test_source
+            and "MODULE.main(" in test_source
+            and "must not be a symlink" in test_source
+            for test_source in test_sources
+        ):
             missing_symlink.append(path.name)
-        if "must not be a directory" not in source:
+        if not any(
+            "--out" in test_source
+            and "MODULE.main(" in test_source
+            and "must not be a directory" in test_source
+            for test_source in test_sources
+        ):
             missing_directory.append(path.name)
 
     assert missing_symlink == []
@@ -998,6 +1123,37 @@ def test_canary_builder_tests_cover_response_argfiles() -> None:
     ]
 
     assert missing == []
+
+
+def test_sorafs_inventory_constants_are_named_by_local_tests() -> None:
+    source_test_pairs = [
+        *(
+            (path, SCRIPTS_DIR / "tests" / f"{path.stem}_test.py")
+            for path in CHECKERS
+        ),
+        *(
+            (path, SCRIPTS_DIR / "tests" / f"{path.stem}_test.py")
+            for path in sorted(SCRIPTS_DIR.glob("build_sorafs_*_canary.py"))
+        ),
+        (
+            PRODUCTION_READINESS_CHECKER,
+            SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py",
+        ),
+    ]
+    missing: dict[str, list[str]] = {}
+
+    for source_path, test_path in source_test_pairs:
+        assert test_path.exists(), f"{source_path.name} has no local test file"
+        test_source = read(test_path)
+        missing_constants = [
+            name
+            for name in exported_inventory_constant_names(source_path)
+            if name not in test_source
+        ]
+        if missing_constants:
+            missing[source_path.name] = missing_constants
+
+    assert missing == {}
 
 
 def bounded_json_checkers() -> list[Path]:
@@ -1473,6 +1629,7 @@ def positive_int_arg_checkers() -> set[str]:
         "check_sorafs_repair_rollout_evidence.py",
         "check_sorafs_reputation_rollout_evidence.py",
         "check_sorafs_reserve_rent_rollout_evidence.py",
+        "check_sorafs_production_readiness.py",
     }
 
 
@@ -1492,11 +1649,12 @@ def non_negative_int_arg_checkers() -> set[str]:
         "check_sorafs_reference_sdk_release_evidence.py",
         "check_sorafs_repair_rollout_evidence.py",
         "check_sorafs_reserve_rent_rollout_evidence.py",
+        "check_sorafs_production_readiness.py",
     }
 
 
 def positive_int_arg_runners() -> set[str]:
-    return set(runner_names())
+    return {path.name for path in COLLECTION_RUNNERS}
 
 
 def non_negative_int_arg_runners() -> set[str]:
@@ -1516,6 +1674,7 @@ def non_negative_int_arg_runners() -> set[str]:
         "run_sorafs_repair_rollout_evidence.py",
         "run_sorafs_reputation_rollout_evidence.py",
         "run_sorafs_reserve_rent_rollout_evidence.py",
+        "run_sorafs_production_readiness.py",
     }
 
 
@@ -1576,6 +1735,28 @@ def runner_example(path: Path) -> Path | None:
         (candidate for candidate in runner_example_candidates(path) if candidate.is_file()),
         None,
     )
+
+
+def runner_collection_example(path: Path) -> Path:
+    if path == PRODUCTION_READINESS_RUNNER:
+        return EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example"
+    return runner_example_candidates(path)[0]
+
+
+def runner_plan_example(path: Path) -> Path | None:
+    if path == PRODUCTION_READINESS_RUNNER:
+        return next(
+            (
+                candidate
+                for candidate in (
+                    EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example",
+                    EXAMPLES_DIR / "sorafs_production_readiness.args.example",
+                )
+                if candidate.is_file()
+            ),
+            None,
+        )
+    return runner_example(path)
 
 
 def required_source_entry_kinds(module: object) -> set[str]:
@@ -1684,6 +1865,31 @@ def expected_rendered_plan_steps(plan: object) -> list[dict[str, object]]:
     ]
 
 
+def runner_inventory_constant_fields(
+    module: object,
+    constant_name: str,
+    failures: list[str],
+) -> set[str] | None:
+    value = getattr(module, constant_name, None)
+    if not isinstance(value, frozenset):
+        failures.append(f"{constant_name}:shape")
+        return None
+    malformed = [
+        field
+        for field in value
+        if (
+            not isinstance(field, str)
+            or not field
+            or field != field.strip()
+            or any(ord(character) < 32 for character in field)
+        )
+    ]
+    if malformed:
+        failures.append(f"{constant_name}:field")
+        return None
+    return set(value)
+
+
 def test_rollout_gate_contract_fixtures_cover_every_checker() -> None:
     assert CHECKERS
     assert len(checker_names()) == len(set(checker_names()))
@@ -1758,6 +1964,110 @@ def test_rollout_evidence_gates_export_dry_run_field_contracts() -> None:
 
     assert checker_failures == {}
     assert runner_failures == []
+
+
+def test_rollout_checker_fingerprint_fields_are_typed_or_reviewed() -> None:
+    assert fingerprint_field_name_is_typed("manifest_body_blake3_hex")
+    assert fingerprint_field_name_is_typed("scheduled_lifecycle_canary_last_tick_at_unix")
+    assert not fingerprint_field_name_is_typed("manifest_body_blake3")
+    assert not fingerprint_field_name_is_typed("scheduled_lifecycle_canary_last_tick_unix")
+
+    ambiguous_fields: dict[str, list[str]] = {}
+    for path in CHECKERS:
+        module = load_script_module(path, f"{path.stem}_fingerprint_field_contract")
+        fields = getattr(module, "FINGERPRINT_FIELDS", ())
+        untyped = [
+            field
+            for field in fields
+            if isinstance(field, str) and not fingerprint_field_name_is_typed(field)
+        ]
+        if untyped:
+            ambiguous_fields[path.name] = untyped
+
+    assert ambiguous_fields == {}
+
+
+def test_rollout_checker_evidence_kind_contracts_are_self_consistent() -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in CHECKERS:
+        module = load_script_module(path, f"{path.stem}_evidence_kind_contract")
+        evidence_kinds = getattr(module, "EVIDENCE_KINDS", None)
+        kind_by_name = getattr(module, "KIND_BY_NAME", None)
+        schema_to_kind = getattr(module, "SCHEMA_TO_KIND", None)
+        default_required = getattr(module, "DEFAULT_REQUIRED_KINDS", None)
+        required_fields = getattr(module, "EVIDENCE_REQUIRED_FIELDS", None)
+        checker_failures: list[str] = []
+
+        if not isinstance(evidence_kinds, tuple) or not evidence_kinds:
+            failures[path.name] = ["EVIDENCE_KINDS:shape"]
+            continue
+        kind_names = [getattr(kind, "name", None) for kind in evidence_kinds]
+        schemas = [getattr(kind, "schema", None) for kind in evidence_kinds]
+        required_kind_names = tuple(
+            kind.name for kind in evidence_kinds if getattr(kind, "required", True)
+        )
+        if any(
+            not isinstance(name, str)
+            or not name
+            or name != name.strip()
+            or any(ord(character) < 32 for character in name)
+            for name in kind_names
+        ):
+            checker_failures.append("EVIDENCE_KINDS:names")
+        if len(kind_names) != len(set(kind_names)):
+            checker_failures.append("EVIDENCE_KINDS:duplicate names")
+        if any(
+            not isinstance(schema, str)
+            or not schema.startswith("sorafs.")
+            or not schema.endswith(".v1")
+            or schema != schema.strip()
+            or any(ord(character) < 32 for character in schema)
+            for schema in schemas
+        ):
+            checker_failures.append("EVIDENCE_KINDS:schemas")
+        if len(schemas) != len(set(schemas)):
+            checker_failures.append("EVIDENCE_KINDS:duplicate schemas")
+        if kind_by_name != {kind.name: kind for kind in evidence_kinds}:
+            checker_failures.append("KIND_BY_NAME")
+        if schema_to_kind != {kind.schema: kind for kind in evidence_kinds}:
+            checker_failures.append("SCHEMA_TO_KIND")
+        if default_required != required_kind_names:
+            checker_failures.append("DEFAULT_REQUIRED_KINDS")
+        if not isinstance(required_fields, dict):
+            checker_failures.append("EVIDENCE_REQUIRED_FIELDS:shape")
+        elif set(required_fields) != set(required_kind_names):
+            checker_failures.append("EVIDENCE_REQUIRED_FIELDS:keys")
+        else:
+            malformed_fields = sorted(
+                kind_name
+                for kind_name, fields in required_fields.items()
+                if not required_field_contract_is_canonical(fields)
+            )
+            if malformed_fields:
+                checker_failures.append(
+                    "EVIDENCE_REQUIRED_FIELDS:malformed:"
+                    + ",".join(malformed_fields)
+                )
+
+        for constant_name in checker_required_field_constant_names(path):
+            value = getattr(module, constant_name, None)
+            if not required_field_contract_is_canonical(value):
+                checker_failures.append(f"{constant_name}:malformed")
+
+        if checker_failures:
+            failures[path.name] = checker_failures
+
+    assert set(CHECKER_EVIDENCE_CONTRACT_CONSTANT_NAMES) == {
+        "EVIDENCE_KINDS",
+        "COMMON_EVIDENCE_REQUIRED_FIELDS",
+        "COMMON_CANARY_REQUIRED_FIELDS",
+        "COMMON_GOVERNANCE_REQUIRED_FIELDS",
+        "FRESH_EVIDENCE_REQUIRED_FIELDS",
+        "E2E_RUN_DETAIL_FIELDS",
+        "EVIDENCE_VIEWER_DIGEST_SET_FIELDS",
+    }
+    assert failures == {}
 
 
 def test_rollout_evidence_contracts_disclose_reviewed_deployment_context() -> None:
@@ -1941,8 +2251,8 @@ def test_rollout_runners_have_operator_argfile_examples() -> None:
 def test_rollout_runners_have_collection_argfile_examples() -> None:
     missing = [
         path.name
-        for path in RUNNERS
-        if not runner_example_candidates(path)[0].is_file()
+        for path in COLLECTION_RUNNERS
+        if not runner_collection_example(path).is_file()
     ]
 
     assert missing == []
@@ -1972,9 +2282,8 @@ def test_flag_backed_rollout_collection_examples_cover_default_required_kinds() 
 
 def test_rollout_runner_examples_show_dry_run_review() -> None:
     missing: dict[str, str] = {}
-    for path in RUNNERS:
-        example = runner_example(path)
-        assert example is not None
+    for path in COLLECTION_RUNNERS:
+        example = runner_collection_example(path)
         source = read(example)
         if "--dry-run" not in source:
             missing[path.name] = str(example.relative_to(SCRIPTS_DIR.parent))
@@ -1988,9 +2297,8 @@ def test_rollout_runner_examples_document_runtime_only_evidence() -> None:
         r"payload-free|runtime-only|runtime|secret|bearer token|signing key|raw",
         re.I,
     )
-    for path in RUNNERS:
-        example = runner_example(path)
-        assert example is not None
+    for path in COLLECTION_RUNNERS:
+        example = runner_collection_example(path)
         if pattern.search(read(example)) is None:
             missing[path.name] = str(example.relative_to(SCRIPTS_DIR.parent))
 
@@ -2102,9 +2410,8 @@ def test_rollout_example_argfiles_expand_with_shared_response_parser() -> None:
 def test_rollout_runner_examples_parse_with_runner_parsers() -> None:
     failures: dict[str, str] = {}
 
-    for path in RUNNERS:
-        example = runner_example(path)
-        assert example is not None
+    for path in COLLECTION_RUNNERS:
+        example = runner_collection_example(path)
         module = load_script_module(path, f"sorafs_runner_contract_{path.stem}")
         stderr = StringIO()
         try:
@@ -2294,6 +2601,110 @@ def test_rollout_runner_dry_run_plan_uses_reviewed_top_level_keys() -> None:
         if runner_failures:
             failures[path.name] = runner_failures
 
+    assert failures == {}
+
+
+def test_rollout_runner_plan_inventory_constants_match_dry_run_plans() -> None:
+    threshold_constant_names = (
+        "PLAN_REQUIRED_THRESHOLD_FIELDS",
+        "PLAN_POSITIVE_THRESHOLD_FIELDS",
+        "PLAN_NON_NEGATIVE_THRESHOLD_FIELDS",
+    )
+    failures: dict[str, list[str]] = {}
+
+    for path in [*RUNNERS, PRODUCTION_READINESS_RUNNER]:
+        example = runner_plan_example(path)
+        assert example is not None
+        module = load_script_module(path, f"sorafs_runner_plan_inventory_{path.stem}")
+        args = module.parse_args([f"@{example}", "--dry-run"])
+        plan = module.build_command_plan(args)
+        rendered = render_runner_plan_json(module, plan, args)
+        if not isinstance(rendered, dict):
+            failures[path.name] = ["plan_json shape"]
+            continue
+
+        runner_failures: list[str] = []
+        plan_fields = runner_inventory_constant_fields(
+            module,
+            "PLAN_FIELDS",
+            runner_failures,
+        )
+        if plan_fields is not None and set(rendered) != plan_fields:
+            runner_failures.append("PLAN_FIELDS:rendered")
+
+        if any(hasattr(module, name) for name in threshold_constant_names):
+            threshold_sets = {
+                name: runner_inventory_constant_fields(module, name, runner_failures)
+                for name in threshold_constant_names
+            }
+            threshold_fields_label = getattr(module, "PLAN_THRESHOLD_FIELDS_LABEL", None)
+            if hasattr(module, "PLAN_THRESHOLD_FIELDS_LABEL") and (
+                not isinstance(threshold_fields_label, str)
+                or not threshold_fields_label
+                or threshold_fields_label != threshold_fields_label.strip()
+                or any(ord(character) < 32 for character in threshold_fields_label)
+            ):
+                runner_failures.append("PLAN_THRESHOLD_FIELDS_LABEL:shape")
+            rendered_thresholds = rendered.get("thresholds")
+            if not isinstance(rendered_thresholds, dict):
+                runner_failures.append("thresholds:shape")
+            elif all(fields is not None for fields in threshold_sets.values()):
+                required = threshold_sets["PLAN_REQUIRED_THRESHOLD_FIELDS"] or set()
+                positive = threshold_sets["PLAN_POSITIVE_THRESHOLD_FIELDS"] or set()
+                non_negative = (
+                    threshold_sets["PLAN_NON_NEGATIVE_THRESHOLD_FIELDS"] or set()
+                )
+                typed_thresholds = positive | non_negative
+                rendered_threshold_fields = set(rendered_thresholds)
+                if not required <= typed_thresholds:
+                    runner_failures.append("PLAN_REQUIRED_THRESHOLD_FIELDS:typed")
+                if not required <= rendered_threshold_fields:
+                    runner_failures.append("PLAN_REQUIRED_THRESHOLD_FIELDS:rendered")
+                if not rendered_threshold_fields <= typed_thresholds:
+                    runner_failures.append("thresholds:untyped")
+
+        for constant_name in (
+            "PLAN_EXTERNAL_EVIDENCE_FIELDS",
+            "EXTERNAL_EVIDENCE_FIELDS",
+        ):
+            if not hasattr(module, constant_name):
+                continue
+            fields = runner_inventory_constant_fields(
+                module,
+                constant_name,
+                runner_failures,
+            )
+            rendered_external = rendered.get("external_evidence")
+            if not isinstance(rendered_external, dict):
+                runner_failures.append("external_evidence:shape")
+            elif fields is not None and set(rendered_external) != fields:
+                runner_failures.append(f"{constant_name}:rendered")
+
+        if hasattr(module, "PLAN_DEPLOYMENT_CONTEXT_FIELDS"):
+            fields = runner_inventory_constant_fields(
+                module,
+                "PLAN_DEPLOYMENT_CONTEXT_FIELDS",
+                runner_failures,
+            )
+            rendered_context = rendered.get("deployment_context")
+            if not isinstance(rendered_context, dict):
+                runner_failures.append("deployment_context:shape")
+            elif fields is not None and set(rendered_context) != fields:
+                runner_failures.append("PLAN_DEPLOYMENT_CONTEXT_FIELDS:rendered")
+
+        if runner_failures:
+            failures[path.name] = runner_failures
+
+    assert set(RUNNER_PLAN_CONSTANT_NAMES) == {
+        "PLAN_FIELDS",
+        "PLAN_REQUIRED_THRESHOLD_FIELDS",
+        "PLAN_POSITIVE_THRESHOLD_FIELDS",
+        "PLAN_NON_NEGATIVE_THRESHOLD_FIELDS",
+        "PLAN_THRESHOLD_FIELDS_LABEL",
+        "PLAN_EXTERNAL_EVIDENCE_FIELDS",
+        "EXTERNAL_EVIDENCE_FIELDS",
+        "PLAN_DEPLOYMENT_CONTEXT_FIELDS",
+    }
     assert failures == {}
 
 
@@ -3229,7 +3640,7 @@ def test_sorafs_hedging_docs_do_not_reopen_generated_fixture_work() -> None:
 def test_rollout_runners_support_dry_run_plans() -> None:
     missing = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if "--dry-run" not in read(path) or "args.dry_run" not in read(path)
     ]
 
@@ -3239,7 +3650,7 @@ def test_rollout_runners_support_dry_run_plans() -> None:
 def test_rollout_runners_preflight_required_files() -> None:
     missing = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if "sorafs_runner_preflight" not in read(path)
         or "require_existing_files" not in read(path)
         or "def require_existing_files(" in read(path)
@@ -3263,7 +3674,7 @@ def test_rollout_runners_preflight_required_files() -> None:
 def test_rollout_runners_preflight_required_directories_with_shared_helper() -> None:
     missing = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if "def require_existing_dirs(" in read(path)
     ]
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
@@ -3282,7 +3693,7 @@ def test_rollout_runners_preflight_required_directories_with_shared_helper() -> 
 def test_rollout_runners_use_shared_command_plan_execution() -> None:
     missing = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if "run_command_plan" not in read(path)
         or "subprocess.run" in read(path)
         or "out_dir.mkdir" in read(path)
@@ -3290,7 +3701,7 @@ def test_rollout_runners_use_shared_command_plan_execution() -> None:
     ]
     local_stderr_emitters = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if re.search(r"\n\s*print\(", read(path))
         or "for error in errors:" in read(path)
         or 'print(f"- {error}"' in read(path)
@@ -3386,14 +3797,14 @@ def test_rollout_runners_use_shared_command_plan_execution() -> None:
 def test_rollout_runners_use_shared_plan_rendering() -> None:
     missing = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if "write_runner_plan," not in read(path)
         or "write_runner_plan(" not in read(path)
         or "json.dumps(" in read(path)
         or "import json" in read(path)
     ]
     unguarded = []
-    for path in RUNNERS:
+    for path in COLLECTION_RUNNERS:
         main_source = function_source(path, "main")
         main_tree = ast.parse(main_source)
         write_count = sum(1 for node in ast.walk(main_tree) if is_call(node, "write_runner_plan"))
@@ -3446,15 +3857,37 @@ def test_rollout_runners_use_shared_plan_rendering() -> None:
         "test_validate_runner_evidence_plan_rejects_nested_drift_without_leaking"
         in helper_test
     )
+    assert (
+        "test_validate_runner_aggregate_readiness_plan_accepts_schema_closed_plan"
+        in helper_test
+    )
+    assert (
+        "test_validate_runner_aggregate_readiness_plan_rejects_nested_drift_without_leaking"
+        in helper_test
+    )
     assert "test_write_runner_plan_reports_non_object_plan_without_stdout" in helper_test
     assert "test_write_runner_plan_sanitizes_malformed_render_error" in helper_test
-    assert all("validate_runner_plan_steps," in read(path) for path in RUNNERS)
-    assert all("rendered_plan = plan_json(plan, args)" in read(path) for path in RUNNERS)
-    for path in RUNNERS:
+    assert all(
+        "validate_runner_plan_steps," in read(path)
+        or (
+            path == PRODUCTION_READINESS_RUNNER
+            and "validate_runner_aggregate_readiness_plan," in read(path)
+        )
+        for path in COLLECTION_RUNNERS
+    )
+    assert all(
+        "rendered_plan = plan_json(plan, args)" in read(path)
+        for path in COLLECTION_RUNNERS
+    )
+    for path in COLLECTION_RUNNERS:
         source = read(path)
         direct_marker = "plan_errors = validate_runner_plan_steps(rendered_plan, plan)"
         wrapped_marker = "plan_errors = validate_plan_json(rendered_plan, plan, args)"
-        if path.name in {
+        if path == PRODUCTION_READINESS_RUNNER:
+            assert wrapped_marker in source
+            assert "validate_runner_aggregate_readiness_plan(" in source
+            assert source.index(wrapped_marker) < source.index("if args.dry_run:")
+        elif path.name in {
             "run_sorafs_appeal_finance_rollout_evidence.py",
             "run_sorafs_ai_prescreen_rollout_evidence.py",
             "run_sorafs_gateway_compliance_rollout_evidence.py",
@@ -3506,34 +3939,55 @@ def test_rollout_runners_use_shared_plan_rendering() -> None:
         else:
             assert direct_marker in source
             assert source.index(direct_marker) < source.index("if args.dry_run:")
-    assert all("plan_errors = write_runner_plan" in read(path) for path in RUNNERS)
-    assert all("write_runner_plan(rendered_plan)" in read(path) for path in RUNNERS)
-    assert all("emit_runner_error_lines(plan_errors)" in read(path) for path in RUNNERS)
+    assert all(
+        "plan_errors = write_runner_plan" in read(path)
+        or (
+            path == PRODUCTION_READINESS_RUNNER
+            and "render_errors = write_runner_plan" in read(path)
+        )
+        for path in COLLECTION_RUNNERS
+    )
+    assert all(
+        "write_runner_plan(rendered_plan)" in read(path)
+        for path in COLLECTION_RUNNERS
+    )
+    assert all(
+        "emit_runner_error_lines(plan_errors)" in read(path)
+        or (
+            path == PRODUCTION_READINESS_RUNNER
+            and "emit_runner_error_lines(render_errors)" in read(path)
+        )
+        for path in COLLECTION_RUNNERS
+    )
     assert missing == []
     assert unguarded == []
 
 
 def test_rollout_runner_mains_return_argparse_error_codes() -> None:
-    missing = [
-        path.name
-        for path in RUNNERS
-        if "parser.error(" in read(path)
-        and (
-            "except SystemExit as error" not in read(path)
-            or "return error.code if isinstance(error.code, int) else 1" not in read(path)
-        )
-    ]
+    missing = []
+    for path in COLLECTION_RUNNERS:
+        main_source = function_source(path, "main")
+        if "parse_args(" not in main_source:
+            continue
+        if (
+            "except SystemExit as error" not in main_source
+            or "return error.code if isinstance(error.code, int) else 1"
+            not in main_source
+        ):
+            missing.append(path.name)
 
     assert missing == []
 
 
 def test_rollout_runners_use_shared_caught_argument_error_reporting() -> None:
     collected_raw_errors = [
-        path.name for path in RUNNERS if "errors.append(str(error))" in read(path)
+        path.name
+        for path in COLLECTION_RUNNERS
+        if "errors.append(str(error))" in read(path)
     ]
     local_parser_error_handlers = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if re.search(
             r"except ValueError as error:\n\s*parser\.error\(str\(error\)\)",
             function_source(path, "parse_args"),
@@ -3541,7 +3995,7 @@ def test_rollout_runners_use_shared_caught_argument_error_reporting() -> None:
     ]
     missing_shared_raises = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if "except ValueError as error:" in function_source(path, "parse_args")
         and "emit_runner_exception(error)\n        raise SystemExit(2) from error"
         not in function_source(path, "parse_args")
@@ -3562,7 +4016,7 @@ def test_rollout_runners_use_shared_caught_argument_error_reporting() -> None:
     assert "test_emit_runner_exception_sanitizes_malformed_message" in helper_test
     assert "test_emit_runner_exception_preserves_canonical_message" in helper_test
     assert "emit_runner_error_lines((str(error),))" not in "\n".join(
-        read(path) for path in RUNNERS
+        read(path) for path in COLLECTION_RUNNERS
     )
     assert collected_raw_errors == []
     for script_name in collected_error_runners:
@@ -4844,12 +5298,21 @@ def test_sorafs_operator_helpers_use_shared_path_identity_for_resolution() -> No
 
 
 def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
-    missing = [
-        path.name
-        for path in RUNNERS
-        if "validate_runner_preflight(args" not in read(path)
-        or "sorafs_runner_preflight" not in read(path)
-    ]
+    missing = []
+    for path in COLLECTION_RUNNERS:
+        source = read(path)
+        validate_sources = (
+            function_source(path, "validate_inputs"),
+            function_source(path, "main"),
+        )
+        uses_shared_preflight = any(
+            is_call(node, "validate_runner_preflight")
+            for validate_source in validate_sources
+            if validate_source
+            for node in ast.walk(ast.parse(validate_source))
+        )
+        if not uses_shared_preflight or "sorafs_runner_preflight" not in source:
+            missing.append(path.name)
 
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     helper_test = read(RUNNER_PREFLIGHT_TEST)
@@ -5205,7 +5668,7 @@ def test_passthrough_arg_runners_use_shared_passthrough_preflight() -> None:
 def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     missing = [
         path.name
-        for path in [*CHECKERS, *RUNNERS]
+        for path in [*SUMMARY_CHECKERS, *COLLECTION_RUNNERS]
         if "sorafs_response_args" not in read(path)
         or "EvidenceArgumentParser" not in read(path)
         or "expand_response_args(" not in read(path)
@@ -5214,7 +5677,7 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     ]
     local_response_parsers = [
         path.name
-        for path in [*CHECKERS, *RUNNERS]
+        for path in [*SUMMARY_CHECKERS, *COLLECTION_RUNNERS]
         if "class EvidenceArgumentParser(" in read(path)
         or "def convert_arg_line_to_args(" in read(path)
         or "import shlex" in read(path)
@@ -5222,6 +5685,15 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     ]
     helper = read(RESPONSE_ARGS_HELPER)
     helper_test = read(RESPONSE_ARGS_TEST)
+    aggregate_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    reputation_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_reputation_rollout_evidence_test.py"
+    )
+    aggregate_runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
 
     assert "class EvidenceArgumentParser" in helper
     assert "import os" in helper
@@ -5327,6 +5799,22 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "test_shared_integer_arg_parsers_reject_non_canonical_values" in helper_test
     assert "test_direct_expanded_argument_limit_fails" in helper_test
     assert "test_response_file_expanded_argument_limit_fails" in helper_test
+    assert "test_response_file_symlink_fails_before_validation" in aggregate_checker_test
+    assert (
+        "test_response_file_malformed_line_fails_before_validation"
+        in aggregate_checker_test
+    )
+    assert "@ARGFILE must not be a symlink" in aggregate_checker_test
+    assert "@ARGFILE line 1:" in aggregate_checker_test
+    assert "private-key-placeholder\" not in captured.err" in aggregate_checker_test
+    assert "test_response_file_symlink_fails_before_validation" in aggregate_runner_test
+    assert (
+        "test_response_file_malformed_line_fails_before_validation"
+        in aggregate_runner_test
+    )
+    assert "@ARGFILE must not be a symlink" in aggregate_runner_test
+    assert "@ARGFILE line 1:" in aggregate_runner_test
+    assert "private-key-placeholder\" not in captured.err" in aggregate_runner_test
     assert missing == []
     assert local_response_parsers == []
 
@@ -5334,37 +5822,37 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
 def test_rollout_checkers_use_shared_integer_arg_parsers() -> None:
     missing_positive = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if path.name in positive_int_arg_checkers()
         and "positive_int_arg" not in read(path)
     ]
     missing_non_negative = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if path.name in non_negative_int_arg_checkers()
         and "non_negative_int_arg" not in read(path)
     ]
     missing_runner_positive = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if path.name in positive_int_arg_runners()
         and "type=positive_int_arg" not in read(path)
     ]
     missing_runner_non_negative = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if path.name in non_negative_int_arg_runners()
         and "type=non_negative_int_arg" not in read(path)
     ]
     local_parser_defs = [
         path.name
-        for path in [*CHECKERS, *RUNNERS]
+        for path in [*SUMMARY_CHECKERS, *COLLECTION_RUNNERS]
         if "def positive_int_arg(" in read(path)
         or "def non_negative_int_arg(" in read(path)
     ]
     local_parser_errors = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if 'ArgumentTypeError("must be positive")' in read(path)
         or 'ArgumentTypeError("must be non-negative")' in read(path)
         or "--max-snapshot-age-secs must be positive" in read(path)
@@ -5372,7 +5860,7 @@ def test_rollout_checkers_use_shared_integer_arg_parsers() -> None:
     ]
     local_parser_predicates = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if "parsed <= 0" in read(path)
         or "parsed < 0" in read(path)
         or "args.max_snapshot_age_secs <= 0" in read(path)
@@ -5380,12 +5868,12 @@ def test_rollout_checkers_use_shared_integer_arg_parsers() -> None:
     ]
     raw_checker_int_arg_types = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if "type=int" in read(path)
     ]
     raw_runner_int_arg_types = [
         path.name
-        for path in RUNNERS
+        for path in COLLECTION_RUNNERS
         if "type=int" in read(path)
     ]
     helper = read(RESPONSE_ARGS_HELPER)
@@ -5410,8 +5898,31 @@ def test_rollout_checkers_use_shared_integer_arg_parsers() -> None:
     assert raw_runner_int_arg_types == []
 
 
+def test_integer_arg_parser_inventories_match_script_usage() -> None:
+    def scripts_using_arg_parser(paths: list[Path], parser_name: str) -> set[str]:
+        pattern = re.compile(rf"\btype\s*=\s*{re.escape(parser_name)}\b")
+        return {path.name for path in paths if pattern.search(read(path))}
+
+    assert positive_int_arg_checkers() == scripts_using_arg_parser(
+        SUMMARY_CHECKERS,
+        "positive_int_arg",
+    )
+    assert non_negative_int_arg_checkers() == scripts_using_arg_parser(
+        SUMMARY_CHECKERS,
+        "non_negative_int_arg",
+    )
+    assert positive_int_arg_runners() == scripts_using_arg_parser(
+        COLLECTION_RUNNERS,
+        "positive_int_arg",
+    )
+    assert non_negative_int_arg_runners() == scripts_using_arg_parser(
+        COLLECTION_RUNNERS,
+        "non_negative_int_arg",
+    )
+
+
 def test_rollout_runners_use_shared_namespace_integer_validators() -> None:
-    runner_sources = {path: read(path) for path in RUNNERS}
+    runner_sources = {path: read(path) for path in COLLECTION_RUNNERS}
     missing_positive = [
         path.name
         for path, source in runner_sources.items()
@@ -5469,19 +5980,26 @@ def test_rollout_runners_use_shared_namespace_integer_validators() -> None:
 
 
 def test_rollout_checkers_preflight_summary_output_targets() -> None:
-    missing = [
-        path.name
-        for path in CHECKERS
-        if "validate_checker_preflight(args)" not in read(path)
-        or "sorafs_checker_preflight" not in read(path)
-        or "render_and_write_checker_summary," not in read(path)
-        or "render_and_write_checker_summary(\n" not in read(path)
-        or "summary_out.parent.mkdir" in read(path)
-        or "summary_out.write_text" in read(path)
-    ]
+    missing = []
+    for path in SUMMARY_CHECKERS:
+        source = read(path)
+        main_source = function_source(path, "main")
+        uses_summary_writer = any(
+            is_call(node, "render_and_write_checker_summary")
+            for node in ast.walk(ast.parse(main_source))
+        )
+        if (
+            "validate_checker_preflight(args)" not in source
+            or "sorafs_checker_preflight" not in source
+            or "render_and_write_checker_summary," not in source
+            or not uses_summary_writer
+            or "summary_out.parent.mkdir" in source
+            or "summary_out.write_text" in source
+        ):
+            missing.append(path.name)
     local_summary_renderers = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if "json.dumps(summary" in read(path)
         or "output = json.dumps" in read(path)
         or "rendered = json.dumps" in read(path)
@@ -5492,7 +6010,7 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     ]
     local_stderr_emitters = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if re.search(r"\n\s*print\(", read(path))
         or "for error in preflight_errors:" in read(path)
         or "for error in summary_errors:" in read(path)
@@ -5502,6 +6020,9 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
 
     helper = read(CHECKER_PREFLIGHT)
     helper_test = read(CHECKER_PREFLIGHT_TEST)
+    aggregate_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "def emit_checker_error_lines" in helper
     assert "def emit_checker_error_block" in helper
     assert "def _checker_error_messages" in helper
@@ -5669,6 +6190,38 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
         "test_summary_out_same_as_explicit_evidence_rejects_unsafe_paths_without_leaking"
         in helper_test
     )
+    assert "test_summary_out_symlink_fails_before_validation" in aggregate_checker_test
+    assert (
+        "test_summary_out_parent_symlink_fails_before_validation"
+        in aggregate_checker_test
+    )
+    assert "test_summary_out_directory_fails_before_validation" in aggregate_checker_test
+    assert (
+        "test_summary_out_parent_file_fails_before_validation"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_summary_out_unsafe_path_fails_before_validation_without_leaking"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_summary_out_same_as_explicit_evidence_fails_before_validation"
+        in aggregate_checker_test
+    )
+    assert "SoraFS checker-rendered paths must not contain secret-looking" in (
+        aggregate_checker_test
+    )
+    assert "must not be a symlink" in aggregate_checker_test
+    assert "must not be a directory" in aggregate_checker_test
+    assert "--summary-out parent" in aggregate_checker_test
+    assert "must be a directory when it exists" in aggregate_checker_test
+    assert "private-key-summary\" not in captured.err" in aggregate_checker_test
+    assert "private-key-summary-parent\" not in captured.err" in aggregate_checker_test
+    assert "private-key-placeholder\" not in captured.err" in aggregate_checker_test
+    assert "private%26%2395%3Bkey\" not in captured.err" in aggregate_checker_test
+    assert "private&#95;key\" not in captured.err" in aggregate_checker_test
+    assert "private_key\" not in captured.err" in aggregate_checker_test
+    assert "must not be the same path as --evidence" in aggregate_checker_test
     assert "test_write_checker_summary_sanitizes_create_parent_failure" in helper_test
     assert "test_write_checker_summary_sanitizes_write_failure" in helper_test
     assert "test_write_checker_summary_sanitizes_fsync_failure" in helper_test
@@ -5682,16 +6235,22 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert missing == []
     assert local_summary_renderers == []
     assert local_stderr_emitters == []
-    assert [path.name for path in CHECKERS if "print(rendered_summary" in read(path)] == []
+    assert [
+        path.name
+        for path in SUMMARY_CHECKERS
+        if "print(rendered_summary" in read(path)
+    ] == []
 
 
 def test_rollout_checkers_use_shared_caught_argument_error_reporting() -> None:
     collected_raw_errors = [
-        path.name for path in CHECKERS if "errors.append(str(error))" in read(path)
+        path.name
+        for path in SUMMARY_CHECKERS
+        if "errors.append(str(error))" in read(path)
     ]
     local_parser_error_handlers = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if re.search(
             r"except ValueError as error:\n\s*parser\.error\(str\(error\)\)",
             read(path),
@@ -5699,7 +6258,7 @@ def test_rollout_checkers_use_shared_caught_argument_error_reporting() -> None:
     ]
     missing_shared_returns = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if "except ValueError as error:" in read(path)
         and "emit_checker_exception(error)\n        return 2" not in read(path)
     ]
@@ -5711,9 +6270,11 @@ def test_rollout_checkers_use_shared_caught_argument_error_reporting() -> None:
     assert "test_emit_checker_exception_sanitizes_malformed_message" in helper_test
     assert "test_emit_checker_exception_preserves_canonical_message" in helper_test
     assert "emit_checker_error_lines((str(error),))" not in "\n".join(
-        read(path) for path in CHECKERS
+        read(path) for path in SUMMARY_CHECKERS
     )
-    reputation_checker = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
+    reputation_checker = read(
+        SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py"
+    )
     assert collected_raw_errors == []
     assert "from sorafs_path_identity import error_diagnostic_label" in reputation_checker
     assert "errors.append(error_diagnostic_label(error))" in reputation_checker
@@ -5723,9 +6284,9 @@ def test_rollout_checkers_use_shared_caught_argument_error_reporting() -> None:
 
 def test_rollout_checker_mains_return_argparse_error_codes() -> None:
     missing = []
-    for path in CHECKERS:
+    for path in SUMMARY_CHECKERS:
         main_source = function_source(path, "main")
-        if "parser.parse_args(" not in main_source:
+        if "parse_args(" not in main_source:
             continue
         if (
             "except SystemExit as error" not in main_source
@@ -5739,12 +6300,12 @@ def test_rollout_checker_mains_return_argparse_error_codes() -> None:
 def test_rollout_checkers_use_shared_evidence_input_preflight() -> None:
     missing = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if "validate_checker_preflight(args)" not in read(path)
     ]
     local_evidence_input_checks = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if "provide --evidence-dir or --evidence" in read(path)
         or "at least one --evidence-dir or --evidence is required" in read(path)
         or "not args.evidence_dir and not args.evidence" in read(path)
@@ -5752,6 +6313,12 @@ def test_rollout_checkers_use_shared_evidence_input_preflight() -> None:
 
     helper = read(CHECKER_PREFLIGHT)
     helper_test = read(CHECKER_PREFLIGHT_TEST)
+    aggregate_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    reputation_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_reputation_rollout_evidence_test.py"
+    )
     assert "def validate_checker_evidence_inputs" in helper
     assert "def _checker_path_sequence" in helper
     assert 'label="--evidence-dir"' in helper
@@ -5766,9 +6333,38 @@ def test_rollout_checkers_use_shared_evidence_input_preflight() -> None:
     assert "test_present_evidence_spec_passes_input_check" in helper_test
     assert "test_evidence_input_check_rejects_malformed_collections" in helper_test
     assert "test_evidence_input_check_rejects_non_path_entries" in helper_test
+    assert (
+        "test_evidence_input_check_rejects_unsafe_rendered_paths_without_leaking"
+        in helper_test
+    )
     assert "test_evidence_input_check_sanitizes_malformed_entry_labels" in helper_test
     assert "test_checker_preflight_reports_malformed_evidence_inputs" in helper_test
     assert "test_checker_preflight_stops_after_malformed_evidence_inputs" in helper_test
+    assert (
+        "test_evidence_dir_unsafe_path_fails_before_validation_without_leaking"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_explicit_evidence_unsafe_path_fails_before_validation_without_leaking"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_typed_explicit_evidence_unsafe_path_fails_before_load_without_leaking"
+        in reputation_checker_test
+    )
+    assert (
+        "test_typed_explicit_evidence_empty_path_fails_before_load_without_leaking"
+        in reputation_checker_test
+    )
+    assert "bearer&#95;token\" not in captured.err" in aggregate_checker_test
+    assert "bearer_token\" not in captured.err" in aggregate_checker_test
+    assert "private%26%2395%3Bkey\" not in captured.err" in aggregate_checker_test
+    assert "private&#95;key\" not in captured.err" in aggregate_checker_test
+    assert "private_key\" not in captured.err" in aggregate_checker_test
+    assert "private%26%2395%3Bkey\" not in captured.err" in reputation_checker_test
+    assert "private&#95;key\" not in captured.err" in reputation_checker_test
+    assert "private_key\" not in captured.err" in reputation_checker_test
+    assert "latest=\" not in captured.err" in reputation_checker_test
     assert missing == []
     assert local_evidence_input_checks == []
 
@@ -5776,7 +6372,7 @@ def test_rollout_checkers_use_shared_evidence_input_preflight() -> None:
 def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     missing = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if "sorafs_evidence_paths" not in read(path)
         or "discover_evidence_files(" not in read(path)
         or "reserved_output_paths=" not in read(path)
@@ -5790,6 +6386,9 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     ]
     helper = read(EVIDENCE_PATHS_HELPER)
     helper_test = read(EVIDENCE_PATHS_TEST)
+    aggregate_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     path_identity_helper = read(PATH_IDENTITY_HELPER)
 
     assert "duplicate explicit evidence file" in helper
@@ -5863,6 +6462,40 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "test_explicit_evidence_broken_parent_symlink_fails_closed" in helper_test
     assert "test_discovered_json_directory_fails_closed_without_hiding_files" in helper_test
     assert "test_discovered_json_symlink_fails_closed_without_hiding_files" in helper_test
+    assert (
+        "test_explicit_evidence_symlink_fails_closed_without_path_leak"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_summary_out_discovered_from_evidence_dir_fails_before_validation"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_evidence_dir_symlink_fails_closed_without_path_leak"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_duplicate_explicit_evidence_fails_closed_without_path_leak"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_explicit_and_directory_evidence_overlap_fails_closed_without_path_leak"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_overlapping_evidence_dirs_fail_closed_without_path_leak"
+        in aggregate_checker_test
+    )
+    assert "evidence file must not be a symlink" in aggregate_checker_test
+    assert "evidence directory must not be a symlink" in aggregate_checker_test
+    assert "evidence file conflicts with reserved output" in aggregate_checker_test
+    assert "duplicate explicit evidence file" in aggregate_checker_test
+    assert "evidence file provided by multiple evidence sources" in aggregate_checker_test
+    assert "duplicate evidence file" in aggregate_checker_test
+    assert "linked-summary\" not in diagnostics" in aggregate_checker_test
+    assert "linked-evidence\" not in diagnostics" in aggregate_checker_test
+    assert "nested\" not in diagnostics" in aggregate_checker_test
+    assert "gateway_load.json\" not in diagnostics" in aggregate_checker_test
     assert "test_noncanonical_evidence_file_labels_are_sanitized" in helper_test
     assert "test_evidence_file_inspection_failure_fails_closed" in helper_test
     assert "test_evidence_file_symlink_inspection_failure_fails_closed" in helper_test
@@ -6196,12 +6829,56 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     )
     assert "private-key-placeholder" in reputation_test
     assert "unknown_schema not in" in reputation_test
+    assert (
+        "test_explicit_unknown_schema_stdout_does_not_echo_schema_or_path"
+        in reputation_test
+    )
+    assert (
+        "test_explicit_untyped_evidence_without_inferred_kind_does_not_echo_path"
+        in reputation_test
+    )
+    assert (
+        "test_explicit_untyped_evidence_stdout_without_inferred_kind_does_not_echo_path"
+        in reputation_test
+    )
+    assert (
+        "test_explicit_kind_schema_mismatch_stdout_does_not_echo_kind_or_path"
+        in reputation_test
+    )
+    assert (
+        "test_explicit_conflicting_kinds_stdout_does_not_echo_kind_or_path"
+        in reputation_test
+    )
+    assert '"unknown.json" not in load_errors' in reputation_test
+    assert '"opaque.json" not in load_errors' in reputation_test
+    assert '"typed.json" not in load_errors' in reputation_test
+    assert (
+        "test_malformed_explicit_evidence_kind_main_summary_sanitizes_exception_text"
+        in reputation_test
+    )
+    assert "<non-canonical-error>\" in diagnostics" in reputation_test
     assert "test_unknown_explicit_evidence_kind_does_not_echo_kind" in reputation_test
+    assert (
+        "test_unknown_explicit_evidence_kind_main_summary_does_not_echo_kind"
+        in reputation_test
+    )
+    assert "unknown_kind not in diagnostics" in reputation_test
     assert "test_unsupported_loaded_evidence_kind_is_sanitized" in reputation_test
     assert "test_events_must_carry_positive_limit" in reputation_test
     assert "test_events_count_must_not_exceed_limit" in reputation_test
     assert "test_events_sequences_must_not_duplicate" in reputation_test
     assert "provider-b-private-key-placeholder" in reputation_test
+    assert "test_required_provider_stdout_does_not_echo_provider_id" in reputation_test
+    assert (
+        "test_provider_id_non_production_marker_stdout_does_not_echo_provider_id"
+        in reputation_test
+    )
+    assert (
+        "test_verify_provider_id_non_production_marker_stdout_does_not_echo_provider_id"
+        in reputation_test
+    )
+    assert "provider_id not in diagnostics" in reputation_test
+    assert "invalid_provider_id not in diagnostics" in reputation_test
     assert missing == []
     assert local_load_error_recorders == []
 
@@ -8727,6 +9404,7 @@ def test_rollout_checkers_use_shared_scalar_binding_validation() -> None:
     assert "valid_policy_digests,\n                binding_errors" not in reserve
     assert "valid_source_batch_digests,\n                binding_errors" not in transparency
     assert "valid_cycle_digests,\n                binding_errors" not in transparency
+    assert "valid_publication_bindings,\n                binding_errors" not in transparency
     assert missing == []
     assert local_scalar_binding_predicates == []
 
@@ -9743,14 +10421,15 @@ def test_rollout_checkers_keep_detail_metadata_out_of_artifact_rows() -> None:
     assert "BILLING_CYCLE_DETAIL_FIELDS: tuple[str, ...]" in hedging
     assert "evidence_artifact_fingerprint(artifact)" in hedging
     assert "valid_provider_bakes.append(provider_bake_fingerprint(payload))" not in reserve
-    assert "valid_provider_bakes.append(bake)" in reserve
+    assert "valid_provider_bakes.append(bake)" not in reserve
+    assert "valid_provider_bakes = [" in reserve
     assert "valid_multi_peer_runs.append(reconciliation_fingerprint(payload))" not in appeal
     assert "valid_multi_peer_runs.append(run)" in appeal
     assert "from sorafs_evidence_fingerprint import artifact_fingerprint" in reserve
     assert "from sorafs_evidence_fingerprint import artifact_fingerprint" in appeal
     assert "PROVIDER_BAKE_FIELDS: tuple[str, ...]" in reserve
     assert "RECONCILIATION_RUN_FIELDS: tuple[str, ...]" in appeal
-    assert "artifact_fingerprint(payload, PROVIDER_BAKE_FIELDS)" in reserve
+    assert "evidence_artifact_fingerprint(artifact),\n            PROVIDER_BAKE_FIELDS" in reserve
     assert "artifact_fingerprint(payload, RECONCILIATION_RUN_FIELDS)" in appeal
     assert "def provider_bake_fingerprint" not in reserve
     assert "def reconciliation_fingerprint" not in appeal
@@ -9790,6 +10469,14 @@ def test_rollout_checkers_use_shared_required_kind_parser() -> None:
     ]
     helper = read(REQUIRED_KINDS_HELPER)
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_required_kinds_test.py")
+    aggregate_checker = read(PRODUCTION_READINESS_CHECKER)
+    aggregate_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    aggregate_runner = read(PRODUCTION_READINESS_RUNNER)
+    aggregate_runner_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
 
     assert "def _validate_allowed_kinds" in helper
     assert "def _validate_default_required" in helper
@@ -9824,6 +10511,32 @@ def test_rollout_checkers_use_shared_required_kind_parser() -> None:
     assert "default-private-key-placeholder" in helper_test
     assert "test_malformed_allowed_kind_registry_fails" in helper_test
     assert "test_malformed_default_required_kinds_fail" in helper_test
+    assert "parse_required_kinds as parse_required_gates" in aggregate_checker
+    assert "required_gates = parse_required_gates(" in aggregate_checker
+    assert "args.require_gate" in aggregate_checker
+    assert "allowed_kinds=GATE_BY_NAME" in aggregate_checker
+    assert "default_required=DEFAULT_REQUIRED_GATES" in aggregate_checker
+    assert "def parse_required_gates(" not in aggregate_checker
+    assert "choices=tuple(GATE_BY_NAME)" not in aggregate_checker
+    assert "test_duplicate_required_gate_fails_before_validation" in aggregate_test
+    assert "test_unknown_required_gate_fails_before_validation" in aggregate_test
+    assert "test_malformed_required_gate_fails_before_validation" in aggregate_test
+    assert "gateway_load\" not in captured.err" in aggregate_test
+    assert "unknown_gate not in captured.err" in aggregate_test
+    assert "malformed_gate not in captured.err" in aggregate_test
+    assert "parse_required_kinds as parse_required_gates" in aggregate_runner
+    assert "args.required_gates = parse_required_gates(" in aggregate_runner
+    assert "args.require_gate" in aggregate_runner
+    assert "allowed_kinds=GATE_BY_NAME" in aggregate_runner
+    assert "default_required=DEFAULT_REQUIRED_GATES" in aggregate_runner
+    assert "def parse_required_gates(" not in aggregate_runner
+    assert "choices=tuple(GATE_BY_NAME)" not in aggregate_runner
+    assert "test_duplicate_required_gate_fails_before_validation" in aggregate_runner_test
+    assert "test_unknown_required_gate_fails_before_validation" in aggregate_runner_test
+    assert "test_malformed_required_gate_fails_before_validation" in aggregate_runner_test
+    assert "gateway_load\" not in captured.err" in aggregate_runner_test
+    assert "unknown_gate not in captured.err" in aggregate_runner_test
+    assert "malformed_gate not in captured.err" in aggregate_runner_test
     assert missing == []
 
 
@@ -9847,7 +10560,7 @@ def test_rollout_runners_use_shared_required_kind_parser() -> None:
 def test_rollout_checkers_fail_closed_on_missing_evidence_directories() -> None:
     missing = [
         path.name
-        for path in CHECKERS
+        for path in SUMMARY_CHECKERS
         if "discover_evidence_files(" not in read(path)
         or "evidence directory `{directory}` must exist" in read(path)
         or "if not root.is_dir()" in read(path)
@@ -10326,6 +11039,8 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
         "Moderation-integration artifacts also bind `sortition_probe_count` and `commit_reveal_probe_count` to the unique canonical `sortition_probes[].name` and `commit_reveal_probes[].name` inventories, require reviewed lowercase `pop-sortition-probe-*` and `pop-commit-reveal-probe-*` labels without non-production markers, and reject duplicate moderation-probe entries before promotion can report ready.",
         "Metrics/alert artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed POP metrics set, and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics/alert artifact fingerprint before final promotion can report ready.",
+        "The aggregate production-readiness gate also rechecks the juror-client sync tuple before final promotion: synced roots in `valid_juror_sync_bindings` must appear in `valid_root_digests`, and synced revocation lists must appear in `valid_revocation_list_digests`.",
+        "Aggregate promotion also rechecks the lane-proven PoP digest relationships: root-bound artifact fingerprints must match `valid_root_digests`, revocation-bound artifact fingerprints must match `valid_revocation_list_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -10342,6 +11057,9 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_pop_credentials_rollout_evidence_test.py"
     )
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
+    production_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
@@ -10446,6 +11164,67 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
         '("pop_credentials", "metric_count_values"): ("metrics_alerts",)'
         in aggregate_checker
     )
+    assert "def validate_pop_credentials_sync_metadata(" in aggregate_checker
+    assert (
+        "valid_juror_sync_bindings roots must match valid_root_digests"
+        in aggregate_checker
+    )
+    assert (
+        "valid_juror_sync_bindings revocations must match "
+        in aggregate_checker
+    )
+    assert "valid_revocation_list_digests" in aggregate_checker
+    assert "validate_pop_credentials_bound_artifact_metadata" in aggregate_checker
+    assert "POP_CREDENTIALS_ROOT_BOUND_KINDS" in aggregate_checker
+    assert "POP_CREDENTIALS_REVOCATION_BOUND_KINDS" in aggregate_checker
+    assert "POP_CREDENTIALS_POLICY_BOUND_KINDS" in aggregate_checker
+    assert "synced_root_digest_hex" in aggregate_checker
+    assert "synced_revocation_list_digest_hex" in aggregate_checker
+    assert (
+        "pop_credentials root-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "pop_credentials revocation-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "pop_credentials policy-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert "test_pop_credentials_juror_sync_root_must_match_valid_roots" in (
+        production_checker_test
+    )
+    assert (
+        "test_pop_credentials_juror_sync_revocation_must_match_valid_revocations"
+        in production_checker_test
+    )
+    assert (
+        "test_pop_credentials_root_bound_artifacts_must_match_valid_roots"
+        in production_checker_test
+    )
+    assert (
+        "test_pop_credentials_revocation_bound_artifacts_must_match_valid_revocations"
+        in production_checker_test
+    )
+    assert (
+        "test_pop_credentials_policy_bound_artifacts_must_match_verifier_policy"
+        in production_checker_test
+    )
+    assert (
+        "test_all_root_bound_artifacts_reject_published_root_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_revocation_bound_artifacts_reject_registry_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_policy_bound_artifacts_reject_verifier_policy_mismatch"
+        in checker_test
+    )
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
     assert "test_issuer_id_must_be_canonical" in checker_test
     assert "test_issuer_id_rejects_generic_issuer_family" in checker_test
     assert "test_issuer_credential_count_must_match_unique_credentials" in checker_test
@@ -10957,12 +11736,14 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
         "Committee artifacts also bind `result_count` to the unique canonical `results[].name` inventory, require reviewed `ai-prescreen-committee-result-*` labels without non-production markers, and reject duplicate committee-result entries before promotion can report ready.",
         "Runner and committee artifacts must use reviewed `cid:*` subject references without non-production markers",
         "Runner evidence must carry both `evidence_digest_hex` and `policy_digest_hex` before it can anchor downstream Governance DAG policy binding.",
+        "The aggregate production-readiness gate rechecks those exported summary relationships before final promotion: runner-bound committee fingerprints must match `valid_runner_bindings`, workflow-bound fingerprints must match `valid_workflow_digests`, and policy-bound Governance DAG fingerprints must match `valid_policy_digests`.",
         "Operator workflow artifacts also bind `route_count` and `passed_route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready.",
         "Juror notification transport artifacts also bind `probe_count` and `accepted_count` to the unique canonical `probes[].delivery_id` inventory and require reviewed `ai-prescreen-notification-delivery-*` labels without non-production markers and at least one accepted notification delivery before promotion can report ready.",
         "Transparency publication artifacts also bind `probe_count`, `passed_probe_count`, and `source_entry_probe_count` to the unique canonical `probes[].source_kind` inventory, require source-entry probe coverage for every required transparency source kind, and reject duplicate or unknown source-entry probes before promotion can report ready.",
         "Transparency publication artifacts must explicitly set `payload_bytes_included`, `private_payloads_included`, and `response_bodies_included` to `false` before promotion can report ready.",
         "AI pre-screen payload-safety artifacts must also explicitly set `payload_bytes_included` and `private_payloads_included` to `false` on operator workflow, juror notification transport, commit/reveal executor, transparency publication, Governance DAG, end-to-end workflow, and their nested route, probe, artifact, and execution-summary records; executor artifacts must set `private_payload_files_copied` to `false`, and transparency probes must set `response_body_included` to `false` before promotion can report ready.",
         "Commit/reveal executor artifacts also bind `artifact_count` and `passed_artifact_count` to the unique canonical `artifacts[].name` inventory and require the reviewed executor bundle to cover `executor.env` and `run.sh`.",
+        "Commit/reveal executor evidence must also use the reviewed `sorafs-moderation-ballots-executor` service identity before promotion can report ready.",
         "Duplicate or unknown artifact entries are rejected before promotion can report ready.",
         "Governance DAG artifacts also bind `producer_count` to the unique canonical `producers[].name` inventory and `edge_count` to the unique canonical `edges[].name` inventory and the required governance producer inventory, require reviewed `ai-prescreen-governance-edge-*` labels without non-production markers and edges covering every required producer, and reject duplicate or unknown producer entries plus duplicate edge, malformed edge-label, or inflated edge-count entries before promotion can report ready.",
         "End-to-end workflow artifacts also require `workflow_id` to match a reviewed lowercase `sfm-4a-*` label without non-production markers, bind `step_count` and `passed_step_count` to the unique canonical `steps[].name` inventory, require reviewed steps to cover every required end-to-end workflow phase, and reject duplicate or unknown workflow-step entries before promotion can report ready.",
@@ -10977,9 +11758,13 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
 
     assert missing_current == {}
     checker = read(SCRIPTS_DIR / "check_sorafs_ai_prescreen_rollout_evidence.py")
+    production_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
     validation_helper = read(SCRIPTS_DIR / "sorafs_evidence_validation.py")
     checker_test = read(
         SCRIPTS_DIR / "tests" / "check_sorafs_ai_prescreen_rollout_evidence_test.py"
+    )
+    production_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     normalized_plan = re.sub(r"\s+", " ", read(SORAFS_AI_PRESCREEN_PLAN))
     assert "require_string_inventory_count_match(" in checker
@@ -10991,12 +11776,49 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert "test_operator_route_url_is_required" in checker_test
     assert 'require_hex(payload, "evidence_digest_hex", HEX64_LEN, errors)' in checker
     assert "test_runner_evidence_digest_is_required" in checker_test
+    assert "def validate_ai_prescreen_bound_artifact_metadata(" in production_checker
+    assert '"ai_prescreen runner-bound artifact fingerprints must match "' in production_checker
+    assert '"ai_prescreen workflow-bound artifact fingerprints must match "' in production_checker
+    assert '"ai_prescreen policy-bound artifact fingerprints must match "' in production_checker
+    assert '"valid_runner_bindings"' in production_checker
+    assert '"valid_workflow_digests"' in production_checker
+    assert '"valid_policy_digests"' in production_checker
+    assert (
+        "test_ai_prescreen_runner_bound_artifacts_must_match_runner_binding"
+        in production_checker_test
+    )
+    assert (
+        "test_ai_prescreen_workflow_bound_artifacts_must_match_workflow_digest"
+        in production_checker_test
+    )
+    assert (
+        "test_ai_prescreen_policy_bound_artifacts_must_match_policy_digest"
+        in production_checker_test
+    )
+    assert "RUNNER_BOUND_FIXTURES" in checker_test
+    assert "WORKFLOW_BOUND_FIXTURES" in checker_test
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_runner_bound_artifacts_reject_runner_binding_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_workflow_bound_artifacts_reject_e2e_workflow_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_policy_bound_artifacts_reject_runner_policy_mismatch"
+        in checker_test
+    )
     assert "URI-scheme-like host/path tokens" in validation_helper
     assert "https://C%3A.committee.example/aggregate" in checker_test
     assert "https://http%3A.committee.example/aggregate" in checker_test
     assert "require_archive_portable_path" in checker
     assert "EVIDENCE_PATH_FIELD_ERROR" in checker
     assert "REQUIRED_EXECUTOR_ARTIFACTS" in checker
+    assert "REQUIRED_EXECUTOR_SERVICE_NAME" in checker
     assert "ALLOWED_PRESCREEN_VERDICTS" in checker
     assert 'require_string_in(payload, "verdict", ALLOWED_PRESCREEN_VERDICTS, errors)' in checker
     assert "WORKFLOW_ID_PATTERN" in checker
@@ -11011,7 +11833,7 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert "NOTIFICATION_DELIVERY_LABEL_PATTERN" in checker
     assert "NOTIFICATION_DELIVERY_LABEL_ERROR" in checker
     assert 'NOTIFICATION_DEDUP_PREFIX = "sorafs-moderation-juror:"' in checker
-    assert 'ALLOWED_NOTIFICATION_ACTIONS = ("commit", "reveal")' in checker
+    assert 'ALLOWED_NOTIFICATION_ACTIONS = ("submit_commit", "submit_reveal")' in checker
     assert "require_string_type" in checker
     assert 'field="dedup_key"' in checker
     assert "probes[{}].dedup_key must equal " in checker
@@ -11112,6 +11934,7 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert "test_executor_artifacts_must_not_duplicate" in checker_test
     assert "test_executor_artifacts_must_not_include_unknown_values" in checker_test
     assert "test_executor_artifacts_must_cover_required_bundle_files" in checker_test
+    assert "test_executor_service_name_must_match_reviewed_service" in checker_test
     assert "test_transparency_probe_count_must_match_unique_source_kinds" in checker_test
     assert "test_transparency_probes_must_not_duplicate_source_kind" in checker_test
     assert (
@@ -11162,6 +11985,7 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_TRANSPARENCY_SOURCE_KINDS" in builder
     assert "REQUIRED_GOVERNANCE_PRODUCERS" in builder
     assert "REQUIRED_E2E_STEPS" in builder
+    assert "REQUIRED_EXECUTOR_SERVICE_NAME" in builder
     assert "runner_url_arg_is_plan_safe" in builder
     assert "CANARY_URL_ARG_ERROR" in builder
     assert "URI-scheme-like host/path tokens" in builder
@@ -11183,6 +12007,10 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_OPERATOR_CONTENT_TYPES" in builder
     assert "route_paths = operator_route_paths(args.quarantine_id_hex)" in builder
     assert "test_operator_workflow_canary_records_passed_route_count" in builder_tests
+    assert (
+        "test_executor_service_name_must_match_reviewed_service_before_write"
+        in builder_tests
+    )
     assert "CHECKER.operator_route_paths(QUARANTINE_ID)" in builder_tests
     assert "CHECKER.expected_operator_route_url(" in builder_tests
     assert "CHECKER.REQUIRED_OPERATOR_CONTENT_TYPES" in builder_tests
@@ -11441,6 +12269,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "Transparency/reputation artifacts also bind `publication_target_count` to the unique canonical `publication_targets` inventory and reject missing, inflated, duplicate, or unknown publication-target coverage before promotion can report ready.",
         "Metrics/alert artifacts also bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics/alert artifact fingerprint before final promotion can report ready.",
+        "The aggregate production-readiness gate also requires `valid_roster_bindings`, `valid_tally_bindings`, `valid_e2e_runs`, and `valid_evidence_viewer_digest_sets` to preserve those case, roster, and tally relationships before final promotion can report ready. It also rechecks the lane-proven bound artifacts before final promotion: case-bound artifact fingerprints must match `valid_case_digests`, roster-bound artifact fingerprints must match `valid_roster_bindings`, tally-bound artifact fingerprints must match `valid_tally_bindings`, and policy-bound governance approval fingerprints must match `valid_policy_digests`.",
         "End-to-end panel artifacts also bind `peer_count` and `validator_count` to the unique canonical `peers[].name` and `validators[].name` inventories and reject duplicate peer or validator entries before promotion can report ready, and require reviewed lowercase `moderation-peer-*` and `moderation-validator-*` labels without non-production markers.",
         "End-to-end panel artifacts also bind `case_count` to the unique canonical `cases[].name` inventory, require `case_count` to match the `cases[].passed` partition, require reviewed lowercase `moderation-case-*` labels without non-production markers, and reject duplicate end-to-end case entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
@@ -11670,6 +12499,92 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
     assert '"metrics": sorted(metric_names)' in checker
     assert "hashable_evidence_values" in checker
     assert "record_observed_evidence_value" in checker
+    assert "validate_moderation_panel_chain_metadata" in aggregate_checker
+    assert "valid_roster_bindings case digests must match valid_case_digests" in (
+        aggregate_checker
+    )
+    assert (
+        "valid_tally_bindings roster pairs must match valid_roster_bindings"
+        in aggregate_checker
+    )
+    assert (
+        "valid_e2e_runs tally bindings must match valid_tally_bindings"
+        in aggregate_checker
+    )
+    assert (
+        "valid_evidence_viewer_digest_sets roster pairs must match valid_roster_bindings"
+        in aggregate_checker
+    )
+    assert "validate_moderation_panel_bound_artifact_metadata" in aggregate_checker
+    assert "MODERATION_PANEL_CASE_BOUND_KINDS" in aggregate_checker
+    assert "MODERATION_PANEL_ROSTER_BOUND_KINDS" in aggregate_checker
+    assert "MODERATION_PANEL_TALLY_BOUND_KINDS" in aggregate_checker
+    assert (
+        "moderation_panel case-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "moderation_panel roster-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "moderation_panel tally-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "moderation_panel policy-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "test_all_case_bound_artifacts_reject_appeal_case_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_roster_bound_artifacts_reject_sortition_tuple_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_tally_bound_artifacts_reject_commit_reveal_tuple_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_policy_bound_artifacts_reject_e2e_policy_mismatch"
+        in checker_test
+    )
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    readiness_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_moderation_panel_roster_binding_case_must_match_case_digest"
+        in readiness_test
+    )
+    assert (
+        "test_moderation_panel_tally_binding_must_match_roster_binding"
+        in readiness_test
+    )
+    assert "test_moderation_panel_e2e_run_must_match_tally_binding" in readiness_test
+    assert (
+        "test_moderation_panel_evidence_viewer_must_match_roster_binding"
+        in readiness_test
+    )
+    assert (
+        "test_moderation_panel_case_bound_artifacts_must_match_case_digest"
+        in readiness_test
+    )
+    assert (
+        "test_moderation_panel_roster_bound_artifacts_must_match_roster_binding"
+        in readiness_test
+    )
+    assert (
+        "test_moderation_panel_tally_bound_artifacts_must_match_tally_binding"
+        in readiness_test
+    )
+    assert (
+        "test_moderation_panel_policy_bound_artifacts_must_match_e2e_policy"
+        in readiness_test
+    )
     assert '("moderation_panel", "metrics"): ("metrics_alerts",)' in aggregate_checker
     assert (
         '("moderation_panel", "metric_count_values"): ("metrics_alerts",)'
@@ -12157,7 +13072,7 @@ def test_reputation_live_ingest_publisher_services_stay_open_in_docs() -> None:
         "Production rollout:",
         "Deploy the live ingest/publisher service against production proof, dispute, settlement, and reserve/rent event sources.",
         "Capture live run evidence for snapshot freshness, ingest lag, low-score handling, SSE/WebSocket event delivery, and routing/incentive consumption",
-        "Publish governance-approved weights and the first production snapshot with archived `.to`/JSON artifacts and proof replay evidence.",
+        "Publish governance-approved weights with the governed `weights_digest_hex` carried by publish/latest rollout evidence, then archive the first production snapshot `.to`/JSON artifacts and proof replay evidence.",
         "Exercise rollback/stale-snapshot procedures before routing or incentives rely",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
@@ -12174,6 +13089,9 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
         "Metrics artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed reputation metrics set, and reject duplicate or unknown metric entries before promotion can report ready.",
         "Metrics and transport artifacts must explicitly set `response_bodies_included` to `false`, and routing/incentive consumption artifacts must explicitly set `raw_provider_records_included` to `false`, before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics artifact fingerprint before final promotion can report ready.",
+        "Publish/latest artifacts must carry the governance-approved `weights_digest_hex`, keep the digest consistent across both snapshot anchors, and export `valid_reputation_weight_digests` for aggregate promotion.",
+        "The aggregate production-readiness gate also requires `valid_snapshot_bindings` to match the top-level `snapshot_id_hex` and `merkle_root_hex` pair before final promotion can report ready, and rechecks snapshot-bound artifact fingerprints against `valid_snapshot_bindings` so downstream provider, event, proof, metrics, transport, and consumption artifacts cannot drift from the lane-proven publish/latest snapshot binding.",
+        "Aggregate promotion also requires `valid_reputation_weight_digests` to match publish/latest artifact fingerprints and rechecks every publish/latest artifact against that metadata before final promotion can report ready.",
         "Provider proof and verification artifacts must use reviewed lowercase `provider-*` IDs and must not contain non-production markers in provider/proof/verify `provider_id` fields.",
         "Required providers must have both matching provider-proof evidence and matching proof-verification evidence before promotion can report ready, and the default gate requires at least one provider ID to appear in both proof and verification evidence.",
         "Event-watch evidence must carry a positive `limit`, keep `count` equal to the `events[]` length, bind `count` to duplicate-free `events[].sequence` values, and reject `count` values above that limit before transport evidence can report ready.",
@@ -12194,6 +13112,9 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_reputation_rollout_evidence_test.py"
     )
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
+    production_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
@@ -12207,9 +13128,21 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
         "        \"websocket_event_count\","
     ) in checker
     assert "REQUIRED_METRICS" in checker
+    reputation_fingerprint_fields = checker.split(
+        "FINGERPRINT_FIELDS: tuple[str, ...] = (", 1
+    )[1].split(")\n\n", 1)[0]
+    assert '"provider_id",' not in reputation_fingerprint_fields
     assert "PROVIDER_ID_PATTERN" in checker
     assert "provider_id must match canonical lowercase `provider-*`" in checker
     assert "FORBIDDEN_PROVIDER_ID_MARKERS" in checker
+    assert (
+        'errors.append(f"{path} must not contain non-production markers {forbidden}")\n'
+        '        return ""'
+    ) in checker
+    assert (
+        'if provider_id != "":\n            fingerprint_values["provider_id"] = provider_id'
+        in checker
+    )
     assert "SSE_EVENT_LABEL_PATTERN" in checker
     assert "SSE_EVENT_LABEL_ERROR" in checker
     assert (
@@ -12243,6 +13176,8 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
     assert '"metric_count",' in checker
     assert '"metric_count_values": sorted(metric_counts)' in checker
     assert '"metrics": sorted(metric_names)' in checker
+    assert '"weights_digest_hex",' in checker
+    assert '"valid_reputation_weight_digests": sorted(' in checker
     assert 'require_positive_int(payload, "metric_count", errors)' in checker
     assert (
         'require_string_inventory_count_match(payload, "metrics", "metric_count", errors)'
@@ -12281,7 +13216,15 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
     assert "test_metrics_must_not_include_unknown_values" in checker_test
     assert "test_provider_id_must_be_canonical" in checker_test
     assert "test_provider_id_rejects_non_production_markers" in checker_test
+    assert (
+        "test_provider_id_non_production_marker_stdout_does_not_echo_provider_id"
+        in checker_test
+    )
     assert "test_verify_provider_id_rejects_non_production_markers" in checker_test
+    assert (
+        "test_verify_provider_id_non_production_marker_stdout_does_not_echo_provider_id"
+        in checker_test
+    )
     assert (
         "test_required_provider_needs_matching_proof_not_only_verification"
         in checker_test
@@ -12300,11 +13243,60 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
         "test_snapshot_provider_inventory_rejects_non_production_markers"
         in checker_test
     )
+    assert "test_snapshot_weight_digest_is_required" in checker_test
+    assert "test_snapshot_weight_digest_must_be_lowercase_hex" in checker_test
+    assert "test_publish_and_latest_weight_digests_must_match" in checker_test
+    assert "SNAPSHOT_BOUND_FIXTURES" in checker_test
+    assert (
+        "test_snapshot_bound_fixture_table_covers_checker_bound_kind_set"
+        in checker_test
+    )
+    assert (
+        "test_all_snapshot_bound_artifacts_reject_publish_latest_mismatch"
+        in checker_test
+    )
     assert "test_provider_id_accepts_future_production_label" in checker_test
     assert '"metric_count_values"' in aggregate_checker
     assert '("reputation", "metrics"): ("metrics",)' in aggregate_checker
     assert '("reputation", "metric_count_values"): ("metrics",)' in aggregate_checker
     assert "PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES" in aggregate_checker
+    assert '"valid_reputation_weight_digests"' in aggregate_checker
+    assert '"valid_reputation_weight_digests": "weights_digest_hex"' in aggregate_checker
+    assert (
+        '("reputation", "valid_reputation_weight_digests"): ("publish", "latest")'
+        in aggregate_checker
+    )
+    assert (
+        "reputation publish/latest artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert "def validate_reputation_snapshot_metadata(" in aggregate_checker
+    assert (
+        "valid_snapshot_bindings must match snapshot_id_hex and merkle_root_hex"
+        in aggregate_checker
+    )
+    assert "REPUTATION_SNAPSHOT_BOUND_KINDS" in aggregate_checker
+    assert "validate_reputation_bound_artifact_metadata" in aggregate_checker
+    assert (
+        "reputation snapshot-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "test_reputation_snapshot_binding_must_match_scalar_snapshot_metadata"
+        in production_checker_test
+    )
+    assert (
+        "test_reputation_snapshot_bound_artifacts_must_match_snapshot_binding"
+        in production_checker_test
+    )
+    assert (
+        "test_reputation_weight_metadata_must_match_publish_latest_fingerprints"
+        in production_checker_test
+    )
+    assert (
+        "test_reputation_publish_latest_weight_artifacts_must_match_metadata"
+        in production_checker_test
+    )
 
 
 UNSHIPPED_REPUTATION_LIVE_ROUTE_PATTERNS = (
@@ -12450,12 +13442,15 @@ def test_reputation_canary_builder_is_checked_in() -> None:
     assert '"providers": provider_rows(args)' in builder
     assert "REQUIRED_METRICS" in builder
     assert '"metric_count": len(args.metrics)' in builder
+    assert "--weights-digest-hex" in builder
     assert "--metric" in builder
     assert "--provider-count must match the number of unique --provider-name values" in builder
     assert "--sse-event" in builder
     assert "--websocket-event" in builder
     assert "validate_reviewed_inventory(" in builder
     assert "test_generated_canaries_pass_full_reputation_gate" in builder_tests
+    assert "test_publish_anchor_includes_weight_digest" in builder_tests
+    assert "test_weight_digest_must_be_lowercase_hex_before_write" in builder_tests
     assert "test_provider_id_must_be_canonical" in builder_tests
     assert "test_provider_id_rejects_non_production_markers" in builder_tests
     assert "test_provider_id_accepts_future_production_label" in builder_tests
@@ -12491,6 +13486,7 @@ def test_reputation_canary_builder_is_checked_in() -> None:
         in builder_tests
     )
     assert "scripts/build_sorafs_reputation_canary.py" in docs
+    assert "`--weights-digest-hex`" in normalized_docs
     assert "unique provider proof sibling hashes" in normalized_docs
     assert "non-production `--provider-id` values before writing" in normalized_docs
     assert "reviewed provider names using the same `provider-*` production shape" in normalized_docs
@@ -12692,13 +13688,12 @@ def test_por_live_deployment_and_archive_work_stays_open_in_docs() -> None:
     normalized_validator = re.sub(r"\s+", " ", validator)
 
     required_scheduler_open = (
-        "Remaining SF-9a rollout work is live deployment evidence for external drand, VRF, and auditor feeds, plus any production governance archive handoff required by the operator; each deployment's SQL/Parquet archive backend decision is now part of the checked reporting/archive evidence.",
+        "Remaining SF-9a rollout work is live deployment evidence for external drand, VRF, and auditor feeds, plus any production governance archive handoff required by the operator; each deployment's SQL/Parquet archive backend decision is now part of the checked reporting/archive evidence, and operator-required governance archive handoff evidence must carry a fingerprinted digest.",
         "The local SF-9 runtime integration is implemented. Remaining rollout work is live deployment evidence for external drand/VRF/auditor feeds and any production governance archive handoff required by the deployment operator.",
         "Operators should keep SF-9 promotion fail-closed until the payload-free deployment evidence passes the checked-in gate:",
         "The checker recognizes `sorafs.por.*` SF-9 rollout schemas for randomness, scheduler runtime, validator replay, reporting/archive handoff, observability, and governance approval.",
         "Archive a live drand/VRF/auditor run showing deterministic challenge generation and verdict replay that passes the SF-9 rollout evidence gate",
-        "Capture each deployment's reviewed SQL/Parquet archive backend selection in the SF-9 reporting/archive evidence packet.",
-        "Capture governance DAG archive handoff evidence for production operators and include it in the SF-9 reporting/archive evidence packet.",
+        "operator-required governance archive handoff carried as `governance_archive_handoff_digest_hex`",
     )
     required_validator_open = (
         "Remaining SF-9b work is live auditor rollout evidence, production archive handoff, and any richer proof-bundle inspection commands required by operators.",
@@ -12730,7 +13725,8 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
         "Scheduler-runtime and reporting/archive artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready.",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed PoR metric set, and reject duplicate or unknown metric labels before promotion can report ready.",
         "PoR payload-safety artifacts must explicitly set `raw_randomness_included`, `raw_vrf_included`, `response_bodies_included`, `raw_challenge_bytes_included`, `raw_proof_bytes_included`, `raw_report_included`, `raw_export_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
-        "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
+        "Reporting/archive artifacts fingerprint the reviewed `archive_backend` value and `governance_archive_handoff_digest_hex`, the summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, `archive_backends`, and `valid_governance_archive_handoff_digests`, and the aggregate production-readiness gate requires those fields to match the observability and reporting/archive artifact fingerprints before final promotion can report ready.",
+        "Aggregate promotion also rechecks the lane-proven PoR digest relationships: seed-replay-bound artifact fingerprints must match `valid_seed_replay_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -12744,6 +13740,9 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
     checker = read(SCRIPTS_DIR / "check_sorafs_por_rollout_evidence.py")
     checker_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_por_rollout_evidence_test.py")
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
+    aggregate_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
@@ -12766,8 +13765,21 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
         "require_string_inventory_count_match(payload, \"metrics\", \"metric_count\", errors)"
         in checker
     )
+    assert '"archive_backends": sorted(archive_backends)' in checker
+    assert (
+        '"valid_governance_archive_handoff_digests": sorted('
+        in checker
+    )
     assert '"metric_count_values": sorted(metric_counts)' in checker
     assert '"metrics": sorted(metric_names)' in checker
+    assert '"archive_backend"' in checker
+    por_fingerprint_fields = checker.split(
+        "FINGERPRINT_FIELDS: tuple[str, ...] = (", 1
+    )[1].split(")\n", 1)[0]
+    assert '"archive_backend",' not in por_fingerprint_fields
+    assert "def validated_archive_backend_fingerprint_values(" in checker
+    assert "evidence_artifact_fingerprint(artifact).update(fingerprint_values)" in checker
+    assert '"governance_archive_handoff_digest_hex"' in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
     assert "PROVIDER_LABEL_PATTERN" in checker
@@ -12789,6 +13801,17 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
     assert "def require_only_required_values(" in checker
     assert "must not include unknown values" in checker
     assert "test_payload_safety_flags_are_required" in checker_test
+    assert (
+        "test_all_seed_replay_bound_artifacts_reject_randomness_mismatch"
+        in checker_test
+    )
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_policy_bound_artifacts_reject_randomness_policy_mismatch"
+        in checker_test
+    )
     assert "test_randomness_provider_count_must_match_unique_providers" in checker_test
     assert "test_randomness_providers_must_not_duplicate" in checker_test
     assert "test_randomness_provider_names_must_be_reviewed_labels" in checker_test
@@ -12810,10 +13833,59 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
     assert "test_reporting_archive_route_count_must_match_unique_routes" in checker_test
     assert "test_reporting_archive_routes_must_not_duplicate" in checker_test
     assert "test_reporting_archive_routes_must_not_include_unknown_values" in checker_test
+    assert "test_summary_collects_reviewed_archive_backend_set" in checker_test
+    assert (
+        "test_reporting_archive_unreviewed_archive_backend_stdout_does_not_echo_backend"
+        in checker_test
+    )
+    assert "invalid_backend not in diagnostics" in checker_test
+    assert "invalid_backend not in captured.err" in checker_test
+    assert "test_reporting_archive_requires_governance_handoff_digest" in checker_test
+    assert (
+        "test_reporting_archive_rejects_malformed_governance_handoff_digest"
+        in checker_test
+    )
     assert "test_reporting_archive_route_body_hash_is_required" in checker_test
     assert 'path=f"routes[{index}].body_blake3_hex"' in checker
     assert "test_observability_metrics_must_not_duplicate" in checker_test
     assert "test_observability_metrics_must_not_include_unknown_values" in checker_test
+    assert '("por", "archive_backends"): ("reporting_archive",)' in aggregate_checker
+    assert '("por", "archive_backends"): POR_ALLOWED_ARCHIVE_BACKENDS' in aggregate_checker
+    assert "validate_por_bound_artifact_metadata" in aggregate_checker
+    assert "POR_SEED_REPLAY_BOUND_KINDS" in aggregate_checker
+    assert "POR_POLICY_BOUND_KINDS" in aggregate_checker
+    assert "por seed-replay-bound artifact fingerprints must match " in aggregate_checker
+    assert "por policy-bound artifact fingerprints must match " in aggregate_checker
+    assert "test_por_archive_backend_metadata_for_gate_passes" in aggregate_checker_test
+    assert (
+        "test_por_seed_replay_bound_artifacts_must_match_randomness_digest"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_por_policy_bound_artifacts_must_match_randomness_policy"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_por_archive_backend_metadata_must_match_reporting_archive_fingerprint"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_por_governance_handoff_digest_metadata_must_match_reporting_archive_fingerprint"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_por_governance_handoff_digest_metadata_rejects_malformed_values"
+        in aggregate_checker_test
+    )
+    assert "test_por_archive_backend_metadata_rejects_unknown_values" in aggregate_checker_test
+    assert (
+        '("por", "valid_governance_archive_handoff_digests"): '
+        '("reporting_archive",)'
+    ) in aggregate_checker
+    assert (
+        '"valid_governance_archive_handoff_digests": ('
+        in aggregate_checker
+    )
     assert '("por", "metrics"): ("observability",)' in aggregate_checker
     assert '("por", "metric_count_values"): ("observability",)' in aggregate_checker
 
@@ -12877,6 +13949,14 @@ def test_por_canary_builder_is_checked_in() -> None:
         in builder_tests
     )
     assert "test_reporting_archive_requires_route_body_digest" in builder_tests
+    assert (
+        "test_reporting_archive_requires_governance_handoff_digest_before_write"
+        in builder_tests
+    )
+    assert (
+        "test_reporting_archive_rejects_malformed_governance_handoff_digest_before_write"
+        in builder_tests
+    )
     assert "test_observability_metrics_must_not_duplicate_before_write" in builder_tests
     assert (
         "test_observability_metrics_must_not_include_unknown_values_before_write"
@@ -13078,6 +14158,7 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed PoTR metric set, and reject duplicate or unknown metric labels before promotion can report ready.",
         "PoTR payload-safety artifacts must explicitly set `raw_receipts_included`, `fetch_transcripts_included`, `raw_receipt_bytes_included`, `response_bodies_included`, `raw_reputation_inputs_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
+        "Aggregate promotion also rechecks the lane-proven PoTR digest relationships: receipt-summary-bound artifact fingerprints must match `valid_receipt_summary_digests`, PQ-key-roster-bound artifact fingerprints must match `valid_pq_key_roster_digests`, and reputation-weight-bound artifact fingerprints must match `valid_reputation_weight_policy_digests` before final promotion can report ready.",
         "The collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before contacting live PoTR services.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -13164,6 +14245,45 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
         '("potr", "metric_count_values"): ("observability",)'
         in aggregate_checker
     )
+    assert "validate_potr_bound_artifact_metadata" in aggregate_checker
+    assert "POTR_RECEIPT_SUMMARY_BOUND_KINDS" in aggregate_checker
+    assert "POTR_PQ_KEY_ROSTER_BOUND_KINDS" in aggregate_checker
+    assert "POTR_REPUTATION_WEIGHT_BOUND_KINDS" in aggregate_checker
+    assert "potr receipt-summary-bound artifact fingerprints must match " in aggregate_checker
+    assert "potr pq-key-roster-bound artifact fingerprints must match " in aggregate_checker
+    assert (
+        "potr reputation-weight-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    readiness_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_potr_receipt_summary_bound_artifacts_must_match_receipt_digest"
+        in readiness_test
+    )
+    assert (
+        "test_potr_pq_key_roster_bound_artifacts_must_match_governance_roster"
+        in readiness_test
+    )
+    assert (
+        "test_potr_reputation_weight_bound_artifacts_must_match_governance_policy"
+        in readiness_test
+    )
+    assert (
+        "test_all_receipt_summary_bound_artifacts_reject_probe_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_pq_key_roster_bound_artifacts_reject_governance_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_reputation_weight_bound_artifacts_reject_governance_mismatch"
+        in checker_test
+    )
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
 
 
 def test_potr_canary_builder_is_checked_in() -> None:
@@ -13394,6 +14514,7 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed repair metrics, and reject duplicate or unknown metric labels before promotion can report ready.",
         "Repair payload-safety artifacts must explicitly set `raw_roster_included`, `raw_evidence_included`, `response_bodies_included`, `raw_repair_payloads_included`, `raw_ledger_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
+        "Aggregate promotion also rechecks the lane-proven repair digest relationships: roster-bound artifact fingerprints must match `valid_roster_digests`, failure-bound artifact fingerprints must match `valid_failure_bundle_digests`, handoff-bound artifact fingerprints must match `valid_handoff_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
         "Its collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before touching live repair services.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -13501,6 +14622,7 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
     assert "test_failure_event_count_must_match_unique_events" in checker_test
     assert "test_failure_events_must_not_duplicate" in checker_test
     assert "test_failure_events_must_cover_required_sources" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
     assert "test_failure_events_must_use_production_family" in checker_test
     assert "test_failure_events_reject_placeholder_marker" in checker_test
     assert "test_worker_statuses_must_not_duplicate" in checker_test
@@ -13531,6 +14653,63 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
     assert (
         '("repair", "metric_count_values"): ("observability",)'
         in aggregate_checker
+    )
+    assert "validate_repair_bound_artifact_metadata" in aggregate_checker
+    assert "REPAIR_ROSTER_BOUND_KINDS" in aggregate_checker
+    assert "REPAIR_FAILURE_BOUND_KINDS" in aggregate_checker
+    assert "REPAIR_HANDOFF_BOUND_KINDS" in aggregate_checker
+    assert "REPAIR_POLICY_BOUND_KINDS" in aggregate_checker
+    assert (
+        "repair roster-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "repair failure-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "repair handoff-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "repair policy-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "test_all_roster_bound_artifacts_reject_auditor_roster_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_failure_bound_artifacts_reject_failure_capture_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_handoff_bound_artifacts_reject_governance_handoff_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_policy_bound_artifacts_reject_governance_policy_mismatch"
+        in checker_test
+    )
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    production_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_repair_roster_bound_artifacts_must_match_auditor_roster"
+        in production_checker_test
+    )
+    assert (
+        "test_repair_failure_bound_artifacts_must_match_failure_capture"
+        in production_checker_test
+    )
+    assert (
+        "test_repair_handoff_bound_artifacts_must_match_governance_handoff"
+        in production_checker_test
+    )
+    assert (
+        "test_repair_policy_bound_artifacts_must_match_handoff_policy"
+        in production_checker_test
     )
 
 
@@ -13749,6 +14928,12 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "missing JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence",
         "duplicate or unknown downstream-package entries",
         "`package_count` values that do not match the unique package list",
+        "Signed-manifest artifacts also fingerprint the reviewed `signature_algorithm`, the summary exports `signature_algorithms`, and the aggregate production-readiness gate requires that metadata to match the signed-manifest artifact fingerprint and stay inside the governed Ed25519 release algorithm set before final promotion can report ready.",
+        "governance approval must reference that same digest and name the approved `public_key_fingerprint_hex`",
+        "`valid_policy_digests` and `valid_release_key_fingerprints` only from valid signed-manifest artifacts",
+        "Aggregate promotion also rechecks the lane-proven reference SDK release digest relationships: manifest-bound artifact fingerprints must match `valid_release_manifest_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`, and governance-approval release-key fingerprints must match `valid_release_key_fingerprints` before final promotion can report ready.",
+        "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
+        "digests, governance approval policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
         "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, and Swift wrappers",
         "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
@@ -13759,6 +14944,10 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     checker = read(SCRIPTS_DIR / "check_sorafs_reference_sdk_release_evidence.py")
     checker_test = read(
         SCRIPTS_DIR / "tests" / "check_sorafs_reference_sdk_release_evidence_test.py"
+    )
+    aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
+    aggregate_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     validation_helper = read(EVIDENCE_VALIDATION_HELPER)
     validation_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
@@ -13774,8 +14963,29 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     assert "def require_only_required_values(" in checker
     assert "must not include unknown values" in checker
     assert "ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS" in checker
-    assert '"ed25519", "rsa-sha256"' in checker
+    assert 'ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS = ("ed25519",)' in checker
+    assert "rsa-sha256" not in checker
     assert 'require_string_in(\n        payload,\n        "signature_algorithm"' in checker
+    assert '"signature_algorithm"' in checker
+    reference_sdk_fingerprint_fields = checker.split(
+        "FINGERPRINT_FIELDS: tuple[str, ...] = (", 1
+    )[1].split(")\n", 1)[0]
+    assert '"signature_algorithm",' not in reference_sdk_fingerprint_fields
+    assert "def validated_signature_algorithm_fingerprint_values(" in checker
+    assert "evidence_artifact_fingerprint(artifact).update(fingerprint_values)" in checker
+    assert '"signature_algorithms": sorted(signature_algorithms)' in checker
+    assert 'RELEASE_KEY_BOUND_KINDS = ("governance_approval",)' in checker
+    assert "valid_release_key_bound_artifacts" in checker
+    governance_validator = checker[
+        checker.index("def validate_governance_approval") : checker.index(
+            "def validate_kind_specific"
+        )
+    ]
+    assert (
+        'require_hex(payload, "public_key_fingerprint_hex", HEX64_LEN, errors)'
+        in governance_validator
+    )
+    assert "signed_manifest public_key_fingerprint_hex" in checker
     assert "must not contain duplicate values" in validation_helper
     assert "must match unique {array_name} count" in validation_helper
     assert "test_require_string_inventory_count_match_rejects_duplicate_scalars" in validation_test
@@ -13792,8 +15002,79 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "test_downstream_packages_must_not_include_unknown_values"
         in checker_test
     )
-    assert "test_signed_manifest_accepts_rsa_sha256_signature_algorithm" in checker_test
+    assert "test_signed_manifest_rejects_rsa_sha256_signature_algorithm" in checker_test
     assert "test_signed_manifest_rejects_unsupported_signature_algorithm" in checker_test
+    assert (
+        "test_signed_manifest_unsupported_signature_algorithm_stdout_does_not_echo_algorithm"
+        in checker_test
+    )
+    assert "invalid_algorithm not in diagnostics" in checker_test
+    assert "invalid_algorithm not in captured.err" in checker_test
+    assert '("reference_sdk_release", "signature_algorithms"): ("signed_manifest",)' in (
+        aggregate_checker
+    )
+    assert '(\n        "reference_sdk_release",\n        "signature_algorithms",' in (
+        aggregate_checker
+    )
+    assert (
+        "validate_reference_sdk_release_bound_artifact_metadata"
+        in aggregate_checker
+    )
+    assert "REFERENCE_SDK_RELEASE_MANIFEST_BOUND_KINDS" in aggregate_checker
+    assert "REFERENCE_SDK_POLICY_BOUND_KINDS" in aggregate_checker
+    assert (
+        "reference_sdk_release manifest-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "reference_sdk_release policy-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "reference_sdk_release governance approval release-key fingerprints "
+        in aggregate_checker
+    )
+    assert (
+        "test_reference_sdk_release_signature_algorithm_metadata_for_gate_passes"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_reference_sdk_release_manifest_bound_artifacts_must_match_signed_manifest"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_reference_sdk_release_policy_bound_artifacts_must_match_signed_manifest"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_reference_sdk_release_governance_key_fingerprint_must_match_signed_manifest"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_reference_sdk_release_signature_algorithm_must_match_signed_manifest"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_reference_sdk_release_signature_algorithm_rejects_unknown_values"
+        in aggregate_checker_test
+    )
+    assert "RELEASE_MANIFEST_BOUND_FIXTURES" in checker_test
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "RELEASE_KEY_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_manifest_bound_artifacts_reject_signed_manifest_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_policy_bound_artifacts_reject_signed_manifest_policy_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_release_key_bound_artifacts_reject_signed_manifest_key_mismatch"
+        in checker_test
+    )
 
 
 def test_reference_sdk_docs_do_not_reopen_implemented_guides() -> None:
@@ -13831,13 +15112,30 @@ def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
     assert "RELEASE_MANIFEST_BOUND_KINDS" in builder
     assert "ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS" in builder
     assert "def validate_signature_algorithm(" in builder
+    assert (
+        builder.count('"public_key_fingerprint_hex": args.public_key_fingerprint_hex')
+        >= 2
+    )
+    assert "--public-key-fingerprint-hex" in builder
     assert "test_generated_canaries_pass_full_reference_sdk_release_gate" in builder_tests
     assert (
         "test_signed_manifest_rejects_unsupported_signature_algorithm_before_write"
         in builder_tests
     )
     assert (
-        "test_signed_manifest_canary_accepts_rsa_sha256_signature_algorithm"
+        "test_signed_manifest_canary_rejects_rsa_sha256_signature_algorithm"
+        in builder_tests
+    )
+    assert (
+        "test_governance_approval_canary_binds_public_key_fingerprint"
+        in builder_tests
+    )
+    assert (
+        "test_governance_approval_requires_public_key_fingerprint_before_write"
+        in builder_tests
+    )
+    assert (
+        "test_governance_approval_rejects_malformed_public_key_fingerprint_before_write"
         in builder_tests
     )
     assert "test_missing_release_target_coverage_fails_closed" in builder_tests
@@ -14067,7 +15365,9 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
         "Provider inventory labels must use reviewed lowercase `provider-*` IDs without non-production markers, challenge inventory labels must use reviewed lowercase `pdp-challenge-*` labels without non-production markers, and proof inventory labels must use reviewed lowercase `pdp-proof-*` labels without non-production markers.",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed PDP metric set, and reject duplicate or unknown metric labels before promotion can report ready.",
         "PDP payload-safety artifacts must explicitly set `response_bodies_included`, `raw_challenge_bytes_included`, `raw_proof_bytes_included`, `raw_export_included`, `raw_report_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
+        "Governance/repair artifacts fingerprint `repair_handoff_digest_hex`, the summary exports `valid_repair_handoff_digests`, and the aggregate production-readiness gate requires those values to match governance/repair artifact fingerprints before final promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
+        "Aggregate promotion also rechecks the lane-proven PDP digest relationships: proof-summary-bound artifact fingerprints must match `valid_proof_summary_digests`, policy-bound artifact fingerprints must match `valid_policy_digests`, provider-roster-bound artifact fingerprints must match `valid_provider_roster_digests`, and repair-handoff metadata must match `valid_repair_handoff_digests` before final promotion can report ready.",
         "Proof-summary mismatches are recorded on the offending artifact in the JSON summary before required-kind validity is reported.",
         "Policy and provider-roster mismatches are recorded on the offending governance approval artifact through the same summary path.",
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
@@ -14116,6 +15416,8 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
     )
     assert '"metric_count_values": sorted(metric_counts)' in checker
     assert '"metrics": sorted(metric_names)' in checker
+    assert '"valid_repair_handoff_digests": sorted(' in checker
+    assert '"repair_handoff_digest_hex"' in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
     assert "PROVIDER_LABEL_PATTERN" in checker
@@ -14165,6 +15467,25 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
     assert "test_provider_transport_routes_must_not_duplicate" in checker_test
     assert "test_provider_transport_routes_must_not_include_unknown_values" in checker_test
     assert "test_provider_transport_route_body_hash_is_required" in checker_test
+    assert "test_governance_repair_requires_handoff_digest" in checker_test
+    assert "test_governance_repair_rejects_malformed_handoff_digest" in checker_test
+    assert "PROOF_SUMMARY_BOUND_FIXTURES" in checker_test
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "PROVIDER_ROSTER_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_proof_summary_bound_artifacts_reject_generation_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_policy_bound_artifacts_reject_generation_policy_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_provider_roster_bound_artifacts_reject_generation_roster_mismatch"
+        in checker_test
+    )
     assert 'path=f"routes[{index}].body_blake3_hex"' in checker
     assert "test_observability_metrics_must_not_duplicate" in checker_test
     assert "test_observability_metrics_must_not_include_unknown_values" in checker_test
@@ -14173,10 +15494,45 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
         '("pdp", "metric_count_values"): ("observability",)'
         in aggregate_checker
     )
+    assert "validate_pdp_bound_artifact_metadata" in aggregate_checker
+    assert "PDP_PROOF_SUMMARY_BOUND_KINDS" in aggregate_checker
+    assert "PDP_POLICY_BOUND_KINDS" in aggregate_checker
+    assert "PDP_PROVIDER_ROSTER_BOUND_KINDS" in aggregate_checker
+    assert "pdp proof-summary-bound artifact fingerprints must match " in aggregate_checker
+    assert "pdp policy-bound artifact fingerprints must match " in aggregate_checker
+    assert (
+        "pdp provider-roster-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        '("pdp", "valid_repair_handoff_digests"): ("governance_repair",)'
+        in aggregate_checker
+    )
+    readiness_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_pdp_proof_summary_bound_artifacts_must_match_proof_summary_digest"
+        in readiness_test
+    )
+    assert "test_pdp_policy_bound_artifacts_must_match_policy_digest" in readiness_test
+    assert (
+        "test_pdp_provider_roster_bound_artifacts_must_match_roster_digest"
+        in readiness_test
+    )
+    assert (
+        "test_pdp_repair_handoff_metadata_must_match_governance_repair_fingerprint"
+        in readiness_test
+    )
+    assert "test_pdp_repair_handoff_metadata_rejects_malformed_values" in readiness_test
     plan = re.sub(r"\s+", " ", read(SORAFS_PDP_PLAN))
     assert "Observability artifacts also bind `metric_count`" in plan
     assert "unique canonical `metrics` inventory" in plan
     assert "The summary exports the sorted reviewed `metrics` inventory" in plan
+    assert (
+        "Aggregate promotion also rechecks the lane-proven PDP digest relationships"
+        in plan
+    )
 
 
 def test_pdp_canary_builder_is_checked_in() -> None:
@@ -14247,6 +15603,14 @@ def test_pdp_canary_builder_is_checked_in() -> None:
         in builder_tests
     )
     assert "test_provider_transport_requires_route_body_digest" in builder_tests
+    assert (
+        "test_governance_repair_requires_handoff_digest_before_write"
+        in builder_tests
+    )
+    assert (
+        "test_governance_repair_rejects_malformed_handoff_digest_before_write"
+        in builder_tests
+    )
     assert "test_observability_metrics_must_not_duplicate_before_write" in builder_tests
     assert (
         "test_observability_metrics_must_not_include_unknown_values_before_write"
@@ -14258,6 +15622,7 @@ def test_pdp_canary_builder_is_checked_in() -> None:
     )
     assert "scripts/build_sorafs_pdp_canary.py" in plan
     assert "--route-body-blake3-hex" in plan
+    assert "--repair-handoff-digest-hex" in plan
     assert "scripts/build_sorafs_pdp_canary.py" in roadmap
     assert (
         SCRIPTS_DIR / "examples" / "sorafs_pdp_provider_transport_canary.args.example"
@@ -14440,6 +15805,7 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metric entries before promotion can report ready",
         "Governance DAG payload-safety artifacts must explicitly set `payload_bytes_included`, `raw_head_included`, `raw_car_included`, `mirror_drift_detected`, `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
+        "Governance DAG aggregate promotion also rechecks the lane-proven relationships: public-head bound artifact fingerprints must match `valid_public_head_cids`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
         "collection planner with dry-run evidence-contract export and schema-closed plan validation",
     )
     missing_current: dict[str, list[str]] = {}
@@ -14506,6 +15872,17 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     assert '"payload_kinds must not include unknown values"' in checker
     assert "must not include unknown values" in checker
     assert "test_payload_safety_flags_are_required" in checker_test
+    assert (
+        "test_all_public_head_bound_artifacts_reject_publisher_head_mismatch"
+        in checker_test
+    )
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_policy_bound_artifacts_reject_publisher_policy_mismatch"
+        in checker_test
+    )
     assert "test_ingest_source_count_must_match_unique_payload_kinds" in checker_test
     assert "test_ingest_payload_kinds_must_not_duplicate" in checker_test
     assert (
@@ -14536,6 +15913,30 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     assert (
         '("governance_dag", "metric_count_values"): ("observability",)'
         in aggregate_checker
+    )
+    assert "validate_governance_dag_bound_artifact_metadata" in aggregate_checker
+    assert "GOVERNANCE_DAG_PUBLIC_HEAD_BOUND_KINDS" in aggregate_checker
+    assert "GOVERNANCE_DAG_POLICY_BOUND_KINDS" in aggregate_checker
+    assert (
+        "governance_dag public-head-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert '"valid_public_head_cids"' in aggregate_checker
+    assert (
+        "governance_dag policy-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert '"valid_policy_digests"' in aggregate_checker
+    readiness_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_governance_dag_public_head_bound_artifacts_must_match_public_head"
+        in readiness_test
+    )
+    assert (
+        "test_governance_dag_policy_bound_artifacts_must_match_policy_digest"
+        in readiness_test
     )
 
 
@@ -14784,11 +16185,14 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
         "Settlement-service artifacts also bind `open_channel_count`, `settled_receipt_count`, and `settlement_backlog_count` to the unique canonical `open_channels`, `settled_receipts`, and `settlement_backlog_channels` inventories, require channel and receipt IDs to use reviewed lowercase `orderbook-channel-*` and `orderbook-receipt-*` labels without non-production markers, and reject duplicate channel or receipt entries before promotion can report ready.",
         "API gateway artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready, and require every route response to carry a lowercase `body_blake3_hex` digest.",
         "Event-stream artifacts also bind `stream_count` to the unique canonical `streams[].name` inventory and reject duplicate or unknown stream entries before promotion can report ready.",
+        "They also require artifact IDs to start with a reviewed SDK language prefix and at least one distinct SDK release artifact per reviewed SDK language before promotion can report ready.",
         "Orderbook payload-safety artifacts must explicitly set `raw_contract_state_included`, `divergence_detected`, `raw_snapshot_included`, `raw_receipts_included`, `response_bodies_included`, `debug_artifacts`, `critical_alerts_firing`, `contract_mirror_divergence`, and `raw_ledger_included` to `false` before promotion can report ready.",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed orderbook metrics set, and reject duplicate or unknown metric labels before promotion can report ready.",
+        "rejects SDK release canaries with fewer than one distinct artifact per reviewed SDK language or artifact IDs outside the reviewed SDK language prefixes",
         "rejects malformed or non-production `--accepted-order`, `--matched-order`, `--open-channel`, `--settled-receipt`, and `--peer` inventory labels before writing any canary JSON",
         "rejects duplicate or unknown closed-set `--verified-claim`, `--route`, `--stream`, `--language`, `--metric`, and `--source` inputs before writing any canary JSON",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
+        "Aggregate promotion also rechecks the lane-proven orderbook digest relationships: contract-bound artifact fingerprints must match `valid_contract_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
         "Reconciliation artifacts also bind `peer_count` and `source_count` to the unique canonical `peers[].name` and `sources[].name` inventories, require peer labels to use reviewed lowercase `orderbook-peer-*` labels without non-production markers, and reject duplicate peer entries plus duplicate or unknown source entries before promotion can report ready.",
         "collection planner with dry-run evidence-contract export",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
@@ -14906,6 +16310,17 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
     ):
         assert f'require_false(payload, "{field}", errors)' in checker
     assert "test_payload_safety_flags_are_required" in checker_test
+    assert (
+        "test_all_contract_bound_artifacts_reject_contract_surface_mismatch"
+        in checker_test
+    )
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_policy_bound_artifacts_reject_contract_policy_mismatch"
+        in checker_test
+    )
     assert "test_sdk_release_debug_artifacts_flag_is_required" in checker_test
     assert (
         "require_string_inventory_count_match(payload, \"metrics\", \"metric_count\", errors)"
@@ -14921,6 +16336,22 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
     assert (
         '("orderbook", "metric_count_values"): ("observability",)'
         in aggregate_checker
+    )
+    assert "validate_orderbook_bound_artifact_metadata" in aggregate_checker
+    assert "ORDERBOOK_CONTRACT_BOUND_KINDS" in aggregate_checker
+    assert "ORDERBOOK_POLICY_BOUND_KINDS" in aggregate_checker
+    assert "orderbook contract-bound artifact fingerprints must match " in aggregate_checker
+    assert "orderbook policy-bound artifact fingerprints must match " in aggregate_checker
+    readiness_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_orderbook_contract_bound_artifacts_must_match_contract_digest"
+        in readiness_test
+    )
+    assert (
+        "test_orderbook_policy_bound_artifacts_must_match_policy_digest"
+        in readiness_test
     )
     assert (
         "require_string_inventory_count_match(\n"
@@ -14986,6 +16417,8 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
     assert "test_event_stream_count_is_required" in checker_test
     assert "test_sdk_artifacts_must_not_duplicate_id" in checker_test
     assert "test_sdk_artifact_count_must_cover_reviewed_languages" in checker_test
+    assert "test_sdk_artifacts_must_cover_every_reviewed_language" in checker_test
+    assert "test_sdk_artifacts_must_use_reviewed_language_prefixes" in checker_test
     assert "test_sdk_languages_must_not_duplicate" in checker_test
     assert "test_sdk_languages_must_not_include_unknown_values" in checker_test
     assert "test_sdk_language_count_is_required" in checker_test
@@ -15014,6 +16447,7 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
         "at least one distinct SDK release artifact per reviewed SDK language"
         in docs
     )
+    assert "artifact IDs to start with a reviewed SDK language prefix" in docs
     assert "Observability artifacts also bind `metric_count`" in docs
     assert "The summary exports the sorted reviewed `metrics` inventory" in docs
     assert "unique canonical `metrics` inventory" in docs
@@ -15039,6 +16473,7 @@ def test_orderbook_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_API_ROUTES" in builder
     assert "REQUIRED_STREAMS" in builder
     assert "REQUIRED_SDK_LANGUAGES" in builder
+    assert "SDK_ARTIFACT_LANGUAGE_PREFIXES" in builder
     assert '"stream_count": len(streams)' in builder
     assert '"language_count": len(args.languages)' in builder
     assert "validate_evidence_payload(payload, validation_options(args))" in builder
@@ -15054,6 +16489,8 @@ def test_orderbook_canary_builder_is_checked_in() -> None:
     assert '"body_blake3_hex": args.route_body_blake3_hex' in builder
     assert "duplicate --artifact id" in builder
     assert "--artifact must include at least one distinct SDK release artifact " in builder
+    assert "--artifact id must start with a reviewed SDK language prefix" in builder
+    assert "--artifact must include at least one SDK release artifact for every " in builder
     assert "--accepted-order" in builder
     assert "--matched-order" in builder
     assert "--rejected-invalid-order" in builder
@@ -15152,6 +16589,14 @@ def test_orderbook_canary_builder_is_checked_in() -> None:
     assert "test_duplicate_sdk_artifact_id_fails_closed_without_leaking" in builder_test
     assert (
         "test_sdk_release_requires_artifact_per_language_before_write"
+        in builder_test
+    )
+    assert (
+        "test_sdk_release_requires_artifact_language_coverage_before_write"
+        in builder_test
+    )
+    assert (
+        "test_sdk_release_rejects_unreviewed_artifact_family_before_write"
         in builder_test
     )
     assert 'payload["language_count"] == len(MODULE.REQUIRED_SDK_LANGUAGES)' in builder_test
@@ -15343,10 +16788,12 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
         "Production promotion remains blocked unless the summary status is `ready`, including at least two distinct staged billing cycles whose reference-decision ids match a valid reference-price artifact in the same evidence bundle.",
         "Feed-collector and reference-price artifacts also bind `feed_count` to the unique canonical `feeds[].name` inventory, require `accepted_feed_count` to equal `feed_count`, require coverage for the reviewed `feed-primary`, `feed-secondary`, and `feed-tertiary` price feeds, and reject duplicate or unknown feed entries before promotion can report ready.",
         "Billing-cycle artifacts also require `cycle_id` to match a reviewed lowercase `billing-cycle-*` label without non-production markers, bind `statement_count` to the unique canonical `statements[].name` inventory using reviewed `billing-statement-*` labels without non-production markers, and bind `line_item_count` to the unique canonical `line_items[].name` inventory using reviewed `billing-line-item-*` labels without non-production markers, rejecting duplicate statement or line-item entries before promotion can report ready.",
+        "The aggregate production-readiness gate now derives cycle tuple and policy digest sets from `valid_billing_cycles`: `valid_cycle_bindings` must match those cycle tuples, `valid_policy_digests` must match those cycle policies, and every billing-cycle `reference_decision_id_hex` must appear in `valid_reference_decision_ids` before final promotion can report ready. It also rechecks cycle-bound and policy-bound artifact fingerprints against `valid_cycle_bindings` and `valid_policy_digests`.",
         "Statement-publication artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready, require every route response to carry a lowercase `body_blake3_hex` digest, and bind `acknowledgement_probe_count` to the unique canonical `acknowledgement_probes` inventory using reviewed `billing-ack-probe-*` labels without non-production markers.",
         "Statement-publication canaries bind `acknowledgement_probe_count` to reviewed `billing-ack-probe-*` `acknowledgement_probes` inventory and reject duplicate or non-production acknowledgement probes.",
         "Reconciliation artifacts also bind `source_count` to the unique canonical `sources[].name` inventory and `line_item_count` to the unique canonical `line_items[].name` inventory using reviewed `billing-line-item-*` labels without non-production markers, rejecting duplicate or unknown source entries and duplicate line-item entries before promotion can report ready.",
         "Native-bridge release artifacts also bind `artifact_count` to the unique canonical `artifacts[].id` inventory, require reviewed `hedging-native-artifact-*` labels without non-production markers, and reject duplicate artifact entries before promotion can report ready.",
+        "They also require artifact IDs to start with reviewed native bridge family prefixes and at least one Swift-family plus one JNI-family artifact before promotion can report ready",
         "Hedging/billing payload-safety artifacts must explicitly set `payload_bytes_included`, `response_bodies_included`, `degraded`, `statement_bodies_included`, `raw_financial_records_included`, `critical_alerts_firing`, and `debug_artifacts` to `false` before promotion can report ready.",
         "Metrics/alert artifacts also bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics/alert artifact fingerprint before final promotion can report ready.",
@@ -15385,17 +16832,72 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
     ):
         assert f'require_false(payload, "{field}", errors)' in checker
     assert "REQUIRED_PRICE_FEEDS" in checker
+    hedging_fingerprint_fields = checker.split(
+        "FINGERPRINT_FIELDS: tuple[str, ...] = (", 1
+    )[1].split(")\n", 1)[0]
+    assert '"cycle_id",' not in hedging_fingerprint_fields
     assert "CYCLE_ID_PATTERN" in checker
     assert "billing-cycle-" in checker
     assert "FORBIDDEN_CYCLE_ID_MARKERS" in checker
+    assert "def validated_billing_cycle_fingerprint_values(" in checker
+    assert "evidence_artifact_fingerprint(artifact).update(fingerprint_values)" in checker
     assert "STATEMENT_LABEL_PATTERN" in checker
     assert "LINE_ITEM_LABEL_PATTERN" in checker
     assert "ACKNOWLEDGEMENT_PROBE_LABEL_PATTERN" in checker
     assert "NATIVE_BRIDGE_ARTIFACT_ID_PATTERN" in checker
+    assert "NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES" in checker
     assert "hedging-native-artifact-" in checker
     assert "DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS = 2" in checker
     assert "DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS" in builder
-    assert "at least two distinct reviewed native artifacts" in hedging_plan
+    assert "at least one Swift-family plus one JNI-family artifact" in hedging_plan
+    assert "NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES" in builder
+    assert "def validate_hedging_billing_cycle_metadata(" in aggregate_checker
+    assert (
+        "valid_cycle_bindings must match valid_billing_cycles cycle tuples"
+        in aggregate_checker
+    )
+    assert (
+        "valid_policy_digests must match valid_billing_cycles policy digests"
+        in aggregate_checker
+    )
+    assert (
+        "valid_billing_cycles reference decisions must match "
+        "valid_reference_decision_ids"
+    ) in aggregate_checker
+    assert "validate_hedging_billing_bound_artifact_metadata" in aggregate_checker
+    assert "HEDGING_BILLING_CYCLE_BOUND_KINDS" in aggregate_checker
+    assert "HEDGING_BILLING_POLICY_BOUND_KINDS" in aggregate_checker
+    assert (
+        "hedging_billing cycle-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "hedging_billing policy-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_policy_bound_artifacts_reject_billing_cycle_policy_mismatch"
+        in checker_test
+    )
+    assert "test_hedging_cycle_bindings_must_match_billing_cycles" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_hedging_policy_digests_must_match_billing_cycles" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_hedging_cycle_bound_artifacts_must_match_billing_cycles" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_hedging_policy_bound_artifacts_must_match_billing_cycles" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_hedging_billing_cycle_reference_must_match_reference_decision"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "billing-ack-probe-" in checker
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in checker
     assert "def require_inventory_label(" in checker
@@ -15483,9 +16985,19 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
     assert "test_reference_price_accepted_feed_count_must_equal_feed_count" in checker_test
     assert "test_payload_safety_flags_are_required" in checker_test
     assert "test_reference_price_degraded_flag_is_required" in checker_test
+    assert (
+        "test_all_cycle_bound_artifacts_reject_billing_cycle_tuple_mismatch"
+        in checker_test
+    )
     assert "test_billing_cycle_id_must_be_canonical" in checker_test
     assert "test_billing_cycle_id_rejects_generic_cycle_family" in checker_test
     assert "test_billing_cycle_id_rejects_non_production_markers" in checker_test
+    assert (
+        "test_billing_cycle_id_non_production_marker_stdout_does_not_echo_cycle_id"
+        in checker_test
+    )
+    assert "invalid_cycle_id not in diagnostics" in checker_test
+    assert "invalid_cycle_id not in captured.err" in checker_test
     assert "test_billing_cycle_id_accepts_future_production_label" in checker_test
     assert "test_billing_cycle_statement_count_must_match_unique_statements" in checker_test
     assert "test_billing_cycle_statements_must_not_duplicate" in checker_test
@@ -15547,8 +17059,13 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
     assert "test_native_bridge_artifact_count_must_match_unique_artifacts" in checker_test
     assert "test_native_bridge_release_requires_minimum_artifact_set" in checker_test
     assert "test_native_bridge_debug_artifacts_flag_is_required" in checker_test
+    assert "test_native_bridge_artifacts_must_cover_reviewed_families" in checker_test
     assert "test_native_bridge_artifacts_must_not_duplicate" in checker_test
     assert "test_native_bridge_artifact_ids_must_use_reviewed_family" in checker_test
+    assert (
+        "test_native_bridge_artifact_ids_must_use_reviewed_family_prefix"
+        in checker_test
+    )
     assert (
         "test_native_bridge_artifact_ids_reject_non_production_markers"
         in checker_test
@@ -15697,6 +17214,14 @@ def test_hedging_canary_builder_is_checked_in() -> None:
         "test_native_bridge_release_requires_minimum_artifacts_before_write"
         in builder_test
     )
+    assert (
+        "test_native_bridge_release_requires_family_coverage_before_write"
+        in builder_test
+    )
+    assert (
+        "test_native_bridge_release_rejects_unreviewed_family_before_write"
+        in builder_test
+    )
     assert "test_hedge_execution_enabled_requires_governance_before_write" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
     assert "--kind reference_price" in reference_example
@@ -15829,6 +17354,7 @@ def test_evidence_viewer_runtime_services_stay_unshipped_in_docs() -> None:
         "quarantine-scoped, payload-free local session manifests and append-only access-event records for encrypted moderation quarantine objects plus local payload-free daily audit reports that record `EvidenceAccess` transparency source entries and can be published by a config-backed Torii runtime scheduler when enabled and a Governance DAG publisher is configured",
         "still does not contain the browser viewer, streaming backend, short-lived URL signer, watermark engine, WebAuthn session flow, or deployed rollout evidence",
         "That gate is a promotion blocker for deployed evidence; it does not replace the missing browser/streaming viewer service.",
+        "Evidence-viewer canaries also require explicit audit-log tamper rejection and watermark metadata mismatch rejection before promotion can report ready.",
         "It is a media validation harness, not a moderation evidence viewer.",
         "`ModerationEvidenceViewerSessionRecord` and",
         "`ModerationEvidenceViewerAuditReport` daily reports",
@@ -15869,10 +17395,13 @@ def test_evidence_viewer_canary_builder_keeps_checker_required_counts() -> None:
         "inventories before checker prevalidation"
         in docs
     )
+    assert "audit-log tamper rejection and watermark metadata mismatch rejection" in docs
     assert '"role_count": len(args.roles)' in builder
     assert '"security_control_count": len(args.security_controls)' in builder
     assert '"access_event_kind_count": len(args.access_event_kinds)' in builder
     assert '"export_target_count": len(args.export_targets)' in builder
+    assert '"audit_log_tamper_rejected"' in builder
+    assert '"watermark_metadata_mismatch_rejected"' in builder
     assert "VIEWER_SESSION_LABEL_PATTERN" in builder
     assert "VIEWER_SESSION_LABEL_ERROR" in builder
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in builder
@@ -15883,6 +17412,8 @@ def test_evidence_viewer_canary_builder_keeps_checker_required_counts() -> None:
     assert "test_viewer_session_placeholder_marker_fails_before_write" in builder_test
     assert "test_digest_must_be_exact_lowercase_hex_before_write" in builder_test
     assert "test_long_lived_url_ttl_fails_before_write" in builder_test
+    assert 'payload["audit_log_tamper_rejected"] is True' in builder_test
+    assert 'payload["watermark_metadata_mismatch_rejected"] is True' in builder_test
 
 
 UNSHIPPED_EVIDENCE_VIEWER_ROUTE_PATTERNS = (
@@ -15997,6 +17528,11 @@ def test_unshipped_evidence_viewer_service_surface_is_not_exposed() -> None:
 
 
 def test_evidence_viewer_canary_builder_is_checked_in() -> None:
+    checker = read(SCRIPTS_DIR / "check_sorafs_moderation_panel_rollout_evidence.py")
+    moderation_builder = read(SCRIPTS_DIR / "build_sorafs_moderation_panel_canary.py")
+    checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_moderation_panel_rollout_evidence_test.py"
+    )
     builder = read(SCRIPTS_DIR / "build_sorafs_evidence_viewer_canary.py")
     builder_test = read(SCRIPTS_DIR / "tests" / "build_sorafs_evidence_viewer_canary_test.py")
     example = read(SCRIPTS_DIR / "examples" / "sorafs_evidence_viewer_canary.args.example")
@@ -16011,10 +17547,24 @@ def test_evidence_viewer_canary_builder_is_checked_in() -> None:
     assert "session_tokens_included" in builder
     assert "signed_urls_included" in builder
     assert "watermark_secrets_included" in builder
+    assert '"audit_log_tamper_rejected"' in checker
+    assert '"watermark_metadata_mismatch_rejected"' in checker
+    assert 'require_bool_true(payload, "audit_log_tamper_rejected", errors)' in checker
+    assert (
+        'require_bool_true(payload, "watermark_metadata_mismatch_rejected", errors)'
+        in checker
+    )
+    assert '"audit_log_tamper_rejected"' in builder
+    assert '"watermark_metadata_mismatch_rejected"' in builder
+    assert '"audit_log_tamper_rejected"' in moderation_builder
+    assert '"watermark_metadata_mismatch_rejected"' in moderation_builder
     assert "--viewer-session" in builder
     assert "VIEWER_SESSION_LABEL_PATTERN" in builder
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in builder
     assert "test_generated_canary_passes_existing_evidence_viewer_gate" in builder_test
+    assert (
+        "test_evidence_viewer_requires_adversarial_security_controls" in checker_test
+    )
     assert "test_duplicate_session_inventory_fails_before_write" in builder_test
     assert "test_viewer_session_label_family_fails_before_write" in builder_test
     assert "test_viewer_session_placeholder_marker_fails_before_write" in builder_test
@@ -16024,6 +17574,8 @@ def test_evidence_viewer_canary_builder_is_checked_in() -> None:
     )
     assert "test_missing_verified_claim_fails_closed" in builder_test
     assert "test_output_symlink_is_rejected" in builder_test
+    assert "--verified-claim audit_log_tamper_rejected" in example
+    assert "--verified-claim watermark_metadata_mismatch_rejected" in example
     assert "--verified-claim legal_hold_policy_bound" in example
     assert "--viewer-session moderation-viewer-session-02" in example
     assert "--session-manifest-digest-hex" in example
@@ -16612,6 +18164,7 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
         "Dashboard metrics artifacts also bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the dashboard metrics artifact fingerprint before final promotion can report ready.",
         "Multi-peer reconciliation artifacts also bind `peer_count`, `validator_count`, and `case_count` to the unique canonical `peers[].name`, `validators[].name`, and `cases[].name` inventories, require those names to use reviewed `appeal-finance-peer-*`, `appeal-finance-validator-*`, and `appeal-finance-case-*` labels without non-production markers, require `case_count` to match the `cases[].reconciled` partition, and reject duplicate peer, validator, or case entries before promotion can report ready.",
+        "aggregate promotion rechecks config-bound artifact fingerprints against `valid_config_digests`, policy-bound governance approval fingerprints against `valid_policy_digests`, and every `valid_multi_peer_runs.config_digest_hex` value against `valid_config_digests`.",
         "Appeal-finance payload-safety artifacts must explicitly set `config_payload_included`, `payloads_included`, `raw_instruction_included`, `deposit_payloads_included`, `signed_transaction_included`, `raw_receipt_included`, `raw_ballot_included`, `deposit_confirmation_payload_included`, `raw_report_included`, `raw_rollup_included`, `critical_alerts_firing`, `response_bodies_included`, and `raw_ledger_included` to `false` before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
@@ -16827,6 +18380,17 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
     assert "test_quote_api_classes_must_not_duplicate" in checker_test
     assert "test_quote_api_dimensions_must_not_include_unknown_values" in checker_test
     assert "test_quote_api_quote_count_must_match_dimension_product" in checker_test
+    assert (
+        "test_all_config_bound_artifacts_reject_pricing_config_mismatch"
+        in checker_test
+    )
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_policy_bound_artifacts_reject_pricing_policy_mismatch"
+        in checker_test
+    )
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
@@ -17347,6 +18911,7 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
         "`--dry-run` emits the command plan plus the checker-backed `evidence_contract` field map without contacting live services.",
         "It also rejects duplicate or unsupported `--source-entry` kinds before rendering the plan or contacting live services.",
         "transparency rollout collection runner reject non-lowercase, wrong-length, or otherwise malformed `--cycle-id` values before rendering dry-run command plans or contacting deployed cycle-detail routes.",
+        "emits `valid_publication_bindings` so aggregate promotion can prove every ready cycle digest came from a source-bound publication. Aggregate promotion also rechecks source-bound artifact fingerprints against `valid_source_batch_digests` and cycle-bound artifact fingerprints against `valid_cycle_digests` before final promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -17379,6 +18944,7 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     assert "CYCLE_DETAIL_PROBE_LABEL_PATTERN" in checker
     assert "CYCLE_DETAIL_PROBE_LABEL_ERROR" in checker
     assert "transparency-cycle-detail-readback" in checker
+    assert '"valid_publication_bindings"' in checker
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in checker
     assert "def require_inventory_label(" in checker
     assert (
@@ -17428,6 +18994,18 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
         in checker_test
     )
     assert "test_publication_requires_cycle_detail_probe_coverage" in checker_test
+    assert "test_invalid_publication_does_not_anchor_cycle_bound_evidence" in checker_test
+    assert (
+        "test_all_source_bound_artifacts_reject_source_entry_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_cycle_bound_artifacts_reject_publication_cycle_mismatch"
+        in checker_test
+    )
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert "valid_publication_bindings" in checker_test
     assert "test_probe_count_must_match_probe_inventory_for_probe_artifacts" in checker_test
     assert "test_specific_probe_counts_must_match_probe_roles" in checker_test
     assert "test_privacy_aggregate_probe_role_counts_must_sum_to_probe_count" in checker_test
@@ -17439,6 +19017,7 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     assert "unique canonical `cycle_detail_probes[].name` inventory" in docs
     assert "reviewed `transparency-cycle-detail-*` probe labels" in docs
     assert "rejects unknown values outside the reviewed source-kind" in docs
+    assert "valid_publication_bindings" in docs
 
 
 def test_transparency_canary_builder_is_checked_in() -> None:
@@ -17666,6 +19245,7 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
         "Honey-audit artifacts also bind `honey_probe_count` to the unique canonical `probes[].name` inventory, require reviewed `gateway-honey-probe-*` labels without non-production markers, and reject duplicate probe entries before promotion can report ready.",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed gateway compliance metrics inventory, and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
+        "Aggregate promotion also rechecks the lane-proven digest relationships: bundle-bound artifact fingerprints must match `valid_bundle_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`.",
         "Gateway compliance payload-safety artifacts must explicitly set `raw_feeds_included`, `feed_payloads_included`, `raw_toggle_payloads_included`, `raw_catalog_included`, `raw_probe_responses_included`, `raw_appeal_payload_included`, `raw_receipts_included`, `critical_alerts_firing`, and `response_bodies_included` to `false` before promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -17850,10 +19430,43 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
         "test_observability_metrics_must_not_include_unknown_values"
         in checker_test
     )
+    assert (
+        "test_all_bundle_bound_artifacts_reject_feed_bundle_mismatch"
+        in checker_test
+    )
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_policy_bound_artifacts_reject_feed_promotion_policy_mismatch"
+        in checker_test
+    )
     assert '("gateway_compliance", "metrics"): ("observability",)' in aggregate_checker
     assert (
         '("gateway_compliance", "metric_count_values"): ("observability",)'
         in aggregate_checker
+    )
+    assert "validate_gateway_compliance_bound_artifact_metadata" in aggregate_checker
+    assert "GATEWAY_COMPLIANCE_BUNDLE_BOUND_KINDS" in aggregate_checker
+    assert "GATEWAY_COMPLIANCE_POLICY_BOUND_KINDS" in aggregate_checker
+    assert (
+        "gateway_compliance bundle-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "gateway_compliance policy-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    readiness_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_gateway_compliance_bundle_bound_artifacts_must_match_bundle_digest"
+        in readiness_test
+    )
+    assert (
+        "test_gateway_compliance_policy_bound_artifacts_must_match_policy_digest"
+        in readiness_test
     )
 
 
@@ -18136,6 +19749,7 @@ def test_gateway_load_rollout_evidence_work_stays_open_in_docs() -> None:
         "Telemetry/SLO artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed gateway-load metrics, and reject duplicate or unknown metric labels before promotion can report ready.",
         "Gateway-load payload-safety artifacts must explicitly set `raw_report_included`, `private_keys_included`, `response_bodies_included`, `raw_payloads_included`, and `critical_alerts_firing` to `false`; transport-scope artifacts must also explicitly set the non-applicable HTTP/3 booleans to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the telemetry/SLO artifact fingerprint before final promotion can report ready.",
+        "Aggregate promotion also rechecks the lane-proven digest relationships: suite-bound artifact fingerprints must match `valid_suite_report_digests`, staging-bound artifact fingerprints must match `valid_staging_report_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -18221,6 +19835,17 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
     assert 'require_false(payload, "http3_config_surface_documented", errors)' in checker
     assert 'require_false(payload, "http3_scenarios_passed", errors)' in checker
     assert "test_payload_safety_flags_are_required" in checker_tests
+    assert (
+        "test_all_staging_bound_artifacts_reject_staging_report_mismatch"
+        in checker_tests
+    )
+    assert "POLICY_BOUND_FIXTURES" in checker_tests
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_tests
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_tests
+    assert (
+        "test_all_policy_bound_artifacts_reject_staging_load_policy_mismatch"
+        in checker_tests
+    )
     assert "test_telemetry_metrics_must_not_duplicate" in checker_tests
     assert "test_telemetry_metrics_must_not_include_unknown_values" in checker_tests
     assert "test_local_conformance_cargo_command_must_be_reviewed" in checker_tests
@@ -18236,6 +19861,27 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
     assert (
         '("gateway_load", "metric_count_values"): ("telemetry_slo",)'
         in aggregate_checker
+    )
+    assert "validate_gateway_load_bound_artifact_metadata" in aggregate_checker
+    assert "GATEWAY_LOAD_STAGING_REPORT_BOUND_KINDS" in aggregate_checker
+    assert "GATEWAY_LOAD_POLICY_BOUND_KINDS" in aggregate_checker
+    assert "gateway_load suite-bound artifact fingerprints must match " in aggregate_checker
+    assert "gateway_load staging-bound artifact fingerprints must match " in aggregate_checker
+    assert "gateway_load policy-bound artifact fingerprints must match " in aggregate_checker
+    readiness_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_gateway_load_suite_bound_artifacts_must_match_suite_digest"
+        in readiness_test
+    )
+    assert (
+        "test_gateway_load_staging_bound_artifacts_must_match_staging_digest"
+        in readiness_test
+    )
+    assert (
+        "test_gateway_load_policy_bound_artifacts_must_match_policy_digest"
+        in readiness_test
     )
     assert "test_local_conformance_scenarios_must_not_include_unknown_values" in checker_tests
     staging_example = read(
@@ -18505,6 +20151,38 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS" in checker
     assert "PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS" in checker
     assert "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS" in checker
+    assert "validate_transparency_publication_binding_metadata" in checker
+    assert "valid_publication_bindings" in checker
+    assert (
+        "valid_cycle_digests must match valid_publication_bindings cycle digests"
+        in checker
+    )
+    assert (
+        "valid_publication_bindings source batches must match valid_source_batch_digests"
+        in checker
+    )
+    assert "validate_transparency_bound_artifact_metadata" in checker
+    assert "TRANSPARENCY_SOURCE_BOUND_KINDS" in checker
+    assert "TRANSPARENCY_CYCLE_BOUND_KINDS" in checker
+    assert (
+        "transparency source-bound artifact fingerprints must match "
+        in checker
+    )
+    assert (
+        "transparency cycle-bound artifact fingerprints must match "
+        in checker
+    )
+    readiness_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_transparency_source_bound_artifacts_must_match_source_batch_digest"
+        in readiness_test
+    )
+    assert (
+        "test_transparency_cycle_bound_artifacts_must_match_publication_cycle"
+        in readiness_test
+    )
     assert "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS" in checker
     assert "validate_payload_free_object_list_metadata_counts" in checker
     assert "length must match `{kind_name}` required artifact count" in checker
@@ -18526,6 +20204,42 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     )
     assert "test_hex_binding_metadata_must_match_recognized_artifact_fingerprints" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_transparency_publication_binding_must_match_publication_fingerprint" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_transparency_cycle_digest_must_match_publication_binding" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_transparency_publication_binding_source_must_match_source_entry" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "validate_appeal_finance_multi_peer_metadata" in checker
+    assert (
+        "valid_multi_peer_runs config digests must match valid_config_digests"
+        in checker
+    )
+    assert "validate_appeal_finance_bound_artifact_metadata" in checker
+    assert "APPEAL_FINANCE_CONFIG_BOUND_KINDS" in checker
+    assert "APPEAL_FINANCE_POLICY_BOUND_KINDS" in checker
+    assert (
+        "appeal_finance config-bound artifact fingerprints must match "
+        in checker
+    )
+    assert (
+        "appeal_finance policy-bound artifact fingerprints must match "
+        in checker
+    )
+    assert "test_appeal_finance_multi_peer_run_config_must_match_valid_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_appeal_finance_config_bound_artifacts_must_match_pricing_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_appeal_finance_policy_bound_artifacts_must_match_pricing_policy"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert "test_scalar_metadata_must_match_recognized_artifact_fingerprints" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
@@ -18552,7 +20266,7 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "scheduled_lifecycle_canary_tick_count" in checker
-    assert "scheduled_lifecycle_canary_last_tick_unix" in checker
+    assert "scheduled_lifecycle_canary_last_tick_at_unix" in checker
     assert "scheduled_lifecycle_canary_defaulted_provider_count" in checker
     assert "test_provider_bake_scheduler_metadata_is_validated" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
@@ -19213,6 +20927,8 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
         "credit-line artifacts bind `credit_line_mutation_count` to unique canonical `credit_line_mutations[].name` and `accrual_cycle_count` to unique canonical `accrual_cycles[].name` inventories and reject duplicate or unknown credit-line entries before promotion can report ready",
         "metrics artifacts bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metrics before promotion can report ready",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics/alert artifact fingerprint before final promotion can report ready.",
+        "The aggregate production-readiness gate also preserves the full policy/matrix/ledger chain: policies in `valid_policy_matrix_bindings` must appear in `valid_policy_digests`, ledger binding policy/matrix pairs must appear in `valid_policy_matrix_bindings`, and provider-bake policy/matrix/ledger tuples must appear in `valid_policy_matrix_ledger_bindings` before final promotion can report ready. It also rechecks policy-bound, matrix-bound, and ledger-bound artifact fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and `valid_policy_matrix_ledger_bindings`.",
+        "Governance approval artifacts must carry the accepted provider-bake `bake_id`, and the rollout gate plus aggregate production-readiness gate reject governance approval evidence whose `bake_id` does not match a valid provider-bake artifact before final promotion can report ready.",
         "Reserve-movement artifacts prove live chain submission coverage, submitted transaction-hash readback, automatic finality polling",
         "governance approval artifacts prove source-entry publication, downstream compliance application, consumer coverage",
         "governance approval artifacts also bind `downstream_compliance_consumer_count` to the unique canonical `downstream_compliance_consumers[].name` inventory using reviewed `reserve-compliance-consumer-*` labels without non-production markers, and reject duplicate downstream-compliance consumer entries before promotion can report ready",
@@ -19231,6 +20947,9 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
     checker_test = read(
         SCRIPTS_DIR / "tests" / "check_sorafs_reserve_rent_rollout_evidence_test.py"
+    )
+    production_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "def validate_route_inventory(" in checker
     assert (
@@ -19266,12 +20985,94 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
         '("reserve_rent", "metric_count_values"): ("metrics_alerts",)'
         in aggregate_checker
     )
+    assert "def validate_reserve_rent_policy_matrix_metadata(" in aggregate_checker
+    assert (
+        "valid_policy_matrix_bindings policies must match valid_policy_digests"
+        in aggregate_checker
+    )
+    assert (
+        "valid_policy_matrix_ledger_bindings matrix pairs must match "
+        in aggregate_checker
+    )
+    assert "valid_policy_matrix_bindings" in aggregate_checker
+    assert "valid_provider_bakes ledger tuples must match " in aggregate_checker
+    assert "valid_policy_matrix_ledger_bindings" in aggregate_checker
+    assert (
+        "reserve_rent governance approval bake_id fingerprints must "
+        in aggregate_checker
+    )
+    assert "match valid_provider_bakes" in aggregate_checker
+    assert "RESERVE_RENT_POLICY_BOUND_KINDS" in aggregate_checker
+    assert "RESERVE_RENT_MATRIX_BOUND_KINDS" in aggregate_checker
+    assert "RESERVE_RENT_LEDGER_BOUND_KINDS" in aggregate_checker
+    assert "validate_reserve_rent_bound_artifact_metadata" in aggregate_checker
+    assert "POLICY_BOUND_FIXTURES" in checker_test
+    assert "MATRIX_BOUND_FIXTURES" in checker_test
+    assert "LEDGER_BOUND_FIXTURES" in checker_test
+    assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
+    assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
+    assert (
+        "test_all_policy_bound_artifacts_reject_policy_config_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_matrix_bound_artifacts_reject_quote_matrix_mismatch"
+        in checker_test
+    )
+    assert (
+        "test_all_ledger_bound_artifacts_reject_ledger_digest_mismatch"
+        in checker_test
+    )
+    assert (
+        "reserve_rent policy-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "reserve_rent matrix-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert (
+        "reserve_rent ledger-bound artifact fingerprints must match "
+        in aggregate_checker
+    )
+    assert "test_reserve_rent_matrix_policy_must_match_policy_digest" in (
+        production_checker_test
+    )
+    assert "test_reserve_rent_ledger_pair_must_match_matrix_binding" in (
+        production_checker_test
+    )
+    assert "test_reserve_rent_provider_bake_tuple_must_match_ledger_binding" in (
+        production_checker_test
+    )
+    assert (
+        "test_reserve_rent_governance_approval_bake_id_must_match_provider_bakes"
+        in production_checker_test
+    )
+    assert "test_reserve_rent_policy_bound_artifacts_must_match_policy_digest" in (
+        production_checker_test
+    )
+    assert "test_reserve_rent_matrix_bound_artifacts_must_match_matrix_binding" in (
+        production_checker_test
+    )
+    assert "test_reserve_rent_ledger_bound_artifacts_must_match_ledger_binding" in (
+        production_checker_test
+    )
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
+    reserve_fingerprint_fields = checker.split(
+        "FINGERPRINT_FIELDS: tuple[str, ...] = (", 1
+    )[1].split(")\n", 1)[0]
+    assert '"bake_id",' not in reserve_fingerprint_fields
     assert "BAKE_ID_PATTERN" in checker
     assert "bake_id must match canonical lowercase `reserve-bake-*`" in checker
     assert "FORBIDDEN_BAKE_ID_MARKERS" in checker
     assert "require_bake_id(payload, errors)" in checker
+    assert "def validated_bake_fingerprint_values(" in checker
+    assert "evidence_artifact_fingerprint(artifact).update(fingerprint_values)" in checker
+    assert "GOVERNANCE_BAKE_BINDING_ERROR" in checker
+    assert "binding_fields=(\"bake_id\",)" in checker
+    assert "binding_error_template=GOVERNANCE_BAKE_BINDING_ERROR" in checker
+    assert "test_governance_approval_bake_id_must_match_provider_bake" in checker_test
     assert "PROVIDER_LABEL_PATTERN" in checker
     assert "providers[].name must match canonical lowercase `provider-*`" in checker
     assert "FORBIDDEN_PROVIDER_LABEL_MARKERS" in checker
@@ -19433,7 +21234,17 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
     assert "test_credit_line_requires_accrual_cycle_coverage" in checker_test
     assert "test_provider_bake_id_must_be_canonical" in checker_test
     assert "test_provider_bake_id_rejects_non_production_markers" in checker_test
+    assert (
+        "test_provider_bake_id_non_production_marker_stdout_does_not_echo_bake_id"
+        in checker_test
+    )
     assert "test_provider_bake_id_accepts_future_production_label" in checker_test
+    assert (
+        "test_governance_approval_bake_id_non_production_marker_stdout_does_not_echo_bake_id"
+        in checker_test
+    )
+    assert "invalid_bake_id not in diagnostics" in checker_test
+    assert "invalid_bake_id not in captured.err" in checker_test
     assert "test_provider_bake_providers_must_not_duplicate" in checker_test
     assert "test_provider_bake_provider_names_must_be_reviewed_labels" in checker_test
     assert (
@@ -19553,6 +21364,11 @@ def test_reserve_rent_canary_builder_is_checked_in() -> None:
         / "examples"
         / "sorafs_reserve_rent_credit_line_canary.args.example"
     )
+    governance_example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_reserve_rent_governance_approval_canary.args.example"
+    )
     docs = read(SORAFS_RESERVE_RENT_PLAN)
 
     assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
@@ -19635,6 +21451,15 @@ def test_reserve_rent_canary_builder_is_checked_in() -> None:
         in builder_test
     )
     assert "test_builds_payload_free_governance_approval_canary" in builder_test
+    assert "test_governance_approval_requires_bake_id_before_write" in builder_test
+    assert (
+        "test_governance_approval_bake_id_must_be_canonical_before_write"
+        in builder_test
+    )
+    assert (
+        "test_governance_approval_bake_id_rejects_non_production_markers_before_write"
+        in builder_test
+    )
     assert (
         "test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write"
         in builder_test
@@ -19714,6 +21539,13 @@ def test_reserve_rent_canary_builder_is_checked_in() -> None:
     assert "--top-up-cycle\nreserve-top-up-cycle-002" in bake_example
     assert "--appeal-cycle\nreserve-appeal-cycle-001" in bake_example
     assert "--scheduled-lifecycle-canary-tick\nreserve-lifecycle-tick-002" in bake_example
+    assert "--kind\ngovernance_approval" in governance_example
+    assert "--bake-id\nreserve-bake-001" in governance_example
+    assert "--verified-claim\nprovider_bake_accepted" in governance_example
+    assert (
+        "--downstream-compliance-consumer\nreserve-compliance-consumer-orderbook"
+        in governance_example
+    )
     assert "--kind\nreserve_movement" in movement_example
     assert "--movement-action\ncustody_reconciliation" in movement_example
     assert "--kind\nappeal_policy" in appeal_example
@@ -19728,6 +21560,7 @@ def test_reserve_rent_canary_builder_is_checked_in() -> None:
     assert "`--instruction-ref` inputs must use reviewed `reserve-ledger-*`" in docs
     assert "Lifecycle-service `--persisted-stage` inputs must use reviewed" in docs
     assert "Provider-bake `--scheduled-lifecycle-canary-tick` inputs must use reviewed" in docs
+    assert "sorafs_reserve_rent_governance_approval_canary.args.example" in docs
 
 
 UNSHIPPED_RESERVE_RENT_LIVE_ROUTE_PATTERNS = (

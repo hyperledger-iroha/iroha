@@ -4,12 +4,11 @@ direction: rtl
 source: docs/source/sorafs_reserve_rent_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 661c88f943df7cd89d86def988df9e3b15b8e86c3600376bb338e3d4afe89726
-source_last_modified: "2026-07-04T06:30:22.222482+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: "2026-07-04T06:30:22.222482+00:00"
+source_hash: 7b6532037723d1359975b367786db45c08cf054a2b4b25b8d64d6f26f0d69117
+source_last_modified: 2026-07-05T01:29:59.210412+00:00
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-05T01:29:59.210412+00:00
 ---
-
 # Reserve+Rent & Lifecycle Policy
 
 ## Status
@@ -528,14 +527,27 @@ prevalidates the generated artifact with
 `check_sorafs_reserve_rent_rollout_evidence.py`, and writes the JSON atomically
 without following output symlinks. Valid provider-bake artifacts surface the
 reviewed `policy_digest_hex`, `matrix_digest_hex`, `ledger_digest_hex`,
-`scheduled_lifecycle_canary_last_tick_unix`,
+`scheduled_lifecycle_canary_last_tick_at_unix`,
 `scheduled_lifecycle_canary_tick_count`, and
 `scheduled_lifecycle_canary_defaulted_provider_count` inside
 `valid_provider_bakes`, so the final production-readiness gate can validate the
 staged bake against the same policy/matrix/ledger tuple and scheduler canary
-metadata that the rollout checker accepted. Example argfiles are checked in for
+metadata that the rollout checker accepted. The aggregate production-readiness
+gate also preserves the full policy/matrix/ledger chain: policies in
+`valid_policy_matrix_bindings` must appear in `valid_policy_digests`, ledger
+binding policy/matrix pairs must appear in `valid_policy_matrix_bindings`, and
+provider-bake policy/matrix/ledger tuples must appear in
+`valid_policy_matrix_ledger_bindings` before final promotion can report ready.
+It also rechecks policy-bound, matrix-bound, and ledger-bound artifact
+fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and
+`valid_policy_matrix_ledger_bindings`.
+Governance approval artifacts must carry the accepted provider-bake `bake_id`,
+and the rollout gate plus aggregate production-readiness gate reject governance
+approval evidence whose `bake_id` does not match a valid provider-bake artifact
+before final promotion can report ready.
+Example argfiles are checked in for
 the policy-config anchor, route-bearing canaries, reserve movement, appeal
-policy, credit-line, and provider-bake evidence:
+policy, credit-line, provider-bake, and governance-approval evidence:
 
 ```bash
 python3 scripts/build_sorafs_reserve_rent_canary.py \
@@ -558,6 +570,9 @@ python3 scripts/build_sorafs_reserve_rent_canary.py \
 
 python3 scripts/build_sorafs_reserve_rent_canary.py \
   @scripts/examples/sorafs_reserve_rent_provider_bake_canary.args.example
+
+python3 scripts/build_sorafs_reserve_rent_canary.py \
+  @scripts/examples/sorafs_reserve_rent_governance_approval_canary.args.example
 ```
 
 The checker recognizes `sorafs.reserve.*` SFM-6 rollout schemas for policy
@@ -621,6 +636,9 @@ account-state mutation/readback, accrual posting, manual-approval tier
 non-mutation, and account-state reconciliation, governance approval artifacts
 prove source-entry publication, downstream compliance application, consumer
 coverage, handoff verification, and non-reserve compliance-entry preservation;
+governance approval artifacts must carry the accepted provider-bake `bake_id`
+and match it to a valid provider-bake artifact before final promotion can report
+ready;
 governance approval artifacts also bind `downstream_compliance_consumer_count`
 to the unique canonical `downstream_compliance_consumers[].name` inventory
 using reviewed `reserve-compliance-consumer-*` labels without non-production
@@ -631,7 +649,15 @@ the quote matrix binds to a valid policy
 lifecycle, route, movement, credit-line, appeal, metrics, provider-bake, and
 governance artifacts all carry the same payload-free
 `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple. The
-governance packet must also be bound to `iroha_config`. Tuple binding failures
+aggregate production-readiness gate also preserves that chain by requiring
+policies in `valid_policy_matrix_bindings` to appear in `valid_policy_digests`,
+ledger binding policy/matrix pairs to appear in `valid_policy_matrix_bindings`,
+and provider-bake policy/matrix/ledger tuples to appear in
+`valid_policy_matrix_ledger_bindings` before final promotion can report ready.
+It also rechecks policy-bound, matrix-bound, and ledger-bound artifact
+fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and
+`valid_policy_matrix_ledger_bindings`.
+The governance packet must also be bound to `iroha_config`. Tuple binding failures
 are recorded on the offending artifact before required-kind validity is
 computed, so the JSON summary matches the fail-closed rollout decision. The
 collection planner's dry-run JSON also includes the checker-backed `evidence_contract` map so

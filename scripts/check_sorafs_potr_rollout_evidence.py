@@ -145,6 +145,8 @@ RECEIPT_SUMMARY_BOUND_KINDS = (
     "observability",
     "governance_approval",
 )
+PQ_KEY_ROSTER_BOUND_KINDS = ("receipt_validation",)
+REPUTATION_WEIGHT_BOUND_KINDS = ("reputation_integration",)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -686,9 +688,9 @@ def build_summary(
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
                     valid_policy_digests.add(policy_digest.lower())
-            elif kind_name == "receipt_validation":
+            elif kind_name in PQ_KEY_ROSTER_BOUND_KINDS:
                 pq_key_roster_bound_artifacts.append((kind_name, artifact))
-            elif kind_name == "reputation_integration":
+            elif kind_name in REPUTATION_WEIGHT_BOUND_KINDS:
                 reputation_weight_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
@@ -712,7 +714,8 @@ def build_summary(
     )
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
-        missing_anchor_required_kinds=("governance_approval", "receipt_validation"),
+        missing_anchor_required_kinds=("governance_approval",)
+        + PQ_KEY_ROSTER_BOUND_KINDS,
         bound_artifacts=pq_key_roster_bound_artifacts,
         valid_anchor_digests=valid_pq_key_roster_digests,
         digest_field="pq_key_roster_digest_hex",
@@ -730,8 +733,8 @@ def build_summary(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=(
             "governance_approval",
-            "reputation_integration",
-        ),
+        )
+        + REPUTATION_WEIGHT_BOUND_KINDS,
         bound_artifacts=reputation_weight_bound_artifacts,
         valid_anchor_digests=valid_reputation_weight_policy_digests,
         digest_field="reputation_weight_policy_digest_hex",

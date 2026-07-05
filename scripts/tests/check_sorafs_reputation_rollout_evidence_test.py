@@ -25,6 +25,7 @@ SPEC.loader.exec_module(MODULE)
 SNAPSHOT_ID = "11" * 16
 MERKLE_ROOT = "22" * 32
 MERKLE_ROOT_2 = "44" * 32
+WEIGHTS_DIGEST = "55" * 32
 NOW_UNIX = 1_800_100_000
 GENERATED_AT = NOW_UNIX - 120
 DEPLOYMENT_ID = "sorafs-mainnet-2026-06"
@@ -67,6 +68,7 @@ def snapshot_summary(*, snapshot_id: str = SNAPSHOT_ID, generated_at: int = GENE
         "status": "accepted",
         "snapshot_id_hex": snapshot_id,
         "generated_at_unix": generated_at,
+        "weights_digest_hex": WEIGHTS_DIGEST,
         "provider_count": 2,
         "providers": provider_inventory(),
         "merkle_root_hex": MERKLE_ROOT,
@@ -186,8 +188,44 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "routing-consumption.json", consumption_evidence())
 
 
+SNAPSHOT_BOUND_FIXTURES = (
+    ("provider", "provider-provider-a.json", provider_evidence),
+    ("events", "events.json", events_evidence),
+    ("verify", "verify-provider-a.json", verify_evidence),
+    ("metrics", "metrics.json", metrics_evidence),
+    ("transport", "transport.json", transport_evidence),
+    ("consumption", "routing-consumption.json", consumption_evidence),
+)
+
+EXPLICIT_EVIDENCE_FILES = (
+    ("publish", "publish.json"),
+    ("latest", "latest.json"),
+    ("provider", "provider-provider-a.json"),
+    ("events", "events.json"),
+    ("verify", "verify-provider-a.json"),
+    ("metrics", "metrics.json"),
+    ("transport", "transport.json"),
+    ("consumption", "routing-consumption.json"),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
+
+
+def run_gate_with_explicit_evidence(root: Path, *extra: str) -> int:
+    args = ["--now-unix", str(NOW_UNIX), "--require-provider", "provider-a"]
+    for kind_name, file_name in EXPLICIT_EVIDENCE_FILES:
+        args.extend(["--evidence", f"{kind_name}={root / file_name}"])
+    args.extend(extra)
+    return MODULE.main(args)
+
+
+def set_merkle_root_mismatch(payload: dict) -> None:
+    if "events" in payload:
+        payload["events"][-1]["merkle_root_hex"] = MERKLE_ROOT_2
+    else:
+        payload["merkle_root_hex"] = MERKLE_ROOT_2
 
 
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
@@ -229,6 +267,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["provider_ids"] == ["provider-a"]
     assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
     assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
+    assert payload["valid_reputation_weight_digests"] == [WEIGHTS_DIGEST]
     assert payload["valid_snapshot_bindings"] == [
         {
             "snapshot_id_hex": SNAPSHOT_ID,
@@ -240,6 +279,8 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         MODULE.REQUIRED_METRICS
     )
     assert metrics_artifact["fingerprint"]["metrics"] == list(MODULE.REQUIRED_METRICS)
+    latest_artifact = payload["required"]["latest"]["artifacts"][0]
+    assert latest_artifact["fingerprint"]["weights_digest_hex"] == WEIGHTS_DIGEST
     production_readiness = load_production_readiness_module()
     _aggregate_row, aggregate_errors = production_readiness.validate_gate_summary(
         production_readiness.GATE_BY_NAME["reputation"],
@@ -254,6 +295,48 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         ),
     )
     assert aggregate_errors == []
+
+
+def test_snapshot_bound_fixture_table_covers_checker_bound_kind_set() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in SNAPSHOT_BOUND_FIXTURES)
+        == MODULE.SNAPSHOT_BOUND_KINDS
+    )
+
+
+def test_all_snapshot_bound_artifacts_reject_publish_latest_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in SNAPSHOT_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        set_merkle_root_mismatch(payload)
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate_with_explicit_evidence(
+            case_dir,
+            "--summary-out",
+            str(summary),
+        ) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_snapshot_bindings"] == [
+            {
+                "snapshot_id_hex": SNAPSHOT_ID,
+                "merkle_root_hex": MERKLE_ROOT,
+            }
+        ]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name}.merkle_root_hex does not match previous value"
+            in artifact["errors"]
+        )
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -415,6 +498,58 @@ def test_snapshot_provider_count_must_match_unique_providers(tmp_path: Path) -> 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["latest"]["artifacts"][0]
     assert "provider_count must match unique providers count" in artifact["errors"]
+
+
+def test_snapshot_weight_digest_is_required(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = snapshot_summary()
+    del payload["weights_digest_hex"]
+    write_json(tmp_path / "latest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["latest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "weights_digest_hex must be a non-empty string" in artifact["errors"]
+    assert payload["valid_reputation_weight_digests"] == [WEIGHTS_DIGEST]
+
+
+def test_snapshot_weight_digest_must_be_lowercase_hex(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = snapshot_summary()
+    payload["weights_digest_hex"] = "AB" * 32
+    write_json(tmp_path / "latest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["latest"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "weights_digest_hex must be 64 lowercase hex characters" in artifact["errors"]
+    assert "AB" * 32 not in "\n".join(artifact["errors"])
+
+
+def test_publish_and_latest_weight_digests_must_match(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = snapshot_summary()
+    other_digest = "66" * 32
+    payload["weights_digest_hex"] = other_digest
+    write_json(tmp_path / "latest.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["publish"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "publish.weights_digest_hex does not match previous value"
+        in artifact["errors"]
+    )
+    assert other_digest not in "\n".join(artifact["errors"])
 
 
 def test_snapshot_providers_must_not_duplicate(tmp_path: Path) -> None:
@@ -595,6 +730,34 @@ def test_provider_id_rejects_non_production_markers(tmp_path: Path) -> None:
     )
 
 
+def test_provider_id_non_production_marker_stdout_does_not_echo_provider_id(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_complete_evidence(tmp_path)
+    invalid_provider_id = "provider-prod-placeholder"
+    write_json(
+        tmp_path / "provider-provider-a.json",
+        provider_evidence(provider_id=invalid_provider_id),
+    )
+
+    assert run_gate(tmp_path) == 1
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert (
+        "provider.provider_id must not contain non-production markers ['placeholder']"
+        in diagnostics
+    )
+    assert (
+        "proof.provider_id must not contain non-production markers ['placeholder']"
+        in diagnostics
+    )
+    assert invalid_provider_id not in diagnostics
+    assert captured.err == ""
+
+
 def test_verify_provider_id_rejects_non_production_markers(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -612,6 +775,30 @@ def test_verify_provider_id_rejects_non_production_markers(tmp_path: Path) -> No
         "provider_id must not contain non-production markers ['placeholder']"
         in artifact["errors"]
     )
+
+
+def test_verify_provider_id_non_production_marker_stdout_does_not_echo_provider_id(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_complete_evidence(tmp_path)
+    invalid_provider_id = "provider-prod-placeholder"
+    write_json(
+        tmp_path / "verify-provider-a.json",
+        verify_evidence(provider_id=invalid_provider_id),
+    )
+
+    assert run_gate(tmp_path) == 1
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert (
+        "provider_id must not contain non-production markers ['placeholder']"
+        in diagnostics
+    )
+    assert invalid_provider_id not in diagnostics
+    assert captured.err == ""
 
 
 def test_provider_id_accepts_future_production_label(tmp_path: Path) -> None:
@@ -695,6 +882,24 @@ def test_required_provider_must_have_proof(tmp_path: Path) -> None:
     diagnostics = json.dumps(payload, sort_keys=True)
     assert "missing provider/proof evidence for required provider" in diagnostics
     assert provider_id not in diagnostics
+
+
+def test_required_provider_stdout_does_not_echo_provider_id(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_complete_evidence(tmp_path)
+    provider_id = "provider-b-private-key-placeholder"
+
+    assert run_gate(tmp_path, "--require-provider", provider_id) == 1
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert "missing provider/proof evidence for required provider" in diagnostics
+    assert "missing proof verification evidence for required provider" in diagnostics
+    assert provider_id not in diagnostics
+    assert captured.err == ""
 
 
 def test_required_provider_needs_matching_proof_not_only_verification(
@@ -1266,6 +1471,89 @@ def test_explicit_unknown_schema_fails(tmp_path: Path) -> None:
     assert str(path) not in load_errors
 
 
+def test_explicit_unknown_schema_stdout_does_not_echo_schema_or_path(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    unknown_schema = "sorafs.reputation.unknown.private-key-placeholder.v1"
+    path = write_json(tmp_path / "unknown.json", {"schema": unknown_schema})
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(path),
+                "--now-unix",
+                str(NOW_UNIX),
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    load_errors = "\n".join(payload["load_errors"])
+    assert "unknown reputation evidence schema" in load_errors
+    assert unknown_schema not in load_errors
+    assert "unknown.json" not in load_errors
+    assert str(path) not in load_errors
+    assert captured.err == ""
+
+
+def test_explicit_untyped_evidence_without_inferred_kind_does_not_echo_path(
+    tmp_path: Path,
+) -> None:
+    path = write_json(tmp_path / "opaque.json", deployment_context())
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(path),
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    load_errors = "\n".join(payload["load_errors"])
+    assert "cannot infer evidence kind" in load_errors
+    assert "opaque.json" not in load_errors
+    assert str(path) not in load_errors
+
+
+def test_explicit_untyped_evidence_stdout_without_inferred_kind_does_not_echo_path(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = write_json(tmp_path / "opaque.json", deployment_context())
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(path),
+                "--now-unix",
+                str(NOW_UNIX),
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    load_errors = "\n".join(payload["load_errors"])
+    assert "cannot infer evidence kind" in load_errors
+    assert "opaque.json" not in load_errors
+    assert str(path) not in load_errors
+    assert captured.err == ""
+
+
 def test_explicit_kind_must_match_recognized_schema(tmp_path: Path) -> None:
     path = write_json(tmp_path / "typed.json", transport_evidence())
     summary = tmp_path / "summary.json"
@@ -1293,6 +1581,35 @@ def test_explicit_kind_must_match_recognized_schema(tmp_path: Path) -> None:
     assert "transport" not in "\n".join(payload["load_errors"])
     assert "metrics" not in "\n".join(payload["load_errors"])
     assert str(path) not in "\n".join(payload["load_errors"])
+
+
+def test_explicit_kind_schema_mismatch_stdout_does_not_echo_kind_or_path(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = write_json(tmp_path / "typed.json", transport_evidence())
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                f"metrics={path}",
+                "--now-unix",
+                str(NOW_UNIX),
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    load_errors = "\n".join(payload["load_errors"])
+    assert "evidence schema does not match explicit kind" in load_errors
+    assert "transport" not in load_errors
+    assert "metrics" not in load_errors
+    assert "typed.json" not in load_errors
+    assert str(path) not in load_errors
+    assert captured.err == ""
 
 
 def test_explicit_same_path_conflicting_kinds_fail(tmp_path: Path) -> None:
@@ -1326,6 +1643,37 @@ def test_explicit_same_path_conflicting_kinds_fail(tmp_path: Path) -> None:
     assert str(path) not in "\n".join(payload["load_errors"])
 
 
+def test_explicit_conflicting_kinds_stdout_does_not_echo_kind_or_path(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    path = write_json(tmp_path / "typed.json", transport_evidence())
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                f"transport={path}",
+                "--evidence",
+                f"metrics={path}",
+                "--now-unix",
+                str(NOW_UNIX),
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    load_errors = "\n".join(payload["load_errors"])
+    assert "explicit evidence kind conflicts with previous kind" in load_errors
+    assert "transport" not in load_errors
+    assert "metrics" not in load_errors
+    assert "typed.json" not in load_errors
+    assert str(path) not in load_errors
+    assert captured.err == ""
+
+
 def test_malformed_explicit_evidence_kind_sanitizes_exception_text(
     monkeypatch,
 ) -> None:
@@ -1342,6 +1690,37 @@ def test_malformed_explicit_evidence_kind_sanitizes_exception_text(
     assert bad_message not in "\n".join(errors)
 
 
+def test_malformed_explicit_evidence_kind_main_summary_sanitizes_exception_text(
+    monkeypatch,
+    capsys,
+) -> None:
+    bad_message = "latest\nshadow"
+
+    def raise_malformed_evidence_spec(_spec: str):
+        raise ValueError(bad_message)
+
+    monkeypatch.setattr(MODULE, "parse_evidence_spec", raise_malformed_evidence_spec)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                "latest=/tmp/evidence.json",
+                "--now-unix",
+                str(NOW_UNIX),
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert "<non-canonical-error>" in diagnostics
+    assert bad_message not in diagnostics
+    assert captured.err == ""
+
+
 def test_unknown_explicit_evidence_kind_does_not_echo_kind() -> None:
     unknown_kind = "private-key-placeholder"
 
@@ -1351,6 +1730,74 @@ def test_unknown_explicit_evidence_kind_does_not_echo_kind() -> None:
     assert loaded == []
     assert "unknown evidence kind" in diagnostics
     assert unknown_kind not in diagnostics
+
+
+def test_unknown_explicit_evidence_kind_main_summary_does_not_echo_kind(
+    capsys,
+) -> None:
+    unknown_kind = "private-key-placeholder"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                f"{unknown_kind}=/tmp/evidence.json",
+                "--now-unix",
+                str(NOW_UNIX),
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert "unknown evidence kind" in diagnostics
+    assert unknown_kind not in diagnostics
+    assert captured.err == ""
+
+
+def test_typed_explicit_evidence_unsafe_path_fails_before_load_without_leaking(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                f"latest={tmp_path / 'private%26%2395%3Bkey.json'}",
+                "--now-unix",
+                str(NOW_UNIX),
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert (
+        "SoraFS checker-rendered paths must not contain secret-looking"
+        in captured.err
+    )
+    assert "private%26%2395%3Bkey" not in captured.err
+    assert "private&#95;key" not in captured.err
+    assert "private_key" not in captured.err
+    assert "unknown evidence kind" not in captured.err
+    assert captured.out == ""
+
+
+def test_typed_explicit_evidence_empty_path_fails_before_load_without_leaking(
+    capsys,
+) -> None:
+    assert MODULE.main(["--evidence", "latest=", "--now-unix", str(NOW_UNIX)]) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "SoraFS checker-rendered paths must not contain secret-looking"
+        in captured.err
+    )
+    assert "latest=" not in captured.err
+    assert "unknown evidence kind" not in captured.err
+    assert captured.out == ""
 
 
 def test_unsupported_loaded_evidence_kind_is_sanitized(tmp_path: Path) -> None:

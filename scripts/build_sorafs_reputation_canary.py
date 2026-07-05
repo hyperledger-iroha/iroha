@@ -266,6 +266,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         payload.update(
             {
                 "status": "accepted",
+                "weights_digest_hex": args.weights_digest_hex,
                 "provider_count": args.provider_count,
                 "providers": provider_rows(args),
             }
@@ -379,6 +380,12 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     validate_provider_id_arg(args.provider_id, errors=errors)
     validate_hex(args.snapshot_id_hex, option="--snapshot-id-hex", length=HEX32_LEN, errors=errors)
     validate_hex(args.merkle_root_hex, option="--merkle-root-hex", length=HEX64_LEN, errors=errors)
+    validate_hex(
+        args.weights_digest_hex,
+        option="--weights-digest-hex",
+        length=HEX64_LEN,
+        errors=errors,
+    )
     validate_thresholds(args, errors)
     validate_provider_inventory(args, errors)
     if args.kind == "metrics":
@@ -536,6 +543,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--now-unix", type=positive_int_arg)
     parser.add_argument("--snapshot-id-hex", required=True)
     parser.add_argument("--merkle-root-hex", required=True)
+    parser.add_argument("--weights-digest-hex", required=True)
     parser.add_argument("--provider-id", default="provider-a")
     parser.add_argument("--provider-count", type=positive_int_arg, default=2)
     parser.add_argument("--provider-name", action="append", default=[])

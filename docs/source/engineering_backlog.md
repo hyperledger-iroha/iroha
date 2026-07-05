@@ -6280,13 +6280,45 @@ redistributable schemas, and official trust/revocation bundles.
   per-lane proposal/vote scheduler so lane blocks are proposed, executed, and
   QC-sealed by their own lane committees instead of being emitted as relay
   metadata from the global block path.
-- Wire lane-local DA/RBC payload ownership into that scheduler and persist lane
-  block artifacts independently from global block sealing.
+- Finish wiring lane-local DA/RBC payload ownership into that scheduler.
+  Proposal assembly now commits final lane ownership/RBC instance identities
+  into the block execution context and exports them through Sumeragi status,
+  including the QC mode tag needed to recompute the lane-local subject, payload
+  ownership, and RBC instance hashes. Validators reject malformed
+  execution-context bindings and forged lane ownership hashes. Kura now persists
+  those committed identities as Norito-framed lane block artifacts under the
+  configured lane segment, anchored to the committing global block hash, and
+  rejects stale or forged artifact anchors on read. Validators now reject later
+  proposals that try to reuse an already committed lane-local artifact height
+  before Kura can overwrite the replay anchor, and Kura itself now rejects
+  conflicting lane-artifact rewrites while preserving exact duplicate replay as
+  idempotent. Proposal planning now also treats the latest valid committed
+  lane artifact as a known lane tip when no relay has been merged yet, so active
+  lanes continue at lane-local height `artifact_tip + 1` instead of jumping to
+  the global compatibility height after idle periods; the artifact scan is
+  dataspace-filtered, so newer artifacts from old/foreign dataspaces do not
+  hide the latest active-dataspace tip. Autoscale scale-in now waits for
+  verified unmerged relay progress on the selected managed lane at staging time
+  and revalidates the same drain condition at commit time before destroying
+  lane-local state. The scheduler now exposes a composed lane payload planner
+  that reduces known tips, applies reset watermarks, assigns next lane-local
+  slots, derives subjects, and validates DA/RBC ownership in one reusable step
+  shared by preview and final proposal assembly. Remaining work is to have the
+  full per-lane proposal/vote scheduler produce, execute, QC-seal, and replay
+  standalone lane blocks from those artifacts instead of relying on the global
+  proposal path.
 - Add a multi-peer integration corridor proving two active lanes can advance at
   different heights, produce lane-domain QCs, upgrade FastPQ relay proofs, and
-  merge without waiting for an idle configured lane. Broaden the unit-level
-  committed-record hydration coverage into restart/replay coverage for
-  persisted verified relay records.
+  merge without waiting for an idle configured lane. Unit-level restart/replay
+  coverage now rejects old-incarnation verified relay contract-state replays
+  after lane reset, and relay caches now tolerate out-of-order future artifacts
+  while merge candidates/commits advance each lane contiguously. Proposal
+  scheduling now floors lane-local block tips at reset watermarks so recreated
+  lanes resume after their previous incarnation, including proposal-path stale
+  old-incarnation tip coverage. Lane reset also prunes lane-scoped operator
+  status snapshots so retired/recreated lanes do not keep stale activity,
+  commitment, relay, payload-ownership, or governance status. The remaining
+  breadth is the multi-peer corridor.
 
 ## Cross-dataspace AMX follow-ups
 

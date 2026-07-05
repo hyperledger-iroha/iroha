@@ -98,6 +98,9 @@ DEFAULT_MAX_EVIDENCE_AGE_SECS = 14 * 24 * 60 * 60
 HEX64_LEN = 64
 BAKE_ID_PATTERN = re.compile(r"^reserve-bake-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 BAKE_ID_ERROR = "bake_id must match canonical lowercase `reserve-bake-*`"
+GOVERNANCE_BAKE_BINDING_ERROR = (
+    "governance_approval bake_id must match a valid provider_bake bake_id"
+)
 PROVIDER_LABEL_PATTERN = re.compile(r"^provider-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 PROVIDER_LABEL_ERROR = "providers[].name must match canonical lowercase `provider-*`"
 RENT_CYCLE_LABEL_PATTERN = re.compile(r"^reserve-rent-cycle-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
@@ -399,6 +402,7 @@ LEDGER_BOUND_KINDS = (
     "provider_bake",
     "governance_approval",
 )
+MATRIX_BOUND_KINDS = ("ledger_digest",) + LEDGER_BOUND_KINDS
 COMMON_EVIDENCE_REQUIRED_FIELDS: tuple[str, ...] = (
     "schema",
     "status",
@@ -582,7 +586,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "appeal_cycles",
         "scheduler_config_bound",
         "scheduled_lifecycle_canary_passed",
-        "scheduled_lifecycle_canary_last_tick_unix",
+        "scheduled_lifecycle_canary_last_tick_at_unix",
         "scheduled_lifecycle_canary_tick_count",
         "scheduled_lifecycle_canary_ticks",
         "scheduled_lifecycle_canary_defaulted_provider_count",
@@ -598,6 +602,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "policy_digest_hex",
         "matrix_digest_hex",
         "ledger_digest_hex",
+        "bake_id",
         "approved",
         "governance_vote_recorded",
         "iroha_config_bound",
@@ -636,7 +641,6 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
-    "bake_id",
     "policy_digest_hex",
     "matrix_digest_hex",
     "ledger_digest_hex",
@@ -645,7 +649,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "started_at_unix",
     "completed_at_unix",
     "provider_count",
-    "scheduled_lifecycle_canary_last_tick_unix",
+    "scheduled_lifecycle_canary_last_tick_at_unix",
     "scheduled_lifecycle_canary_tick_count",
     "scheduled_lifecycle_canary_defaulted_provider_count",
 )
@@ -659,10 +663,23 @@ PROVIDER_BAKE_FIELDS: tuple[str, ...] = (
     "started_at_unix",
     "completed_at_unix",
     "provider_count",
-    "scheduled_lifecycle_canary_last_tick_unix",
+    "scheduled_lifecycle_canary_last_tick_at_unix",
     "scheduled_lifecycle_canary_tick_count",
     "scheduled_lifecycle_canary_defaulted_provider_count",
 )
+
+
+def validated_bake_fingerprint_values(
+    kind_name: str,
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    """Return bake fingerprint fields only after canonical validation."""
+
+    if kind_name not in ("provider_bake", "governance_approval"):
+        return {}
+    bake_errors: list[str] = []
+    bake_id = require_bake_id(payload, bake_errors)
+    return {"bake_id": bake_id} if bake_id else {}
 
 
 def require_policy_matrix_binding(
@@ -1230,7 +1247,7 @@ def validate_provider_bake(
         )
     scheduled_tick_at = require_recent_timestamp(
         payload,
-        "scheduled_lifecycle_canary_last_tick_unix",
+        "scheduled_lifecycle_canary_last_tick_at_unix",
         errors,
         now_unix=options.now_unix,
         max_age_secs=options.max_bake_age_secs,
@@ -1243,13 +1260,13 @@ def validate_provider_bake(
             errors,
             message=(
                 "completed_at_unix must be >= "
-                "scheduled_lifecycle_canary_last_tick_unix"
+                "scheduled_lifecycle_canary_last_tick_at_unix"
             ),
         )
         scheduler_lag_secs = completed_at - scheduled_tick_at
         if scheduler_lag_secs > options.max_lifecycle_lag_secs:
             errors.append(
-                "scheduled_lifecycle_canary_last_tick_unix must be within "
+                "scheduled_lifecycle_canary_last_tick_at_unix must be within "
                 f"{options.max_lifecycle_lag_secs} seconds of completed_at_unix"
             )
     provider_count = require_count_equal(
@@ -1420,6 +1437,7 @@ def validate_provider_bake(
 
 def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> None:
     require_policy_matrix_ledger_binding(payload, errors)
+    require_bake_id(payload, errors)
     require_config_backed_governance_approval(payload, errors)
     require_bool_true(payload, "reserve_movement_policy_present", errors)
     require_bool_true(payload, "credit_line_policy_present", errors)
@@ -1539,7 +1557,6 @@ def build_summary(
 
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
-    valid_provider_bakes: list[dict[str, Any]] = []
     valid_policy_digests: set[str] = set()
     valid_policy_matrix_bindings: set[tuple[str, str]] = set()
     valid_policy_matrix_ledger_bindings: set[tuple[str, str, str]] = set()
@@ -1575,10 +1592,9 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
-        if kind_name == "provider_bake":
-            bake = artifact_fingerprint(payload, PROVIDER_BAKE_FIELDS)
-            if evidence_artifact_is_valid(artifact):
-                valid_provider_bakes.append(bake)
+        fingerprint_values = validated_bake_fingerprint_values(kind_name, payload)
+        if fingerprint_values:
+            evidence_artifact_fingerprint(artifact).update(fingerprint_values)
         if evidence_artifact_is_valid(artifact):
             fingerprint = evidence_artifact_fingerprint(artifact)
             policy_digest = fingerprint.get("policy_digest_hex")
@@ -1713,6 +1729,45 @@ def build_summary(
             "policy_digest_hex/matrix_digest_hex/ledger_digest_hex tuple"
         ),
     )
+
+    valid_provider_bake_ids = {
+        bake_id
+        for artifact in artifacts_by_kind["provider_bake"]
+        if evidence_artifact_is_valid(artifact)
+        for bake_id in (evidence_artifact_fingerprint(artifact).get("bake_id"),)
+        if isinstance(bake_id, str)
+    }
+    valid_provider_bake_id_bindings = {
+        (bake_id,) for bake_id in valid_provider_bake_ids
+    }
+    validate_bound_evidence_tuple_references(
+        required_kinds=required_kinds,
+        missing_anchor_required_kinds=("governance_approval",),
+        bound_artifacts=[
+            (evidence_artifact_schema(artifact), artifact)
+            for artifact in artifacts_by_kind["governance_approval"]
+            if evidence_artifact_is_valid(artifact)
+        ],
+        missing_anchor_artifacts=[
+            (evidence_artifact_schema(artifact), artifact)
+            for artifact in artifacts_by_kind["governance_approval"]
+        ],
+        valid_anchor_bindings=valid_provider_bake_id_bindings,
+        binding_fields=("bake_id",),
+        errors=errors,
+        binding_error_template=GOVERNANCE_BAKE_BINDING_ERROR,
+        missing_anchor_error_template=GOVERNANCE_BAKE_BINDING_ERROR,
+        missing_anchor_summary_error=GOVERNANCE_BAKE_BINDING_ERROR,
+    )
+
+    valid_provider_bakes = [
+        artifact_fingerprint(
+            evidence_artifact_fingerprint(artifact),
+            PROVIDER_BAKE_FIELDS,
+        )
+        for artifact in artifacts_by_kind["provider_bake"]
+        if evidence_artifact_is_valid(artifact)
+    ]
 
     required = build_required_evidence_summary(
         required_kinds,

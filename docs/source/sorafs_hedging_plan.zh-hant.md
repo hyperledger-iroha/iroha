@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_hedging_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4e04661f0ef614c52908aab6714a93a6ac618c4abd27b78ddb32c798f65aee94
-source_last_modified: "2026-07-04T06:21:28.261425+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: "2026-07-04T06:21:28.261425+00:00"
+source_hash: 0f010abae7163d50fa836b784dce31e479d0ce5426e63ae1c47e92b7c17ddbcf
+source_last_modified: "2026-07-05T00:26:17.557380+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-05T00:26:17.557380+00:00
 ---
 
 # SoraFS XOR Hedging & Billing
@@ -61,7 +61,15 @@ Statement-publication, reconciliation,
 metrics/alert, and governance-approval evidence must also carry the same
 `statement_bundle_digest_hex`/`reconciliation_digest_hex` tuple as a valid
 staged billing cycle in the same rollout bundle, and governance approval
-`policy_digest_hex` must match a valid billing-cycle policy digest.
+`policy_digest_hex` must match a valid billing-cycle policy digest. The
+aggregate production-readiness gate now derives cycle tuple and policy digest
+sets from `valid_billing_cycles`: `valid_cycle_bindings` must match those cycle
+tuples, `valid_policy_digests` must match those cycle policies, and every
+billing-cycle `reference_decision_id_hex` must appear in
+`valid_reference_decision_ids` before final promotion can report ready. It also
+rechecks the lane-proven bound artifacts before final promotion:
+cycle-bound artifact fingerprints must match `valid_cycle_bindings`, and
+policy-bound artifact fingerprints must match `valid_policy_digests`.
 Statement-publication artifacts also bind `route_count` to the unique canonical
 `routes[].name` inventory and reject duplicate or unknown route entries before promotion
 can report ready, require every route response to carry a lowercase
@@ -78,7 +86,8 @@ artifacts also bind `source_count` to the
 `artifact_count` to the unique canonical `artifacts[].id` inventory, require
 reviewed `hedging-native-artifact-*` labels without non-production markers, and
 reject duplicate artifact entries before promotion can report ready. They also
-require at least two distinct reviewed native artifacts before promotion can
+require artifact IDs to start with reviewed native bridge family prefixes and
+at least one Swift-family plus one JNI-family artifact before promotion can
 report ready, matching the Swift XCFramework plus JNI bridge release evidence
 shape used by the checked-in canary fixtures. Metrics/alert
 artifacts also bind `metric_count` to the unique canonical `metrics` inventory
@@ -356,6 +365,13 @@ Required before rollout:
   missing/invalid reference-price decision; it also publishes valid
   billing-cycle policy digests as `valid_policy_digests` and rejects governance
   approval artifacts whose `policy_digest_hex` is not anchored to one of them.
+  The aggregate production-readiness gate now derives cycle tuple and policy
+  digest sets from `valid_billing_cycles`: `valid_cycle_bindings` must match
+  those cycle tuples, `valid_policy_digests` must match those cycle policies,
+  and every billing-cycle `reference_decision_id_hex` must appear in
+  `valid_reference_decision_ids` before final promotion can report ready. It
+  also rechecks cycle-bound and policy-bound artifact fingerprints against
+  `valid_cycle_bindings` and `valid_policy_digests`.
 - Remaining: implement collector service, daemonized pricing/exposure engine,
   billing aggregator, statement publisher, signed APIs, runtime CLI helpers,
   runtime service emission of the checked-in metric families, released native

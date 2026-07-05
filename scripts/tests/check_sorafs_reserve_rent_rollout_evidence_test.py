@@ -380,7 +380,7 @@ def provider_bake(*, failure_count: int = 0) -> dict:
         "appeal_cycles": appeal_cycles,
         "scheduler_config_bound": True,
         "scheduled_lifecycle_canary_passed": True,
-        "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 60,
+        "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT - 60,
         "scheduled_lifecycle_canary_tick_count": 2,
         "scheduled_lifecycle_canary_ticks": [
             {"name": "reserve-lifecycle-tick-001"},
@@ -403,6 +403,7 @@ def governance_approval() -> dict:
         "policy_digest_hex": DIGEST,
         "matrix_digest_hex": MATRIX_DIGEST,
         "ledger_digest_hex": LEDGER_DIGEST,
+        "bake_id": "reserve-bake-001",
         "approved": True,
         "governance_vote_recorded": True,
         "iroha_config_bound": True,
@@ -437,6 +438,27 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "metrics-alerts.json", metrics_alerts())
     write_json(root / "provider-bake.json", provider_bake())
     write_json(root / "governance-approval.json", governance_approval())
+
+
+POLICY_BOUND_FIXTURES = (
+    ("quote_matrix", "quote-matrix.json", quote_matrix),
+    ("ledger_digest", "ledger-digest.json", ledger_digest),
+)
+
+LEDGER_BOUND_FIXTURES = (
+    ("lifecycle_service", "lifecycle-service.json", lifecycle_service),
+    ("signed_routes", "signed-routes.json", signed_routes),
+    ("reserve_movement", "reserve-movement.json", reserve_movement),
+    ("credit_line", "credit-line.json", credit_line),
+    ("appeal_policy", "appeal-policy.json", appeal_policy),
+    ("metrics_alerts", "metrics-alerts.json", metrics_alerts),
+    ("provider_bake", "provider-bake.json", provider_bake),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+MATRIX_BOUND_FIXTURES = (
+    ("ledger_digest", "ledger-digest.json", ledger_digest),
+) + LEDGER_BOUND_FIXTURES
 
 
 def run_gate(root: Path, *extra: str) -> int:
@@ -476,6 +498,8 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         MODULE.REQUIRED_METRICS
     )
     assert metrics_artifact["fingerprint"]["metrics"] == list(MODULE.REQUIRED_METRICS)
+    governance_artifact = payload["required"]["governance_approval"]["artifacts"][0]
+    assert governance_artifact["fingerprint"]["bake_id"] == "reserve-bake-001"
     assert payload["valid_provider_bakes"] == [
         {
             "bake_id": "reserve-bake-001",
@@ -487,11 +511,147 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
             "started_at_unix": GENERATED_AT - 3_600,
             "completed_at_unix": GENERATED_AT,
             "provider_count": 3,
-            "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 60,
+            "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT - 60,
             "scheduled_lifecycle_canary_tick_count": 2,
             "scheduled_lifecycle_canary_defaulted_provider_count": 1,
         }
     ]
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in LEDGER_BOUND_FIXTURES)
+        == MODULE.LEDGER_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in MATRIX_BOUND_FIXTURES)
+        == MODULE.MATRIX_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    matrix = quote_matrix()
+    assert tuple(matrix["storage_classes"]) == MODULE.REQUIRED_STORAGE_CLASSES
+    assert tuple(matrix["tiers"]) == MODULE.REQUIRED_TIERS
+    assert tuple(matrix["durations"]) == MODULE.REQUIRED_DURATIONS
+    assert matrix["scenario_count"] == MODULE.REQUIRED_QUOTE_MATRIX_SCENARIOS
+    assert tuple(route["name"] for route in lifecycle_service()["routes"]) == (
+        MODULE.REQUIRED_LIFECYCLE_ROUTES
+    )
+    assert tuple(route["name"] for route in signed_routes()["routes"]) == (
+        MODULE.REQUIRED_SIGNED_ROUTES
+    )
+    assert tuple(movement["action"] for movement in reserve_movement()["movements"]) == (
+        MODULE.REQUIRED_RESERVE_MOVEMENT_ACTIONS
+    )
+    assert tuple(probe["name"] for probe in appeal_policy()["appeal_probes"]) == (
+        MODULE.REQUIRED_APPEAL_POLICY_PROBES
+    )
+
+    credit = credit_line()
+    assert tuple(mutation["name"] for mutation in credit["credit_line_mutations"]) == (
+        MODULE.REQUIRED_CREDIT_LINE_MUTATIONS
+    )
+    assert tuple(cycle["name"] for cycle in credit["accrual_cycles"]) == (
+        MODULE.REQUIRED_CREDIT_LINE_ACCRUAL_CYCLES
+    )
+    assert tuple(metrics_alerts()["metrics"]) == MODULE.REQUIRED_METRICS
+
+
+def test_all_policy_bound_artifacts_reject_policy_config_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = ALT_LEDGER_DIGEST
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        schema = MODULE.KIND_BY_NAME[kind_name].schema
+        assert result["valid_policy_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{schema} policy_digest_hex must match a valid "
+            "policy_config policy_digest_hex"
+        ) in artifact["errors"]
+
+
+def test_all_matrix_bound_artifacts_reject_quote_matrix_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in MATRIX_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["matrix_digest_hex"] = ALT_LEDGER_DIGEST
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        schema = MODULE.KIND_BY_NAME[kind_name].schema
+        assert result["valid_policy_matrix_bindings"] == [
+            {
+                "policy_digest_hex": DIGEST,
+                "matrix_digest_hex": MATRIX_DIGEST,
+            }
+        ]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{schema} policy_digest_hex and matrix_digest_hex must match "
+            "a valid quote_matrix artifact"
+        ) in artifact["errors"]
+
+
+def test_all_ledger_bound_artifacts_reject_ledger_digest_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in LEDGER_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["ledger_digest_hex"] = ALT_LEDGER_DIGEST
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        schema = MODULE.KIND_BY_NAME[kind_name].schema
+        assert result["valid_policy_matrix_ledger_bindings"] == [
+            {
+                "policy_digest_hex": DIGEST,
+                "matrix_digest_hex": MATRIX_DIGEST,
+                "ledger_digest_hex": LEDGER_DIGEST,
+            }
+        ]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{schema} policy_digest_hex, matrix_digest_hex, and "
+            "ledger_digest_hex must match a valid ledger_digest artifact"
+        ) in artifact["errors"]
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -1702,11 +1862,41 @@ def test_provider_bake_id_rejects_non_production_markers(tmp_path: Path) -> None
     )
 
 
+def test_provider_bake_id_non_production_marker_stdout_does_not_echo_bake_id(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_complete_evidence(tmp_path)
+    invalid_bake_id = "reserve-bake-prod-placeholder"
+    bake = provider_bake()
+    bake["bake_id"] = invalid_bake_id
+    write_json(tmp_path / "provider-bake.json", bake)
+
+    assert run_gate(tmp_path) == 1
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert (
+        "bake_id must not contain non-production markers ['placeholder']"
+        in diagnostics
+    )
+    assert invalid_bake_id not in diagnostics
+    assert (
+        "bake_id must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert invalid_bake_id not in captured.err
+
+
 def test_provider_bake_id_accepts_future_production_label(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     bake = provider_bake()
     bake["bake_id"] = "reserve-bake-prod-a-202607"
     write_json(tmp_path / "provider-bake.json", bake)
+    approval = governance_approval()
+    approval["bake_id"] = "reserve-bake-prod-a-202607"
+    write_json(tmp_path / "governance-approval.json", approval)
 
     assert run_gate(tmp_path) == 0
 
@@ -2003,7 +2193,7 @@ def test_provider_bake_cycle_rows_must_carry_proof_flags(tmp_path: Path) -> None
 def test_provider_bake_scheduler_lifecycle_canary_must_be_fresh(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     bake = provider_bake()
-    bake["scheduled_lifecycle_canary_last_tick_unix"] = (
+    bake["scheduled_lifecycle_canary_last_tick_at_unix"] = (
         bake["completed_at_unix"] - MODULE.DEFAULT_MAX_LIFECYCLE_LAG_SECS - 1
     )
     write_json(tmp_path / "provider-bake.json", bake)
@@ -2015,10 +2205,105 @@ def test_provider_bake_scheduler_lifecycle_canary_must_be_fresh(tmp_path: Path) 
     artifact = payload["required"]["provider_bake"]["artifacts"][0]
     assert artifact["valid"] is False
     assert (
-        "scheduled_lifecycle_canary_last_tick_unix must be within "
+        "scheduled_lifecycle_canary_last_tick_at_unix must be within "
         f"{MODULE.DEFAULT_MAX_LIFECYCLE_LAG_SECS} seconds of completed_at_unix"
         in artifact["errors"]
     )
+
+
+def test_governance_approval_requires_bake_id(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    del payload["bake_id"]
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "bake_id must be a non-empty canonical string" in artifact["errors"]
+
+
+def test_governance_approval_bake_id_must_be_canonical(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["bake_id"] = "reserve_bake_001"
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert MODULE.BAKE_ID_ERROR in artifact["errors"]
+
+
+def test_governance_approval_bake_id_rejects_non_production_markers(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["bake_id"] = "reserve-bake-prod-placeholder"
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "bake_id must not contain non-production markers ['placeholder']"
+        in artifact["errors"]
+    )
+
+
+def test_governance_approval_bake_id_non_production_marker_stdout_does_not_echo_bake_id(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_complete_evidence(tmp_path)
+    invalid_bake_id = "reserve-bake-prod-placeholder"
+    payload = governance_approval()
+    payload["bake_id"] = invalid_bake_id
+    write_json(tmp_path / "governance-approval.json", payload)
+
+    assert run_gate(tmp_path) == 1
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = json.dumps(payload, sort_keys=True)
+    assert (
+        "bake_id must not contain non-production markers ['placeholder']"
+        in diagnostics
+    )
+    assert invalid_bake_id not in diagnostics
+    assert (
+        "bake_id must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert invalid_bake_id not in captured.err
+
+
+def test_governance_approval_bake_id_must_match_provider_bake(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_approval()
+    payload["bake_id"] = "reserve-bake-002"
+    write_json(tmp_path / "governance-approval.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_approval"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert MODULE.GOVERNANCE_BAKE_BINDING_ERROR in artifact["errors"]
+    assert all("reserve-bake-002" not in error for error in result["errors"])
 
 
 def test_governance_approval_requires_downstream_compliance_evidence(

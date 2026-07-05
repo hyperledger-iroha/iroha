@@ -37,6 +37,7 @@ POLICY_DIGEST = "b" * 64
 VALIDATION_DIGEST = "c" * 64
 ARCHIVE_DIGEST = "d" * 64
 ROSTER_DIGEST = "e" * 64
+HANDOFF_DIGEST = "f" * 64
 
 
 def canary_path(tmp_path: Path, kind: str) -> Path:
@@ -79,6 +80,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         args.extend(["--validation-bundle-digest-hex", VALIDATION_DIGEST])
     elif kind == "governance_repair":
         args.extend(["--archive-summary-digest-hex", ARCHIVE_DIGEST])
+        args.extend(["--repair-handoff-digest-hex", HANDOFF_DIGEST])
     elif kind == "observability":
         for metric in MODULE.REQUIRED_METRICS:
             args.extend(["--metric", metric])
@@ -145,6 +147,7 @@ def test_generated_canaries_pass_full_pdp_gate(tmp_path: Path) -> None:
     assert payload["valid_proof_summary_digests"] == [DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
     assert payload["valid_provider_roster_digests"] == [ROSTER_DIGEST]
+    assert payload["valid_repair_handoff_digests"] == [HANDOFF_DIGEST]
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
         assert payload["required"][kind]["artifacts"][0]["valid"] is True
@@ -529,6 +532,39 @@ def test_proof_generation_requires_provider_roster_digest_before_write(
     captured = capsys.readouterr()
     assert "--provider-roster-digest-hex is required for proof_generation" in captured.err
     assert not canary_path(tmp_path, "proof_generation").exists()
+
+
+def test_governance_repair_requires_handoff_digest_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_repair", tmp_path)
+    index = args.index("--repair-handoff-digest-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--repair-handoff-digest-hex is required for governance_repair" in captured.err
+    assert not canary_path(tmp_path, "governance_repair").exists()
+
+
+def test_governance_repair_rejects_malformed_handoff_digest_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_repair", tmp_path)
+    index = args.index("--repair-handoff-digest-hex")
+    args[index + 1] = "not-a-digest"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--repair-handoff-digest-hex must be exact lowercase 32-byte hex"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "governance_repair").exists()
 
 
 def test_output_symlink_is_refused(tmp_path: Path, capsys) -> None:

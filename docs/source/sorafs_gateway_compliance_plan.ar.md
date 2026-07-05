@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c6e2b71194d4fabfa2969abdc0615ab94bd1ecda0ae8ebf41333ddb78f25fa90
-source_last_modified: "2026-07-04T05:29:01.456022+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-04T05:29:01.456022+00:00
+source_hash: 3094c38f0f11619b2d251f669cc0c937bc7ebe56028a76b0e93e60e3eac1c842
+source_last_modified: "2026-07-04T22:36:57.666365+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-04T22:36:57.666365+00:00
 ---
 
 # Gateway Compliance, Moderation & Transparency
@@ -114,7 +114,10 @@ gateway compliance can be marked ready.
   The summary exports the sorted reviewed `metrics` inventory plus
   `metric_count_values`, and the aggregate production-readiness gate requires
   those fields to match the observability artifact fingerprint before final
-  promotion can report ready.
+  promotion can report ready. Aggregate promotion also rechecks the
+  lane-proven digest relationships: bundle-bound artifact fingerprints must
+  match `valid_bundle_digests`, and policy-bound artifact fingerprints must
+  match `valid_policy_digests`.
 - `scripts/build_sorafs_gateway_compliance_canary.py` is a payload-free
   full-surface canary builder for feed-promotion, controller-runtime,
   moderation-toggle, gateway-reload, enforcement-probe, honey-audit,

@@ -4,12 +4,11 @@ direction: ltr
 source: docs/source/sorafs_reference_sdk_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f0002697d8af3c17927c9164c542a9cbc0b86a34351b46bfe74fc516546869bb
-source_last_modified: "2026-07-03T10:04:56.741713+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T10:04:56.741713+00:00
+source_hash: 18a79d098ba9a77344733af361655443cf51d0dfe1929f49adf3a4d2a46e2ada
+source_last_modified: "2026-07-05T01:47:48.121506+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: "2026-07-05T01:47:48.121506+00:00"
 ---
-
 # SoraFS Reference SDK & Validator
 
 ## Goals & Scope
@@ -35,7 +34,10 @@ approval evidence back to a valid signed manifest in the same bundle, and
 payload-free summary anchors for the release archive index, signed release-key
 fingerprint, downstream package index, cookbook smoke output, header digest,
 and FFI contract digest so final production readiness can tether those release
-artifacts to their owning evidence rows. The
+artifacts to their owning evidence rows. Signed-manifest evidence must declare
+the governed Ed25519 release signature algorithm (`ed25519`), and the
+payload-free canary builder rejects unsupported `--signature-algorithm` values,
+including legacy RSA labels, before writing evidence JSON. The
 `scripts/run_sorafs_reference_sdk_release_evidence.py` provides the reviewed
 collection planner/runner with dry-run `evidence_contract` output for each
 selected release evidence schema and required payload field. The JavaScript SDK
@@ -475,19 +477,30 @@ duplicate or unknown downstream-package entries, `package_count` values that do 
 the unique package list,
 SDK export or `ValidationOutcomeV1` drift, missing native bridge/header binding,
 failed published-archive cookbook smoke, missing fixture bundle or manifest/CAR
-replay, smoke duration above threshold, FFI header drift, and governance packets
-not bound to the governed release key roster, targets, downstream packages,
+replay, non-integer or above-threshold smoke duration, FFI header drift, and
+governance packets not bound to the governed release key roster, targets, downstream packages,
 smoke evidence, and a `release_manifest_digest_hex` matching a valid signed
 manifest artifact in the same bundle. Signed manifests also publish a
-`policy_digest_hex`, governance approval must reference that same digest, and
-the gate summary emits `valid_policy_digests` only from valid signed-manifest
-artifacts. Valid downstream release-archive, downstream-binding,
+`policy_digest_hex`, governance approval must reference that same digest and
+name the approved `public_key_fingerprint_hex`, and the gate summary emits
+`valid_policy_digests` and `valid_release_key_fingerprints` only from valid
+signed-manifest artifacts. Valid downstream release-archive, downstream-binding,
 cookbook-smoke, FFI/header-contract, and governance-approval references now
 publish their reviewed `release_manifest_digest_hex` values as
 `valid_release_manifest_reference_digests`; the aggregate
 production-readiness gate accepts those reference digests only as payload-free
-metadata tethered to recognized artifact fingerprints. Release-manifest and
-policy binding failures are recorded on the
+metadata tethered to recognized artifact fingerprints. Signed-manifest artifacts
+also fingerprint the reviewed `signature_algorithm`, the summary exports
+`signature_algorithms`, and the aggregate production-readiness gate requires
+that metadata to match the signed-manifest artifact fingerprint and stay inside
+the governed Ed25519 release algorithm set before final promotion can report
+ready. Aggregate promotion also rechecks the lane-proven reference SDK release
+digest relationships: manifest-bound artifact fingerprints must match
+`valid_release_manifest_digests`, and policy-bound artifact fingerprints must
+match `valid_policy_digests`, and governance-approval release-key fingerprints
+must match `valid_release_key_fingerprints` before final promotion can report
+ready.
+Release-manifest, policy, and release-key binding failures are recorded on the
 offending artifact before required-kind validity is computed, so the JSON
 summary matches the fail-closed release decision. The runner's dry-run plan
 includes an `evidence_contract` map that operators can review before collecting
@@ -507,7 +520,8 @@ package coverage where applicable, reviewed target/package inventories
 closed to unknown values,
 duplicate-free target/package inventories
 whose count fields match their unique entries, release-manifest digest bindings,
-threshold-reviewed smoke duration, signed-manifest policy digests,
+positive integer threshold-reviewed smoke duration, signed-manifest policy
+digests, governance approval policy and `--public-key-fingerprint-hex` inputs,
 governed-release approval markers, and checker-backed validation before
 atomically writing JSON without following output symlinks or output directories.
 The release-archive and signed-manifest response-file examples are
@@ -545,7 +559,9 @@ Implemented locally:
   focused tests for release archives, signed manifests, downstream bindings,
   cookbook smoke, FFI/header contract, and governance approval, including
   cross-artifact signed-manifest digest and policy-digest binding plus
-  aggregate-ready release-manifest reference digest metadata.
+  governance approval release-key fingerprint binding, aggregate-ready
+  release-manifest reference digest metadata, and approved signed-manifest
+  algorithm labels.
 
 Remaining production gates:
 - Run the packaging helper for the supported release targets and publish signed

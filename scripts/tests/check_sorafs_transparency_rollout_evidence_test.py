@@ -227,6 +227,21 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "explorer.json", explorer_evidence())
 
 
+SOURCE_BOUND_FIXTURES = (
+    ("publication", "publication.json", publication_evidence),
+)
+
+CYCLE_BOUND_FIXTURES = (
+    ("privacy_aggregate", "privacy-aggregate.json", privacy_aggregate_evidence),
+    ("proof_token_issuance", "proof-token-issuance.json", proof_token_issuance_evidence),
+    ("explorer", "explorer.json", explorer_evidence),
+)
+
+
+def run_gate(root: Path, *extra: str) -> int:
+    return MODULE.main(["--evidence-dir", str(root), *extra])
+
+
 def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -241,9 +256,46 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["publication"]["valid"] is True
     assert payload["valid_source_batch_digests"] == [DIGEST]
     assert payload["valid_cycle_digests"] == [DIGEST]
+    assert payload["valid_publication_bindings"] == [
+        {
+            "source_batch_digest_hex": DIGEST,
+            "cycle_digest_hex": DIGEST,
+        }
+    ]
     assert payload["required"]["publication"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in SOURCE_BOUND_FIXTURES)
+        == MODULE.SOURCE_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in CYCLE_BOUND_FIXTURES)
+        == MODULE.CYCLE_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(route["name"] for route in publication_evidence()["routes"]) == (
+        MODULE.REQUIRED_PUBLICATION_ROUTES
+    )
+    assert tuple(
+        probe["name"] for probe in publication_evidence()["cycle_detail_probes"]
+    ) == MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES
+    assert tuple(route["name"] for route in explorer_evidence()["routes"]) == (
+        MODULE.REQUIRED_EXPLORER_ROUTES
+    )
+    assert tuple(probe["action"] for probe in privacy_aggregate_evidence()["probes"]) == (
+        MODULE.REQUIRED_PRIVACY_AGGREGATE_ACTIONS
+    )
+    assert tuple(
+        probe["action"] for probe in proof_token_issuance_evidence()["probes"]
+    ) == (
+        MODULE.REQUIRED_PROOF_TOKEN_ISSUANCE_ACTIONS
+    )
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -909,6 +961,31 @@ def test_publication_requires_source_batch_binding(tmp_path: Path) -> None:
     assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
 
 
+def test_all_source_bound_artifacts_reject_source_entry_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in SOURCE_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["source_batch_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} source_batch_digest_hex must match "
+            "a valid source_entry artifact"
+        ) in artifact["errors"]
+
+
 def test_explorer_cycle_binding_must_match_publication(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = explorer_evidence()
@@ -916,6 +993,31 @@ def test_explorer_cycle_binding_must_match_publication(tmp_path: Path) -> None:
     write_json(tmp_path / "explorer.json", payload)
 
     assert MODULE.main(["--evidence-dir", str(tmp_path)]) == 1
+
+
+def test_all_cycle_bound_artifacts_reject_publication_cycle_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in CYCLE_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["cycle_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} cycle_digest_hex must match "
+            "a valid source-bound publication artifact"
+        ) in artifact["errors"]
 
 
 def test_invalid_publication_does_not_anchor_cycle_bound_evidence(tmp_path: Path) -> None:
@@ -933,6 +1035,7 @@ def test_invalid_publication_does_not_anchor_cycle_bound_evidence(tmp_path: Path
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["valid_source_batch_digests"] == [DIGEST]
     assert payload["valid_cycle_digests"] == []
+    assert payload["valid_publication_bindings"] == []
     assert payload["required"]["publication"]["valid"] is False
     assert payload["required"]["explorer"]["valid"] is False
     errors = "\n".join(payload["errors"])

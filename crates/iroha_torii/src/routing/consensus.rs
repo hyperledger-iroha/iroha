@@ -5872,6 +5872,7 @@ pub async fn handle_v1_sumeragi_status(
                 .collect(),
             lane_settlement_commitments: snap.lane_settlement_commitments.clone(),
             lane_relay_envelopes: snap.lane_relay_envelopes.clone(),
+            lane_payload_ownerships: snap.lane_payload_ownerships.clone(),
             lane_governance_sealed_total: snap.lane_governance_sealed_total,
             lane_governance_sealed_aliases: snap.lane_governance_sealed_aliases.clone(),
             lane_governance: snap

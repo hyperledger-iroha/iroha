@@ -197,11 +197,16 @@ set, and reject duplicate or unknown metric labels before promotion can report
 ready. The summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the observability artifact fingerprint before final
-promotion can report ready. The collection planner exposes those exact required
-payload fields through `--dry-run` and validates the schema-closed collection
-plan, required kinds, thresholds, external evidence map, evidence contract, and
-command steps before contacting live PoTR services. The shared runner plan
-guard rejects
+promotion can report ready. Aggregate promotion also rechecks the lane-proven
+PoTR digest relationships: receipt-summary-bound artifact fingerprints must
+match `valid_receipt_summary_digests`, PQ-key-roster-bound artifact
+fingerprints must match `valid_pq_key_roster_digests`, and
+reputation-weight-bound artifact fingerprints must match
+`valid_reputation_weight_policy_digests` before final promotion can report
+ready. The collection planner exposes those exact required payload fields
+through `--dry-run` and validates the schema-closed collection plan, required
+kinds, thresholds, external evidence map, evidence contract, and command steps
+before contacting live PoTR services. The shared runner plan guard rejects
 non-canonical nested required-kind, threshold, external-evidence,
 evidence-contract, and command-step shapes before any live PoTR contact.
 

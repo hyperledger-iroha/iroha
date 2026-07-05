@@ -11,10 +11,45 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_path_identity import (  # noqa: E402
+    ALLOWED_FAILURE_TEMPLATE_FIELDS,
     error_diagnostic_label,
     path_diagnostic_label,
     resolve_path_identity,
 )
+
+
+def test_allowed_failure_template_fields_match_formatter_policy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    assert ALLOWED_FAILURE_TEMPLATE_FIELDS == frozenset({"label", "path", "error"})
+
+    argfile = tmp_path / "reviewed.args"
+    original_resolve = Path.resolve
+
+    def resolve(self: Path, *args, **kwargs):
+        if self == argfile:
+            raise RuntimeError("identity denied")
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    template = "failed " + " ".join(
+        f"{field}={{{field}}}" for field in sorted(ALLOWED_FAILURE_TEMPLATE_FIELDS)
+    )
+    errors: list[str] = []
+
+    assert (
+        resolve_path_identity(
+            argfile,
+            errors,
+            label="@ARGFILE",
+            failure_template=template,
+        )
+        is None
+    )
+    assert errors == [
+        f"failed error=identity denied label=@ARGFILE path={argfile}",
+    ]
 
 
 def test_resolve_path_identity_returns_canonical_path(tmp_path: Path) -> None:

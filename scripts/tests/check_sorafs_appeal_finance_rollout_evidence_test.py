@@ -382,6 +382,31 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+CONFIG_BOUND_FIXTURES = (
+    ("quote_api", "quote-api.json", quote_api),
+    ("deposit_lifecycle", "deposit-lifecycle.json", deposit_lifecycle),
+    ("settlement_execution", "settlement-execution.json", settlement_execution),
+    ("settlement_submitter", "settlement-submitter.json", settlement_submitter),
+    ("moderation_worker", "moderation-worker.json", moderation_worker),
+    (
+        "governance_dag_publication",
+        "governance-dag-publication.json",
+        governance_dag_publication,
+    ),
+    ("dashboard_metrics", "dashboard-metrics.json", dashboard_metrics),
+    (
+        "multi_peer_reconciliation",
+        "multi-peer-reconciliation.json",
+        multi_peer_reconciliation,
+    ),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -448,6 +473,46 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["pricing_config"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in CONFIG_BOUND_FIXTURES)
+        == MODULE.CONFIG_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(pricing_config()["classes"]) == MODULE.REQUIRED_APPEAL_CLASSES
+    assert tuple(quote_api()["classes"]) == MODULE.REQUIRED_APPEAL_CLASSES
+    assert tuple(quote_api()["urgencies"]) == MODULE.REQUIRED_URGENCIES
+    assert quote_api()["quote_count"] == MODULE.REQUIRED_QUOTE_API_QUOTES
+    assert tuple(route["name"] for route in quote_api()["routes"]) == (
+        MODULE.REQUIRED_QUOTE_ROUTES
+    )
+    assert tuple(route["name"] for route in deposit_lifecycle()["routes"]) == (
+        MODULE.REQUIRED_DEPOSIT_ROUTES
+    )
+    settlement = settlement_execution()
+    assert tuple(route["name"] for route in settlement["routes"]) == (
+        MODULE.REQUIRED_SETTLEMENT_ROUTES
+    )
+    assert tuple(settlement["instruction_steps"]) == (
+        MODULE.REQUIRED_SETTLEMENT_INSTRUCTION_STEPS
+    )
+    assert tuple(settlement["outcomes"]) == MODULE.REQUIRED_OUTCOMES
+    assert tuple(settlement["reconciliation_statuses"]) == (
+        MODULE.REQUIRED_RECONCILIATION_STATUSES
+    )
+    assert tuple(governance_dag_publication()["payload_kinds"]) == (
+        MODULE.REQUIRED_PAYLOAD_KINDS
+    )
+    assert tuple(dashboard_metrics()["payload_kinds"]) == MODULE.REQUIRED_PAYLOAD_KINDS
+    assert tuple(dashboard_metrics()["metrics"]) == MODULE.REQUIRED_METRICS
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -1628,6 +1693,31 @@ def test_settlement_execution_config_digest_must_match_pricing(tmp_path: Path) -
     ]
 
 
+def test_all_config_bound_artifacts_reject_pricing_config_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in CONFIG_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["config_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} config_digest_hex must reference a valid "
+            "pricing_config config_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_governance_approval_policy_digest_must_match_pricing(
     tmp_path: Path,
 ) -> None:
@@ -1649,6 +1739,32 @@ def test_governance_approval_policy_digest_must_match_pricing(
         "governance_approval policy_digest_hex must reference a valid "
         "pricing_config policy_digest_hex"
     ]
+
+
+def test_all_policy_bound_artifacts_reject_pricing_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must reference a valid "
+            "pricing_config policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_stale_pricing_config_does_not_anchor_config_bound_evidence(tmp_path: Path) -> None:

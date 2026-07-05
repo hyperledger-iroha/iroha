@@ -835,6 +835,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         dataspace_commitments: vec![rng_dataspace_commitment(rng)],
         lane_settlement_commitments: Vec::new(),
         lane_relay_envelopes: vec![rng_lane_relay_envelope(rng)],
+        lane_payload_ownerships: Vec::new(),
         lane_governance_sealed_total: 0,
         lane_governance_sealed_aliases: Vec::new(),
         lane_governance: vec![rng_lane_governance(rng)],
@@ -1761,6 +1762,7 @@ fn sumeragi_wire_status_roundtrip() {
         }],
         lane_settlement_commitments: Vec::new(),
         lane_relay_envelopes: vec![relay],
+        lane_payload_ownerships: Vec::new(),
         lane_governance_sealed_total: 0,
         lane_governance_sealed_aliases: Vec::new(),
         lane_governance: vec![SumeragiLaneGovernance {

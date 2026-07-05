@@ -165,6 +165,17 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+STAGING_REPORT_BOUND_FIXTURES = (
+    ("telemetry_slo", "telemetry-slo.json", telemetry_slo),
+    ("transport_scope", "transport-scope.json", transport_scope),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -204,6 +215,30 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert telemetry_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
     )
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(
+            kind_name
+            for kind_name, _file_name, _factory in STAGING_REPORT_BOUND_FIXTURES
+        )
+        == MODULE.STAGING_REPORT_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert (
+        local_conformance()["cargo_command"]
+        in MODULE.ALLOWED_GATEWAY_CONFORMANCE_CARGO_COMMANDS
+    )
+    assert tuple(local_conformance()["scenarios"]) == MODULE.REQUIRED_SCENARIOS
+    assert staging_load()["cache_state"]["mode"] in MODULE.REQUIRED_CACHE_STATES
+    assert tuple(telemetry_slo()["metrics"]) == MODULE.REQUIRED_METRICS
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -738,6 +773,31 @@ def test_staging_digest_binding_must_match_load_report(tmp_path: Path) -> None:
     ) in artifact["errors"]
 
 
+def test_all_staging_bound_artifacts_reject_staging_report_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in STAGING_REPORT_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["staging_report_digest_hex"] = "12" * 32
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} staging_report_digest_hex must reference a valid "
+            "staging_load staging_report_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_staging_load_policy_digest_is_required(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = staging_load()
@@ -775,3 +835,29 @@ def test_governance_approval_policy_digest_must_match_staging_load(
         "governance_approval policy_digest_hex must reference a valid "
         "staging_load policy_digest_hex"
     ) in artifact["errors"]
+
+
+def test_all_policy_bound_artifacts_reject_staging_load_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = "12" * 32
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [POLICY_DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must reference a valid "
+            "staging_load policy_digest_hex"
+        ) in artifact["errors"]

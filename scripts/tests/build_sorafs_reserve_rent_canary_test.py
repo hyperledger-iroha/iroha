@@ -206,6 +206,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     elif kind == "governance_approval":
         args.extend(
             [
+                "--bake-id",
+                "reserve-bake-001",
                 "--downstream-compliance-consumer-count",
                 "2",
                 "--downstream-compliance-consumer",
@@ -350,7 +352,7 @@ def test_generated_canaries_pass_full_reserve_rent_gate(tmp_path: Path) -> None:
             "started_at_unix": GENERATED_AT - 3_600,
             "completed_at_unix": GENERATED_AT,
             "provider_count": 3,
-            "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 60,
+            "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT - 60,
             "scheduled_lifecycle_canary_tick_count": 2,
             "scheduled_lifecycle_canary_defaulted_provider_count": 1,
         }
@@ -426,6 +428,7 @@ def test_builds_payload_free_governance_approval_canary(tmp_path: Path) -> None:
     )
 
     assert payload["schema"] == "sorafs.reserve.governance_approval.v1"
+    assert payload["bake_id"] == "reserve-bake-001"
     assert payload["downstream_compliance_consumer_count"] == 2
     assert payload["downstream_compliance_consumers"] == [
         {"name": "reserve-compliance-consumer-gateway"},
@@ -436,6 +439,52 @@ def test_builds_payload_free_governance_approval_canary(tmp_path: Path) -> None:
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "governance_approval"
     assert errors == []
+
+
+def test_governance_approval_requires_bake_id_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_approval", tmp_path)
+    index = args.index("--bake-id")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--bake-id is required for governance_approval" in captured.err
+    assert not canary_path(tmp_path, "governance_approval").exists()
+
+
+def test_governance_approval_bake_id_must_be_canonical_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_approval", tmp_path)
+    args[args.index("--bake-id") + 1] = "reserve_bake_001"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--bake-id must match canonical lowercase `reserve-bake-*`" in captured.err
+    assert not canary_path(tmp_path, "governance_approval").exists()
+
+
+def test_governance_approval_bake_id_rejects_non_production_markers_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_approval", tmp_path)
+    args[args.index("--bake-id") + 1] = "reserve-bake-prod-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--bake-id must not contain non-production markers ['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "governance_approval").exists()
 
 
 def test_response_file_can_build_reserve_movement_canary(tmp_path: Path) -> None:
@@ -1322,7 +1371,7 @@ def test_stale_scheduler_tick_fails_before_write(tmp_path: Path, capsys) -> None
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "scheduled_lifecycle_canary_last_tick_unix must be within" in captured.err
+    assert "scheduled_lifecycle_canary_last_tick_at_unix must be within" in captured.err
     assert not canary_path(tmp_path, "provider_bake").exists()
 
 

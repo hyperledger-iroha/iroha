@@ -49,7 +49,7 @@ use iroha_data_model::{
         BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockSignature,
         ExternalExecutionContext, SignedBlock,
         builder::BlockBuilder,
-        consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+        consensus::{LaneBlockCommitment, LaneSettlementReceipt, SumeragiLanePayloadOwnership},
     },
     consensus::{
         NposConsensusEffects, NposMarkVrfPenaltiesAppliedAction, NposPenaltyAction,
@@ -1454,6 +1454,62 @@ fn sample_lane_relay_envelope_with_bitmap(
     }))
 }
 
+fn lane_relay_committee_for_main_loop_test(
+    state: &State,
+    chain_id: &ChainId,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    block_height: u64,
+) -> Vec<PeerId> {
+    let nexus = state.nexus_snapshot();
+    let fault_tolerance = nexus
+        .dataspace_catalog
+        .entries()
+        .iter()
+        .find(|entry| entry.id == dataspace_id)
+        .map(|entry| entry.fault_tolerance)
+        .expect("test dataspace must exist");
+    let committee_size = usize::try_from(
+        fault_tolerance
+            .checked_mul(3)
+            .and_then(|value| value.checked_add(1))
+            .expect("test committee size"),
+    )
+    .expect("test committee size fits usize");
+    let base_pool = state.authoritative_lane_peer_ids(lane_id);
+    if base_pool.len() < committee_size {
+        return base_pool;
+    }
+
+    let world = state.world.view();
+    let epoch_seed =
+        crate::sumeragi::npos_seed_for_height_from_world(&world, chain_id, block_height);
+    let mut seed_buffer =
+        Vec::with_capacity(b"iroha:lane-relay:committee-seed:v1".len() + epoch_seed.len() + 12);
+    seed_buffer.extend_from_slice(b"iroha:lane-relay:committee-seed:v1");
+    seed_buffer.extend_from_slice(&epoch_seed);
+    seed_buffer.extend_from_slice(&dataspace_id.as_u64().to_le_bytes());
+    seed_buffer.extend_from_slice(&lane_id.as_u32().to_le_bytes());
+    let seed: [u8; 32] = Hash::new(seed_buffer).into();
+
+    let mut scored = Vec::with_capacity(base_pool.len());
+    for peer in base_pool {
+        let mut member_buffer =
+            Vec::with_capacity(b"iroha:lane-relay:committee-member:v1".len() + seed.len());
+        member_buffer.extend_from_slice(b"iroha:lane-relay:committee-member:v1");
+        member_buffer.extend_from_slice(&seed);
+        member_buffer.extend_from_slice(&to_bytes(&peer).expect("peer encodes for test committee"));
+        scored.push((Hash::new(member_buffer), peer));
+    }
+    scored.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
+    scored.dedup_by(|lhs, rhs| lhs.1 == rhs.1);
+    scored
+        .into_iter()
+        .take(committee_size)
+        .map(|(_, peer)| peer)
+        .collect()
+}
+
 fn account_id_for_keypair(keypair: &KeyPair) -> AccountId {
     AccountId::new(keypair.public_key().clone())
 }
@@ -1480,6 +1536,66 @@ fn install_lane_manifest_registry(state: &State, lanes: &[(LaneId, DataSpaceId, 
     }
     let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
     state.install_lane_manifests(&registry);
+}
+
+fn sample_lane_payload_ownership_status(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+) -> SumeragiLanePayloadOwnership {
+    SumeragiLanePayloadOwnership {
+        proposal_height: 999,
+        proposal_view: 3,
+        lane_id,
+        dataspace_id,
+        lane_block_height: 777,
+        lane_block_view: 2,
+        subject_hash: Hash::prehashed([0x51; Hash::LENGTH]),
+        qc_mode_tag: "test-lane-qc-mode".to_string(),
+        accepted_candidate_indices: vec![9],
+        payload_ownership_hash: Hash::prehashed([0x52; Hash::LENGTH]),
+        rbc_instance_hash: Hash::prehashed([0x53; Hash::LENGTH]),
+    }
+}
+
+fn sample_block_with_lane_payload_artifact(
+    proposal_height: u64,
+    proposal_view: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+) -> SignedBlock {
+    let mut block = sample_block(proposal_height, proposal_view, None);
+    let preimage = format!(
+        "main-loop-test-lane-artifact:{}:{}:{}:{}:{}",
+        proposal_height,
+        proposal_view,
+        lane_id.as_u32(),
+        dataspace_id.as_u64(),
+        lane_block_height
+    );
+    let ownership = SumeragiLanePayloadOwnership {
+        proposal_height,
+        proposal_view,
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+        lane_block_view: proposal_view,
+        subject_hash: Hash::new(preimage.as_bytes()),
+        qc_mode_tag: "main-loop-lane-artifact-test".to_string(),
+        accepted_candidate_indices: vec![0],
+        payload_ownership_hash: Hash::new(format!("{preimage}:payload").as_bytes()),
+        rbc_instance_hash: Hash::new(format!("{preimage}:rbc").as_bytes()),
+    };
+    let entrypoint_hash =
+        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(preimage.as_bytes()));
+    let execution_context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+        entrypoint_hash,
+        lane_id,
+        dataspace_id,
+    )])
+    .with_lane_payload_ownerships(vec![ownership]);
+    block.set_execution_context(Some(execution_context));
+    block
 }
 
 fn seed_npos_epochs(
@@ -6674,9 +6790,13 @@ async fn first_validated_qc_is_relayed_once_to_commit_topology() {
 
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.rbc.chunk_max_bytes = 64 * 1024;
+    consensus_cfg.rbc.inline_block_created_backup = true;
 
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
     let actor = &mut harness.actor;
+    widen_sumeragi_timing_for_heavy_proposal_test(actor);
     let background_log = attach_background_log(actor);
 
     let _genesis_hash = seed_genesis_block_for_state(&actor.state);
@@ -143523,6 +143643,18 @@ async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
         .expect("state uniquely held")
         .set_nexus(nexus)
         .expect("set Nexus config");
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators.clone()),
+            (lane1.lane_id, lane1.dataspace_id, lane_validators),
+        ],
+    );
 
     let queue_router = Arc::new(ConfigLaneRouter::new(
         routing_policy,
@@ -143588,6 +143720,1074 @@ async fn proposal_queue_scan_budget_looks_ahead_for_rotated_lane() {
             .expect("requeue deferred tx");
     }
     assert_eq!(actor.queue.queued_len(), 3);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_multilane_records_lane_payload_ownership_status() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
+
+    let _status_guard = super::status::lane_relay_test_guard();
+    super::status::set_lane_payload_ownerships(Vec::new());
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: lane1.dataspace_id,
+            alias: "space-1".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority.clone())
+        .with_instructions([Log::new(
+            Level::INFO,
+            "lane payload ownership status".to_string(),
+        )])
+        .sign(&private_key);
+    let tx_hash = tx.hash();
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators.clone()),
+            (lane1.lane_id, lane1.dataspace_id, lane_validators),
+        ],
+    );
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::new(1)),
+        ],
+    ));
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = 12;
+    let view = 4;
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        1,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        height,
+        view,
+    );
+
+    assert!(deferred.is_empty(), "lane1 proposal should be accepted");
+    assert_eq!(tx_guards.len(), 1);
+    assert_eq!(tx_guards[0].as_accepted().hash(), tx_hash);
+    assert_eq!(tx_guards[0].routing(), lane1);
+
+    let ownerships = super::status::lane_payload_ownerships_snapshot();
+    assert_eq!(ownerships.len(), 1);
+    let ownership = &ownerships[0];
+    assert_eq!(ownership.proposal_height, height);
+    assert_eq!(ownership.proposal_view, view);
+    assert_eq!(ownership.lane_id, lane1.lane_id);
+    assert_eq!(ownership.dataspace_id, lane1.dataspace_id);
+    assert_eq!(
+        ownership.lane_block_height, height,
+        "without a prior lane relay, the compatibility tip should advance to the proposal height"
+    );
+    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(ownership.accepted_candidate_indices, vec![0]);
+    assert_ne!(
+        ownership.payload_ownership_hash, ownership.rbc_instance_hash,
+        "payload ownership and RBC instance identities must remain domain-separated"
+    );
+
+    drop(tx_guards);
+    super::status::set_lane_payload_ownerships(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn assemble_proposal_publishes_final_lane_payload_ownership_status() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
+
+    let _status_guard = super::status::lane_relay_test_guard();
+    super::status::set_lane_payload_ownerships(Vec::new());
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: lane1.dataspace_id,
+            alias: "space-1".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority.clone())
+        .with_instructions([Log::new(
+            Level::INFO,
+            "lane payload ownership committed context".to_string(),
+        )])
+        .sign(&private_key);
+
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators.clone()),
+            (lane1.lane_id, lane1.dataspace_id, lane_validators),
+        ],
+    );
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::new(1)),
+        ],
+    ));
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let highest_qc = sample_qc_ref(height.saturating_sub(1), 0);
+    let mut topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, _, prf_seed) = actor.consensus_context_for_height(height);
+    let seed = prf_seed.expect("PRF seed available");
+    topology.canonicalize_order();
+    topology.shuffle_prf(seed, height);
+    let local_pos = topology
+        .position(actor.common_config.peer.id().public_key())
+        .expect("local peer in topology");
+    let view = u64::try_from(local_pos).expect("view fits u64");
+    let leader_index = actor
+        .leader_index_for(&mut topology, height, view)
+        .expect("leader index");
+    let local_idx = actor
+        .local_validator_index_for_topology(&topology)
+        .expect("local validator index");
+    assert_eq!(
+        u32::try_from(leader_index).expect("leader index fits u32"),
+        local_idx,
+        "local peer must be leader for proposal assembly"
+    );
+
+    let assembled = actor
+        .assemble_and_broadcast_proposal(
+            height,
+            view,
+            highest_qc,
+            &mut topology,
+            leader_index,
+            local_idx,
+            None,
+            Instant::now(),
+        )
+        .expect("proposal assembly should succeed");
+    assert!(assembled, "proposal assembly should produce a block");
+
+    let ownerships = super::status::lane_payload_ownerships_snapshot();
+    assert_eq!(ownerships.len(), 1);
+    let ownership = &ownerships[0];
+    assert_eq!(ownership.proposal_height, height);
+    assert_eq!(ownership.proposal_view, view);
+    assert_eq!(ownership.lane_id, lane1.lane_id);
+    assert_eq!(ownership.dataspace_id, lane1.dataspace_id);
+    assert_eq!(ownership.accepted_candidate_indices, vec![0]);
+    assert_ne!(
+        ownership.payload_ownership_hash, ownership.rbc_instance_hash,
+        "payload ownership and RBC instance identities must be domain-separated"
+    );
+    assert_eq!(
+        actor.queue.queued_len(),
+        0,
+        "assembled proposal should consume the lane-routed transaction"
+    );
+
+    super::status::set_lane_payload_ownerships(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
+
+    let _status_guard = super::status::lane_relay_test_guard();
+    super::status::set_lane_relay_envelopes(Vec::new());
+    super::status::set_lane_payload_ownerships(Vec::new());
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog =
+        DataSpaceCatalog::new(vec![DataSpaceMetadata::default()]).expect("dataspace catalog");
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority.clone())
+        .with_instructions([Log::new(
+            Level::INFO,
+            "lane payload ownership relay tip".to_string(),
+        )])
+        .sign(&private_key);
+    let tx_hash = tx.hash();
+
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators.clone()),
+            (lane1.lane_id, lane1.dataspace_id, lane_validators),
+        ],
+    );
+
+    let artifact_tip_height = 3_u64;
+    let artifact_block = sample_block_with_lane_payload_artifact(
+        2,
+        0,
+        lane1.lane_id,
+        lane1.dataspace_id,
+        artifact_tip_height,
+    );
+    store_block_with_test_ancestors(actor.kura.as_ref(), artifact_block);
+    assert_eq!(
+        actor.state.lane_block_artifact_tips_snapshot_cached(),
+        vec![(lane1.lane_id, lane1.dataspace_id, artifact_tip_height)]
+    );
+
+    let relay_tip_height = 5_u64;
+    let committee = lane_relay_committee_for_main_loop_test(
+        actor.state.as_ref(),
+        &actor.chain_id,
+        lane1.lane_id,
+        lane1.dataspace_id,
+        relay_tip_height,
+    );
+    let signers = committee
+        .iter()
+        .map(|peer| {
+            harness
+                .key_pairs
+                .iter()
+                .find(|keypair| keypair.public_key() == peer.public_key())
+                .expect("committee peer has harness keypair")
+        })
+        .collect::<Vec<_>>();
+    let signer_bitmap = u8::try_from(
+        (1_u16
+            .checked_shl(u32::try_from(signers.len()).expect("signer count fits u32"))
+            .expect("test signer bitmap fits u16"))
+        .saturating_sub(1),
+    )
+    .expect("test signer bitmap fits u8");
+    let (_, mode_tag, _) = actor.consensus_context_for_height(relay_tip_height);
+    let relay = sample_lane_relay_envelope(
+        relay_tip_height,
+        lane1.lane_id,
+        &actor.chain_id,
+        mode_tag,
+        &signers,
+        signer_bitmap,
+    );
+    actor
+        .state
+        .record_lane_relay(&relay)
+        .expect("lane relay recorded");
+    assert_eq!(actor.state.lane_relay_snapshot(), vec![relay]);
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::UNIVERSAL),
+        ],
+    ));
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = 12;
+    let view = 4;
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        1,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        height,
+        view,
+    );
+
+    assert!(
+        deferred.is_empty(),
+        "lane1 proposal should be accepted after a relay tip"
+    );
+    assert_eq!(tx_guards.len(), 1);
+    assert_eq!(tx_guards[0].as_accepted().hash(), tx_hash);
+    assert_eq!(tx_guards[0].routing(), lane1);
+
+    let ownerships = super::status::lane_payload_ownerships_snapshot();
+    assert_eq!(ownerships.len(), 1);
+    let ownership = &ownerships[0];
+    assert_eq!(ownership.proposal_height, height);
+    assert_eq!(ownership.proposal_view, view);
+    assert_eq!(ownership.lane_id, lane1.lane_id);
+    assert_eq!(ownership.dataspace_id, lane1.dataspace_id);
+    assert_eq!(
+        ownership.lane_block_height,
+        relay_tip_height + 1,
+        "lane-local ownership must advance from the newest known tip instead of a lower artifact or the global height"
+    );
+    assert_ne!(
+        ownership.lane_block_height, height,
+        "a lane with relay history must not fall back to the global compatibility height"
+    );
+    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(ownership.accepted_candidate_indices, vec![0]);
+
+    drop(tx_guards);
+    super::status::set_lane_relay_envelopes(Vec::new());
+    super::status::set_lane_payload_ownerships(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_multilane_uses_lane_artifact_tip_for_payload_ownership_status() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
+
+    let _status_guard = super::status::lane_relay_test_guard();
+    super::status::set_lane_relay_envelopes(Vec::new());
+    super::status::set_lane_payload_ownerships(Vec::new());
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog =
+        DataSpaceCatalog::new(vec![DataSpaceMetadata::default()]).expect("dataspace catalog");
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority.clone())
+        .with_instructions([Log::new(
+            Level::INFO,
+            "lane payload ownership artifact tip".to_string(),
+        )])
+        .sign(&private_key);
+    let tx_hash = tx.hash();
+
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators.clone()),
+            (lane1.lane_id, lane1.dataspace_id, lane_validators),
+        ],
+    );
+
+    let artifact_tip_height = 5_u64;
+    let artifact_block = sample_block_with_lane_payload_artifact(
+        2,
+        0,
+        lane1.lane_id,
+        lane1.dataspace_id,
+        artifact_tip_height,
+    );
+    store_block_with_test_ancestors(actor.kura.as_ref(), artifact_block);
+    let foreign_dataspace = DataSpaceId::new(77);
+    let foreign_artifact_tip_height = artifact_tip_height + 2;
+    let foreign_artifact_block = sample_block_with_lane_payload_artifact(
+        3,
+        0,
+        lane1.lane_id,
+        foreign_dataspace,
+        foreign_artifact_tip_height,
+    );
+    store_block_with_test_ancestors(actor.kura.as_ref(), foreign_artifact_block);
+    let latest_any_artifact = actor
+        .kura
+        .latest_lane_block_artifact(lane1.lane_id)
+        .expect("latest lane artifact");
+    assert_eq!(
+        latest_any_artifact.ownership.dataspace_id,
+        foreign_dataspace
+    );
+    assert_eq!(
+        latest_any_artifact.ownership.lane_block_height,
+        foreign_artifact_tip_height
+    );
+    assert!(
+        actor.state.lane_relay_snapshot().is_empty(),
+        "test must rely on lane artifacts, not relay cache state"
+    );
+    assert_eq!(
+        actor.state.lane_block_artifact_tips_snapshot_cached(),
+        vec![(lane1.lane_id, lane1.dataspace_id, artifact_tip_height)],
+        "active proposal tips must skip newer artifacts from foreign dataspaces"
+    );
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::UNIVERSAL),
+        ],
+    ));
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = 12;
+    let view = 4;
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        1,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        height,
+        view,
+    );
+
+    assert!(
+        deferred.is_empty(),
+        "lane1 proposal should be accepted after an artifact tip"
+    );
+    assert_eq!(tx_guards.len(), 1);
+    assert_eq!(tx_guards[0].as_accepted().hash(), tx_hash);
+    assert_eq!(tx_guards[0].routing(), lane1);
+
+    let ownerships = super::status::lane_payload_ownerships_snapshot();
+    assert_eq!(ownerships.len(), 1);
+    let ownership = &ownerships[0];
+    assert_eq!(ownership.proposal_height, height);
+    assert_eq!(ownership.proposal_view, view);
+    assert_eq!(ownership.lane_id, lane1.lane_id);
+    assert_eq!(ownership.dataspace_id, lane1.dataspace_id);
+    assert_eq!(
+        ownership.lane_block_height,
+        artifact_tip_height + 1,
+        "lane-local ownership must advance from the latest committed artifact tip"
+    );
+    assert_ne!(
+        ownership.lane_block_height, height,
+        "a lane with artifact history must not fall back to the global compatibility height"
+    );
+    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(ownership.accepted_candidate_indices, vec![0]);
+
+    drop(tx_guards);
+    super::status::set_lane_relay_envelopes(Vec::new());
+    super::status::set_lane_payload_ownerships(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_multilane_floors_lane_payload_ownership_status_at_reset_watermark() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
+
+    let _status_guard = super::status::lane_relay_test_guard();
+    super::status::set_lane_relay_envelopes(Vec::new());
+    super::status::set_lane_payload_ownerships(Vec::new());
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog =
+        DataSpaceCatalog::new(vec![DataSpaceMetadata::default()]).expect("dataspace catalog");
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority.clone())
+        .with_instructions([Log::new(
+            Level::INFO,
+            "lane payload ownership reset watermark".to_string(),
+        )])
+        .sign(&private_key);
+    let tx_hash = tx.hash();
+
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators.clone()),
+            (lane1.lane_id, lane1.dataspace_id, lane_validators),
+        ],
+    );
+
+    let stale_relay_height = 5_u64;
+    let reset_height = 8_u64;
+    let signers = harness.key_pairs.iter().collect::<Vec<_>>();
+    let signer_bitmap =
+        u8::try_from((1_u16 << signers.len()) - 1).expect("test signer bitmap fits u8");
+    let (_, mode_tag, _) = actor.consensus_context_for_height(stale_relay_height);
+    let stale_relay = sample_lane_relay_envelope(
+        stale_relay_height,
+        lane1.lane_id,
+        &actor.chain_id,
+        mode_tag,
+        &signers,
+        signer_bitmap,
+    );
+    actor
+        .state
+        .lane_relays
+        .write()
+        .insert(stale_relay.clone())
+        .expect("seed stale lane relay cache entry");
+    actor
+        .state
+        .da_shard_cursors
+        .write()
+        .mark_lanes_reset(&BTreeSet::from([lane1.lane_id]), reset_height);
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::UNIVERSAL),
+        ],
+    ));
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let height = 12;
+    let view = 4;
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        1,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        height,
+        view,
+    );
+
+    assert!(
+        deferred.is_empty(),
+        "lane1 proposal should be accepted after a reset watermark"
+    );
+    assert_eq!(tx_guards.len(), 1);
+    assert_eq!(tx_guards[0].as_accepted().hash(), tx_hash);
+    assert_eq!(tx_guards[0].routing(), lane1);
+
+    let ownerships = super::status::lane_payload_ownerships_snapshot();
+    assert_eq!(ownerships.len(), 1);
+    let ownership = &ownerships[0];
+    assert_eq!(ownership.proposal_height, height);
+    assert_eq!(ownership.proposal_view, view);
+    assert_eq!(ownership.lane_id, lane1.lane_id);
+    assert_eq!(ownership.dataspace_id, lane1.dataspace_id);
+    assert_eq!(
+        ownership.lane_block_height,
+        reset_height + 1,
+        "lane-local ownership must advance from the reset watermark when the cached relay belongs to an older incarnation"
+    );
+    assert_ne!(
+        ownership.lane_block_height,
+        stale_relay_height + 1,
+        "stale cached relay height must not be reused after lane reset"
+    );
+    assert_ne!(
+        ownership.lane_block_height, height,
+        "reset-aware lane-local ownership should not fall back to the global compatibility height"
+    );
+    assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(ownership.accepted_candidate_indices, vec![0]);
+
+    drop(tx_guards);
+    super::status::set_lane_relay_envelopes(Vec::new());
+    super::status::set_lane_payload_ownerships(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_multilane_defers_candidate_when_lane_authority_is_missing() {
+    use iroha_config::parameters::actual::{
+        LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
+    };
+    use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig};
+
+    let _status_guard = super::status::lane_relay_test_guard();
+    super::status::set_lane_payload_ownerships(vec![sample_lane_payload_ownership_status(
+        LaneId::new(99),
+        DataSpaceId::UNIVERSAL,
+    )]);
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+    let lane0 = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let lane1 = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(2_u32),
+        vec![
+            LaneConfig::default(),
+            LaneConfig {
+                id: lane1.lane_id,
+                dataspace_id: lane1.dataspace_id,
+                alias: "lane-1".to_string(),
+                ..LaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog");
+    let dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: lane1.dataspace_id,
+            alias: "space-1".to_string(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+
+    let key_pair = checked_keypair();
+    let (_, private_key) = key_pair.clone().into_parts();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority.clone())
+        .with_instructions([Log::new(Level::INFO, "missing lane authority".to_string())])
+        .sign(&private_key);
+    let tx_hash = tx.hash();
+
+    let routing_policy = LaneRoutingPolicy {
+        default_lane: lane0.lane_id,
+        default_dataspace: lane0.dataspace_id,
+        rules: vec![LaneRoutingRule {
+            lane: lane1.lane_id,
+            dataspace: Some(lane1.dataspace_id),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let mut nexus = actor.state.nexus_snapshot();
+    nexus.enabled = true;
+    nexus.lane_catalog = lane_catalog.clone();
+    nexus.dataspace_catalog = dataspace_catalog.clone();
+    nexus.routing_policy = routing_policy.clone();
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+    Arc::get_mut(&mut actor.state)
+        .expect("state uniquely held")
+        .set_nexus(nexus)
+        .expect("set Nexus config");
+
+    let queue_router = Arc::new(ConfigLaneRouter::new(
+        routing_policy,
+        dataspace_catalog,
+        lane_catalog,
+    ));
+    actor.queue = Arc::new(Queue::test_with_router_for_routes(
+        QueueConfig::default(),
+        &time_source,
+        queue_router,
+        &[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (LaneId::new(1), DataSpaceId::new(1)),
+        ],
+    ));
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(1_usize),
+        1,
+        None,
+        None,
+        false,
+        &mut tx_guards,
+        1,
+        0,
+    );
+
+    assert!(
+        tx_guards.is_empty(),
+        "enabled multilane proposals must not accept work without lane authority"
+    );
+    assert_eq!(
+        deferred.len(),
+        1,
+        "candidate should be returned for requeue"
+    );
+    assert_eq!(deferred[0].0.hash(), tx_hash);
+    assert_eq!(deferred[0].1.coordinator_route(), lane1);
+    assert!(
+        super::status::lane_payload_ownerships_snapshot().is_empty(),
+        "failed lane-consensus planning must clear stale planned ownership status"
+    );
+
+    drop(tx_guards);
+    for (tx, routing_plan) in deferred {
+        actor
+            .queue
+            .push_requeued_with_routing_plan(tx, routing_plan, actor.state.as_ref())
+            .expect("requeue missing-authority tx");
+    }
+    assert_eq!(actor.queue.queued_len(), 1);
 
     harness.shutdown.send();
 }
@@ -143695,6 +144895,18 @@ async fn proposal_gas_budget_prefers_fitting_cross_lane_tx_over_oversized_first_
         .expect("state uniquely held")
         .set_nexus(nexus)
         .expect("set Nexus config");
+    let lane_validators = harness
+        .key_pairs
+        .iter()
+        .map(account_id_for_keypair)
+        .collect::<Vec<_>>();
+    install_lane_manifest_registry(
+        actor.state.as_ref(),
+        &[
+            (lane0.lane_id, lane0.dataspace_id, lane_validators.clone()),
+            (lane1.lane_id, lane1.dataspace_id, lane_validators),
+        ],
+    );
 
     let queue_router = Arc::new(ConfigLaneRouter::new(
         routing_policy,
