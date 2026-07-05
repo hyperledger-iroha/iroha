@@ -64,6 +64,63 @@ class HostileImportedScalar:
         )
 
 
+class HostileImportedInteger:
+    def __int__(self):
+        raise AssertionError(
+            "secret-token imported EVM source live integer was coerced"
+        )
+
+
+class HostileSourceLiveDomain:
+    def __str__(self):
+        raise AssertionError(
+            "secret-token imported EVM source live domain was stringified"
+        )
+
+    def __repr__(self):
+        raise AssertionError("secret-token imported EVM source live domain was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError(
+            "secret-token imported EVM source live domain was compared"
+        )
+
+    def __hash__(self):
+        raise AssertionError("secret-token imported EVM source live domain was hashed")
+
+    def __int__(self):
+        raise AssertionError("secret-token imported EVM source live domain was coerced")
+
+
+class HostileSourceLiveDomainText(str):
+    def __new__(cls):
+        return str.__new__(cls, "eth")
+
+    def __str__(self):
+        raise AssertionError("secret-token EVM source live domain was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM source live domain was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM source live domain was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token EVM source live domain was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token EVM source live domain was stripped")
+
+    def lower(self):
+        raise AssertionError("secret-token EVM source live domain was lowered")
+
+    def isascii(self):
+        raise AssertionError("secret-token EVM source live domain was inspected")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token EVM source live domain was inspected")
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -491,6 +548,37 @@ def test_evm_source_json_rpc_rejects_duplicate_json_keys():
 def test_evm_source_json_rpc_url_rejects_hidden_request_state():
     module = load_live_module()
 
+    class HostileSourceRpcUrl(str):
+        def __new__(cls):
+            return str.__new__(cls, "https://ethereum.example")
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM source RPC URL was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM source RPC URL was repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token EVM source RPC URL was compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token EVM source RPC URL was compared")
+
+        def __iter__(self):
+            raise AssertionError("secret-token EVM source RPC URL was iterated")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token EVM source RPC URL was stripped")
+
+    class HostileSourceRpcUrlLabel:
+        def __str__(self):
+            raise AssertionError(
+                "secret-token EVM source RPC URL label was stringified"
+            )
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM source RPC URL label was repr'd")
+
     assert module._normalize_evm_rpc_url("https://ethereum.example") == (
         "https://ethereum.example"
     )
@@ -517,6 +605,8 @@ def test_evm_source_json_rpc_url_rejects_hidden_request_state():
         ("https://bad_host.ethereum.example", "public DNS"),
         (" https://ethereum.example", "exact http(s) URL"),
         ("https://ethereum.example\nsecret", "exact http(s) URL"),
+        (HostileSourceRpcUrl(), "exact http(s) URL"),
+        (HostileSourceRpcUrlLabel(), "exact http(s) URL"),
     ):
         try:
             module._json_rpc(
@@ -644,7 +734,7 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
     module = load_live_module()
 
     assert module.parse_domain("eth") == module.SCCP_DOMAIN_ETH
-    assert module.parse_domain("1") == module.SCCP_DOMAIN_ETH
+    assert module.parse_domain("bsc") == module.SCCP_DOMAIN_BSC
     assert module._parse_rpc_chain_id("1") == 1
     assert module._parse_hex32("0x" + "11" * 32, label="component hash") == (
         bytes.fromhex("11" * 32)
@@ -652,14 +742,34 @@ def test_evm_source_live_numeric_parsers_require_canonical_decimal():
     assert module._rpc_quantity("0xa", method="eth_test") == 10
     assert module._rpc_hex_data("0x6000", method="eth_test") == bytes.fromhex("6000")
 
-    for value in ("01", "0x1", "+1", " 1 ", "١"):
+    for value in (
+        "1",
+        "2",
+        "ethereum",
+        "bnb",
+        "ETH",
+        "BSC",
+        "01",
+        "0x1",
+        "+1",
+        " 1 ",
+        " eth ",
+        "١",
+        "secret-token-evm-source-live-domain",
+        HostileSourceLiveDomainText(),
+    ):
         try:
             module.parse_domain(value)
         except module.argparse.ArgumentTypeError as exc:
-            assert "domain must be eth, bsc, 1, or 2" in str(exc)
+            rendered = str(exc)
+            assert rendered == "domain must be eth or bsc"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
         else:
-            raise AssertionError(f"noncanonical EVM source domain {value!r} was accepted")
+            raise AssertionError("noncanonical EVM source domain was accepted")
 
+    for value in ("01", "0x1", "+1", " 1 ", "١"):
         try:
             module._parse_rpc_chain_id(value)
         except module.argparse.ArgumentTypeError as exc:
@@ -778,7 +888,7 @@ def test_evm_source_live_cli_parsers_reject_non_string_values_without_stringific
     cases = (
         (
             module.parse_domain,
-            "domain must be eth, bsc, 1, or 2",
+            "domain must be eth or bsc",
         ),
         (
             lambda value: module._parse_hex32(value, label="component hash"),
@@ -1005,13 +1115,15 @@ def test_evm_source_live_cli_defaults_eth_to_finalized_and_bsc_to_latest():
 
     assert module.default_block_tag_for_domain(module.SCCP_DOMAIN_ETH) == "finalized"
     assert module.default_block_tag_for_domain(module.SCCP_DOMAIN_BSC) == "latest"
-    for alias_domain in (True, False):
+    for alias_domain in (True, False, 3, HostileSourceLiveDomain()):
         try:
             module.default_block_tag_for_domain(alias_domain)
         except module.argparse.ArgumentTypeError as exc:
-            assert str(exc) == "domain must be an EVM-family source lane"
+            rendered = str(exc)
+            assert rendered == "domain must be an EVM-family source lane"
+            assert "secret-token" not in rendered
         else:
-            raise AssertionError("boolean EVM source-live block-tag domain was accepted")
+            raise AssertionError("invalid EVM source-live block-tag domain was accepted")
 
     eth_fake = fake_opener_for(module)
     eth_args = parser.parse_args(
@@ -1503,8 +1615,20 @@ def test_evm_source_live_rejects_non_string_copied_metadata_without_stringifying
 
     cases = (
         (
+            ("block_tag",),
+            "source block tag metadata is invalid",
+        ),
+        (
+            ("source_bridge", "rpc_chain_id"),
+            "source RPC chain id must be an exact u32",
+        ),
+        (
             ("source_bridge", "bridge_address"),
             "source bridge address must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "bridge_code_hash"),
+            "source bridge code hash must be an exact hex string",
         ),
         (
             ("source_bridge", "expected_source_bridge_code_hash"),
@@ -1519,12 +1643,44 @@ def test_evm_source_live_rejects_non_string_copied_metadata_without_stringifying
             "deployment transaction hash must be an exact hex string",
         ),
         (
+            ("source_bridge", "deployment_transaction_block_hash"),
+            "deployment transaction block hash must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "deployment_transaction_block_number"),
+            "deployment transaction block number must be an exact positive u64",
+        ),
+        (
+            ("source_bridge", "deployment_transaction_input_sha256"),
+            "deployment transaction input SHA-256 must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "deployment_receipt_status"),
+            "source deployment receipt status must be exact 0x1",
+        ),
+        (
             ("source_bridge", "deployment_receipt_contract_address"),
             "deployment receipt contract address must be an exact hex string",
         ),
         (
+            ("source_bridge", "deployment_receipt_block_hash"),
+            "deployment receipt block hash must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "deployment_receipt_block_number"),
+            "deployment receipt block number must be an exact positive u64",
+        ),
+        (
+            ("source_bridge", "deployment_receipt_block_receipts_root"),
+            "deployment receipt block receiptsRoot must be an exact hex string",
+        ),
+        (
             ("source_bridge", "deployment_receipt_finalized_block_hash"),
             "deployment receipt finalized block hash must be an exact hex string",
+        ),
+        (
+            ("source_bridge", "deployment_receipt_finalized_block_number"),
+            "deployment receipt finalized block number must be an exact positive u64",
         ),
         (
             ("source_records", "source_verifier_material_hash"),
@@ -1555,6 +1711,74 @@ def test_evm_source_live_rejects_non_string_copied_metadata_without_stringifying
             raise AssertionError(
                 f"EVM source TOML accepted non-string copied {'.'.join(path)}"
             )
+
+
+def test_evm_source_live_offline_args_reject_non_string_runtime_metadata_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_source_live_summary(module)
+    source_args = summary["_source_args"]
+    args = SimpleNamespace(
+        domain=source_args.source_domain,
+        source_trust_anchor_hash=source_args.source_trust_anchor_hash,
+        consensus_verifier_hash=source_args.consensus_verifier_hash,
+        message_inclusion_verifier_hash=source_args.message_inclusion_verifier_hash,
+        finality_policy_hash=source_args.finality_policy_hash,
+        adapter_verifier_vk_hash=source_args.adapter_verifier_vk_hash,
+        deployment_receipt_hash=source_args.deployment_receipt_hash,
+        expected_source_verifier_material_hash=(
+            source_args.expected_source_verifier_material_hash
+        ),
+        expected_source_adapter_engine_deployment_hash=(
+            source_args.expected_source_adapter_engine_deployment_hash
+        ),
+    )
+    forged_source = copy.deepcopy(summary["source_bridge"])
+    forged_source["bridge_runtime_bytecode_hex"] = HostileImportedScalar()
+
+    try:
+        module._offline_args(args, forged_source)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "source bridge runtime bytecode must be exact 0x-prefixed hex"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError(
+            "EVM source offline args accepted non-string bridge runtime bytecode"
+        )
+
+
+def test_evm_source_live_offline_args_reject_hostile_domain_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_source_live_summary(module)
+    source_args = summary["_source_args"]
+    args = SimpleNamespace(
+        domain=HostileSourceLiveDomain(),
+        source_trust_anchor_hash=source_args.source_trust_anchor_hash,
+        consensus_verifier_hash=source_args.consensus_verifier_hash,
+        message_inclusion_verifier_hash=source_args.message_inclusion_verifier_hash,
+        finality_policy_hash=source_args.finality_policy_hash,
+        adapter_verifier_vk_hash=source_args.adapter_verifier_vk_hash,
+        deployment_receipt_hash=source_args.deployment_receipt_hash,
+        expected_source_verifier_material_hash=(
+            source_args.expected_source_verifier_material_hash
+        ),
+        expected_source_adapter_engine_deployment_hash=(
+            source_args.expected_source_adapter_engine_deployment_hash
+        ),
+    )
+
+    try:
+        module._offline_args(args, copy.deepcopy(summary["source_bridge"]))
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "domain must be an EVM-family source lane"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM source offline args accepted hostile domain")
 
 
 def test_bsc_source_live_evidence_uses_canonical_bsc_profile():
@@ -1771,6 +1995,14 @@ def test_evm_source_live_collect_rejects_namespace_args_before_rpc():
         "timeout": 1.0,
     }
     cases = (
+        (
+            {"domain": HostileSourceLiveDomain()},
+            "domain must be an EVM-family source lane",
+        ),
+        (
+            {"domain": 3},
+            "domain must be an EVM-family source lane",
+        ),
         (
             {"expected_rpc_chain_id": HostileImportedScalar()},
             "--expected-rpc-chain-id must be a positive u64 integer",
@@ -2070,6 +2302,54 @@ def test_evm_source_live_redacts_receipt_block_hash_metadata_reparse_failures(
                 raise AssertionError(
                     "deployment receipt block hash metadata parser detail was accepted"
                 )
+
+
+def test_evm_source_live_finalized_receipt_summary_rejects_non_exact_receipt_metadata_without_coercion():
+    module = load_live_module()
+    fake = fake_opener_for(module)
+    source_bridge = module.collect_source_bridge_evidence(
+        "https://ethereum.example",
+        domain=module.SCCP_DOMAIN_ETH,
+        bridge_address=fake.bridge,
+        block_tag="latest",
+        deployment_transaction_hash=bytes.fromhex("de" * 32),
+        opener=fake.opener,
+        timeout=1.0,
+    )
+
+    cases = (
+        (
+            "deployment_receipt_block_number",
+            HostileImportedInteger(),
+            "deployment receipt block number metadata is invalid",
+        ),
+        (
+            "deployment_receipt_block_hash",
+            HostileImportedScalar(),
+            "deployment receipt block hash metadata is invalid",
+        ),
+    )
+
+    for field, hostile_value, expected_message in cases:
+        forged = copy.deepcopy(source_bridge)
+        forged[field] = hostile_value
+        try:
+            module._deployment_receipt_finalized_block_summary(
+                "https://ethereum.example",
+                forged,
+                opener=fake.opener,
+                timeout=1.0,
+            )
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                f"EVM source finalized receipt accepted hostile {field}"
+            )
 
 
 def test_evm_source_live_rejects_deployment_transaction_readback_drift():

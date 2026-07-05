@@ -789,6 +789,38 @@ pub struct SumeragiDataspaceCommitment {
     pub block_hash: HashOf<BlockHeader>,
 }
 
+/// Planned lane-local payload ownership exported by Sumeragi status.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiLanePayloadOwnership {
+    /// Global proposal height that planned this lane-local payload.
+    pub proposal_height: u64,
+    /// Global proposal view that planned this lane-local payload.
+    pub proposal_view: u64,
+    /// Lane whose payload ownership is bound by this identity.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane payload.
+    pub dataspace_id: DataSpaceId,
+    /// Lane-local block height for the payload.
+    pub lane_block_height: u64,
+    /// Lane-local view for the payload.
+    pub lane_block_view: u64,
+    /// Stable digest of the lane-local block subject.
+    pub subject_hash: Hash,
+    /// Domain-separated QC mode tag used to derive the lane-local subject.
+    #[norito(default)]
+    pub qc_mode_tag: String,
+    /// Fetched-batch candidate indices owned by this lane payload.
+    pub accepted_candidate_indices: Vec<u64>,
+    /// Stable digest naming lane-local payload ownership.
+    pub payload_ownership_hash: Hash,
+    /// Stable digest naming the lane-local RBC instance for this payload.
+    pub rbc_instance_hash: Hash,
+}
+
 /// Deterministic settlement receipt emitted for audit and reconciliation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2646,6 +2678,9 @@ pub struct SumeragiStatusWire {
     /// Relay envelopes capturing lane block headers, QCs, DA digests, and settlement proofs.
     #[norito(default)]
     pub lane_relay_envelopes: Vec<LaneRelayEnvelope>,
+    /// Planned lane-local payload ownership and RBC instance identities.
+    #[norito(default)]
+    pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
     /// Count of lanes that still require a governance manifest.
     #[norito(default)]
     pub lane_governance_sealed_total: u32,
@@ -3044,6 +3079,7 @@ impl_decode_from_slice_via_codec!(NposGenesisParams);
 impl_decode_from_slice_via_codec!(SumeragiMembershipStatus);
 impl_decode_from_slice_via_codec!(SumeragiLaneCommitment);
 impl_decode_from_slice_via_codec!(SumeragiDataspaceCommitment);
+impl_decode_from_slice_via_codec!(SumeragiLanePayloadOwnership);
 impl_decode_from_slice_via_codec!(SumeragiRuntimeUpgradeHook);
 impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
 impl_decode_from_slice_via_codec!(SumeragiV1StatusWire);
@@ -3807,6 +3843,32 @@ mod tests {
         let (decoded_from_slice, used) =
             SumeragiV1StatusWire::decode_from_slice(&encoded).expect("status decodes from slice");
         assert_eq!(decoded_from_slice, status);
+        assert_eq!(used, encoded.len());
+    }
+
+    #[test]
+    fn lane_payload_ownership_status_roundtrip_codec() {
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 12,
+            proposal_view: 3,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(42),
+            lane_block_height: 2,
+            lane_block_view: 1,
+            subject_hash: Hash::new(b"lane subject"),
+            qc_mode_tag: "test-lane-qc-mode".to_string(),
+            accepted_candidate_indices: vec![0, 2],
+            payload_ownership_hash: Hash::new(b"lane payload ownership"),
+            rbc_instance_hash: Hash::new(b"lane rbc instance"),
+        };
+        let encoded = ownership.encode();
+        let decoded = SumeragiLanePayloadOwnership::decode(&mut &encoded[..])
+            .expect("lane payload ownership decodes");
+        assert_eq!(decoded, ownership);
+
+        let (decoded_from_slice, used) = SumeragiLanePayloadOwnership::decode_from_slice(&encoded)
+            .expect("lane payload ownership decodes from slice");
+        assert_eq!(decoded_from_slice, ownership);
         assert_eq!(used, encoded.len());
     }
 

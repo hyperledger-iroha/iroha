@@ -98,7 +98,8 @@ def test_receipt_cli_redacts_top_level_exception_details(monkeypatch, capsys):
                         "eth",
                         "--transaction-hash",
                         "0x" + "11" * 32,
-                        "--allow-receipt-only-evidence",
+                        "--source-bridge-address",
+                        "0x" + "33" * 20,
                     ]
                 )
             except SystemExit as exc:
@@ -175,7 +176,7 @@ def test_receipt_cli_parsers_reject_non_string_values_without_stringification():
         ),
         (
             module.parse_domain,
-            "domain must be eth, bsc, 1, or 2",
+            "domain must be eth or bsc",
         ),
         (
             module.parse_rpc_chain_id,
@@ -193,6 +194,69 @@ def test_receipt_cli_parsers_reject_non_string_values_without_stringification():
             assert "HostileParserValue" not in rendered
         else:
             raise AssertionError("hostile receipt parser value was accepted")
+
+
+def test_receipt_domain_parser_rejects_retired_aliases_without_stringifying():
+    """Receipt domain parsing must stay exact for first-release source lanes."""
+
+    module = load_module()
+
+    class HostileDomainText(str):
+        def __new__(cls):
+            return str.__new__(cls, "eth")
+
+        def __str__(self):
+            raise AssertionError("secret-token receipt domain was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token receipt domain was repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token receipt domain was compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token receipt domain was compared")
+
+        def strip(self):
+            raise AssertionError("secret-token receipt domain was stripped")
+
+        def lower(self):
+            raise AssertionError("secret-token receipt domain was lowered")
+
+        def isascii(self):
+            raise AssertionError("secret-token receipt domain was inspected")
+
+        def isdecimal(self):
+            raise AssertionError("secret-token receipt domain was inspected")
+
+    assert module.parse_domain("eth") == module.SCCP_DOMAIN_ETH
+    assert module.parse_domain("bsc") == module.SCCP_DOMAIN_BSC
+
+    for value in (
+        "1",
+        "2",
+        "ethereum",
+        "bnb",
+        "ETH",
+        "BSC",
+        "01",
+        "0x1",
+        "+1",
+        " eth ",
+        "١",
+        "secret-token-receipt-domain",
+        HostileDomainText(),
+    ):
+        try:
+            module.parse_domain(value)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "domain must be eth or bsc"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("noncanonical receipt domain was accepted")
 
 
 def test_receipt_hex_nonzero_controls_reject_non_booleans():
@@ -467,9 +531,9 @@ def test_collect_receipt_proof_evidence_builds_verified_source_event_proof():
     assert summary["receipt_status"] == "0x1"
     assert summary["receipt_root_verified"] is True
     assert summary["source_event_validated"] is True
-    assert summary["receipt_only_evidence"] is False
     assert summary["execution_receipts_root"] == summary["computed_receipts_root"]
     assert summary["source_event_digest"] == "0x" + "55" * 32
+    assert "receipt_only_evidence" not in summary
     assert summary["receipt_rlp"].startswith("0x02")
     assert summary["receipt_trie_key"] == "0x80"
     assert len(summary["receipt_trie_proof_nodes"]) >= 1
@@ -481,7 +545,7 @@ def test_collect_receipt_proof_evidence_builds_verified_source_event_proof():
     ]
 
 
-def test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge():
+def test_collect_receipt_proof_requires_source_bridge_without_receipt_only_bypass():
     module = load_module()
     opener = fake_opener_for(module)
 
@@ -493,53 +557,36 @@ def test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_sourc
             opener=opener,
         )
     except ValueError as exc:
-        assert "source_bridge_address is required for SCCP source-event evidence" in str(exc)
+        assert str(exc) == "source_bridge_address is required for SCCP source-event evidence"
     else:
-        raise AssertionError("receipt-only evidence was accepted without explicit opt-in")
+        raise AssertionError("receipt evidence was accepted without source bridge validation")
     assert opener.calls == []
 
 
-def test_collect_receipt_proof_allows_explicit_receipt_only_mode():
-    module = load_module()
-    opener = fake_opener_for(module)
-
-    summary = module.collect_receipt_proof_evidence(
-        "https://rpc.example",
-        domain=module.SCCP_DOMAIN_ETH,
-        transaction_hash=bytes.fromhex("11" * 32),
-        allow_receipt_only_evidence=True,
-        opener=opener,
-    )
-
-    assert summary["evidence_mode"] == "receipt_only"
-    assert summary["source_event_validated"] is False
-    assert summary["receipt_only_evidence"] is True
-    assert "source_event_digest" not in summary
-
-
-def test_collect_receipt_proof_rejects_malformed_receipt_only_flag_before_rpc():
+def test_collect_receipt_proof_rejects_removed_receipt_only_keyword_before_rpc():
     module = load_module()
 
     def opener(_request, timeout=15.0):
         del timeout
-        raise AssertionError("malformed receipt-only flag reached RPC")
+        raise AssertionError("removed receipt-only option reached RPC")
 
-    for malformed_flag in (1, "true", None):
-        try:
-            module.collect_receipt_proof_evidence(
-                "https://rpc.example",
-                domain=module.SCCP_DOMAIN_ETH,
-                transaction_hash=bytes.fromhex("11" * 32),
-                allow_receipt_only_evidence=malformed_flag,
-                opener=opener,
-            )
-        except ValueError as exc:
-            assert str(exc) == "allow_receipt_only_evidence must be a boolean"
-        else:
-            raise AssertionError("malformed receipt-only flag was accepted")
+    try:
+        module.collect_receipt_proof_evidence(
+            "https://rpc.example",
+            domain=module.SCCP_DOMAIN_ETH,
+            transaction_hash=bytes.fromhex("11" * 32),
+            source_bridge_address=bytes.fromhex("33" * 20),
+            allow_receipt_only_evidence=True,
+            opener=opener,
+        )
+    except TypeError as exc:
+        assert "allow_receipt_only_evidence" in str(exc)
+        assert "unexpected keyword argument" in str(exc)
+    else:
+        raise AssertionError("removed receipt-only keyword was accepted")
 
 
-def test_cli_requires_source_bridge_or_explicit_receipt_only_mode():
+def test_cli_requires_source_bridge_without_receipt_only_bypass():
     module = load_module()
     stderr = io.StringIO()
 
@@ -563,25 +610,37 @@ def test_cli_requires_source_bridge_or_explicit_receipt_only_mode():
             raise AssertionError("CLI accepted source-event evidence without a bridge")
 
     assert "--source-bridge-address" in stderr.getvalue()
-    assert "--allow-receipt-only-evidence" in stderr.getvalue()
+    assert "--allow-receipt-only-evidence" not in stderr.getvalue()
 
 
-def test_cli_exposes_explicit_receipt_only_mode():
+def test_cli_rejects_removed_receipt_only_mode_before_collection(monkeypatch, capsys):
     module = load_module()
-    args = module.build_parser().parse_args(
-        [
-            "--rpc-url",
-            "https://rpc.example",
-            "--domain",
-            "eth",
-            "--transaction-hash",
-            "0x" + "11" * 32,
-            "--allow-receipt-only-evidence",
-        ]
-    )
 
-    assert args.allow_receipt_only_evidence is True
-    assert args.source_bridge_address is None
+    def fail_collect(*_args, **_kwargs):
+        raise AssertionError("removed receipt-only CLI flag reached collection")
+
+    monkeypatch.setattr(module, "collect_receipt_proof_evidence", fail_collect)
+    try:
+        module.main(
+            [
+                "--rpc-url",
+                "https://rpc.example",
+                "--domain",
+                "eth",
+                "--transaction-hash",
+                "0x" + "11" * 32,
+                "--source-bridge-address",
+                "0x" + "33" * 20,
+                "--allow-receipt-only-evidence",
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("removed receipt-only CLI flag was accepted")
+
+    captured = capsys.readouterr()
+    assert "unrecognized arguments: --allow-receipt-only-evidence" in captured.err
 
 
 def test_receipt_rlp_rejects_unknown_typed_receipt_prefix():
@@ -667,7 +726,7 @@ def test_collect_receipt_proof_rejects_non_mainnet_chain_id():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
-            allow_receipt_only_evidence=True,
+            source_bridge_address=bytes.fromhex("33" * 20),
             opener=opener,
         )
     except ValueError as exc:
@@ -704,7 +763,7 @@ def test_collect_receipt_proof_rejects_boolean_domain_and_expected_chain_id_befo
             module.collect_receipt_proof_evidence(
                 "https://rpc.example",
                 transaction_hash=bytes.fromhex("11" * 32),
-                allow_receipt_only_evidence=True,
+                source_bridge_address=bytes.fromhex("33" * 20),
                 opener=opener,
                 **kwargs,
             )
@@ -771,7 +830,6 @@ def test_collect_receipt_proof_rejects_direct_namespace_args_before_rpc():
             "domain": module.SCCP_DOMAIN_ETH,
             "transaction_hash": bytes.fromhex("11" * 32),
             "source_bridge_address": bytes.fromhex("22" * 20),
-            "allow_receipt_only_evidence": False,
             "opener": opener,
         }
         kwargs.update(overrides)
@@ -806,7 +864,7 @@ def test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity():
                 "https://rpc.example",
                 domain=module.SCCP_DOMAIN_ETH,
                 transaction_hash=bytes.fromhex("11" * 32),
-                allow_receipt_only_evidence=True,
+                source_bridge_address=bytes.fromhex("33" * 20),
                 opener=opener,
             )
         except RuntimeError as exc:
@@ -837,7 +895,7 @@ def test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
-            allow_receipt_only_evidence=True,
+            source_bridge_address=bytes.fromhex("33" * 20),
             opener=opener,
         )
     except RuntimeError as exc:
@@ -879,7 +937,7 @@ def test_collect_receipt_proof_rejects_duplicate_json_receipt_fields():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
-            allow_receipt_only_evidence=True,
+            source_bridge_address=bytes.fromhex("33" * 20),
             opener=opener,
         )
     except RuntimeError as exc:
@@ -923,6 +981,35 @@ def test_receipt_json_rpc_redacts_invalid_json_parser_details():
 def test_receipt_json_rpc_url_rejects_hidden_request_state():
     module = load_module()
 
+    class HostileReceiptRpcUrl(str):
+        def __new__(cls):
+            return str.__new__(cls, "https://rpc.example")
+
+        def __str__(self):
+            raise AssertionError("secret-token receipt RPC URL was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token receipt RPC URL was repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token receipt RPC URL was compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token receipt RPC URL was compared")
+
+        def __iter__(self):
+            raise AssertionError("secret-token receipt RPC URL was iterated")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token receipt RPC URL was stripped")
+
+    class HostileReceiptRpcUrlLabel:
+        def __str__(self):
+            raise AssertionError("secret-token receipt RPC URL label was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token receipt RPC URL label was repr'd")
+
     assert module._normalize_evm_rpc_url("https://rpc.example") == (
         "https://rpc.example"
     )
@@ -949,6 +1036,8 @@ def test_receipt_json_rpc_url_rejects_hidden_request_state():
         ("https://bad_host.rpc.example", "public DNS"),
         (" https://rpc.example", "exact http(s) URL"),
         ("https://rpc.example\nsecret", "exact http(s) URL"),
+        (HostileReceiptRpcUrl(), "exact http(s) URL"),
+        (HostileReceiptRpcUrlLabel(), "exact http(s) URL"),
     ):
         try:
             module._json_rpc(
@@ -1096,7 +1185,7 @@ def test_collect_receipt_proof_rejects_failed_receipt():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
-            allow_receipt_only_evidence=True,
+            source_bridge_address=bytes.fromhex("33" * 20),
             opener=opener,
         )
     except RuntimeError as exc:
@@ -1114,7 +1203,7 @@ def test_collect_receipt_proof_rejects_receipts_root_mismatch():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
-            allow_receipt_only_evidence=True,
+            source_bridge_address=bytes.fromhex("33" * 20),
             opener=opener,
         )
     except RuntimeError as exc:
@@ -1237,7 +1326,7 @@ def test_collect_receipt_proof_rejects_direct_receipt_rlp_drift():
             "https://rpc.example",
             domain=module.SCCP_DOMAIN_ETH,
             transaction_hash=bytes.fromhex("11" * 32),
-            allow_receipt_only_evidence=True,
+            source_bridge_address=bytes.fromhex("33" * 20),
             opener=opener,
         )
     except RuntimeError as exc:

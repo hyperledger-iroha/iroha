@@ -194,6 +194,17 @@ def test_manifest_only_accepts_checked_in_inventory(tmp_path: Path) -> None:
     assert {entry["generated"] for entry in payload["entries"]} == {"not_checked"}
 
 
+def test_checked_in_manifest_matches_required_fixture_inventory() -> None:
+    payload = base_manifest()
+
+    assert {fixture["name"] for fixture in payload["fixtures"]} == MODULE.REQUIRED_FIXTURES
+    assert {
+        fixture["expected_status"] for fixture in payload["fixtures"]
+    } == MODULE.EXPECTED_STATUSES
+    for fixture in payload["fixtures"]:
+        assert fixture["expected_status"] in MODULE.EXPECTED_STATUSES
+
+
 def test_summary_out_same_as_manifest_fails_before_write(
     tmp_path: Path,
     capsys,

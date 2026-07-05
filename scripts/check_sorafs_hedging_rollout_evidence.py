@@ -125,6 +125,10 @@ NATIVE_BRIDGE_ARTIFACT_ID_PATTERN = re.compile(
 NATIVE_BRIDGE_ARTIFACT_ID_ERROR = (
     "artifacts[].id must match canonical lowercase `hedging-native-artifact-*`"
 )
+NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES = (
+    ("swift", "hedging-native-artifact-swift-"),
+    ("jni", "hedging-native-artifact-jni-"),
+)
 FORBIDDEN_CYCLE_ID_MARKERS = frozenset(
     (
         "debug",
@@ -479,7 +483,6 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
-    "cycle_id",
     "cycle_index",
     "generated_at_unix",
     "decision_id_hex",
@@ -502,7 +505,62 @@ BILLING_CYCLE_DETAIL_FIELDS: tuple[str, ...] = (
     "policy_digest_hex",
     "statement_bundle_digest_hex",
     "reconciliation_digest_hex",
-)
+        )
+
+
+def validated_billing_cycle_fingerprint_values(
+    kind_name: str,
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    """Return billing-cycle fingerprint fields only after canonical validation."""
+
+    if kind_name != "billing_cycle":
+        return {}
+    cycle_errors: list[str] = []
+    cycle_id = require_cycle_id(payload, cycle_errors)
+    return {"cycle_id": cycle_id} if cycle_id else {}
+
+
+def native_bridge_artifact_family(artifact_id: Any) -> str | None:
+    """Return the reviewed native bridge family prefix for an artifact id."""
+
+    if not isinstance(artifact_id, str):
+        return None
+    for family, prefix in NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES:
+        if artifact_id.startswith(prefix):
+            return family
+    return None
+
+
+def validate_native_bridge_artifact_family_coverage(
+    artifact_records: list[tuple[int, dict[str, Any]]],
+    errors: list[str],
+) -> None:
+    """Require native bridge release artifacts to cover each reviewed family."""
+
+    covered_families: set[str] = set()
+    found_unknown_artifact_family = False
+    for _index, record in artifact_records:
+        artifact_id = record.get("id")
+        family = native_bridge_artifact_family(artifact_id)
+        if family is None:
+            if isinstance(artifact_id, str) and artifact_id:
+                found_unknown_artifact_family = True
+            continue
+        covered_families.add(family)
+
+    if found_unknown_artifact_family:
+        errors.append(
+            "artifacts[].id must start with a reviewed native bridge family prefix"
+        )
+    required_families = {
+        family for family, _prefix in NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES
+    }
+    if required_families - covered_families:
+        errors.append(
+            "artifacts must include at least one native bridge artifact for every "
+            "reviewed bridge family"
+        )
 
 
 def validate_routes(payload: dict[str, Any], errors: list[str]) -> None:
@@ -833,6 +891,7 @@ def validate_native_bridge_release(payload: dict[str, Any], errors: list[str]) -
             errors=errors,
         )
         require_hex(record, "sha256", HEX64_LEN, errors)
+    validate_native_bridge_artifact_family_coverage(artifact_records, errors)
 
 
 def validate_governance_approval(payload: dict[str, Any], errors: list[str]) -> None:
@@ -942,6 +1001,12 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
+        fingerprint_values = validated_billing_cycle_fingerprint_values(
+            kind_name,
+            payload,
+        )
+        if fingerprint_values:
+            evidence_artifact_fingerprint(artifact).update(fingerprint_values)
         artifact_valid = evidence_artifact_is_valid(artifact)
         if kind_name == "billing_cycle" and artifact_valid:
             valid_billing_cycle_artifacts.append(artifact)

@@ -151,6 +151,9 @@ REQUIRED_SDK_LANGUAGES = (
     "java-android",
     "swift",
 )
+SDK_ARTIFACT_LANGUAGE_PREFIXES = tuple(
+    (language, f"{language}-") for language in REQUIRED_SDK_LANGUAGES
+)
 CONTRACT_BOUND_KINDS = (
     "matcher_service",
     "settlement_service",
@@ -428,6 +431,43 @@ def require_scalar_inventory_labels(
             pattern=pattern,
             label_error=label_error,
             errors=errors,
+        )
+
+
+def sdk_artifact_language(artifact_id: Any) -> str | None:
+    """Return the reviewed SDK language prefix for an artifact id."""
+
+    if not isinstance(artifact_id, str):
+        return None
+    for language, prefix in SDK_ARTIFACT_LANGUAGE_PREFIXES:
+        if artifact_id.startswith(prefix):
+            return language
+    return None
+
+
+def validate_sdk_artifact_language_coverage(
+    artifact_records: list[tuple[int, dict[str, Any]]],
+    errors: list[str],
+) -> None:
+    """Require SDK release artifacts to cover every reviewed language."""
+
+    covered_languages: set[str] = set()
+    found_unknown_artifact_family = False
+    for _index, record in artifact_records:
+        artifact_id = record.get("id")
+        language = sdk_artifact_language(artifact_id)
+        if language is None:
+            if isinstance(artifact_id, str) and artifact_id:
+                found_unknown_artifact_family = True
+            continue
+        covered_languages.add(language)
+
+    if found_unknown_artifact_family:
+        errors.append("artifacts[].id must start with a reviewed SDK language prefix")
+    if set(REQUIRED_SDK_LANGUAGES) - covered_languages:
+        errors.append(
+            "artifacts must include at least one SDK release artifact for every "
+            "reviewed language"
         )
 
 
@@ -715,6 +755,7 @@ def validate_sdk_release(payload: dict[str, Any], errors: list[str]) -> None:
     for _index, record in artifact_records:
         require_string(record, "id", errors)
         require_hex(record, "sha256", HEX64_LEN, errors)
+    validate_sdk_artifact_language_coverage(artifact_records, errors)
 
 
 def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:

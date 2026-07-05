@@ -21,7 +21,10 @@ use iroha_crypto::{
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus::{LaneBlockCommitment, SumeragiMembershipStatus, ValidatorIndex},
+        consensus::{
+            LaneBlockCommitment, SumeragiLanePayloadOwnership, SumeragiMembershipStatus,
+            ValidatorIndex,
+        },
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorElectionOutcome, ValidatorSetCheckpoint},
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
@@ -679,6 +682,8 @@ static LANE_COMMITMENTS: OnceLock<Mutex<Vec<LaneCommitmentSnapshot>>> = OnceLock
 static DATASPACE_COMMITMENTS: OnceLock<Mutex<Vec<DataspaceCommitmentSnapshot>>> = OnceLock::new();
 static LANE_SETTLEMENT_COMMITMENTS: OnceLock<Mutex<Vec<LaneBlockCommitment>>> = OnceLock::new();
 static LANE_RELAY_ENVELOPES: OnceLock<Mutex<Vec<LaneRelayEnvelope>>> = OnceLock::new();
+static LANE_PAYLOAD_OWNERSHIPS: OnceLock<Mutex<Vec<SumeragiLanePayloadOwnership>>> =
+    OnceLock::new();
 static LANE_GOVERNANCE: OnceLock<Mutex<Vec<LaneGovernanceSnapshot>>> = OnceLock::new();
 static NEXUS_FEE_STATUS: OnceLock<Mutex<NexusFeeSnapshot>> = OnceLock::new();
 static NEXUS_STAKING_STATUS: OnceLock<Mutex<BTreeMap<LaneId, NexusStakingLaneSnapshot>>> =
@@ -691,6 +696,7 @@ static QC_MISSING_VOTES_ACCEPTED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QC_QUORUM_WITHOUT_QC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PREVOTE_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
 const LANE_RELAY_ENVELOPES_CAP: usize = 64;
+const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
 const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
 const KEY_LIFECYCLE_HISTORY_CAP: usize = 128;
 static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
@@ -4198,7 +4204,7 @@ pub struct StatusSnapshot {
     pub epoch_commit_deadline_offset: u64,
     /// Reveal window deadline offset from epoch start (blocks; zero when not applicable).
     pub epoch_reveal_deadline_offset: u64,
-    /// PRF epoch seed used for deterministic leader/collector selection (`NPoS` mode).
+    /// PRF seed used for deterministic leader and collector selection.
     pub prf_epoch_seed: Option<[u8; 32]>,
     /// Height associated with the recorded PRF context.
     pub prf_height: u64,
@@ -4252,6 +4258,8 @@ pub struct StatusSnapshot {
     pub lane_settlement_commitments: Vec<LaneBlockCommitment>,
     /// Latest lane relay envelopes captured during block sealing.
     pub lane_relay_envelopes: Vec<LaneRelayEnvelope>,
+    /// Planned lane-local payload ownership and RBC instance identities.
+    pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
     /// Number of lanes that remain sealed awaiting governance manifests.
     pub lane_governance_sealed_total: u32,
     /// Aliases of lanes that remain sealed awaiting governance manifests.
@@ -4278,6 +4286,7 @@ impl StatusSnapshot {
         self.dataspace_commitments.clear();
         self.lane_settlement_commitments.clear();
         self.lane_relay_envelopes.clear();
+        self.lane_payload_ownerships.clear();
         self.lane_governance_sealed_total = 0;
         self.lane_governance_sealed_aliases.clear();
         self.lane_governance.clear();
@@ -4898,6 +4907,7 @@ pub fn snapshot() -> StatusSnapshot {
     let (lane_governance_sealed_total, lane_governance_sealed_aliases, lane_governance_entries) =
         lane_governance_sealed_summary();
     let lane_relay_envelopes = lane_relay_envelopes_snapshot();
+    let lane_payload_ownerships = lane_payload_ownerships_snapshot();
     let kura_last_hash = (*lock_operator_status_slot(
         KURA_STORE_LAST_HASH.get_or_init(|| Mutex::new(None)),
         "kura store failure hash",
@@ -5239,6 +5249,7 @@ pub fn snapshot() -> StatusSnapshot {
         dataspace_commitments: dataspace_commitments_snapshot(),
         lane_settlement_commitments: lane_settlement_commitments_snapshot(),
         lane_relay_envelopes,
+        lane_payload_ownerships,
         lane_governance_sealed_total,
         lane_governance_sealed_aliases,
         lane_governance: lane_governance_entries,
@@ -6981,6 +6992,10 @@ fn lane_relay_envelopes_slot() -> &'static Mutex<Vec<LaneRelayEnvelope>> {
     LANE_RELAY_ENVELOPES.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn lane_payload_ownerships_slot() -> &'static Mutex<Vec<SumeragiLanePayloadOwnership>> {
+    LANE_PAYLOAD_OWNERSHIPS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 fn lane_relay_key(
     envelope: &LaneRelayEnvelope,
 ) -> (
@@ -7089,6 +7104,60 @@ pub fn push_lane_relay_envelope(envelope: LaneRelayEnvelope) {
     upsert_lane_relay_envelope(&mut guard, envelope);
 }
 
+/// Replace the planned lane-local DA/RBC ownership identities used by `/v1/sumeragi/status`.
+pub fn set_lane_payload_ownerships(mut entries: Vec<SumeragiLanePayloadOwnership>) {
+    if entries.len() > LANE_PAYLOAD_OWNERSHIPS_CAP {
+        let drain = entries.len() - LANE_PAYLOAD_OWNERSHIPS_CAP;
+        entries.drain(0..drain);
+    }
+    let mut guard = lock_operator_status_slot(
+        lane_payload_ownerships_slot(),
+        "lane payload ownership snapshot",
+    );
+    *guard = entries;
+}
+
+/// Remove lane-scoped operator status snapshots for lanes whose runtime state was reset.
+pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
+    if lanes_to_reset.is_empty() {
+        return;
+    }
+    let lane_matches = |lane_id: u32| lanes_to_reset.contains(&LaneId::new(lane_id));
+
+    lock_operator_status_slot(lane_activity_slot(), "lane activity snapshot")
+        .retain(|entry| !lane_matches(entry.lane_id));
+    lock_operator_status_slot(dataspace_activity_slot(), "dataspace activity snapshot")
+        .retain(|entry| !lane_matches(entry.lane_id));
+    lock_operator_status_slot(rbc_lane_backlog_slot(), "RBC lane backlog snapshot")
+        .retain(|entry| !lane_matches(entry.lane_id));
+    lock_operator_status_slot(
+        rbc_dataspace_backlog_slot(),
+        "RBC dataspace backlog snapshot",
+    )
+    .retain(|entry| !lane_matches(entry.lane_id));
+    lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot")
+        .retain(|entry| !lane_matches(entry.lane_id));
+    lock_operator_status_slot(
+        dataspace_commitments_slot(),
+        "dataspace commitments snapshot",
+    )
+    .retain(|entry| !lane_matches(entry.lane_id));
+    lock_operator_status_slot(
+        lane_settlement_commitments_slot(),
+        "lane settlement commitments snapshot",
+    )
+    .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
+    lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot")
+        .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
+    lock_operator_status_slot(
+        lane_payload_ownerships_slot(),
+        "lane payload ownership snapshot",
+    )
+    .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
+    lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot")
+        .retain(|entry| !lane_matches(entry.lane_id));
+}
+
 fn lane_commitments_snapshot() -> Vec<LaneCommitmentSnapshot> {
     lock_operator_status_slot(lane_commitments_slot(), "lane commitments snapshot").clone()
 }
@@ -7113,6 +7182,15 @@ fn lane_settlement_commitments_snapshot() -> Vec<LaneBlockCommitment> {
 /// Returns the cached lane relay envelopes snapshot used by Sumeragi status endpoints.
 pub fn lane_relay_envelopes_snapshot() -> Vec<LaneRelayEnvelope> {
     lock_operator_status_slot(lane_relay_envelopes_slot(), "lane relay envelopes snapshot").clone()
+}
+
+/// Returns the cached lane-local DA/RBC ownership snapshot used by Sumeragi status endpoints.
+pub fn lane_payload_ownerships_snapshot() -> Vec<SumeragiLanePayloadOwnership> {
+    lock_operator_status_slot(
+        lane_payload_ownerships_slot(),
+        "lane payload ownership snapshot",
+    )
+    .clone()
 }
 
 fn lane_governance_slot() -> &'static Mutex<Vec<LaneGovernanceSnapshot>> {
@@ -8762,7 +8840,7 @@ mod tests {
     use iroha_data_model::{
         block::{
             BlockHeader,
-            consensus::{LaneBlockCommitment, LaneSettlementReceipt},
+            consensus::{LaneBlockCommitment, LaneSettlementReceipt, SumeragiLanePayloadOwnership},
         },
         consensus::{
             ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc,
@@ -12911,9 +12989,10 @@ mod tests {
         super::set_lane_commitments(Vec::new(), Vec::new());
         super::set_lane_settlement_commitments(Vec::new());
         super::set_lane_relay_envelopes(Vec::new());
+        super::set_lane_payload_ownerships(Vec::new());
         super::set_lane_governance_snapshot(Vec::new());
 
-        let poison_slots: [fn(); 15] = [
+        let poison_slots: [fn(); 16] = [
             || {
                 let _guard = super::availability_slot()
                     .lock()
@@ -12997,6 +13076,12 @@ mod tests {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 panic!("poison lane relay envelopes snapshot for recovery test");
+            },
+            || {
+                let _guard = super::lane_payload_ownerships_slot()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                panic!("poison lane payload ownership snapshot for recovery test");
             },
             || {
                 let _guard = super::lane_governance_slot()
@@ -13094,6 +13179,20 @@ mod tests {
         super::set_lane_settlement_commitments(vec![settlement]);
         let envelope = lane_relay_envelope(12, 7);
         super::set_lane_relay_envelopes(vec![envelope.clone()]);
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 12,
+            proposal_view: 3,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(42),
+            lane_block_height: 2,
+            lane_block_view: 1,
+            subject_hash: UntypedHash::new(b"lane subject"),
+            qc_mode_tag: "test-lane-qc-mode".to_string(),
+            accepted_candidate_indices: vec![0, 2],
+            payload_ownership_hash: UntypedHash::new(b"lane payload ownership"),
+            rbc_instance_hash: UntypedHash::new(b"lane rbc instance"),
+        };
+        super::set_lane_payload_ownerships(vec![ownership.clone()]);
         super::set_lane_governance_snapshot(vec![super::LaneGovernanceSnapshot {
             lane_id: 7,
             alias: "lane-seven".to_string(),
@@ -13134,6 +13233,7 @@ mod tests {
             snapshot.lane_relay_envelopes[0].block_height,
             envelope.block_height
         );
+        assert_eq!(snapshot.lane_payload_ownerships, vec![ownership]);
         assert_eq!(snapshot.lane_governance_sealed_total, 1);
         assert_eq!(
             snapshot.lane_governance_sealed_aliases,
@@ -13147,6 +13247,7 @@ mod tests {
         super::set_lane_commitments(Vec::new(), Vec::new());
         super::set_lane_settlement_commitments(Vec::new());
         super::set_lane_relay_envelopes(Vec::new());
+        super::set_lane_payload_ownerships(Vec::new());
         super::set_lane_governance_snapshot(Vec::new());
         let cleared = super::snapshot();
         assert_eq!(super::availability_snapshot().total, 0);
@@ -13157,7 +13258,53 @@ mod tests {
         assert!(cleared.rbc_lane_backlog.is_empty());
         assert!(cleared.lane_commitments.is_empty());
         assert!(cleared.lane_relay_envelopes.is_empty());
+        assert!(cleared.lane_payload_ownerships.is_empty());
         assert_eq!(cleared.lane_governance_sealed_total, 0);
+    }
+
+    #[test]
+    fn lane_payload_ownerships_are_bounded_and_stripped_with_lane_details() {
+        let _guard = super::lane_relay_test_guard();
+        super::set_lane_payload_ownerships(Vec::new());
+
+        let entries = (0..(super::LANE_PAYLOAD_OWNERSHIPS_CAP + 5))
+            .map(|idx| {
+                let index = u64::try_from(idx).expect("index fits u64");
+                SumeragiLanePayloadOwnership {
+                    proposal_height: 100 + index,
+                    proposal_view: index % 3,
+                    lane_id: LaneId::new(u32::try_from(idx + 1).expect("lane fits u32")),
+                    dataspace_id: DataSpaceId::new(index + 10),
+                    lane_block_height: index + 1,
+                    lane_block_view: index % 5,
+                    subject_hash: UntypedHash::new(format!("subject-{index}").as_bytes()),
+                    qc_mode_tag: format!("test-lane-qc-mode-{index}"),
+                    accepted_candidate_indices: vec![index, index + 1],
+                    payload_ownership_hash: UntypedHash::new(
+                        format!("payload-ownership-{index}").as_bytes(),
+                    ),
+                    rbc_instance_hash: UntypedHash::new(format!("rbc-instance-{index}").as_bytes()),
+                }
+            })
+            .collect::<Vec<_>>();
+        super::set_lane_payload_ownerships(entries);
+
+        let snapshot = super::lane_payload_ownerships_snapshot();
+        assert_eq!(snapshot.len(), super::LANE_PAYLOAD_OWNERSHIPS_CAP);
+        assert_eq!(snapshot[0].proposal_height, 105);
+        assert_eq!(
+            snapshot.last().map(|entry| entry.proposal_height),
+            Some(100 + (super::LANE_PAYLOAD_OWNERSHIPS_CAP + 4) as u64)
+        );
+
+        let stripped = super::StatusSnapshot {
+            lane_payload_ownerships: snapshot,
+            ..Default::default()
+        }
+        .strip_lane_details();
+        assert!(stripped.lane_payload_ownerships.is_empty());
+
+        super::set_lane_payload_ownerships(Vec::new());
     }
 
     #[test]
@@ -13220,6 +13367,194 @@ mod tests {
         let snapshot = super::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].fastpq_proof.is_none());
+    }
+
+    #[test]
+    fn lane_scoped_status_snapshots_are_pruned_for_reset_lanes() {
+        let _guard = super::lane_relay_test_guard();
+        let target = LaneId::new(7);
+        let survivor = LaneId::new(8);
+        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xA7; UntypedHash::LENGTH],
+        ));
+        let ownership = |lane_id: LaneId| SumeragiLanePayloadOwnership {
+            proposal_height: 12,
+            proposal_view: 3,
+            lane_id,
+            dataspace_id: DataSpaceId::new(u64::from(lane_id.as_u32()) + 40),
+            lane_block_height: 2,
+            lane_block_view: 1,
+            subject_hash: UntypedHash::new(format!("subject-{}", lane_id.as_u32()).as_bytes()),
+            qc_mode_tag: format!("test-lane-qc-mode-{}", lane_id.as_u32()),
+            accepted_candidate_indices: vec![0],
+            payload_ownership_hash: UntypedHash::new(
+                format!("payload-{}", lane_id.as_u32()).as_bytes(),
+            ),
+            rbc_instance_hash: UntypedHash::new(format!("rbc-{}", lane_id.as_u32()).as_bytes()),
+        };
+
+        super::set_lane_activity_snapshot(vec![
+            super::LaneActivitySnapshot {
+                lane_id: target.as_u32(),
+                tx_vertices: 1,
+                ..Default::default()
+            },
+            super::LaneActivitySnapshot {
+                lane_id: survivor.as_u32(),
+                tx_vertices: 2,
+                ..Default::default()
+            },
+        ]);
+        super::set_dataspace_activity_snapshot(vec![
+            super::DataspaceActivitySnapshot {
+                lane_id: target.as_u32(),
+                dataspace_id: 47,
+                tx_served: 1,
+            },
+            super::DataspaceActivitySnapshot {
+                lane_id: survivor.as_u32(),
+                dataspace_id: 48,
+                tx_served: 2,
+            },
+        ]);
+        super::set_rbc_lane_backlog(vec![
+            super::LaneRbcSnapshot {
+                lane_id: target.as_u32(),
+                tx_count: 1,
+                total_chunks: 2,
+                pending_chunks: 1,
+                rbc_bytes_total: 32,
+            },
+            super::LaneRbcSnapshot {
+                lane_id: survivor.as_u32(),
+                tx_count: 2,
+                total_chunks: 3,
+                pending_chunks: 1,
+                rbc_bytes_total: 64,
+            },
+        ]);
+        super::set_rbc_dataspace_backlog(vec![
+            super::DataspaceRbcSnapshot {
+                lane_id: target.as_u32(),
+                dataspace_id: 47,
+                tx_count: 1,
+                total_chunks: 2,
+                pending_chunks: 1,
+                rbc_bytes_total: 32,
+            },
+            super::DataspaceRbcSnapshot {
+                lane_id: survivor.as_u32(),
+                dataspace_id: 48,
+                tx_count: 2,
+                total_chunks: 3,
+                pending_chunks: 1,
+                rbc_bytes_total: 64,
+            },
+        ]);
+        super::set_lane_commitments(
+            vec![
+                super::LaneCommitmentSnapshot {
+                    block_height: 12,
+                    lane_id: target.as_u32(),
+                    tx_count: 1,
+                    total_chunks: 2,
+                    rbc_bytes_total: 32,
+                    teu_total: 5,
+                    block_hash,
+                },
+                super::LaneCommitmentSnapshot {
+                    block_height: 12,
+                    lane_id: survivor.as_u32(),
+                    tx_count: 2,
+                    total_chunks: 3,
+                    rbc_bytes_total: 64,
+                    teu_total: 8,
+                    block_hash,
+                },
+            ],
+            vec![
+                super::DataspaceCommitmentSnapshot {
+                    block_height: 12,
+                    lane_id: target.as_u32(),
+                    dataspace_id: 47,
+                    tx_count: 1,
+                    total_chunks: 2,
+                    rbc_bytes_total: 32,
+                    teu_total: 5,
+                    block_hash,
+                },
+                super::DataspaceCommitmentSnapshot {
+                    block_height: 12,
+                    lane_id: survivor.as_u32(),
+                    dataspace_id: 48,
+                    tx_count: 2,
+                    total_chunks: 3,
+                    rbc_bytes_total: 64,
+                    teu_total: 8,
+                    block_hash,
+                },
+            ],
+        );
+        super::set_lane_settlement_commitments(vec![
+            sample_lane_commitment(12, target.as_u32(), 47),
+            sample_lane_commitment(12, survivor.as_u32(), 48),
+        ]);
+        super::set_lane_relay_envelopes(vec![
+            lane_relay_envelope(12, target.as_u32()),
+            lane_relay_envelope(13, survivor.as_u32()),
+        ]);
+        super::set_lane_payload_ownerships(vec![ownership(target), ownership(survivor)]);
+        super::set_lane_governance_snapshot(vec![
+            super::LaneGovernanceSnapshot {
+                lane_id: target.as_u32(),
+                alias: "target".to_string(),
+                dataspace_id: 47,
+                ..Default::default()
+            },
+            super::LaneGovernanceSnapshot {
+                lane_id: survivor.as_u32(),
+                alias: "survivor".to_string(),
+                dataspace_id: 48,
+                ..Default::default()
+            },
+        ]);
+
+        super::prune_lane_scoped_snapshots(&BTreeSet::from([target]));
+
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.lane_activity.len(), 1);
+        assert_eq!(snapshot.lane_activity[0].lane_id, survivor.as_u32());
+        assert_eq!(snapshot.dataspace_activity.len(), 1);
+        assert_eq!(snapshot.dataspace_activity[0].lane_id, survivor.as_u32());
+        assert_eq!(snapshot.rbc_lane_backlog.len(), 1);
+        assert_eq!(snapshot.rbc_lane_backlog[0].lane_id, survivor.as_u32());
+        assert_eq!(snapshot.rbc_dataspace_backlog.len(), 1);
+        assert_eq!(snapshot.rbc_dataspace_backlog[0].lane_id, survivor.as_u32());
+        assert_eq!(snapshot.lane_commitments.len(), 1);
+        assert_eq!(snapshot.lane_commitments[0].lane_id, survivor.as_u32());
+        assert_eq!(snapshot.dataspace_commitments.len(), 1);
+        assert_eq!(snapshot.dataspace_commitments[0].lane_id, survivor.as_u32());
+        assert_eq!(snapshot.lane_settlement_commitments.len(), 1);
+        assert_eq!(snapshot.lane_settlement_commitments[0].lane_id, survivor);
+        assert_eq!(snapshot.lane_relay_envelopes.len(), 1);
+        assert_eq!(snapshot.lane_relay_envelopes[0].lane_id, survivor);
+        assert_eq!(snapshot.lane_payload_ownerships.len(), 1);
+        assert_eq!(snapshot.lane_payload_ownerships[0].lane_id, survivor);
+        assert_eq!(snapshot.lane_governance.len(), 1);
+        assert_eq!(snapshot.lane_governance[0].lane_id, survivor.as_u32());
+
+        super::prune_lane_scoped_snapshots(&BTreeSet::from([survivor]));
+        let cleared = super::snapshot();
+        assert!(cleared.lane_activity.is_empty());
+        assert!(cleared.dataspace_activity.is_empty());
+        assert!(cleared.rbc_lane_backlog.is_empty());
+        assert!(cleared.rbc_dataspace_backlog.is_empty());
+        assert!(cleared.lane_commitments.is_empty());
+        assert!(cleared.dataspace_commitments.is_empty());
+        assert!(cleared.lane_settlement_commitments.is_empty());
+        assert!(cleared.lane_relay_envelopes.is_empty());
+        assert!(cleared.lane_payload_ownerships.is_empty());
+        assert!(cleared.lane_governance.is_empty());
     }
 
     #[test]

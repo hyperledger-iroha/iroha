@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_governance_dag_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1f2725261510e6910199a5268c5b62de69eef643f76f4c3f9fbd7e69c172a5f0
-source_last_modified: "2026-07-04T05:49:56.209264+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-04T05:49:56.209264+00:00
+source_hash: baef1204f4fa2238b622e82e4ef1b66e51c038275119d7299dc7210396609aa7
+source_last_modified: "2026-07-04T22:25:42.499635+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-04T22:25:42.499635+00:00
 ---
 
 # Governance DAG Publishing Pipeline
@@ -577,6 +577,10 @@ entries before promotion can report ready. The summary exports the sorted
 reviewed `metrics` inventory plus `metric_count_values`, and the aggregate
 production-readiness gate requires those fields to match the observability
 artifact fingerprint before final promotion can report ready. Governance DAG
+aggregate promotion also rechecks the lane-proven relationships: public-head
+bound artifact fingerprints must match `valid_public_head_cids`, and
+policy-bound artifact fingerprints must match `valid_policy_digests` before
+final promotion can report ready. Governance DAG
 payload-safety artifacts must explicitly set `payload_bytes_included`,
 `raw_head_included`, `raw_car_included`, `mirror_drift_detected`,
 `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`,

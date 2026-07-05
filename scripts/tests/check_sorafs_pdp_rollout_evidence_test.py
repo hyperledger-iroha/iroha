@@ -21,6 +21,7 @@ GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ef" * 32
 DIGEST_2 = "12" * 32
 ROSTER_DIGEST = "34" * 32
+HANDOFF_DIGEST = "56" * 32
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -143,13 +144,18 @@ def validator_replay(*, expanded_fixtures: bool = True) -> dict:
     return payload
 
 
-def governance_repair(*, handoff: bool = True) -> dict:
+def governance_repair(
+    *,
+    handoff: bool = True,
+    handoff_digest: str | None = HANDOFF_DIGEST,
+) -> dict:
     payload = base("sorafs.pdp.governance_repair_canary.v1")
     payload.update(
         {
             "governance_dag_challenge_published": True,
             "governance_dag_verdict_published": True,
             "repair_handoff_verified": handoff,
+            "repair_handoff_digest_hex": handoff_digest,
             "archive_retention_bound": True,
             "slash_policy_bound": True,
             "operator_export_verified": True,
@@ -218,6 +224,22 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+PROOF_SUMMARY_BOUND_FIXTURES = (
+    ("validator_replay", "validator-replay.json", validator_replay),
+    ("governance_repair", "governance-repair.json", governance_repair),
+    ("observability", "observability.json", observability),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+PROVIDER_ROSTER_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -234,6 +256,7 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["provider_transport"]["valid"] is True
     assert payload["valid_policy_digests"] == [DIGEST]
     assert payload["valid_provider_roster_digests"] == [ROSTER_DIGEST]
+    assert payload["valid_repair_handoff_digests"] == [HANDOFF_DIGEST]
     assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
     assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
     observability_artifact = payload["required"]["observability"]["artifacts"][0]
@@ -242,6 +265,40 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     )
     assert observability_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
+    )
+    governance_repair_artifact = payload["required"]["governance_repair"][
+        "artifacts"
+    ][0]
+    assert (
+        governance_repair_artifact["fingerprint"]["repair_handoff_digest_hex"]
+        == HANDOFF_DIGEST
+    )
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(
+            kind_name
+            for kind_name, _file_name, _factory in PROOF_SUMMARY_BOUND_FIXTURES
+        )
+        == MODULE.PROOF_SUMMARY_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+    assert (
+        tuple(
+            kind_name
+            for kind_name, _file_name, _factory in PROVIDER_ROSTER_BOUND_FIXTURES
+        )
+        == MODULE.PROVIDER_ROSTER_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(route["name"] for route in provider_transport()["routes"]) == (
+        MODULE.REQUIRED_ROUTES
     )
 
 
@@ -817,6 +874,31 @@ def test_governance_repair_proof_summary_digest_must_match(tmp_path: Path) -> No
     ]
 
 
+def test_all_proof_summary_bound_artifacts_reject_generation_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in PROOF_SUMMARY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["proof_summary_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} proof_summary_digest_hex must reference a valid "
+            "proof_generation proof_summary_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_governance_approval_policy_digest_must_match_proof_generation(
     tmp_path: Path,
 ) -> None:
@@ -840,6 +922,32 @@ def test_governance_approval_policy_digest_must_match_proof_generation(
     ]
 
 
+def test_all_policy_bound_artifacts_reject_generation_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must reference a valid "
+            "proof_generation policy_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_governance_approval_provider_roster_digest_must_match_proof_generation(
     tmp_path: Path,
 ) -> None:
@@ -861,6 +969,32 @@ def test_governance_approval_provider_roster_digest_must_match_proof_generation(
         "governance_approval provider_roster_digest_hex must reference a valid "
         "proof_generation provider_roster_digest_hex"
     ]
+
+
+def test_all_provider_roster_bound_artifacts_reject_generation_roster_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in PROVIDER_ROSTER_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["provider_roster_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_provider_roster_digests"] == [ROSTER_DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} provider_roster_digest_hex must reference a valid "
+            "proof_generation provider_roster_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_stale_proof_generation_does_not_anchor_bound_evidence(tmp_path: Path) -> None:
@@ -935,6 +1069,39 @@ def test_governance_repair_requires_handoff(tmp_path: Path) -> None:
     write_json(tmp_path / "governance-repair.json", governance_repair(handoff=False))
 
     assert run_gate(tmp_path) == 1
+
+
+def test_governance_repair_requires_handoff_digest(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_repair()
+    del payload["repair_handoff_digest_hex"]
+    write_json(tmp_path / "governance-repair.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_repair"]["artifacts"][0]
+    assert "repair_handoff_digest_hex must be a non-empty string" in artifact["errors"]
+    assert result["valid_repair_handoff_digests"] == []
+
+
+def test_governance_repair_rejects_malformed_handoff_digest(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "governance-repair.json",
+        governance_repair(handoff_digest="not-a-digest"),
+    )
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["governance_repair"]["artifacts"][0]
+    assert "repair_handoff_digest_hex must be 64 hex characters" in artifact["errors"]
+    assert result["valid_repair_handoff_digests"] == []
 
 
 def test_observability_critical_alert_fails(tmp_path: Path) -> None:

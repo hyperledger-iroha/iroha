@@ -10,9 +10,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { isIP } from "node:net";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { normalizeAccountId } from "../javascript/iroha_js/src/normalizers.js";
 
 const ROUTE_ID = "taira_ton_xor";
@@ -30,6 +31,7 @@ const DEFAULT_ROUTE_MANIFEST_OUT =
   "artifacts/sccp-ton/testnet-taira-xor-route.manifest.json";
 const DEFAULT_ROUTE_MANIFEST_ISI_OUT =
   "artifacts/sccp-ton/testnet-taira-xor-route.upsert-isi.json";
+const TON_TESTNET_LEGACY_NETWORK = "testnet";
 const TON_TESTNET_CHAIN_ID_HEX =
   "0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffd";
 const TON_TESTNET_EXPLORER_URL = "https://testnet.tonscan.org";
@@ -45,6 +47,11 @@ const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const TAIRA_BURN_RECORD_VK_BACKEND = "halo2/ipa";
 const DEFAULT_TAIRA_BURN_RECORD_VK_NAME = "taira_bsc_xor_burn_record_v1";
 const TAIRA_BURN_RECORD_GAS_LIMIT = 2_000_000;
+const RETIRED_TON_ROUTE_MANIFEST_FIELDS = Object.freeze([
+  ["tron_network", "chain"],
+  ["sccp_tron_source_bridge_address", "source_bridge_address"],
+  ["tron_verifier_address", "destination_verifier_address"],
+]);
 
 function usage(command = "") {
   const common = `Usage:
@@ -400,20 +407,78 @@ async function sha256HexFileOrJson(path, label) {
 async function writeJsonNoSecrets(path, value) {
   const out = resolve(path);
   await mkdir(dirname(out), { recursive: true });
-  await writeFile(out, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o644,
-  });
+  await replaceWithTemporaryFile(out, `${JSON.stringify(value, null, 2)}\n`);
   return out;
+}
+
+function temporaryOutputPath(out) {
+  return `${out}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+}
+
+async function replaceWithTemporaryFile(out, value) {
+  let lastCollision = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const temp = temporaryOutputPath(out);
+    let created = false;
+    try {
+      await writeFile(temp, value, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o644,
+      });
+      created = true;
+      await rename(temp, out);
+      return;
+    } catch (error) {
+      if (created) {
+        await rm(temp, { force: true }).catch(() => {});
+      }
+      if (error?.code === "EEXIST") {
+        lastCollision = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw lastCollision ?? new Error("unable to allocate temporary output file");
+}
+
+function canonicalPathForCollision(pathName) {
+  const resolved = resolve(pathName);
+  if (resolved.includes("\0")) {
+    return resolved;
+  }
+  try {
+    return realpathSync(resolved);
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  try {
+    return resolve(realpathSync(dirname(resolved)), basename(resolved));
+  } catch (error) {
+    if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") {
+      throw error;
+    }
+  }
+  return resolved;
 }
 
 function assertDistinctResolvedPaths(outputPath, outputLabel, inputPaths) {
   const outputResolved = resolve(outputPath);
+  const outputCanonical = canonicalPathForCollision(outputPath);
   for (const [inputPath, inputLabel] of inputPaths) {
     if (typeof inputPath !== "string" || inputPath.trim() === "") {
       continue;
     }
-    if (outputResolved === resolve(inputPath)) {
+    const inputResolved = resolve(inputPath);
+    if (
+      outputResolved === inputResolved ||
+      outputCanonical === canonicalPathForCollision(inputPath)
+    ) {
       throw new Error(
         `${outputLabel} must not be the same path as ${inputLabel}.`,
       );
@@ -720,6 +785,16 @@ function normalizeTairaContractMaterial(raw, { vkName: expectedVkName } = {}) {
   };
 }
 
+function assertNoRetiredTonRouteManifestAliases(manifest) {
+  for (const [field, replacement] of RETIRED_TON_ROUTE_MANIFEST_FIELDS) {
+    if (Object.hasOwn(manifest, field)) {
+      throw new Error(
+        `TON route manifest must not use retired ${field}; use ${replacement}.`,
+      );
+    }
+  }
+}
+
 function normalizeTonRouteManifestForPublication(input) {
   const source = requireRecord(
     input.manifest && typeof input.manifest === "object"
@@ -731,6 +806,7 @@ function normalizeTonRouteManifestForPublication(input) {
   delete manifest.schema;
   delete manifest.generated_at_ms;
   delete manifest.generatedAtMs;
+  assertNoRetiredTonRouteManifestAliases(manifest);
   if (manifest.route_id !== ROUTE_ID || manifest.asset_key !== ASSET_KEY) {
     throw new Error(`TON route manifest must target ${ROUTE_ID}/${ASSET_KEY}.`);
   }
@@ -775,19 +851,11 @@ function normalizeTonRouteManifestForPublication(input) {
     manifest[key] = normalizeTonRawAddress(manifest[key], label);
   }
   manifest.source_bridge_address = normalizeTonRawAddress(
-    firstString(
-      manifest,
-      "source_bridge_address",
-      "sccp_tron_source_bridge_address",
-    ),
+    manifest.source_bridge_address,
     "TON source bridge address",
   );
   manifest.destination_verifier_address = normalizeTonRawAddress(
-    firstString(
-      manifest,
-      "destination_verifier_address",
-      "tron_verifier_address",
-    ),
+    manifest.destination_verifier_address,
     "TON verifier address",
   );
   if (
@@ -910,10 +978,11 @@ function normalizeTonRouteManifestForPublication(input) {
 
 function bridgeRouteManifestForInstruction(manifest) {
   const bridgeManifest = { ...manifest };
+  // The v1 ISI struct still uses legacy field names; public TON manifests do not.
+  bridgeManifest.tron_network = TON_TESTNET_LEGACY_NETWORK;
   bridgeManifest.sccp_tron_source_bridge_address =
-    manifest.sccp_tron_source_bridge_address ?? manifest.source_bridge_address;
-  bridgeManifest.tron_verifier_address =
-    manifest.tron_verifier_address ?? manifest.destination_verifier_address;
+    manifest.source_bridge_address;
+  bridgeManifest.tron_verifier_address = manifest.destination_verifier_address;
   delete bridgeManifest.source_bridge_address;
   delete bridgeManifest.destination_verifier_address;
   return stableJsonValue(bridgeManifest);
@@ -1052,7 +1121,6 @@ async function commandRouteManifest(options) {
     version: 1,
     route_id: ROUTE_ID,
     asset_key: ASSET_KEY,
-    tron_network: "testnet",
     chain: "ton-testnet",
     chain_id_hex: TON_TESTNET_CHAIN_ID_HEX,
     explorer_url: options["explorer-url"] ?? TON_TESTNET_EXPLORER_URL,

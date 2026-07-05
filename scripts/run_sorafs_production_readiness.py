@@ -62,6 +62,11 @@ PLAN_FIELDS = frozenset(
         "steps",
     }
 )
+PLAN_REQUIRED_THRESHOLD_FIELDS = frozenset({"max_summary_artifact_age_secs"})
+PLAN_POSITIVE_THRESHOLD_FIELDS = frozenset({"now_unix"})
+PLAN_NON_NEGATIVE_THRESHOLD_FIELDS = frozenset({"max_summary_artifact_age_secs"})
+PLAN_THRESHOLD_FIELDS_LABEL = "max_summary_artifact_age_secs and optional now_unix"
+PLAN_DEPLOYMENT_CONTEXT_FIELDS = frozenset({"deployment_id", "environment"})
 COMMAND_PATH_FLAGS = frozenset({"--evidence", "--summary-out"})
 
 
@@ -358,12 +363,12 @@ def validate_plan_json(
         required_gates=args.required_gates,
         known_gates=GATE_BY_NAME,
         thresholds=expected_thresholds,
-        required_threshold_fields=frozenset({"max_summary_artifact_age_secs"}),
-        positive_threshold_fields=frozenset({"now_unix"}),
-        non_negative_threshold_fields=frozenset({"max_summary_artifact_age_secs"}),
-        threshold_fields_label="max_summary_artifact_age_secs and optional now_unix",
+        required_threshold_fields=PLAN_REQUIRED_THRESHOLD_FIELDS,
+        positive_threshold_fields=PLAN_POSITIVE_THRESHOLD_FIELDS,
+        non_negative_threshold_fields=PLAN_NON_NEGATIVE_THRESHOLD_FIELDS,
+        threshold_fields_label=PLAN_THRESHOLD_FIELDS_LABEL,
         deployment_context=expected_deployment_context,
-        deployment_context_fields=frozenset({"deployment_id", "environment"}),
+        deployment_context_fields=PLAN_DEPLOYMENT_CONTEXT_FIELDS,
         deployment_context_value_errors=deployment_context_value_errors,
         external_summaries=expected_external_summaries,
         summary_contract=expected_summary_contract,

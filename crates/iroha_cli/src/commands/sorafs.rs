@@ -2942,7 +2942,7 @@ impl ModerationQuarantineNotificationsCanaryArgs {
             Value::from(self.manifest.to_string_lossy().into_owned()),
         );
         evidence.insert(
-            "manifest_body_blake3".into(),
+            "manifest_body_blake3_hex".into(),
             Value::from(encode(
                 blake3::hash(
                     &norito::json::to_vec(&manifest)
@@ -25354,6 +25354,17 @@ mod tests {
         assert_eq!(
             evidence.get("accepted_count").and_then(Value::as_u64),
             Some(1)
+        );
+        assert!(
+            evidence
+                .get("manifest_body_blake3_hex")
+                .and_then(Value::as_str)
+                .is_some(),
+            "canary evidence should expose the typed manifest digest key"
+        );
+        assert!(
+            evidence.get("manifest_body_blake3").is_none(),
+            "canary evidence must not emit the ambiguous manifest digest key"
         );
         assert_eq!(
             evidence

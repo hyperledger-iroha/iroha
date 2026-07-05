@@ -269,6 +269,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "weekly_report_generated",
         "status_export_verified",
         "governance_archive_handoff_verified",
+        "governance_archive_handoff_digest_hex",
         "archive_retention_bound",
         "operator_archive_decision_recorded",
         "archive_backend",
@@ -356,9 +357,24 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_context_reviewed",
     "seed_replay_digest_hex",
     "policy_digest_hex",
+    "governance_archive_handoff_digest_hex",
     "metric_count",
     "metrics",
 )
+
+
+def validated_archive_backend_fingerprint_values(
+    kind_name: str,
+    payload: dict[str, Any],
+) -> dict[str, str]:
+    """Return archive backend fingerprint fields only after closed-set validation."""
+
+    if kind_name != "reporting_archive":
+        return {}
+    archive_backend = payload.get("archive_backend")
+    if isinstance(archive_backend, str) and archive_backend in ALLOWED_ARCHIVE_BACKENDS:
+        return {"archive_backend": archive_backend}
+    return {}
 
 
 def validate_routes(payload: dict[str, Any], errors: list[str], options: ValidationOptions) -> None:
@@ -552,6 +568,12 @@ def validate_reporting_archive(
     require_bool_true(payload, "weekly_report_generated", errors)
     require_bool_true(payload, "status_export_verified", errors)
     require_bool_true(payload, "governance_archive_handoff_verified", errors)
+    require_hex(
+        payload,
+        "governance_archive_handoff_digest_hex",
+        HEX64_LEN,
+        errors,
+    )
     require_bool_true(payload, "archive_retention_bound", errors)
     require_bool_true(payload, "operator_archive_decision_recorded", errors)
     archive_backend = require_string(payload, "archive_backend", errors)
@@ -664,6 +686,8 @@ def build_summary(
     valid_policy_digests: set[str] = set()
     valid_seed_replay_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    archive_backends: set[str] = set()
+    valid_governance_archive_handoff_digests: set[str] = set()
     metric_counts: set[int] = set()
     metric_names: set[str] = set()
     files = discover_evidence_files(
@@ -694,18 +718,34 @@ def build_summary(
             validation_errors,
             FINGERPRINT_FIELDS,
         )
+        fingerprint_values = validated_archive_backend_fingerprint_values(
+            kind_name,
+            payload,
+        )
+        if fingerprint_values:
+            evidence_artifact_fingerprint(artifact).update(fingerprint_values)
         if kind_name == "observability":
             record_observed_evidence_value(metric_counts, payload.get("metric_count"))
             metric_names.update(hashable_evidence_values(payload.get("metrics")))
         if evidence_artifact_is_valid(artifact):
-            digest = evidence_artifact_fingerprint(artifact).get("seed_replay_digest_hex")
+            fingerprint = evidence_artifact_fingerprint(artifact)
+            if kind_name == "reporting_archive":
+                archive_backend = fingerprint.get("archive_backend")
+                if isinstance(archive_backend, str):
+                    archive_backends.add(archive_backend)
+                handoff_digest = fingerprint.get(
+                    "governance_archive_handoff_digest_hex"
+                )
+                if isinstance(handoff_digest, str):
+                    valid_governance_archive_handoff_digests.add(
+                        handoff_digest.lower()
+                    )
+            digest = fingerprint.get("seed_replay_digest_hex")
             if kind_name == "randomness" and isinstance(digest, str):
                 valid_seed_replay_digests.add(digest.lower())
             elif kind_name in SEED_REPLAY_BOUND_KINDS:
                 valid_seed_replay_bound_artifacts.append((kind_name, artifact))
-            policy_digest = evidence_artifact_fingerprint(artifact).get(
-                "policy_digest_hex"
-            )
+            policy_digest = fingerprint.get("policy_digest_hex")
             if kind_name == "randomness" and isinstance(policy_digest, str):
                 valid_policy_digests.add(policy_digest.lower())
             elif kind_name in POLICY_BOUND_KINDS:
@@ -771,6 +811,10 @@ def build_summary(
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_seed_replay_digests": sorted(valid_seed_replay_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
+        "archive_backends": sorted(archive_backends),
+        "valid_governance_archive_handoff_digests": sorted(
+            valid_governance_archive_handoff_digests
+        ),
         "metrics": sorted(metric_names),
         "metric_count_values": sorted(metric_counts),
         "required": required,

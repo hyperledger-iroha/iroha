@@ -264,6 +264,29 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+ROSTER_BOUND_FIXTURES = (
+    ("auditor_api", "auditor-api.json", auditor_api),
+    ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+    ("event_streams", "event-streams.json", event_streams),
+    ("governance_handoff", "governance-handoff.json", governance_handoff),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+FAILURE_BOUND_FIXTURES = (
+    ("worker_lifecycle", "worker-lifecycle.json", worker_lifecycle),
+    ("event_streams", "event-streams.json", event_streams),
+    ("governance_handoff", "governance-handoff.json", governance_handoff),
+)
+
+HANDOFF_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -289,6 +312,47 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert observability_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
     )
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in ROSTER_BOUND_FIXTURES)
+        == MODULE.ROSTER_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in FAILURE_BOUND_FIXTURES)
+        == MODULE.FAILURE_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in HANDOFF_BOUND_FIXTURES)
+        == MODULE.HANDOFF_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(source for source in failure_capture()["failure_sources"]) == (
+        MODULE.REQUIRED_FAILURE_SOURCES
+    )
+    assert tuple(route["name"] for route in auditor_api()["routes"]) == (
+        MODULE.REQUIRED_AUDITOR_ROUTES
+    )
+    assert tuple(route["name"] for route in worker_lifecycle()["routes"]) == (
+        MODULE.REQUIRED_WORKER_ROUTES
+    )
+    assert tuple(worker_lifecycle()["statuses_observed"]) == (
+        MODULE.REQUIRED_LIFECYCLE_STATUSES
+    )
+    assert tuple(route["name"] for route in event_streams()["routes"]) == (
+        MODULE.REQUIRED_EVENT_ROUTES
+    )
+    assert tuple(governance_handoff()["handoff_targets"]) == (
+        MODULE.REQUIRED_GOVERNANCE_TARGETS
+    )
+    assert tuple(observability()["metrics"]) == MODULE.REQUIRED_METRICS
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -772,6 +836,31 @@ def test_worker_lifecycle_roster_digest_must_match_roster(tmp_path: Path) -> Non
     ]
 
 
+def test_all_roster_bound_artifacts_reject_auditor_roster_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in ROSTER_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["roster_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} roster_digest_hex must reference a valid "
+            "auditor_roster roster_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_worker_statuses_must_not_duplicate(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = worker_lifecycle()
@@ -847,6 +936,31 @@ def test_governance_handoff_failure_digest_must_match_capture(tmp_path: Path) ->
         "governance_handoff evidence_bundle_digest_hex must reference a valid "
         "failure_capture evidence_bundle_digest_hex"
     ]
+
+
+def test_all_failure_bound_artifacts_reject_failure_capture_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in FAILURE_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["evidence_bundle_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} evidence_bundle_digest_hex must reference a valid "
+            "failure_capture evidence_bundle_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_governance_handoff_targets_must_not_duplicate(tmp_path: Path) -> None:
@@ -932,6 +1046,31 @@ def test_governance_approval_handoff_digest_must_match_handoff(tmp_path: Path) -
     ]
 
 
+def test_all_handoff_bound_artifacts_reject_governance_handoff_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in HANDOFF_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["handoff_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} handoff_digest_hex must reference a valid "
+            "governance_handoff handoff_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_governance_handoff_requires_policy_digest(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -968,6 +1107,31 @@ def test_governance_approval_policy_digest_must_match_handoff(
         "governance_approval policy_digest_hex must reference a valid "
         "governance_handoff policy_digest_hex"
     ]
+
+
+def test_all_policy_bound_artifacts_reject_governance_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must reference a valid "
+            "governance_handoff policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_policy_bound_subset_requires_governance_handoff_anchor(tmp_path: Path) -> None:

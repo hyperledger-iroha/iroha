@@ -5,8 +5,15 @@
 
 #[tokio::test]
 async fn sumeragi_status_sse_content_type() {
+    use std::sync::Arc;
+
     use axum::{Router, routing::get};
-    use iroha_core::sumeragi::status;
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+        sumeragi::status,
+    };
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
     use tower::ServiceExt;
@@ -25,9 +32,17 @@ async fn sumeragi_status_sse_content_type() {
         )),
     );
 
+    let state = Arc::new(State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    ));
     let app = Router::new().route(
         "/v1/sumeragi/status/sse",
-        get(|| async move { iroha_torii::handle_v1_sumeragi_status_sse(200, true) }),
+        get(move || {
+            let state = state.clone();
+            async move { iroha_torii::handle_v1_sumeragi_status_sse(state, 200, true) }
+        }),
     );
 
     let resp = app

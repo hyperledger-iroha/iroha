@@ -94,22 +94,12 @@ def parse_domain(value: str) -> int:
     """Parse an EVM-family source domain."""
 
     if type(value) is not str:
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    if value != value.strip():
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    text = value.lower()
-    if text == "eth":
+        raise argparse.ArgumentTypeError("domain must be eth or bsc") from None
+    if value == "eth":
         return SCCP_DOMAIN_ETH
-    if text == "bsc":
+    if value == "bsc":
         return SCCP_DOMAIN_BSC
-    if not text or not text.isascii() or not text.isdecimal():
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    if len(text) > 1 and text.startswith("0"):
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    parsed = int(text, 10)
-    if parsed not in EXPECTED_RPC_CHAIN_IDS:
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    return parsed
+    raise argparse.ArgumentTypeError("domain must be eth or bsc") from None
 
 
 def parse_rpc_chain_id(value: str) -> int:
@@ -150,7 +140,7 @@ def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[st
 
 def _normalize_evm_rpc_url(rpc_url: str) -> str:
     if (
-        not isinstance(rpc_url, str)
+        type(rpc_url) is not str
         or rpc_url != rpc_url.strip()
         or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in rpc_url)
     ):
@@ -769,31 +759,25 @@ def collect_receipt_proof_evidence(
     transaction_hash: bytes,
     expected_rpc_chain_id: int | None = None,
     source_bridge_address: bytes | None = None,
-    allow_receipt_only_evidence: bool = False,
     opener: Urlopen = urllib.request.urlopen,
     timeout: float = 15.0,
 ) -> dict[str, Any]:
     """Collect a receipt trie proof from a mainnet JSON-RPC endpoint."""
 
-    if type(allow_receipt_only_evidence) is not bool:
-        raise ValueError("allow_receipt_only_evidence must be a boolean")
     transaction_hash = _require_direct_bytes_arg(
         transaction_hash,
         label="transaction_hash",
         byte_length=32,
     )
-    if source_bridge_address is not None:
-        source_bridge_address = _require_direct_bytes_arg(
-            source_bridge_address,
-            label="source_bridge_address",
-            byte_length=20,
-        )
-    if source_bridge_address is None and not allow_receipt_only_evidence:
+    if source_bridge_address is None:
         raise ValueError(
-            "source_bridge_address is required for SCCP source-event evidence; "
-            "set allow_receipt_only_evidence=True only for generic "
-            "receipt-trie diagnostics"
+            "source_bridge_address is required for SCCP source-event evidence"
         )
+    source_bridge_address = _require_direct_bytes_arg(
+        source_bridge_address,
+        label="source_bridge_address",
+        byte_length=20,
+    )
     chain_id = _require_mainnet_chain(
         rpc_url,
         domain=domain,
@@ -897,22 +881,18 @@ def collect_receipt_proof_evidence(
         raise RuntimeError(
             "eth_getBlockReceipts target receipt RLP must match eth_getTransactionReceipt"
         )
-    source_event_digest = None
-    if source_bridge_address is not None:
-        source_event_digest = _source_event_digest_from_receipt(
-            receipt,
-            source_bridge_address=source_bridge_address,
-            transaction_hash=transaction_hash,
-            block_hash=block_hash,
-            block_number=block_number,
-        )
+    source_event_digest = _source_event_digest_from_receipt(
+        receipt,
+        source_bridge_address=source_bridge_address,
+        transaction_hash=transaction_hash,
+        block_hash=block_hash,
+        block_number=block_number,
+    )
     return {
         "domain": domain,
         "chain": "eth" if domain == SCCP_DOMAIN_ETH else "bsc",
         "read_only": True,
-        "evidence_mode": (
-            "receipt_only" if source_event_digest is None else "sccp_source_event"
-        ),
+        "evidence_mode": "sccp_source_event",
         "rpc_chain_id": chain_id,
         "transaction_hash": _hex(transaction_hash),
         "transaction_index": transaction_index,
@@ -928,13 +908,8 @@ def collect_receipt_proof_evidence(
         "receipt_trie_proof_nodes": [
             _hex(node) for node in proof["receipt_trie_proof_nodes"]
         ],
-        "source_event_validated": source_event_digest is not None,
-        "receipt_only_evidence": source_event_digest is None,
-        **(
-            {}
-            if source_event_digest is None
-            else {"source_event_digest": _hex(source_event_digest)}
-        ),
+        "source_event_validated": True,
+        "source_event_digest": _hex(source_event_digest),
     }
 
 
@@ -964,14 +939,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "SCCP source bridge address. Required by default so the receipt "
             "must contain exactly one canonical source event log."
-        ),
-    )
-    parser.add_argument(
-        "--allow-receipt-only-evidence",
-        action="store_true",
-        help=(
-            "Collect generic receipt-trie diagnostics without SCCP source-event "
-            "validation. Do not use this mode as source proof material."
         ),
     )
     parser.add_argument("--timeout", type=float, default=15.0, help="HTTP timeout in seconds.")
@@ -1059,11 +1026,9 @@ def _cli_error_detail(exc: BaseException, *, fallback: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.source_bridge_address is None and not args.allow_receipt_only_evidence:
+    if args.source_bridge_address is None:
         parser.error(
-            "--source-bridge-address is required for SCCP source-event evidence; "
-            "pass --allow-receipt-only-evidence only for generic "
-            "receipt-trie diagnostics"
+            "--source-bridge-address is required for SCCP source-event evidence"
         )
     try:
         summary = collect_receipt_proof_evidence(
@@ -1072,7 +1037,6 @@ def main(argv: list[str] | None = None) -> int:
             transaction_hash=args.transaction_hash,
             expected_rpc_chain_id=args.expected_rpc_chain_id,
             source_bridge_address=args.source_bridge_address,
-            allow_receipt_only_evidence=args.allow_receipt_only_evidence,
             timeout=args.timeout,
         )
     except (

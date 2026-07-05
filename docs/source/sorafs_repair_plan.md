@@ -466,6 +466,12 @@ The summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the observability artifact fingerprint before final
 promotion can report ready.
+Aggregate promotion also rechecks the lane-proven repair digest relationships:
+roster-bound artifact fingerprints must match `valid_roster_digests`,
+failure-bound artifact fingerprints must match `valid_failure_bundle_digests`,
+handoff-bound artifact fingerprints must match `valid_handoff_digests`, and
+policy-bound artifact fingerprints must match `valid_policy_digests` before
+final promotion can report ready.
 Its collection planner exposes those exact required payload fields through
 `--dry-run` and validates the schema-closed collection plan, required kinds,
 thresholds, external evidence map, evidence contract, and command steps before

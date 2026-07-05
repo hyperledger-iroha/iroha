@@ -218,6 +218,23 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+RECEIPT_SUMMARY_BOUND_FIXTURES = (
+    ("receipt_validation", "receipt-validation.json", receipt_validation),
+    ("proof_stream", "proof-stream.json", proof_stream),
+    ("reputation_integration", "reputation-integration.json", reputation_integration),
+    ("observability", "observability.json", observability),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+PQ_KEY_ROSTER_BOUND_FIXTURES = (
+    ("receipt_validation", "receipt-validation.json", receipt_validation),
+)
+
+REPUTATION_WEIGHT_BOUND_FIXTURES = (
+    ("reputation_integration", "reputation-integration.json", reputation_integration),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -241,6 +258,37 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     )
     assert observability_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
+    )
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(
+            kind_name
+            for kind_name, _file_name, _factory in RECEIPT_SUMMARY_BOUND_FIXTURES
+        )
+        == MODULE.RECEIPT_SUMMARY_BOUND_KINDS
+    )
+    assert (
+        tuple(
+            kind_name
+            for kind_name, _file_name, _factory in PQ_KEY_ROSTER_BOUND_FIXTURES
+        )
+        == MODULE.PQ_KEY_ROSTER_BOUND_KINDS
+    )
+    assert (
+        tuple(
+            kind_name
+            for kind_name, _file_name, _factory in REPUTATION_WEIGHT_BOUND_FIXTURES
+        )
+        == MODULE.REPUTATION_WEIGHT_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(multi_provider_probe()["tiers_observed"]) == MODULE.REQUIRED_TIERS
+    assert tuple(route["name"] for route in proof_stream()["routes"]) == (
+        MODULE.REQUIRED_ROUTES
     )
 
 
@@ -333,6 +381,31 @@ def test_stale_probe_fails(tmp_path: Path) -> None:
         "receipt_validation receipt_summary_digest_hex requires a valid "
         "multi_provider_probe receipt_summary_digest_hex"
     ]
+
+
+def test_all_receipt_summary_bound_artifacts_reject_probe_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in RECEIPT_SUMMARY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["receipt_summary_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} receipt_summary_digest_hex must reference a valid "
+            "multi_provider_probe receipt_summary_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_raw_receipt_leakage_fails(tmp_path: Path) -> None:
@@ -608,6 +681,31 @@ def test_receipt_validation_pq_key_roster_digest_must_match_governance(
     ]
 
 
+def test_all_pq_key_roster_bound_artifacts_reject_governance_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in PQ_KEY_ROSTER_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["pq_key_roster_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} pq_key_roster_digest_hex must reference a valid "
+            "governance_approval pq_key_roster_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_receipt_validation_requires_receipt_summary_binding(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = receipt_validation()
@@ -738,6 +836,31 @@ def test_reputation_weight_policy_digest_must_match_governance(
         "reputation_integration reputation_weight_policy_digest_hex must "
         "reference a valid governance_approval reputation_weight_policy_digest_hex"
     ]
+
+
+def test_all_reputation_weight_bound_artifacts_reject_governance_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in REPUTATION_WEIGHT_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["reputation_weight_policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} reputation_weight_policy_digest_hex must reference a "
+            "valid governance_approval reputation_weight_policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_observability_critical_alert_fails(tmp_path: Path) -> None:

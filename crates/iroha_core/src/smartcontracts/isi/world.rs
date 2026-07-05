@@ -3379,7 +3379,7 @@ pub mod isi {
             }
 
             let payload = SccpRouteManifestProposal {
-                manifest: self.manifest.clone(),
+                manifest: Box::new(self.manifest.clone()),
             };
             let kind = ProposalKind::SccpRouteManifest(payload.clone());
             if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
@@ -5241,7 +5241,8 @@ pub mod isi {
                     enact_runtime_upgrade_proposal(state_transaction, payload, &proposal.proposer)?;
                 }
                 ProposalKind::SccpRouteManifest(payload) => {
-                    let manifest = sccp_route_manifest_to_actual(payload.manifest.clone())?;
+                    let manifest =
+                        sccp_route_manifest_to_actual(payload.manifest.as_ref().clone())?;
                     upsert_sccp_route_manifest_actual(state_transaction, manifest);
                 }
             }

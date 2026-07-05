@@ -190,7 +190,7 @@ def parse_code_boc_file(value: str, *, label: str) -> bytes:
     """Parse non-empty TON code BoC bytes from a raw, hex, or base64 file."""
 
     if type(value) is not str:
-        raise argparse.ArgumentTypeError(f"{label} file cannot be read")
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     path = Path(value).expanduser()
     raw = _read_code_boc_file(path, label=label)
     if not raw:
@@ -227,6 +227,18 @@ def parse_positive_decimal_text(value: str, *, label: str) -> str:
     ):
         raise argparse.ArgumentTypeError(f"{label} must be a positive decimal")
     return text
+
+
+def _require_last_transaction_lt_text(value: object) -> str:
+    if type(value) is not str:
+        raise ValueError("last_transaction_lt must be a positive decimal") from None
+    try:
+        return parse_positive_decimal_text(
+            value,
+            label="last_transaction_lt",
+        )
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
+        raise ValueError("last_transaction_lt must be a positive decimal") from None
 
 
 def parse_account_status(value: str, *, label: str) -> str:
@@ -1018,15 +1030,7 @@ def ton_route_canary_evidence_hash(
         label="account_state_hash",
         byte_length=32,
     )
-    if not isinstance(last_transaction_lt, str):
-        raise ValueError("last_transaction_lt must be a positive decimal") from None
-    try:
-        last_transaction_lt = parse_positive_decimal_text(
-            last_transaction_lt,
-            label="last_transaction_lt",
-        )
-    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
-        raise ValueError("last_transaction_lt must be a positive decimal") from None
+    last_transaction_lt = _require_last_transaction_lt_text(last_transaction_lt)
     last_transaction_hash = _require_fixed_bytes(
         last_transaction_hash,
         label="last_transaction_hash",
@@ -1063,17 +1067,19 @@ def ton_route_canary_evidence_hash(
 
 
 def _toml_string(value: str) -> str:
+    if type(value) is not str:
+        raise TypeError("unsupported TOML string value")
     return json.dumps(value)
 
 
 def _toml_line(key: str, value: object) -> str:
-    if isinstance(value, bool):
+    if type(value) is bool:
         rendered = "true" if value else "false"
-    elif isinstance(value, int):
+    elif type(value) is int:
         rendered = str(value)
-    elif isinstance(value, str):
+    elif type(value) is str:
         rendered = _toml_string(value)
-    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+    elif type(value) is list and all(type(item) is str for item in value):
         rendered = "[" + ", ".join(_toml_string(item) for item in value) + "]"
     else:
         raise TypeError(f"unsupported TOML value for {key}")
@@ -1081,6 +1087,7 @@ def _toml_line(key: str, value: object) -> str:
 
 
 def _destination_rollout_lines(args: argparse.Namespace) -> Iterable[str]:
+    last_transaction_lt = _require_last_transaction_lt_text(args.last_transaction_lt)
     yield "[[zk.sccp_destination_rollouts]]"
     yield _toml_line("version", 1)
     yield _toml_line("domain", SCCP_DOMAIN_TON)
@@ -1095,7 +1102,7 @@ def _destination_rollout_lines(args: argparse.Namespace) -> Iterable[str]:
     yield _toml_line("anchor_id", TON_DESTINATION_ANCHOR_ID)
     yield _toml_line("ton_account_status", args.account_status)
     yield _toml_line("ton_account_state_hash", _hex(args.account_state_hash))
-    yield _toml_line("ton_last_transaction_lt", str(args.last_transaction_lt))
+    yield _toml_line("ton_last_transaction_lt", last_transaction_lt)
     yield _toml_line("ton_last_transaction_hash", _hex(args.last_transaction_hash))
     yield _toml_line(
         "ton_verifier_code_boc_root_hash",
@@ -1150,6 +1157,7 @@ def _route_canary_toml_lines(
     )
     if canary_hash is None:
         return []
+    last_transaction_lt = _require_last_transaction_lt_text(args.last_transaction_lt)
     return [
         _toml_line("route_canary_status", "passed"),
         _toml_line("route_canary_evidence_hash", _hex(canary_hash)),
@@ -1161,7 +1169,7 @@ def _route_canary_toml_lines(
         _toml_line("ton_route_canary_account_state_hash", _hex(args.account_state_hash)),
         _toml_line(
             "ton_route_canary_last_transaction_lt",
-            str(args.last_transaction_lt),
+            last_transaction_lt,
         ),
         _toml_line(
             "ton_route_canary_last_transaction_hash",
@@ -1183,6 +1191,7 @@ def _route_canary_comment_lines(
     )
     if canary_hash is None:
         return []
+    last_transaction_lt = _require_last_transaction_lt_text(args.last_transaction_lt)
     return [
         "# sccp_route_canary_status = " + json.dumps("passed"),
         "# sccp_route_canary_evidence_hash = " + json.dumps(_hex(canary_hash)),
@@ -1193,7 +1202,7 @@ def _route_canary_comment_lines(
         "# sccp_ton_route_canary_account_state_hash = "
         + json.dumps(_hex(args.account_state_hash)),
         "# sccp_ton_route_canary_last_transaction_lt = "
-        + json.dumps(str(args.last_transaction_lt)),
+        + json.dumps(last_transaction_lt),
         "# sccp_ton_route_canary_last_transaction_hash = "
         + json.dumps(_hex(args.last_transaction_hash)),
     ]
@@ -1212,13 +1221,14 @@ def _route_canary_summary(
     )
     if canary_hash is None:
         return None
+    last_transaction_lt = _require_last_transaction_lt_text(args.last_transaction_lt)
     return {
         "status": "passed",
         "evidence_hash": _hex(canary_hash),
         "route_allowlist_hash": _hex(route_allowlist_hash),
         "destination_binding_hash": _hex(destination_binding_hash),
         "ton_account_state_hash": _hex(args.account_state_hash),
-        "ton_last_transaction_lt": str(args.last_transaction_lt),
+        "ton_last_transaction_lt": last_transaction_lt,
         "ton_last_transaction_hash": _hex(args.last_transaction_hash),
         "evidence_bound": True,
     }
@@ -1341,14 +1351,11 @@ def _require_toml_account_metadata(
         byte_length=32,
     )
     last_transaction_lt = getattr(args, "last_transaction_lt", None)
-    if not isinstance(last_transaction_lt, str):
-        raise ValueError(f"--{output} requires --last-transaction-lt")
     try:
-        canonical_last_transaction_lt = parse_positive_decimal_text(
-            last_transaction_lt,
-            label="last transaction LT",
+        canonical_last_transaction_lt = _require_last_transaction_lt_text(
+            last_transaction_lt
         )
-    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
+    except ValueError:
         raise ValueError(f"--{output} requires --last-transaction-lt") from None
     if canonical_last_transaction_lt != last_transaction_lt:
         raise ValueError(f"--{output} requires --last-transaction-lt")
@@ -1477,13 +1484,14 @@ def render_toml(
         raise ValueError("--toml requires --route-canary-evidence-hash")
     _require_toml_account_metadata(args, output="toml")
     _require_code_boc_root_metadata(args, output="toml")
+    last_transaction_lt = _require_last_transaction_lt_text(args.last_transaction_lt)
     return "\n".join(
         [
             "# sccp_ton_account_status = " + json.dumps(args.account_status),
             "# sccp_ton_account_state_hash = "
             + json.dumps(_hex(args.account_state_hash)),
             "# sccp_ton_last_transaction_lt = "
-            + json.dumps(str(args.last_transaction_lt)),
+            + json.dumps(last_transaction_lt),
             "# sccp_ton_last_transaction_hash = "
             + json.dumps(_hex(args.last_transaction_hash)),
             "# sccp_ton_code_hash = " + json.dumps(_hex(args.verifier_code_hash)),

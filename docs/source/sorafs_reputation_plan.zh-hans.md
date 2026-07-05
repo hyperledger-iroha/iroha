@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_reputation_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e3d521e53e0735104ed6abd66ec429a2b2f32b5272554fef62bcbfd5fc19def5
-source_last_modified: "2026-07-04T05:02:54.944251+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-04T05:02:54.944251+00:00
+source_hash: 33c678843e42b52e8f67a94a2dcde536d484c0877408c35551de278890d3750d
+source_last_modified: 2026-07-05T01:12:33.279909+00:00
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-05T01:12:33.279909+00:00
 ---
 
 # SoraFS Provider Reputation Oracle
@@ -33,6 +33,8 @@ snapshot-age and ingest-lag threshold facts, duplicate/unknown metric rejection 
 bounded event-watch `limit`/`count` facts with duplicate-free sequence
 inventories, reviewed `reputation-sse-event-*` and
 `reputation-websocket-event-*` transport labels without non-production markers,
+the governance-approved `--weights-digest-hex` input for publish/latest
+snapshot anchors,
 and validates every generated artifact through
 `scripts/check_sorafs_reputation_rollout_evidence.py` before writing.
 Checked-in response-file examples cover provider and metrics canaries.
@@ -222,7 +224,13 @@ CREATE TABLE reputation_snapshots (
   proof coverage, proof replay, transport event delivery, and downstream
   consumption. Snapshot binding failures are recorded on the
   offending artifact before required-kind validity is finalized, so the JSON
-  summary matches the fail-closed rollout decision. It rejects raw snapshot/proof
+  summary matches the fail-closed rollout decision. The aggregate
+  production-readiness gate also requires `valid_snapshot_bindings` to match the
+  top-level `snapshot_id_hex` and `merkle_root_hex` pair before final promotion
+  can report ready, and rechecks snapshot-bound artifact fingerprints against
+  `valid_snapshot_bindings` so downstream provider, event, proof, metrics,
+  transport, and consumption artifacts cannot drift from the lane-proven
+  publish/latest snapshot binding. It rejects raw snapshot/proof
   bytes, raw provider records, request or
   response bodies, bearer tokens, signed transactions, private keys, and other
   payload-bearing fields. The checker exports its required top-level payload
@@ -410,8 +418,13 @@ Completed local foundations:
 - `scripts/build_sorafs_reputation_canary.py` provides checked-in payload-free
   canary generation for the local SFM-3 rollout gate. Count-bearing reputation
   canaries bind `provider_count` to reviewed `provider-*` `providers[].name`
-  inventory before writing, and metrics canaries derive `metric_count` from the
-  reviewed required metric inventory before writing. The rollout summary now
+  inventory before writing, publish/latest canaries require the
+  governance-approved `weights_digest_hex`, and metrics canaries derive
+  `metric_count` from the reviewed required metric inventory before writing.
+  Publish/latest artifacts must carry the governance-approved
+  `weights_digest_hex`, keep the digest consistent across both snapshot anchors,
+  and export `valid_reputation_weight_digests` for aggregate promotion. The
+  rollout summary now
   carries the reviewed metric inventory and `metric_count_values` as
   aggregate-gate metadata so final production readiness cannot promote a
   reputation summary whose metrics evidence is absent, truncated, unknown,
@@ -433,6 +446,15 @@ Completed local foundations:
   Transport canaries also require reviewed `reputation-sse-event-*` and
   `reputation-websocket-event-*` labels without non-production markers matching
   `sse_event_count` and `websocket_event_count` before writing.
+  The aggregate production-readiness gate also requires
+  `valid_snapshot_bindings` to match the top-level `snapshot_id_hex` and
+  `merkle_root_hex` pair before final promotion can report ready, and rechecks
+  snapshot-bound artifact fingerprints against `valid_snapshot_bindings` so
+  downstream provider, event, proof, metrics, transport, and consumption
+  artifacts cannot drift from the lane-proven publish/latest snapshot binding.
+  Aggregate promotion also requires `valid_reputation_weight_digests` to match
+  publish/latest artifact fingerprints and rechecks every publish/latest
+  artifact against that metadata before final promotion can report ready.
 - Rollout evidence collection harness that publishes, reads back, watches, proof
   replays, and verifies the deployed reputation evidence bundle from one
   response-file driven operator command.
@@ -446,7 +468,8 @@ Remaining production gates:
   then publish a `ready` summary from
   `scripts/run_sorafs_reputation_rollout_evidence.py` or the direct
   `scripts/check_sorafs_reputation_rollout_evidence.py` gate.
-- Publish governance-approved weights and the first production snapshot with
-  archived `.to`/JSON artifacts and proof replay evidence.
+- Publish governance-approved weights with the governed `weights_digest_hex`
+  carried by publish/latest rollout evidence, then archive the first production
+  snapshot `.to`/JSON artifacts and proof replay evidence.
 - Exercise rollback/stale-snapshot procedures before routing or incentives rely
   on scores in production.

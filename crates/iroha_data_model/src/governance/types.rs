@@ -447,7 +447,7 @@ pub struct RuntimeUpgradeProposal {
 )]
 pub struct SccpRouteManifestProposal {
     /// Canonical SCCP route manifest payload to publish on enactment.
-    pub manifest: SccpRouteManifest,
+    pub manifest: Box<SccpRouteManifest>,
 }
 
 /// Inclusive execution window for enactment certificates.
@@ -1051,6 +1051,18 @@ mod tests {
                 panic!("unexpected sccp-route-manifest proposal")
             }
         }
+    }
+
+    #[test]
+    fn sccp_route_manifest_proposal_is_boxed_out_of_proposal_kind() {
+        assert_eq!(
+            core::mem::size_of::<SccpRouteManifestProposal>(),
+            core::mem::size_of::<Box<SccpRouteManifest>>()
+        );
+        assert!(
+            core::mem::size_of::<ProposalKind>() < core::mem::size_of::<SccpRouteManifest>(),
+            "ProposalKind must not carry the large SCCP route manifest inline"
+        );
     }
 
     #[test]

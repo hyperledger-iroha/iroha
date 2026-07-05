@@ -238,6 +238,7 @@ REQUIRED_EXECUTOR_ARTIFACT_KINDS = {
     "executor.env": "env",
     "run.sh": "script",
 }
+REQUIRED_EXECUTOR_SERVICE_NAME = "sorafs-moderation-ballots-executor"
 REQUIRED_GOVERNANCE_PRODUCERS = (
     "screening_ingest",
     "quarantine_escalation",
@@ -510,7 +511,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "workflow_digest_hex",
         "manifest_path",
         "webhook_url",
-        "manifest_body_blake3",
+        "manifest_body_blake3_hex",
         "probe_count",
         "accepted_count",
         "payload_bytes_included",
@@ -594,7 +595,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "runner_hash_hex",
     "subject_digest_hex",
     "workflow_digest_hex",
-    "manifest_body_blake3",
+    "manifest_body_blake3_hex",
     "execution_summary_digest_hex",
     "policy_digest_hex",
 )
@@ -825,7 +826,7 @@ def validate_notification_transport(payload: dict[str, Any], errors: list[str]) 
     require_hex(payload, "workflow_digest_hex", HEX64_LEN, errors)
     require_archive_portable_path(payload, "manifest_path", errors)
     require_safe_url(payload, "webhook_url", errors)
-    require_hex(payload, "manifest_body_blake3", HEX64_LEN, errors)
+    require_hex(payload, "manifest_body_blake3_hex", HEX64_LEN, errors)
     require_count_equal(payload, "probe_count", "accepted_count", errors)
     require_minimum_int(payload, "accepted_count", 1, errors)
     require_string_inventory_count_match(
@@ -917,7 +918,12 @@ def validate_commit_reveal_executor(payload: dict[str, Any], errors: list[str]) 
     require_string(payload, "bundle_dir", errors)
     require_positive_int(payload, "bundle_metadata_bytes", errors)
     require_hex(payload, "bundle_metadata_blake3", HEX64_LEN, errors)
-    require_string(payload, "service_name", errors)
+    require_string_equal(
+        payload,
+        "service_name",
+        REQUIRED_EXECUTOR_SERVICE_NAME,
+        errors,
+    )
     require_positive_int(payload, "interval_secs", errors)
     artifact_count = require_count_equal(
         payload, "artifact_count", "passed_artifact_count", errors
@@ -1344,7 +1350,7 @@ def build_summary(
                 if isinstance(digest, str):
                     valid_workflow_digests.add(digest.lower())
             if kind_name == "notification_transport":
-                digest = fingerprint.get("manifest_body_blake3")
+                digest = fingerprint.get("manifest_body_blake3_hex")
                 if isinstance(digest, str):
                     valid_notification_manifest_digests.add(digest.lower())
             if kind_name == "commit_reveal_executor":

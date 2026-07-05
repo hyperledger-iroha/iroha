@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_potr_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 25e6479e904f6e4969a0f20a8a887a3d2d2653e19c12093aa98cea78973b87cd
-source_last_modified: "2026-07-04T05:42:00.646783+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-04T05:42:00.646783+00:00
+source_hash: da8bb56a955aad96359de32a045b5e6defe0b147c33733af01e8246020d85244
+source_last_modified: "2026-07-04T22:57:30.469522+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-04T22:57:30.469522+00:00
 ---
 
 # PoTR-Lite Deadline Proofs Status
@@ -204,11 +204,16 @@ set, and reject duplicate or unknown metric labels before promotion can report
 ready. The summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the observability artifact fingerprint before final
-promotion can report ready. The collection planner exposes those exact required
-payload fields through `--dry-run` and validates the schema-closed collection
-plan, required kinds, thresholds, external evidence map, evidence contract, and
-command steps before contacting live PoTR services. The shared runner plan
-guard rejects
+promotion can report ready. Aggregate promotion also rechecks the lane-proven
+PoTR digest relationships: receipt-summary-bound artifact fingerprints must
+match `valid_receipt_summary_digests`, PQ-key-roster-bound artifact
+fingerprints must match `valid_pq_key_roster_digests`, and
+reputation-weight-bound artifact fingerprints must match
+`valid_reputation_weight_policy_digests` before final promotion can report
+ready. The collection planner exposes those exact required payload fields
+through `--dry-run` and validates the schema-closed collection plan, required
+kinds, thresholds, external evidence map, evidence contract, and command steps
+before contacting live PoTR services. The shared runner plan guard rejects
 non-canonical nested required-kind, threshold, external-evidence,
 evidence-contract, and command-step shapes before any live PoTR contact.
 

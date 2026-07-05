@@ -4,12 +4,11 @@ direction: ltr
 source: docs/source/sorafs_por_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b32b0cf2adeaa7f706dba3f264fc1f10648750e956bdbdf71becb46918a82194
-source_last_modified: "2026-07-04T05:38:16.762019+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-04T05:38:16.762019+00:00
+source_hash: 20074dd52af70730424b83fab999b280445ce3d6e6b8edf3bc12cda982c02731
+source_last_modified: "2026-07-05T00:48:50.900046+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: "2026-07-05T00:48:50.900046+00:00"
 ---
-
 # SoraFS PoR Challenge Scheduler & Randomness Integration
 
 ## Goals & Scope
@@ -30,7 +29,9 @@ fixtures. The reference validator also provides
 Remaining SF-9a rollout work is live deployment evidence for external drand,
 VRF, and auditor feeds, plus any production governance archive handoff required
 by the operator; each deployment's SQL/Parquet archive backend decision is now
-part of the checked reporting/archive evidence. `scripts/check_sorafs_por_rollout_evidence.py` now provides
+part of the checked reporting/archive evidence, and operator-required
+governance archive handoff evidence must carry a fingerprinted digest.
+`scripts/check_sorafs_por_rollout_evidence.py` now provides
 the fail-closed SF-9 rollout evidence gate for deployed PoR scheduler,
 randomness, validator, reporting, archive, observability, and governance
 promotion packets, and `scripts/run_sorafs_por_rollout_evidence.py` provides
@@ -69,9 +70,9 @@ inventory matches `provider_count`, reviewed `por-challenge-*` challenge labels
 without non-production markers whose unique inventory matches `challenge_count`,
 per-route `body_blake3_hex` response digest evidence, route, scheduler-lag, and
 report-latency threshold facts, the SQL/Parquet
-archive backend selection, the manual-trigger route decision, config-backed
-governance metadata, reviewed policy digest input for randomness and
-governance-approval canaries, and
+archive backend selection, governance archive handoff digest evidence, the
+manual-trigger route decision, config-backed governance metadata, reviewed
+policy digest input for randomness and governance-approval canaries, and
 validates every generated artifact through
 `scripts/check_sorafs_por_rollout_evidence.py` before writing.
 Checked-in response-file examples cover randomness and scheduler-runtime
@@ -362,10 +363,18 @@ entries before promotion can report ready. Every route response must include a
 `body_blake3_hex` digest before runtime or reporting readiness can report ready.
 Observability artifacts also bind `metric_count` to the unique canonical
 `metrics` inventory, require the reviewed PoR metric set, and reject duplicate
-or unknown metric labels before promotion can report ready. The summary exports
-the sorted reviewed `metrics` inventory plus `metric_count_values`, and the
-aggregate production-readiness gate requires those fields to match the
-observability artifact fingerprint before final promotion can report ready.
+or unknown metric labels before promotion can report ready. Reporting/archive
+artifacts fingerprint the reviewed `archive_backend` value and
+`governance_archive_handoff_digest_hex`, the summary exports the sorted
+reviewed `metrics` inventory plus `metric_count_values`, `archive_backends`,
+and `valid_governance_archive_handoff_digests`, and the aggregate
+production-readiness gate requires those fields to match the observability and
+reporting/archive artifact fingerprints before final promotion can report
+ready.
+Aggregate promotion also rechecks the lane-proven PoR digest relationships:
+seed-replay-bound artifact fingerprints must match `valid_seed_replay_digests`,
+and policy-bound artifact fingerprints must match `valid_policy_digests` before
+final promotion can report ready.
 
 ## Rollout Status
 Implemented locally:
@@ -384,16 +393,16 @@ Implemented locally:
   cross-artifact seed replay digest binding with per-artifact summary
   invalidation and dry-run export of the checker-backed evidence contract.
   Randomness provider/challenge inventory binding and policy digest binding from
-  randomness to governance approval are now covered by the same evidence gate.
+  randomness to governance approval are now covered by the same evidence gate,
+  and reporting/archive evidence now fingerprints the reviewed archive backend
+  and governance archive handoff digest.
 
 Remaining production gates:
 - Archive a live drand/VRF/auditor run showing deterministic challenge
   generation and verdict replay that passes the SF-9 rollout evidence gate with
   all runtime/replay/reporting/governance evidence bound to the same seed replay
   digest, randomness evidence bound to reviewed provider and challenge
-  inventories, governance approval bound to the randomness policy digest, and
-  any binding failure marked on the offending artifact in the emitted summary.
-- Capture each deployment's reviewed SQL/Parquet archive backend selection in
-  the SF-9 reporting/archive evidence packet.
-- Capture governance DAG archive handoff evidence for production operators and
-  include it in the SF-9 reporting/archive evidence packet.
+  inventories, governance approval bound to the randomness policy digest, any
+  operator-required governance archive handoff carried as
+  `governance_archive_handoff_digest_hex`, and any binding failure marked on the
+  offending artifact in the emitted summary.

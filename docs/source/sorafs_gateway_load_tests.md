@@ -163,7 +163,11 @@ duplicate or unknown metric labels before promotion can report ready. The
 summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the telemetry/SLO artifact fingerprint before final
-promotion can report ready.
+promotion can report ready. Aggregate promotion also rechecks the lane-proven
+digest relationships: suite-bound artifact fingerprints must match
+`valid_suite_report_digests`, staging-bound artifact fingerprints must match
+`valid_staging_report_digests`, and policy-bound artifact fingerprints must
+match `valid_policy_digests`.
 
 ## Failure Injection Coverage
 

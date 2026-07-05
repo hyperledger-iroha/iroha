@@ -34,6 +34,7 @@ from check_sorafs_hedging_rollout_evidence import (  # noqa: E402
     LINE_ITEM_LABEL_ERROR,
     LINE_ITEM_LABEL_PATTERN,
     NATIVE_BRIDGE_ARTIFACT_ID_ERROR,
+    NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES,
     NATIVE_BRIDGE_ARTIFACT_ID_PATTERN,
     REQUIRED_METRICS,
     REQUIRED_PRICE_FEEDS,
@@ -286,6 +287,8 @@ def parse_artifacts(values: Sequence[str], errors: list[str]) -> list[dict[str, 
 
     artifacts: list[dict[str, str]] = []
     seen_artifact_ids: set[str] = set()
+    covered_families: set[str] = set()
+    found_unknown_artifact_family = False
     for index, value in enumerate(values):
         if ":" not in value:
             errors.append("--artifact must use id:sha256")
@@ -315,11 +318,35 @@ def parse_artifacts(values: Sequence[str], errors: list[str]) -> list[dict[str, 
             errors.append("duplicate --artifact id")
             continue
         seen_artifact_ids.add(artifact_id)
+        family = next(
+            (
+                family
+                for family, prefix in NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES
+                if artifact_id.startswith(prefix)
+            ),
+            None,
+        )
+        if family is None:
+            found_unknown_artifact_family = True
+        else:
+            covered_families.add(family)
         artifacts.append({"id": artifact_id, "sha256": sha256})
     if len(artifacts) < DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS:
         errors.append(
             "--artifact must include at least "
             f"{DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS} distinct artifacts"
+        )
+    if found_unknown_artifact_family:
+        errors.append(
+            "--artifact id must start with a reviewed native bridge family prefix"
+        )
+    required_families = {
+        family for family, _prefix in NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES
+    }
+    if required_families - covered_families:
+        errors.append(
+            "--artifact must include at least one native bridge artifact for every "
+            "reviewed bridge family"
         )
     return artifacts
 

@@ -137,9 +137,11 @@ def evidence_viewer() -> dict:
         "offline_mode_disabled": True,
         "per_session_access_logged": True,
         "append_only_log_verified": True,
+        "audit_log_tamper_rejected": True,
         "anomaly_events_recorded": True,
         "watermark_overlay_rendered": True,
         "watermark_metadata_hashed": True,
+        "watermark_metadata_mismatch_rejected": True,
         "audit_digest_exported": True,
         "transparency_report_exported": True,
         "daily_digest_published": True,
@@ -456,6 +458,59 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+CASE_BOUND_FIXTURES = (
+    ("sortition_roster", "sortition-roster.json", sortition_roster),
+    ("evidence_viewer", "evidence-viewer.json", evidence_viewer),
+    ("operator_workflow", "operator-workflow.json", operator_workflow),
+    ("juror_notifications", "juror-notifications.json", juror_notifications),
+    ("commit_reveal", "commit-reveal.json", commit_reveal),
+    ("decision_publication", "decision-publication.json", decision_publication),
+    ("settlement_integration", "settlement-integration.json", settlement_integration),
+    (
+        "transparency_reputation",
+        "transparency-reputation.json",
+        transparency_reputation,
+    ),
+    ("e2e_panel", "e2e-panel.json", e2e_panel),
+    ("metrics_alerts", "metrics-alerts.json", metrics_alerts),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+ROSTER_BOUND_FIXTURES = (
+    ("evidence_viewer", "evidence-viewer.json", evidence_viewer),
+    ("operator_workflow", "operator-workflow.json", operator_workflow),
+    ("juror_notifications", "juror-notifications.json", juror_notifications),
+    ("commit_reveal", "commit-reveal.json", commit_reveal),
+    ("decision_publication", "decision-publication.json", decision_publication),
+    ("settlement_integration", "settlement-integration.json", settlement_integration),
+    (
+        "transparency_reputation",
+        "transparency-reputation.json",
+        transparency_reputation,
+    ),
+    ("e2e_panel", "e2e-panel.json", e2e_panel),
+    ("metrics_alerts", "metrics-alerts.json", metrics_alerts),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+TALLY_BOUND_FIXTURES = (
+    ("decision_publication", "decision-publication.json", decision_publication),
+    ("settlement_integration", "settlement-integration.json", settlement_integration),
+    (
+        "transparency_reputation",
+        "transparency-reputation.json",
+        transparency_reputation,
+    ),
+    ("e2e_panel", "e2e-panel.json", e2e_panel),
+    ("metrics_alerts", "metrics-alerts.json", metrics_alerts),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -512,6 +567,57 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
         "environment": ENVIRONMENT,
     }
     assert len(payload["valid_e2e_runs"]) == 1
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in CASE_BOUND_FIXTURES)
+        == MODULE.CASE_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in ROSTER_BOUND_FIXTURES)
+        == MODULE.ROSTER_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in TALLY_BOUND_FIXTURES)
+        == MODULE.TALLY_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(route["name"] for route in appeal_intake()["routes"]) == (
+        MODULE.REQUIRED_INTAKE_ROUTES
+    )
+    assert tuple(route["name"] for route in operator_workflow()["routes"]) == (
+        MODULE.REQUIRED_OPERATOR_ROUTES
+    )
+    assert tuple(route["name"] for route in commit_reveal()["routes"]) == (
+        MODULE.REQUIRED_BALLOT_ROUTES
+    )
+    assert tuple(route["name"] for route in decision_publication()["routes"]) == (
+        MODULE.REQUIRED_DECISION_ROUTES
+    )
+    assert tuple(decision_publication()["outcomes"]) == MODULE.REQUIRED_OUTCOMES
+    assert tuple(transparency_reputation()["publication_targets"]) == (
+        MODULE.REQUIRED_PUBLICATION_TARGETS
+    )
+
+    viewer = evidence_viewer()
+    assert tuple(viewer["roles_tested"]) == MODULE.REQUIRED_VIEWER_ROLES
+    assert tuple(viewer["viewer_security_controls"]) == (
+        MODULE.REQUIRED_VIEWER_SECURITY_CONTROLS
+    )
+    assert tuple(viewer["access_event_kinds"]) == MODULE.REQUIRED_VIEWER_EVENT_KINDS
+    assert tuple(viewer["export_targets"]) == MODULE.REQUIRED_VIEWER_EXPORT_TARGETS
+
+    assert tuple(commit_reveal()["scenarios_exercised"]) == (
+        MODULE.REQUIRED_COMMIT_REVEAL_SCENARIOS
+    )
+    assert tuple(metrics_alerts()["metrics"]) == MODULE.REQUIRED_METRICS
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -742,6 +848,32 @@ def test_governance_approval_policy_digest_must_match_e2e_panel(
         "governance_approval policy_digest_hex must match a valid "
         "e2e_panel policy_digest_hex"
     ]
+
+
+def test_all_policy_bound_artifacts_reject_e2e_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must match a valid "
+            "e2e_panel policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_policy_bound_subset_requires_e2e_panel_anchor(tmp_path: Path) -> None:
@@ -1286,6 +1418,29 @@ def test_evidence_viewer_requires_access_event_coverage(tmp_path: Path) -> None:
     assert run_gate(tmp_path) == 1
 
 
+def test_evidence_viewer_requires_adversarial_security_controls(
+    tmp_path: Path,
+) -> None:
+    for field in (
+        "audit_log_tamper_rejected",
+        "watermark_metadata_mismatch_rejected",
+    ):
+        case_dir = tmp_path / field
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = evidence_viewer()
+        payload[field] = False
+        write_json(case_dir / "evidence-viewer.json", payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["evidence_viewer"]["artifacts"][0]
+        assert artifact["valid"] is False
+        assert f"{field} must be true" in artifact["errors"]
+
+
 def test_evidence_viewer_requires_auditable_digest_coverage(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = evidence_viewer()
@@ -1708,6 +1863,32 @@ def test_invalid_sortition_roster_does_not_anchor_downstream_evidence(
     )
 
 
+def test_all_case_bound_artifacts_reject_appeal_case_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in CASE_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["case_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_case_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} case_digest_hex must match a valid "
+            "appeal_intake case_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_commit_reveal_roster_binding_must_match_sortition(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = commit_reveal()
@@ -1717,6 +1898,31 @@ def test_commit_reveal_roster_binding_must_match_sortition(tmp_path: Path) -> No
     assert run_gate(tmp_path) == 1
 
 
+def test_all_roster_bound_artifacts_reject_sortition_tuple_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in ROSTER_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["roster_hash_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} case_digest_hex and roster_hash_hex "
+            "must match a valid case-bound sortition_roster artifact"
+        ) in artifact["errors"]
+
+
 def test_decision_publication_tally_binding_must_match_commit_reveal(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = decision_publication()
@@ -1724,6 +1930,31 @@ def test_decision_publication_tally_binding_must_match_commit_reveal(tmp_path: P
     write_json(tmp_path / "decision-publication.json", payload)
 
     assert run_gate(tmp_path) == 1
+
+
+def test_all_tally_bound_artifacts_reject_commit_reveal_tuple_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in TALLY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["tally_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} case_digest_hex, roster_hash_hex, and "
+            "tally_digest_hex must match a valid roster-bound commit_reveal artifact"
+        ) in artifact["errors"]
 
 
 def test_decision_publication_outcomes_must_not_duplicate(tmp_path: Path) -> None:

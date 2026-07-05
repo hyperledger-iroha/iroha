@@ -97,7 +97,14 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
             ]
         )
     elif kind == "governance_approval":
-        args.extend(["--policy-digest-hex", POLICY_DIGEST])
+        args.extend(
+            [
+                "--policy-digest-hex",
+                POLICY_DIGEST,
+                "--public-key-fingerprint-hex",
+                PUBLIC_KEY_DIGEST,
+            ]
+        )
     return args
 
 
@@ -153,6 +160,7 @@ def test_generated_canaries_pass_full_reference_sdk_release_gate(
     assert payload["status"] == "ready"
     assert payload["valid_release_manifest_digests"] == [MANIFEST_DIGEST]
     assert payload["valid_release_manifest_reference_digests"] == [MANIFEST_DIGEST]
+    assert payload["valid_release_key_fingerprints"] == [PUBLIC_KEY_DIGEST]
     assert payload["valid_policy_digests"] == [POLICY_DIGEST]
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
@@ -173,6 +181,18 @@ def test_response_file_can_build_signed_manifest_canary(tmp_path: Path) -> None:
     assert payload["policy_digest_hex"] == POLICY_DIGEST
     assert payload["private_key_absent"] is True
     assert payload["raw_manifest_included"] is False
+
+
+def test_policy_digest_kind_inventory_matches_generated_payloads(tmp_path: Path) -> None:
+    assert MODULE.POLICY_DIGEST_KINDS == ("signed_manifest", "governance_approval")
+
+    for kind in MODULE.CANARY_KINDS:
+        assert MODULE.main(args_for(kind, tmp_path)) == 0
+        payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
+        if kind in MODULE.POLICY_DIGEST_KINDS:
+            assert payload["policy_digest_hex"] == POLICY_DIGEST
+        else:
+            assert "policy_digest_hex" not in payload
 
 
 def test_signed_manifest_requires_policy_digest_before_write(
@@ -199,20 +219,70 @@ def test_signed_manifest_rejects_unsupported_signature_algorithm_before_write(
     assert MODULE.main(args) == 2
 
     captured = capsys.readouterr()
-    assert "--signature-algorithm must be `ed25519` or `rsa-sha256`" in captured.err
+    assert "--signature-algorithm must be `ed25519`" in captured.err
     assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
-def test_signed_manifest_canary_accepts_rsa_sha256_signature_algorithm(
+def test_governance_approval_canary_binds_public_key_fingerprint(
     tmp_path: Path,
+) -> None:
+    assert MODULE.main(args_for("governance_approval", tmp_path)) == 0
+
+    payload = json.loads(canary_path(tmp_path, "governance_approval").read_text("utf-8"))
+
+    assert payload["release_manifest_digest_hex"] == MANIFEST_DIGEST
+    assert payload["policy_digest_hex"] == POLICY_DIGEST
+    assert payload["public_key_fingerprint_hex"] == PUBLIC_KEY_DIGEST
+
+
+def test_governance_approval_requires_public_key_fingerprint_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_approval", tmp_path)
+    index = args.index("--public-key-fingerprint-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--public-key-fingerprint-hex is required for governance_approval"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "governance_approval").exists()
+
+
+def test_governance_approval_rejects_malformed_public_key_fingerprint_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_approval", tmp_path)
+    index = args.index("--public-key-fingerprint-hex")
+    args[index + 1] = "not-hex"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--public-key-fingerprint-hex must be exact lowercase 32-byte hex"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "governance_approval").exists()
+
+
+def test_signed_manifest_canary_rejects_rsa_sha256_signature_algorithm(
+    tmp_path: Path,
+    capsys,
 ) -> None:
     args = args_for("signed_manifest", tmp_path)
     args.extend(["--signature-algorithm", "rsa-sha256"])
 
-    assert MODULE.main(args) == 0
+    assert MODULE.main(args) == 2
 
-    payload = json.loads(canary_path(tmp_path, "signed_manifest").read_text("utf-8"))
-    assert payload["signature_algorithm"] == "rsa-sha256"
+    captured = capsys.readouterr()
+    assert "--signature-algorithm must be `ed25519`" in captured.err
+    assert not canary_path(tmp_path, "signed_manifest").exists()
 
 
 def test_missing_release_target_coverage_fails_closed(tmp_path: Path, capsys) -> None:

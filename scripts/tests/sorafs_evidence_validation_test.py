@@ -11,6 +11,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_evidence_validation import (  # noqa: E402
+    ALLOWED_ROLLOUT_ENVIRONMENTS,
+    ROLLOUT_DEPLOYMENT_REVIEW_LABELS,
     archive_artifact_path_label,
     build_evidence_artifact,
     build_kinded_evidence_artifact,
@@ -6565,6 +6567,35 @@ def test_require_rollout_environment_accepts_reviewed_labels() -> None:
     assert require_rollout_environment({"environment": "release"}, errors) == "release"
 
     assert errors == []
+
+
+def test_rollout_environment_inventory_matches_validation_policy() -> None:
+    assert ALLOWED_ROLLOUT_ENVIRONMENTS == {
+        "prod",
+        "production",
+        "release",
+        "staging",
+    }
+    assert ROLLOUT_DEPLOYMENT_REVIEW_LABELS == frozenset(
+        {"prod", "production", "release"}
+    )
+    assert ROLLOUT_DEPLOYMENT_REVIEW_LABELS < ALLOWED_ROLLOUT_ENVIRONMENTS
+
+    for environment in sorted(ALLOWED_ROLLOUT_ENVIRONMENTS):
+        errors: list[str] = []
+        assert require_rollout_environment({"environment": environment}, errors) == (
+            environment
+        )
+        assert errors == []
+
+    for label in sorted(ROLLOUT_DEPLOYMENT_REVIEW_LABELS):
+        deployment_id = f"gateway-{label}-202606"
+        errors = []
+        assert require_rollout_deployment_id(
+            {"deployment_id": deployment_id},
+            errors,
+        ) == deployment_id
+        assert errors == []
 
 
 def test_require_rollout_environment_rejects_unreviewed_labels() -> None:

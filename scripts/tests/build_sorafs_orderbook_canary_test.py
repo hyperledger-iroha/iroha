@@ -735,6 +735,45 @@ def test_sdk_release_requires_artifact_per_language_before_write(
     assert not canary_path(tmp_path, "sdk_release").exists()
 
 
+def test_sdk_release_requires_artifact_language_coverage_before_write(
+    tmp_path: Path, capsys
+) -> None:
+    args = args_for("sdk_release", tmp_path)
+    artifact_positions = [
+        index + 1 for index, value in enumerate(args) if value == "--artifact"
+    ]
+    for index, position in enumerate(artifact_positions):
+        args[position] = f"rust-orderbook-extra-{index:02d}:{ARTIFACT_DIGEST}"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--artifact must include at least one SDK release artifact for every "
+        "reviewed language"
+    ) in captured.err
+    assert not canary_path(tmp_path, "sdk_release").exists()
+
+
+def test_sdk_release_rejects_unreviewed_artifact_family_before_write(
+    tmp_path: Path, capsys
+) -> None:
+    args = args_for("sdk_release", tmp_path)
+    first_artifact = args.index("--artifact") + 1
+    artifact_id = "go-orderbook-private-key-placeholder"
+    args[first_artifact] = f"{artifact_id}:{ARTIFACT_DIGEST}"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--artifact id must start with a reviewed SDK language prefix"
+        in captured.err
+    )
+    assert artifact_id not in captured.err
+    assert not canary_path(tmp_path, "sdk_release").exists()
+
+
 def test_missing_verified_claim_fails_closed(tmp_path: Path, capsys) -> None:
     args = args_for("contract_surface", tmp_path)
     index = args.index("--verified-claim")

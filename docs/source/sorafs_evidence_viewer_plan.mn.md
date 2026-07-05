@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_evidence_viewer_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 40d67a848eb59d392182e69ed7ea2326ee41418857775f6cfc2aab52132e90bd
-source_last_modified: "2026-07-04T14:27:52.000763+00:00"
-translation_last_reviewed: 2026-07-04
-source_mtime: 2026-07-04T14:27:52.000763+00:00
+source_hash: 78829c1c4d9a3f1986e67dc26b956f003afe35e75c45c906ddc7008e7907b712
+source_last_modified: "2026-07-05T01:58:10.285289+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-05T01:58:10.285289+00:00
 ---
 # Secure Evidence Viewer & Access Logging
 
@@ -35,6 +35,8 @@ transparency report. Evidence-viewer canaries also bind `session_count` to the
 unique canonical `sessions[].name` inventory, require `attested_session_count`
 and `logged_session_count` to match the `sessions[].attested` and
 `sessions[].logged` partitions, and reject duplicate session entries before
+promotion can report ready. Evidence-viewer canaries also require explicit
+audit-log tamper rejection and watermark metadata mismatch rejection before
 promotion can report ready. It also rejects raw evidence, signed URLs, session tokens,
 response bodies, raw access logs, legal-hold receipt payloads, transparency
 report payloads, or watermark secrets.
@@ -108,7 +110,8 @@ missing browser/streaming viewer service.
   inventory matches `--session-count` and rejects non-production markers,
   emits `role_count`, `security_control_count`, `access_event_kind_count`, and
   `export_target_count` from the reviewed role/control/event/export inventories
-  before checker prevalidation, rejects duplicate or unknown `--verified-claim`,
+  before checker prevalidation, requires explicit audit-log tamper rejection and
+  watermark metadata mismatch rejection, rejects duplicate or unknown `--verified-claim`,
   `--role`, `--security-control`, `--access-event-kind`, and `--export-target`
   inputs before any canary JSON is written, validates the generated JSON with the
   same SFM-4b checker contract before writing, and writes atomically. It
@@ -183,7 +186,8 @@ python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
   target, digest field, reviewed viewer session label, and positive control
   claim is explicit before the SFM-4b rollout gate runs.
 - Add end-to-end security tests for unauthorized access, replay, stale URLs,
-  audit-log tampering, and watermark metadata mismatch.
+  audit-log tampering, and watermark metadata mismatch beyond the payload-free
+  canary claims.
 - Collect a passing payload-free `evidence_viewer` canary through the SFM-4b
   rollout evidence gate after the viewer service exists.
 

@@ -74,6 +74,20 @@ class HostileImportedInteger:
         raise AssertionError("secret-token imported EVM live integer was stringified")
 
 
+class HostileLiveDomain:
+    def __str__(self):
+        raise AssertionError("secret-token EVM live domain was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM live domain was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM live domain was compared")
+
+    def __int__(self):
+        raise AssertionError("secret-token EVM live domain was coerced")
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -1029,6 +1043,35 @@ def test_evm_json_rpc_rejects_duplicate_json_keys():
 def test_evm_json_rpc_url_rejects_hidden_request_state():
     module = load_live_module()
 
+    class HostileEvmRpcUrl(str):
+        def __new__(cls):
+            return str.__new__(cls, "https://ethereum.example")
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM RPC URL was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM RPC URL was repr'd")
+
+        def __eq__(self, _other):
+            raise AssertionError("secret-token EVM RPC URL was compared")
+
+        def __ne__(self, _other):
+            raise AssertionError("secret-token EVM RPC URL was compared")
+
+        def __iter__(self):
+            raise AssertionError("secret-token EVM RPC URL was iterated")
+
+        def strip(self, *_args):
+            raise AssertionError("secret-token EVM RPC URL was stripped")
+
+    class HostileEvmRpcUrlLabel:
+        def __str__(self):
+            raise AssertionError("secret-token EVM RPC URL label was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM RPC URL label was repr'd")
+
     assert module._normalize_evm_rpc_url("https://ethereum.example") == (
         "https://ethereum.example"
     )
@@ -1055,6 +1098,8 @@ def test_evm_json_rpc_url_rejects_hidden_request_state():
         ("https://bad_host.ethereum.example", "public DNS"),
         (" https://ethereum.example", "exact http(s) URL"),
         ("https://ethereum.example\nsecret", "exact http(s) URL"),
+        (HostileEvmRpcUrl(), "exact http(s) URL"),
+        (HostileEvmRpcUrlLabel(), "exact http(s) URL"),
     ):
         try:
             module._json_rpc(
@@ -2373,6 +2418,68 @@ def test_live_evm_rejects_non_string_copied_route_metadata_without_stringifying(
             )
 
 
+def test_live_evm_rejects_non_string_copied_destination_comment_metadata_without_stringifying():
+    module = load_live_module()
+    summary = full_evm_live_summary(module)
+
+    cases = (
+        (("block_tag",), "EVM block tag metadata is invalid"),
+        (
+            ("destination_bridge", "rpc_chain_id"),
+            "EVM RPC chain id must be an exact u32 integer",
+        ),
+        (
+            ("destination_bridge", "bridge_code_hash"),
+            "bridge code hash must be an exact hex string",
+        ),
+        (
+            ("destination_bridge", "bridge_runtime_bytecode_hex"),
+            "bridge runtime bytecode must be exact 0x-prefixed hex",
+        ),
+        (
+            ("destination_bridge", "eth_getcode_verifier_code_hash"),
+            "eth_getCode verifier code hash must be an exact hex string",
+        ),
+        (
+            ("destination_bridge", "verifier_runtime_bytecode_hex"),
+            "verifier runtime bytecode must be exact 0x-prefixed hex",
+        ),
+        (
+            ("destination_bridge", "verifier_verifying_key_hash"),
+            "verifier verifyingKeyHash must be an exact hex string",
+        ),
+        (
+            ("destination_bridge", "verifier_backend_hash"),
+            "verifier backend hash must be an exact hex string",
+        ),
+        (
+            ("destination_bridge", "proof_family_hash"),
+            "proof family hash must be an exact hex string",
+        ),
+    )
+
+    for path, expected_message in cases:
+        forged = copy.deepcopy(summary)
+        container = forged
+        for key in path[:-1]:
+            container = container[key]
+        container[path[-1]] = HostileImportedScalar()
+
+        try:
+            module.render_offline_toml(forged)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(
+                "EVM full TOML accepted non-string copied destination "
+                f"{'.'.join(path)}"
+            )
+
+
 def test_live_evm_full_toml_rejects_non_string_route_canary_transaction_metadata_without_stringifying():
     module = load_live_module()
     summary = full_evm_live_summary(module)
@@ -3166,13 +3273,17 @@ def test_live_evm_default_block_tag_rejects_boolean_domain():
         == "finalized"
     )
     assert module.default_block_tag_for_domain(module.evidence.SCCP_DOMAIN_BSC) == "latest"
-    for alias_domain in (True, False):
+    for alias_domain in (True, False, 3, 99, HostileLiveDomain()):
         try:
             module.default_block_tag_for_domain(alias_domain)
         except module.argparse.ArgumentTypeError as exc:
-            assert str(exc) == "domain must be an EVM-family SCCP lane"
+            rendered = str(exc)
+            assert rendered == "domain must be an EVM-family SCCP lane"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
         else:
-            raise AssertionError("boolean EVM live block-tag domain was accepted")
+            raise AssertionError("invalid EVM live block-tag domain was accepted")
 
 
 def test_live_evm_block_tag_parser_rejects_unstable_or_noncanonical_tags():

@@ -745,6 +745,7 @@ def build_summary(
     valid_source_batch_digests: set[str] = set()
     source_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_cycle_digests: set[str] = set()
+    valid_publication_bindings: set[tuple[str, str]] = set()
     publication_cycle_artifacts: list[dict[str, Any]] = []
     cycle_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     files = discover_evidence_files(
@@ -810,9 +811,16 @@ def build_summary(
 
     for artifact in publication_cycle_artifacts:
         if evidence_artifact_is_valid(artifact):
-            cycle_digest = evidence_artifact_fingerprint(artifact).get("cycle_digest_hex")
-            if isinstance(cycle_digest, str):
-                valid_cycle_digests.add(cycle_digest.lower())
+            fingerprint = evidence_artifact_fingerprint(artifact)
+            source_batch = fingerprint.get("source_batch_digest_hex")
+            cycle_digest = fingerprint.get("cycle_digest_hex")
+            if isinstance(source_batch, str) and isinstance(cycle_digest, str):
+                source_batch_digest = source_batch.lower()
+                cycle_digest_value = cycle_digest.lower()
+                valid_cycle_digests.add(cycle_digest_value)
+                valid_publication_bindings.add(
+                    (source_batch_digest, cycle_digest_value)
+                )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
@@ -851,6 +859,15 @@ def build_summary(
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_source_batch_digests": sorted(valid_source_batch_digests),
         "valid_cycle_digests": sorted(valid_cycle_digests),
+        "valid_publication_bindings": [
+            {
+                "source_batch_digest_hex": source_batch_digest,
+                "cycle_digest_hex": cycle_digest,
+            }
+            for source_batch_digest, cycle_digest in sorted(
+                valid_publication_bindings
+            )
+        ],
         "required": required,
         "errors": errors,
     }

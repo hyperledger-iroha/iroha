@@ -421,6 +421,49 @@ def test_native_bridge_release_requires_minimum_artifacts_before_write(
     assert not canary_path(tmp_path, "native_bridge_release").exists()
 
 
+def test_native_bridge_release_requires_family_coverage_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("native_bridge_release", tmp_path)
+    artifact_positions = [
+        index + 1 for index, value in enumerate(args) if value == "--artifact"
+    ]
+    for index, position in enumerate(artifact_positions):
+        args[position] = (
+            f"hedging-native-artifact-swift-extra-{index:02d}:{ARTIFACT_DIGEST}"
+        )
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--artifact must include at least one native bridge artifact for every "
+        "reviewed bridge family"
+    ) in captured.err
+    assert not canary_path(tmp_path, "native_bridge_release").exists()
+
+
+def test_native_bridge_release_rejects_unreviewed_family_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("native_bridge_release", tmp_path)
+    first_artifact = args.index("--artifact") + 1
+    artifact_id = "hedging-native-artifact-rust-bridge"
+    args[first_artifact] = f"{artifact_id}:{ARTIFACT_DIGEST}"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--artifact id must start with a reviewed native bridge family prefix"
+        in captured.err
+    )
+    assert artifact_id not in captured.err
+    assert not canary_path(tmp_path, "native_bridge_release").exists()
+
+
 def test_billing_cycle_statement_inventory_must_match_statement_digests(
     tmp_path: Path,
     capsys,

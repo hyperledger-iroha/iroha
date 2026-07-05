@@ -27268,7 +27268,7 @@ async fn handler_sumeragi_status(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     let nexus_enabled = app.state.nexus_snapshot().enabled;
-    routing::handle_v1_sumeragi_status(accept, nexus_enabled)
+    routing::handle_v1_sumeragi_status(State(app.state.clone()), accept, nexus_enabled)
         .await
         .map(axum::response::IntoResponse::into_response)
 }
@@ -27315,7 +27315,10 @@ async fn handler_sumeragi_status_sse(
         ));
     }
     let nexus_enabled = app.state.nexus_snapshot().enabled;
-    Ok(routing::handle_v1_sumeragi_status_sse(1_000, nexus_enabled).into_response())
+    Ok(
+        routing::handle_v1_sumeragi_status_sse(app.state.clone(), 1_000, nexus_enabled)
+            .into_response(),
+    )
 }
 
 #[cfg(feature = "telemetry")]

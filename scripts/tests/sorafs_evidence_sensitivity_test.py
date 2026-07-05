@@ -11,9 +11,37 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_evidence_sensitivity import (  # noqa: E402
+    COMMON_SENSITIVE_KEYS,
     MAX_SENSITIVE_FIELD_DEPTH,
+    normalize_sensitive_key,
     visit_sensitive_fields,
 )
+
+
+def test_common_sensitive_keys_inventory_is_canonical_and_enforced() -> None:
+    assert COMMON_SENSITIVE_KEYS
+    assert len(COMMON_SENSITIVE_KEYS) == len(
+        {normalize_sensitive_key(key) for key in COMMON_SENSITIVE_KEYS}
+    )
+    assert all(
+        isinstance(key, str)
+        and key
+        and key == key.strip()
+        and key == key.lower()
+        and all(character.isalnum() or character == "_" for character in key)
+        for key in COMMON_SENSITIVE_KEYS
+    )
+
+    errors: list[str] = []
+    visit_sensitive_fields(
+        {key: "redacted" for key in COMMON_SENSITIVE_KEYS},
+        "",
+        errors,
+        sensitive_keys=frozenset(),
+    )
+
+    assert len(errors) == len(COMMON_SENSITIVE_KEYS)
+    assert set(errors) == {"<sensitive-key> must not be present in rollout evidence"}
 
 
 def test_normalized_sensitive_key_variants_fail() -> None:
@@ -137,6 +165,206 @@ def test_encoded_sensitive_key_fragments_fail_without_leaking_names() -> None:
     assert "session_token" not in joined
 
 
+def test_secret_like_values_under_neutral_keys_fail_without_leaking_values() -> None:
+    errors: list[str] = []
+    jwt_value = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+        "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    )
+    payload = {
+        "transport": {
+            "observedHeader": "Bearer runtime-only-token",
+            "encodedHeader": "Bearer%20runtime-only-token",
+            "zeroWidthHeader": "Be\u200darer runtime-only-token",
+            "encodedZeroWidthHeader": "Be%E2%80%8Darer runtime-only-token",
+            "authorizationAssignment": "authorization=Bearer runtime-only-assignment",
+            "encodedAssignment": "auth%2Dtoken=runtime-only-assignment",
+            "basicHeader": "Basic dXNlcjpwYXNz",
+            "headers": [
+                "Authorization: Bearer runtime-only-header",
+                "Cookie: session=runtime-only-cookie",
+                "Set-Cookie: session=runtime-only-cookie",
+            ],
+            "headerBlock": (
+                "HTTP/1.1 200 OK\n"
+                "Content-Type: application/json\n"
+                "Authorization: Bearer runtime-only-block"
+            ),
+            "encodedHeaderBlock": (
+                "HTTP%2F1.1%20200%20OK%0A"
+                "Set-Cookie%3A%20session%3Druntime-only-block"
+            ),
+            "foldedAuthorizationBlock": (
+                "HTTP/1.1 200 OK\n"
+                "Content-Type: application/json\n"
+                "Authorization:\n"
+                " runtime-only-folded-token"
+            ),
+            "encodedFoldedCookieBlock": (
+                "HTTP%2F1.1%20200%20OK%0A"
+                "Cache-Control%3A%20no-store%0A"
+                "Set-Cookie%3A%0A%20session%3Druntime-only-folded"
+            ),
+            "jwtValue": jwt_value,
+            "pemValue": "-----BEGIN PRIVATE KEY-----\nruntime-only-key",
+        },
+    }
+
+    visit_sensitive_fields(payload, "", errors, sensitive_keys={"payload"})
+
+    assert errors == [
+        "transport.observedHeader must not contain secret-looking values in rollout evidence",
+        "transport.encodedHeader must not contain secret-looking values in rollout evidence",
+        "transport.zeroWidthHeader must not contain secret-looking values in rollout evidence",
+        "transport.encodedZeroWidthHeader must not contain secret-looking values in rollout evidence",
+        "transport.authorizationAssignment must not contain secret-looking values in rollout evidence",
+        "transport.encodedAssignment must not contain secret-looking values in rollout evidence",
+        "transport.basicHeader must not contain secret-looking values in rollout evidence",
+        "transport.headers[0] must not contain secret-looking values in rollout evidence",
+        "transport.headers[1] must not contain secret-looking values in rollout evidence",
+        "transport.headers[2] must not contain secret-looking values in rollout evidence",
+        "transport.headerBlock must not contain secret-looking values in rollout evidence",
+        "transport.encodedHeaderBlock must not contain secret-looking values in rollout evidence",
+        "transport.foldedAuthorizationBlock must not contain secret-looking values in rollout evidence",
+        "transport.encodedFoldedCookieBlock must not contain secret-looking values in rollout evidence",
+        "transport.jwtValue must not contain secret-looking values in rollout evidence",
+        "transport.pemValue must not contain secret-looking values in rollout evidence",
+    ]
+    joined = "\n".join(errors)
+    assert "Bearer runtime-only-token" not in joined
+    assert "Bearer%20runtime-only-token" not in joined
+    assert "Be\u200darer runtime-only-token" not in joined
+    assert "Be%E2%80%8Darer runtime-only-token" not in joined
+    assert "authorization=Bearer" not in joined
+    assert "auth%2Dtoken" not in joined
+    assert "runtime-only-assignment" not in joined
+    assert "runtime-only-header" not in joined
+    assert "runtime-only-block" not in joined
+    assert "runtime-only-folded-token" not in joined
+    assert "runtime-only-folded" not in joined
+    assert "Set-Cookie" not in joined
+    assert "dXNlcjpwYXNz" not in joined
+    assert "runtime-only-cookie" not in joined
+    assert jwt_value not in joined
+    assert "BEGIN PRIVATE KEY" not in joined
+
+
+def test_secret_like_url_values_under_neutral_keys_fail_without_leaking() -> None:
+    errors: list[str] = []
+    payload = {
+        "transport": {
+            "safeUrl": "https://torii.example/request_body_digest/abc?digest=123",
+            "safeEncodedUrl": (
+                "https%3A%2F%2Ftorii.example%2Frequest_body_digest%2Fabc"
+                "%3Fdigest%3D123"
+            ),
+            "safeIpfsDigestUrl": "ipfs://bafybeigdyrzt/request_body_digest?digest=123",
+            "userinfoUrl": "https://user:runtime-secret@torii.example/path",
+            "encodedWholeUrl": (
+                "https%3A%2F%2Fuser%3Aruntime-secret%40torii.example%2Fpath"
+            ),
+            "databaseUserinfoUrl": "postgres://user:runtime-secret@db.example/sorafs",
+            "encodedDatabaseUserinfoUrl": (
+                "postgres%3A%2F%2Fuser%3Aruntime-secret%40db.example%2Fsorafs"
+            ),
+            "queryUrl": "https://torii.example/path?access_token=runtime-secret",
+            "websocketQueryUrl": (
+                "wss://torii.example/socket?access_token=runtime-secret"
+            ),
+            "zeroWidthWebsocketQueryUrl": (
+                "w\u200dss://torii.example/socket?access_token=runtime-secret"
+            ),
+            "encodedZeroWidthWebsocketQueryUrl": (
+                "w%E2%80%8Dss://torii.example/socket?access_token=runtime-secret"
+            ),
+            "doubleEncodedQueryUrl": (
+                "https%253A%252F%252Ftorii.example%252Fpath"
+                "%253Faccess_token%253Druntime-secret"
+            ),
+            "queryBearerValueUrl": (
+                "https://torii.example/path?redirect=Bearer%20runtime-secret"
+            ),
+            "queryJwtValueUrl": (
+                "https://torii.example/path?"
+                "assertion=eyJhbGciOiJIUzI1NiJ9."
+                "eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature000"
+            ),
+            "queryRedirectValueUrl": (
+                "https://torii.example/path?"
+                "return_to=https%3A%2F%2Fuser%3Aruntime-secret%40torii.example"
+            ),
+            "encodedQueryUrl": (
+                "https://torii.example/path?session%255Ftoken=runtime-secret"
+            ),
+            "hostUrl": "https://api-token.example/hook",
+            "pathUrl": "https://torii.example/private%5Fkey/hook",
+            "filePathUrl": "file:///tmp/private_key/material",
+        },
+    }
+
+    visit_sensitive_fields(payload, "", errors, sensitive_keys={"payload"})
+
+    assert errors == [
+        "transport.userinfoUrl must not contain secret-looking values in rollout evidence",
+        "transport.encodedWholeUrl must not contain secret-looking values in rollout evidence",
+        "transport.databaseUserinfoUrl must not contain secret-looking values in rollout evidence",
+        "transport.encodedDatabaseUserinfoUrl must not contain secret-looking values in rollout evidence",
+        "transport.queryUrl must not contain secret-looking values in rollout evidence",
+        "transport.websocketQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.zeroWidthWebsocketQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.encodedZeroWidthWebsocketQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.doubleEncodedQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.queryBearerValueUrl must not contain secret-looking values in rollout evidence",
+        "transport.queryJwtValueUrl must not contain secret-looking values in rollout evidence",
+        "transport.queryRedirectValueUrl must not contain secret-looking values in rollout evidence",
+        "transport.encodedQueryUrl must not contain secret-looking values in rollout evidence",
+        "transport.hostUrl must not contain secret-looking values in rollout evidence",
+        "transport.pathUrl must not contain secret-looking values in rollout evidence",
+        "transport.filePathUrl must not contain secret-looking values in rollout evidence",
+    ]
+    joined = "\n".join(errors)
+    assert "safeUrl" not in joined
+    assert "safeEncodedUrl" not in joined
+    assert "safeIpfsDigestUrl" not in joined
+    assert "runtime-secret" not in joined
+    assert "encodedWholeUrl" in joined
+    assert "encodedDatabaseUserinfoUrl" in joined
+    assert "websocketQueryUrl" in joined
+    assert "zeroWidthWebsocketQueryUrl" in joined
+    assert "encodedZeroWidthWebsocketQueryUrl" in joined
+    assert "doubleEncodedQueryUrl" in joined
+    assert "access_token" not in joined
+    assert "postgres://" not in joined
+    assert "w\u200dss://" not in joined
+    assert "w%E2%80%8Dss://" not in joined
+    assert "Bearer%20runtime-secret" not in joined
+    assert "signature000" not in joined
+    assert "return_to" not in joined
+    assert "session%255Ftoken" not in joined
+    assert "api-token" not in joined
+    assert "private%5Fkey" not in joined
+    assert "file:///tmp" not in joined
+
+
+def test_secret_like_values_under_sensitive_keys_do_not_duplicate_errors() -> None:
+    errors: list[str] = []
+    payload = {
+        "authorization": "Bearer runtime-only-token",
+        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature000",
+    }
+
+    visit_sensitive_fields(payload, "", errors, sensitive_keys={"payload"})
+
+    assert errors == [
+        "<sensitive-key> must not be present in rollout evidence",
+        "<sensitive-key> must not be present in rollout evidence",
+    ]
+    joined = "\n".join(errors)
+    assert "Bearer runtime-only-token" not in joined
+    assert "signature000" not in joined
+
+
 def test_sensitive_key_fragments_allow_payload_free_digest_and_absence_fields() -> None:
     errors: list[str] = []
     payload = {
@@ -145,6 +373,22 @@ def test_sensitive_key_fragments_allow_payload_free_digest_and_absence_fields() 
             "responseBodySha256": "b" * 64,
             "response_body_included": False,
             "private_key_absent": True,
+            "absenceAssignment": "private_key_absent=true",
+            "digestAssignment": "request_body_digest=" + "a" * 64,
+            "multilineDigestMetadata": "\n".join(
+                (
+                    "request_body_digest=" + "a" * 64,
+                    "response_body_included=false",
+                )
+            ),
+            "foldedDigestMetadata": "\n".join(
+                (
+                    "request_body_digest:",
+                    " " + "a" * 64,
+                    "response_body_included:",
+                    " false",
+                )
+            ),
             "included": False,
         }
     }

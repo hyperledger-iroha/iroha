@@ -1262,12 +1262,30 @@ pub enum ModerationEvidenceViewerAuditScheduleOutcome {
         /// Due window that was published.
         window: PrivacyAggregateCycleWindow,
         /// Payload-free audit report recorded for the window.
-        report: ModerationEvidenceViewerAuditReport,
+        report: Box<ModerationEvidenceViewerAuditReport>,
         /// Transparency source entry recorded for the report.
-        source_entry: TransparencyLedgerSourceEntry,
+        source_entry: Box<TransparencyLedgerSourceEntry>,
         /// Published transparency ledger cycle.
         publication: ModerationLedgerCyclePublicationV1,
     },
+}
+
+/// Inputs used to publish a local moderation ballot lifecycle event.
+struct ModerationBallotEventInput {
+    /// Event kind to publish.
+    kind: ModerationBallotEventKind,
+    /// Local generation timestamp in milliseconds since the Unix epoch.
+    generated_at_unix_ms: u64,
+    /// Moderation case identifier.
+    case_id: String,
+    /// Ballot round identifier.
+    round_id: String,
+    /// Optional juror involved in the event.
+    juror_id: Option<String>,
+    /// Optional tally snapshot for finalization events.
+    tally: Option<ModerationBallotTally>,
+    /// Optional challenge record for challenge lifecycle events.
+    challenge: Option<ModerationBallotChallengeRecord>,
 }
 
 /// Payload returned by a repair orchestrator for a missing chunk.
@@ -3777,8 +3795,8 @@ impl NodeHandle {
             published_cycles.insert(cycle_id);
             return Ok(ModerationEvidenceViewerAuditScheduleOutcome::Published {
                 window,
-                report: outcome.report,
-                source_entry: outcome.source_entry,
+                report: Box::new(outcome.report),
+                source_entry: Box::new(outcome.source_entry),
                 publication,
             });
         }
@@ -3871,15 +3889,15 @@ impl NodeHandle {
                 .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
                 .announce_ballot(announcement)?
         };
-        self.publish_moderation_ballot_event(
-            ModerationBallotEventKind::BallotAnnounced,
+        self.publish_moderation_ballot_event(ModerationBallotEventInput {
+            kind: ModerationBallotEventKind::BallotAnnounced,
             generated_at_unix_ms,
             case_id,
             round_id,
-            None,
-            None,
-            None,
-        );
+            juror_id: None,
+            tally: None,
+            challenge: None,
+        });
         self.save_moderation_ballot_checkpoint();
         Ok(record)
     }
@@ -3899,15 +3917,15 @@ impl NodeHandle {
                 .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
                 .submit_commit(commit, now_unix_ms)?
         };
-        self.publish_moderation_ballot_event(
-            ModerationBallotEventKind::CommitAccepted,
-            now_unix_ms,
+        self.publish_moderation_ballot_event(ModerationBallotEventInput {
+            kind: ModerationBallotEventKind::CommitAccepted,
+            generated_at_unix_ms: now_unix_ms,
             case_id,
             round_id,
-            Some(juror_id),
-            None,
-            None,
-        );
+            juror_id: Some(juror_id),
+            tally: None,
+            challenge: None,
+        });
         self.save_moderation_ballot_checkpoint();
         Ok(outcome)
     }
@@ -3924,15 +3942,15 @@ impl NodeHandle {
                 .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
                 .submit_challenge(input, now_unix_ms)?
         };
-        self.publish_moderation_ballot_event(
-            ModerationBallotEventKind::ChallengeSubmitted,
-            now_unix_ms,
-            record.case_id.clone(),
-            record.round_id.clone(),
-            None,
-            None,
-            Some(record.clone()),
-        );
+        self.publish_moderation_ballot_event(ModerationBallotEventInput {
+            kind: ModerationBallotEventKind::ChallengeSubmitted,
+            generated_at_unix_ms: now_unix_ms,
+            case_id: record.case_id.clone(),
+            round_id: record.round_id.clone(),
+            juror_id: None,
+            tally: None,
+            challenge: Some(record.clone()),
+        });
         self.save_moderation_ballot_checkpoint();
         Ok(record)
     }
@@ -3949,15 +3967,15 @@ impl NodeHandle {
                 .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
                 .resolve_challenge(input, now_unix_ms)?
         };
-        self.publish_moderation_ballot_event(
-            ModerationBallotEventKind::ChallengeResolved,
-            now_unix_ms,
-            record.case_id.clone(),
-            record.round_id.clone(),
-            None,
-            None,
-            Some(record.clone()),
-        );
+        self.publish_moderation_ballot_event(ModerationBallotEventInput {
+            kind: ModerationBallotEventKind::ChallengeResolved,
+            generated_at_unix_ms: now_unix_ms,
+            case_id: record.case_id.clone(),
+            round_id: record.round_id.clone(),
+            juror_id: None,
+            tally: None,
+            challenge: Some(record.clone()),
+        });
         self.save_moderation_ballot_checkpoint();
         Ok(record)
     }
@@ -3977,15 +3995,15 @@ impl NodeHandle {
                 .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
                 .submit_reveal(reveal, now_unix_ms)?
         };
-        self.publish_moderation_ballot_event(
-            ModerationBallotEventKind::RevealAccepted,
-            now_unix_ms,
+        self.publish_moderation_ballot_event(ModerationBallotEventInput {
+            kind: ModerationBallotEventKind::RevealAccepted,
+            generated_at_unix_ms: now_unix_ms,
             case_id,
             round_id,
-            Some(juror_id),
-            None,
-            None,
-        );
+            juror_id: Some(juror_id),
+            tally: None,
+            challenge: None,
+        });
         self.save_moderation_ballot_checkpoint();
         Ok(outcome)
     }
@@ -4003,15 +4021,15 @@ impl NodeHandle {
                 .map_err(|_| ModerationBallotRuntimeError::StateLockPoisoned)?
                 .tally_ballot(case_id, round_id, now_unix_ms)?
         };
-        self.publish_moderation_ballot_event(
-            ModerationBallotEventKind::BallotTallied,
-            now_unix_ms,
-            case_id.to_owned(),
-            round_id.to_owned(),
-            None,
-            Some(tally.clone()),
-            None,
-        );
+        self.publish_moderation_ballot_event(ModerationBallotEventInput {
+            kind: ModerationBallotEventKind::BallotTallied,
+            generated_at_unix_ms: now_unix_ms,
+            case_id: case_id.to_owned(),
+            round_id: round_id.to_owned(),
+            juror_id: None,
+            tally: Some(tally.clone()),
+            challenge: None,
+        });
         self.save_moderation_ballot_checkpoint();
         if let Some(record) = self.moderation_ballot(case_id, round_id) {
             self.publish_moderation_appeal_finance_report(&record, &tally);
@@ -5558,17 +5576,8 @@ impl NodeHandle {
         }
     }
 
-    fn publish_moderation_ballot_event(
-        &self,
-        kind: ModerationBallotEventKind,
-        generated_at_unix_ms: u64,
-        case_id: String,
-        round_id: String,
-        juror_id: Option<String>,
-        tally: Option<ModerationBallotTally>,
-        challenge: Option<ModerationBallotChallengeRecord>,
-    ) {
-        let record = self.moderation_ballot(&case_id, &round_id);
+    fn publish_moderation_ballot_event(&self, input: ModerationBallotEventInput) {
+        let record = self.moderation_ballot(&input.case_id, &input.round_id);
         let committed_count = record
             .as_ref()
             .map_or(0, |record| record.commits.len() as u64);
@@ -5586,16 +5595,16 @@ impl NodeHandle {
             .map_or(1, |event| event.sequence.saturating_add(1));
         let event = ModerationBallotEvent {
             sequence,
-            kind,
-            generated_at_unix_ms,
-            case_id,
-            round_id,
-            juror_id,
+            kind: input.kind,
+            generated_at_unix_ms: input.generated_at_unix_ms,
+            case_id: input.case_id,
+            round_id: input.round_id,
+            juror_id: input.juror_id,
             committed_count,
             revealed_count,
             challenge_count,
-            tally,
-            challenge,
+            tally: input.tally,
+            challenge: input.challenge,
         };
         events.push(event.clone());
         let _ = self.moderation_event_sender.send(event.clone());

@@ -5,7 +5,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    block::consensus::NativeAmxReceipt,
+    block::consensus::{NativeAmxReceipt, SumeragiLanePayloadOwnership},
     nexus::{DataSpaceId, LaneId},
     transaction::signed::TransactionEntrypoint,
 };
@@ -145,19 +145,35 @@ fn single_route_plan_digest(lane_id: LaneId, dataspace_id: DataSpaceId) -> Hash 
 pub struct BlockExecutionContextBundle {
     /// Routing context entries aligned with the block's external entrypoints.
     pub external: Vec<ExternalExecutionContext>,
+    /// Lane-local payload ownership and RBC instance identities aligned by block entrypoint index.
+    #[norito(default)]
+    pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
 }
 
 impl BlockExecutionContextBundle {
     /// Construct an ordered execution context bundle.
     #[must_use]
     pub const fn new(external: Vec<ExternalExecutionContext>) -> Self {
-        Self { external }
+        Self {
+            external,
+            lane_payload_ownerships: Vec::new(),
+        }
+    }
+
+    /// Attach lane-local payload ownership identities to this bundle.
+    #[must_use]
+    pub fn with_lane_payload_ownerships(
+        mut self,
+        lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+    ) -> Self {
+        self.lane_payload_ownerships = lane_payload_ownerships;
+        self
     }
 
     /// Returns true when the bundle carries no execution context.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.external.is_empty()
+        self.external.is_empty() && self.lane_payload_ownerships.is_empty()
     }
 }
 
@@ -220,5 +236,60 @@ mod tests {
 
         assert_eq!(context.routing_plan_digest, routing_plan_digest);
         assert_eq!(context.routing_plan_legs, routing_plan_legs);
+    }
+
+    #[test]
+    fn block_execution_context_bundle_roundtrips_lane_payload_ownerships() {
+        let lane_id = LaneId::new(2);
+        let dataspace_id = DataSpaceId::new(9);
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 7,
+            proposal_view: 3,
+            lane_id,
+            dataspace_id,
+            lane_block_height: 5,
+            lane_block_view: 1,
+            subject_hash: Hash::new(b"lane-subject"),
+            qc_mode_tag: "test-lane-qc-mode".to_string(),
+            accepted_candidate_indices: vec![0],
+            payload_ownership_hash: Hash::new(b"lane-payload-ownership"),
+            rbc_instance_hash: Hash::new(b"lane-rbc-instance"),
+        };
+        let bundle = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+            entrypoint_hash(b"entrypoint"),
+            lane_id,
+            dataspace_id,
+        )])
+        .with_lane_payload_ownerships(vec![ownership.clone()]);
+
+        let encoded = norito::to_bytes(&bundle).expect("bundle encodes");
+        let decoded: BlockExecutionContextBundle =
+            norito::decode_from_bytes(&encoded).expect("bundle decodes with lane ownership");
+
+        assert_eq!(decoded.lane_payload_ownerships, vec![ownership]);
+        assert!(!decoded.is_empty());
+    }
+
+    #[test]
+    fn block_execution_context_bundle_with_only_ownership_is_not_empty() {
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 1,
+            proposal_view: 0,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"subject"),
+            qc_mode_tag: "test-lane-qc-mode".to_string(),
+            accepted_candidate_indices: vec![0],
+            payload_ownership_hash: Hash::new(b"payload"),
+            rbc_instance_hash: Hash::new(b"rbc"),
+        };
+
+        assert!(
+            !BlockExecutionContextBundle::new(Vec::new())
+                .with_lane_payload_ownerships(vec![ownership])
+                .is_empty()
+        );
     }
 }

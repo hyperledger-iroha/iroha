@@ -33866,6 +33866,12 @@ fn verify_nexus_commit_qc_bls_aggregate(_proof: &NexusBridgeFinalityProofV1) -> 
     false
 }
 
+fn sccp_test_only_placeholder_source_adapter_opening_allowed() -> bool {
+    // Source-adapter placeholder opening is test-only; production builds must
+    // use FastPQ verification.
+    cfg!(test)
+}
+
 fn source_adapter_placeholder_opening_is_well_bound(
     proof: &SccpSourceChainProofEnvelopeV1,
     consensus_proof: &SccpSourceConsensusProofV1,
@@ -33967,15 +33973,17 @@ fn verify_sccp_source_chain_proof_material_with_material_and_optional_deployment
             material,
         )
     };
-    let placeholder_source_adapter_opening = deployment.is_none()
-        && material.placeholder_material
-        && proof.source_domain == SCCP_DOMAIN_BSC
-        && source_adapter_placeholder_opening_is_well_bound(
-            proof,
-            &consensus_proof,
-            expected_adapter_transcript_hash,
-        )
-        && source_verifier_evidence_has_common_valid_shape(&consensus_proof.verifier_evidence);
+    let placeholder_source_adapter_opening =
+        sccp_test_only_placeholder_source_adapter_opening_allowed()
+            && deployment.is_none()
+            && material.placeholder_material
+            && proof.source_domain == SCCP_DOMAIN_BSC
+            && source_adapter_placeholder_opening_is_well_bound(
+                proof,
+                &consensus_proof,
+                expected_adapter_transcript_hash,
+            )
+            && source_verifier_evidence_has_common_valid_shape(&consensus_proof.verifier_evidence);
     let source_adapter_opening_is_valid = placeholder_source_adapter_opening
         || verify_sccp_source_adapter_verification_proof(
             proof,
@@ -58841,6 +58849,27 @@ pub mod tests {
                 .expect("sample branch depth is below u64 width");
             replace_source_inclusion_proof(proof, &inclusion);
         });
+    }
+
+    #[test]
+    fn bsc_placeholder_source_adapter_opening_is_test_only() {
+        assert!(
+            sccp_test_only_placeholder_source_adapter_opening_allowed(),
+            "BSC placeholder source-adapter opening remains a test-only structural fixture",
+        );
+        let bundle = sample_transfer_bundle(SCCP_DOMAIN_BSC, SCCP_DOMAIN_SORA, 359);
+        let proof = source_chain_proof_from_bundle(&bundle);
+        let material =
+            sccp_source_verifier_material_for_domain(SCCP_DOMAIN_BSC).expect("BSC material");
+        assert!(material.placeholder_material);
+        assert!(
+            verify_sccp_source_chain_proof_envelope_structure_with_material(&proof, &material),
+            "test-only BSC placeholder source material may satisfy structural fixtures",
+        );
+        assert!(
+            !verify_sccp_source_chain_proof_envelope_production_with_material(&proof, &material),
+            "BSC placeholder source material must not satisfy production verification",
+        );
     }
 
     #[test]

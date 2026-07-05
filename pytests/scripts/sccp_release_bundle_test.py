@@ -74,6 +74,85 @@ class HashCollisionPublicKey:
         return "secret-token-collision-key"
 
 
+class HostilePublicCryptoScalar:
+    """Public optional scalar that must not be compared or stringified."""
+
+    def __eq__(self, other):
+        raise AssertionError("secret-token hostile public crypto __eq__")
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile public crypto __str__")
+
+    def __repr__(self):
+        return "secret-token-hostile-public-crypto-scalar"
+
+
+class HostileMarkdownPresenceValue:
+    """Public Markdown presence value that must not be compared or rendered."""
+
+    def __eq__(self, other):
+        raise AssertionError("secret-token hostile markdown presence __eq__")
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile markdown presence __str__")
+
+    def __repr__(self):
+        return "secret-token-hostile-markdown-presence-value"
+
+
+class HostileMarkdownString(str):
+    """String subclass that public Markdown renderers must reject exactly."""
+
+    def __new__(cls, value: str = "safe-source"):
+        return str.__new__(cls, value)
+
+    def __eq__(self, other):
+        raise AssertionError("secret-token hostile markdown string __eq__")
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile markdown string __str__")
+
+    def __format__(self, format_spec):
+        raise AssertionError("secret-token hostile markdown string __format__")
+
+    def __repr__(self):
+        return "secret-token-hostile-markdown-string"
+
+
+class HostileVerifierFieldName(str):
+    """String subclass that verifier field-name classifiers must reject exactly."""
+
+    def __new__(cls, value: str):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token hostile verifier field __str__")
+
+    def __repr__(self):
+        return "secret-token-hostile-verifier-field"
+
+    def __iter__(self):
+        raise AssertionError("secret-token hostile verifier field __iter__")
+
+    def __eq__(self, other):
+        raise AssertionError("secret-token hostile verifier field __eq__")
+
+    def __ne__(self, other):
+        raise AssertionError("secret-token hostile verifier field __eq__")
+
+    def __lt__(self, other):
+        raise AssertionError("secret-token hostile verifier field __lt__")
+
+    def __hash__(self):
+        return str.__hash__(self)
+
+    def isascii(self):
+        raise AssertionError("secret-token hostile verifier field isascii")
+
+    def strip(self):
+        raise AssertionError("secret-token hostile verifier field strip")
+
+
 def skip_unless_system_temp_is_symlink() -> None:
     if not Path("/tmp").is_symlink():
         pytest.skip("/tmp is not a symlink on this platform")
@@ -563,6 +642,28 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         label,
         canary_with_missing_blockers,
     ) == []
+    hostile_canary = dict(valid_canary)
+    hostile_canary[HostileVerifierFieldName("evidence_hash")] = hostile_canary.pop(
+        "evidence_hash"
+    )
+    hostile_canary[HostileVerifierFieldName("route_allowlist_hash")] = (
+        hostile_canary.pop("route_allowlist_hash")
+    )
+    hostile_canary_blockers = "\n".join(
+        verifier._active_launch_route_canary_metadata_blockers(
+            label,
+            hostile_canary,
+        )
+    )
+
+    assert (
+        "route canary evidence hash must be a canonical non-zero bytes32 hex "
+        "string"
+    ) in hostile_canary_blockers
+    assert "secret-token" not in hostile_canary_blockers
+    assert "hostile verifier" not in hostile_canary_blockers
+    assert "__eq__" not in hostile_canary_blockers
+    assert "__str__" not in hostile_canary_blockers
 
     binding_lane = {
         "route_allowlist": {
@@ -577,6 +678,22 @@ def test_release_bundle_active_route_canary_metadata_rejects_exact_type_drift() 
         binding_lane,
         valid_canary,
     ) == []
+    hostile_binding_blockers = "\n".join(
+        verifier._active_launch_route_canary_binding_hash_blockers(
+            label,
+            binding_lane,
+            hostile_canary,
+        )
+    )
+
+    assert (
+        "route canary route allowlist hash must be a canonical non-zero bytes32 "
+        "hex string"
+    ) in hostile_binding_blockers
+    assert "secret-token" not in hostile_binding_blockers
+    assert "hostile verifier" not in hostile_binding_blockers
+    assert "__eq__" not in hostile_binding_blockers
+    assert "__str__" not in hostile_binding_blockers
     route_canary_binding_hash_cases = (
         (
             "route_allowlist_hash",
@@ -1371,6 +1488,71 @@ def test_release_bundle_active_route_allowlist_metadata_rejects_exact_flag_and_r
         label,
         valid_lane,
     ) == []
+    hostile_route_source_hashes = dict(valid_lane["source_record_hashes"])
+    hostile_route_source_hashes.pop("source_verifier_material_hash")
+    hostile_route_source_hashes[
+        HostileVerifierFieldName("source_verifier_material_hash")
+    ] = source_material_hash
+    hostile_route_source_blockers = "\n".join(
+        verifier._active_launch_route_allowlist_binding_blockers(
+            label,
+            {
+                **valid_lane,
+                "source_record_hashes": hostile_route_source_hashes,
+            },
+        )
+    )
+    assert (
+        "route allowlist source verifier material hash must be a canonical "
+        "non-zero bytes32 hex string"
+    ) in hostile_route_source_blockers
+    assert "secret-token" not in hostile_route_source_blockers
+    assert "hostile verifier" not in hostile_route_source_blockers
+    assert "__eq__" not in hostile_route_source_blockers
+    assert "__str__" not in hostile_route_source_blockers
+    hostile_route_destination = dict(valid_lane["destination_binding"])
+    hostile_route_destination.pop("destination_binding_hash")
+    hostile_route_destination[
+        HostileVerifierFieldName("destination_binding_hash")
+    ] = destination_binding_hash
+    hostile_route_destination_blockers = "\n".join(
+        verifier._active_launch_route_allowlist_binding_blockers(
+            label,
+            {
+                **valid_lane,
+                "destination_binding": hostile_route_destination,
+            },
+        )
+    )
+    assert (
+        "route allowlist destination binding hash must be a canonical "
+        "non-zero bytes32 hex string"
+    ) in hostile_route_destination_blockers
+    assert "secret-token" not in hostile_route_destination_blockers
+    assert "hostile verifier" not in hostile_route_destination_blockers
+    assert "__eq__" not in hostile_route_destination_blockers
+    assert "__str__" not in hostile_route_destination_blockers
+    hostile_route_summary = dict(valid_lane["route_allowlist"])
+    hostile_route_summary.pop("route_allowlist_hash")
+    hostile_route_summary[HostileVerifierFieldName("route_allowlist_hash")] = (
+        route_hash
+    )
+    hostile_route_summary_blockers = "\n".join(
+        verifier._active_launch_route_allowlist_binding_blockers(
+            label,
+            {
+                **valid_lane,
+                "route_allowlist": hostile_route_summary,
+            },
+        )
+    )
+    assert (
+        "route allowlist hash must be a canonical non-zero bytes32 hex string"
+    ) in hostile_route_summary_blockers
+    assert "secret-token" not in hostile_route_summary_blockers
+    assert "hostile verifier" not in hostile_route_summary_blockers
+    assert "__eq__" not in hostile_route_summary_blockers
+    assert "__str__" not in hostile_route_summary_blockers
     route_allowlist_with_missing_blockers = {
         **valid_lane["route_allowlist"],
         "blockers": [],
@@ -1597,6 +1779,94 @@ def test_release_bundle_active_governed_deployment_metadata_rejects_exact_flag_a
         label,
         valid_lane,
     ) == []
+    hostile_audit_lane = {
+        **valid_lane,
+        "source_adapter_gate": {
+            **valid_lane["source_adapter_gate"],
+            "audit_hashes": {
+                HostileVerifierFieldName("evm_source_gate_hash"): source_gate_hash,
+            },
+        },
+    }
+    hostile_audit_blockers = "\n".join(
+        verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            hostile_audit_lane,
+        )
+    )
+    assert (
+        f"active {verifier.ACTIVE_LAUNCH_DISPLAY} source adapter gate audit "
+        "hashes must contain only evm_source_gate_hash"
+    ) in hostile_audit_blockers
+    assert "secret-token" not in hostile_audit_blockers
+    assert "hostile verifier" not in hostile_audit_blockers
+    assert "__eq__" not in hostile_audit_blockers
+    assert "__str__" not in hostile_audit_blockers
+    hostile_source_hashes = dict(valid_lane["source_record_hashes"])
+    hostile_source_hashes.pop("source_verifier_material_hash")
+    hostile_source_hashes[
+        HostileVerifierFieldName("source_verifier_material_hash")
+    ] = source_material_hash
+    hostile_source_hash_lane = {
+        **valid_lane,
+        "source_record_hashes": hostile_source_hashes,
+    }
+    hostile_source_hash_blockers = "\n".join(
+        verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            hostile_source_hash_lane,
+        )
+    )
+    assert (
+        "governed deployment source verifier material hash must be a canonical "
+        "non-zero bytes32 hex string"
+    ) in hostile_source_hash_blockers
+    assert "secret-token" not in hostile_source_hash_blockers
+    assert "hostile verifier" not in hostile_source_hash_blockers
+    assert "__eq__" not in hostile_source_hash_blockers
+    assert "__str__" not in hostile_source_hash_blockers
+    hostile_destination = dict(valid_lane["destination_binding"])
+    hostile_destination.pop("destination_binding_hash")
+    hostile_destination[
+        HostileVerifierFieldName("destination_binding_hash")
+    ] = destination_binding_hash
+    hostile_destination_blockers = "\n".join(
+        verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            {
+                **valid_lane,
+                "destination_binding": hostile_destination,
+            },
+        )
+    )
+    assert (
+        "governed deployment destination binding hash must be a canonical "
+        "non-zero bytes32 hex string"
+    ) in hostile_destination_blockers
+    assert "secret-token" not in hostile_destination_blockers
+    assert "hostile verifier" not in hostile_destination_blockers
+    assert "__eq__" not in hostile_destination_blockers
+    assert "__str__" not in hostile_destination_blockers
+    hostile_source_gate = dict(valid_lane["source_adapter_gate"])
+    hostile_source_gate.pop("gate_hash")
+    hostile_source_gate[HostileVerifierFieldName("gate_hash")] = source_gate_hash
+    hostile_gate_blockers = "\n".join(
+        verifier._active_launch_governed_deployment_metadata_blockers(
+            label,
+            {
+                **valid_lane,
+                "source_adapter_gate": hostile_source_gate,
+            },
+        )
+    )
+    assert (
+        f"active {verifier.ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must "
+        "be a canonical non-zero bytes32 hex string"
+    ) in hostile_gate_blockers
+    assert "secret-token" not in hostile_gate_blockers
+    assert "hostile verifier" not in hostile_gate_blockers
+    assert "__eq__" not in hostile_gate_blockers
+    assert "__str__" not in hostile_gate_blockers
     active_template_hash = "0x" + next(
         iter(
             verifier._source_adapter_gate_template_hashes(
@@ -2407,6 +2677,55 @@ def test_release_bundle_verifier_boolean_domain_does_not_alias_eth_policy() -> N
     assert "finalized EVM route canary evidence" not in crypto_errors
 
 
+def test_release_bundle_verifier_rejects_hostile_all_lanes_fixed_hex_without_comparing() -> None:
+    """All-lanes fixed-hex matching must reject string subclasses exactly."""
+
+    verifier = load_verify_helpers()
+    route_hash = fixed_hex32(0x51)
+    destination_hash = fixed_hex32(0x52)
+    lane = evm_route_canary_lane(verifier, verifier.SCCP_DOMAIN_ETH, 0x60)
+    lane["destination_binding"][
+        "expected_destination_binding_hash"
+    ] = HostileMarkdownString(destination_hash)
+    lane["route_allowlist"]["expected_route_allowlist_hash"] = HostileMarkdownString(
+        route_hash
+    )
+    lane["route_allowlist"]["route_canary"][
+        "route_allowlist_hash"
+    ] = HostileMarkdownString(route_hash)
+
+    errors = verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+    joined_errors = "\n".join(errors)
+
+    assert (
+        "all-lanes summary lane domain 1 destination_binding "
+        "expected_destination_binding_hash must be a canonical bytes32 hex string"
+    ) in errors
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist expected_route_allowlist_hash "
+        "must be a canonical bytes32 hex string"
+    ) in errors
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist route_canary "
+        "route_allowlist_hash must be a canonical bytes32 hex string"
+    ) in errors
+    assert verifier._matching_text_field_errors(
+        "copied row",
+        {"field": HostileMarkdownString("same")},
+        "field",
+        "same",
+        "expected field",
+    ) == []
+    assert verifier._matching_text_field_errors(
+        "copied row",
+        {"field": "same"},
+        "field",
+        HostileMarkdownString("same"),
+        "expected field",
+    ) == []
+    assert "secret-token" not in joined_errors
+
+
 def test_release_bundle_verifier_crypto_evm_live_tag_flag_rejects_non_booleans():
     """Strict public crypto EVM live-tag control must not accept truthy aliases."""
 
@@ -3166,6 +3485,65 @@ def test_release_bundle_verifier_guards_bsc_route_config_canonical_manifest_inve
         assert checked_markers > 0
 
 
+def test_release_bundle_verifier_guards_bsc_route_manifest_cli_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin BSC route-manifest CLI guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._bsc_route_manifest_cli_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.BSC_ROUTE_MANIFEST_CLI_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"bsc-route-manifest-cli-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._bsc_route_manifest_cli_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP BSC route-manifest CLI source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.BSC_ROUTE_MANIFEST_CLI_MARKERS,
+        0,
+    )
+    verifier.BSC_ROUTE_MANIFEST_CLI_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "SCCP BSC route-manifest CLI source inventory" in error
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
+    )
+
+
 def test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inventory(
     tmp_path: Path,
 ) -> None:
@@ -3204,6 +3582,65 @@ def test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inv
                 for error in errors
             )
         assert checked_markers > 0
+
+
+def test_release_bundle_verifier_guards_tron_route_manifest_cli_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin TRON route-manifest CLI guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._tron_route_manifest_cli_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.TRON_ROUTE_MANIFEST_CLI_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"tron-route-manifest-cli-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._tron_route_manifest_cli_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP TRON route-manifest CLI source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.TRON_ROUTE_MANIFEST_CLI_MARKERS,
+        0,
+    )
+    verifier.TRON_ROUTE_MANIFEST_CLI_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "SCCP TRON route-manifest CLI source inventory" in error
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
+    )
 
 
 def test_release_bundle_verifier_guards_ton_route_manifest_cli_inventory(
@@ -3260,6 +3697,65 @@ def test_release_bundle_verifier_guards_ton_route_manifest_cli_inventory(
     assert verified["verified"] is False
     assert any(
         "SCCP TON route-manifest CLI source inventory" in error
+        and f"missing marker: {removed_marker}" in error
+        for error in verified["errors"]
+    )
+
+
+def test_release_bundle_verifier_guards_solana_route_manifest_cli_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin Solana route-manifest CLI guards."""
+
+    verifier = load_verify_helpers()
+    assert verifier._solana_route_manifest_cli_inventory_errors() == []
+
+    for index, (source_path, required_markers) in enumerate(
+        verifier.SOLANA_ROUTE_MANIFEST_CLI_MARKERS
+    ):
+        checked_markers = 0
+        for marker_index, removed_marker in enumerate(required_markers):
+            remaining_markers = tuple(
+                marker for marker in required_markers if marker != removed_marker
+            )
+            if removed_marker in "\n".join(remaining_markers):
+                continue
+            checked_markers += 1
+            sparse_source = (
+                tmp_path
+                / f"solana-route-manifest-cli-{index}-{marker_index}-{Path(source_path).name}"
+            )
+            sparse_source.write_text(
+                "\n".join(remaining_markers),
+                encoding="utf-8",
+            )
+            errors = verifier._solana_route_manifest_cli_inventory_errors(
+                ((sparse_source, required_markers),)
+            )
+
+            assert any(
+                "SCCP Solana route-manifest CLI source inventory" in error
+                and str(sparse_source) in error
+                and f"missing marker: {removed_marker}" in error
+                for error in errors
+            )
+        assert checked_markers > 0
+
+    sparse_inventory, removed_marker = source_marker_inventory_with_one_marker_removed(
+        tmp_path,
+        verifier.SOLANA_ROUTE_MANIFEST_CLI_MARKERS,
+        0,
+    )
+    verifier.SOLANA_ROUTE_MANIFEST_CLI_MARKERS = sparse_inventory
+
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    output_dir = build_ready_bundle(bundle_dir)
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert any(
+        "SCCP Solana route-manifest CLI source inventory" in error
         and f"missing marker: {removed_marker}" in error
         for error in verified["errors"]
     )
@@ -4320,6 +4816,125 @@ def test_release_bundle_verifier_guards_release_public_markdown_text_schema_inve
                 for error in errors
             )
         assert checked_markers > 0
+
+
+def test_release_bundle_verifier_markdown_presence_ignores_hostile_values_without_stringifying() -> None:
+    """Markdown presence checks must only render exact built-in scalar values."""
+
+    verifier = load_verify_helpers()
+    hostile = HostileMarkdownPresenceValue()
+
+    assert (
+        verifier._markdown_missing_value_errors(
+            "Summary",
+            "safe public text",
+            hostile,
+            "hostile value",
+        )
+        == []
+    )
+    assert (
+        verifier._markdown_missing_terminal_table_cell_errors(
+            "Summary",
+            "| lane | - |\n",
+            row_prefix="| lane |",
+            value=hostile,
+            label="hostile value",
+        )
+        == []
+    )
+
+    assert (
+        verifier._markdown_missing_value_errors("Summary", "height 7", 7, "height")
+        == []
+    )
+    assert (
+        verifier._markdown_missing_terminal_table_cell_errors(
+            "Summary",
+            "| lane | 7 |\n",
+            row_prefix="| lane |",
+            value=7,
+            label="height",
+        )
+        == []
+    )
+    assert (
+        verifier._markdown_missing_value_errors("Summary", "flag true", True, "flag")
+        == []
+    )
+    assert (
+        verifier._markdown_missing_terminal_table_cell_errors(
+            "Summary",
+            "| lane | true |\n",
+            row_prefix="| lane |",
+            value=True,
+            label="flag",
+        )
+        == []
+    )
+    assert verifier._markdown_missing_value_errors(
+        "Summary",
+        "flag false",
+        True,
+        "flag",
+    ) == ["readiness report Markdown Summary section missing flag: true"]
+
+
+def test_release_bundle_verifier_crypto_markdown_text_rejects_hostile_scalars_without_stringifying() -> None:
+    """Markdown text cells must reject hostile scalar and string-subclass values."""
+
+    verifier = load_verify_helpers()
+    hostile_scalar = HostileMarkdownPresenceValue()
+    hostile_text = HostileMarkdownString()
+
+    assert not verifier._readiness_markdown_crypto_text_is_safe(hostile_scalar)
+    assert not verifier._readiness_markdown_crypto_text_is_safe(hostile_text)
+    assert verifier._readiness_markdown_text_cell(hostile_text) == "`-`"
+    assert (
+        verifier._readiness_markdown_crypto_field_presence_value(
+            "route_canary_evidence_source",
+            hostile_text,
+        )
+        is None
+    )
+
+    assert verifier._readiness_markdown_crypto_text_is_safe(None)
+    assert verifier._readiness_markdown_crypto_text_is_safe("")
+    assert verifier._readiness_markdown_crypto_text_is_safe("safe-source")
+    assert verifier._readiness_markdown_text_cell("safe-source") == "`safe-source`"
+    assert (
+        verifier._readiness_markdown_crypto_field_presence_value(
+            "route_canary_evidence_source",
+            "safe-source",
+        )
+        == "safe-source"
+    )
+
+    cells = verifier._readiness_markdown_crypto_row_cells(
+        {
+            "domain": verifier.ACTIVE_LAUNCH_DOMAIN,
+            "chain": hostile_text,
+            "route_canary_evidence_source": hostile_text,
+            "route_canary_evidence_bound": True,
+        }
+    )
+
+    assert cells[1] == "-"
+    assert cells[13] == "`-`"
+
+    lane_cells = verifier._readiness_markdown_lane_row_cells(
+        {
+            "domain": verifier.ACTIVE_LAUNCH_DOMAIN,
+            "chain": hostile_text,
+            "production_ready": True,
+            "records": {
+                HostileVerifierFieldName("source_verifier_material"): True,
+            },
+        }
+    )
+
+    assert lane_cells[1] == "-"
+    assert lane_cells[3] == "source=no, deploy=no, dest=no, route=no"
 
 
 def test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory(
@@ -5851,6 +6466,7 @@ def test_release_bundle_verifier_cli_rejects_unknown_summary_fields_without_leak
         "private-key-summary",
         7,
         HostilePublicKey(),
+        HostileVerifierFieldName("operator_subclass_note"),
     ]
     summary = {
         "verified": True,
@@ -5889,7 +6505,7 @@ def test_release_bundle_verifier_cli_rejects_unknown_summary_fields_without_leak
     assert "__str__" not in captured.out
     assert "Traceback" not in captured.out
     for field in hostile_unknown_fields:
-        if isinstance(field, str):
+        if type(field) is str:
             assert field not in captured.out
 
     errors = "\n".join(payload["errors"])
@@ -5909,9 +6525,14 @@ def test_release_bundle_verifier_cli_rejects_unknown_summary_fields_without_leak
         "contains malformed unknown field name",
     ):
         error = f"strict verifier summary {suffix}"
+        expected_count = (
+            3 if suffix == "contains malformed unknown field name" else 2
+        )
         assert f"{error} #1" in errors
         assert f"{error} #2" in errors
-        assert errors.count(f"{error} #") == 2
+        if expected_count == 3:
+            assert f"{error} #3" in errors
+        assert errors.count(f"{error} #") == expected_count
 
 
 def rewrite_manifest_artifact(output_dir: Path, relative_path: str) -> None:
@@ -6889,6 +7510,9 @@ def test_release_bundle_rejects_unknown_copied_report_root_before_render(
                 report[markdown_field] = "markdown local claim"
                 report[confusable_field] = "confusable local claim"
                 report[HostilePublicKey()] = "secret-token hostile local claim"
+                report[HostileVerifierFieldName("operator_subclass_attestation")] = (
+                    "secret-token hostile subclass claim"
+                )
             return report
 
         def _render_markdown(self, *args, **kwargs) -> str:
@@ -6936,6 +7560,7 @@ def test_release_bundle_rejects_unknown_copied_report_root_before_render(
     )
     assert markdown_field not in captured.err
     assert confusable_field not in captured.err
+    assert "operator_subclass_attestation" not in captured.err
     assert "hostile" not in captured.err
     assert "__str__" not in captured.err
     assert fake_report_module.calls == 2
@@ -11989,6 +12614,130 @@ def test_release_bundle_verifier_rejects_not_ready_public_nested_missing_fields(
     assert "operator pending not-ready BSC lane certification" not in rendered
 
 
+def test_release_bundle_verifier_destination_binding_exact_key_helpers_reject_hostile_required_keys(
+) -> None:
+    """All-lanes destination binding keys must be exact builtin strings."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    lane = json.loads(
+        json.dumps(
+            next(
+                lane
+                for lane in summary["lanes"]
+                if lane["domain"] == verifier.SCCP_DOMAIN_ETH
+            )
+        )
+    )
+    destination = lane["destination_binding"]
+    destination[HostileVerifierFieldName("destination_binding_hash")] = (
+        destination.pop("destination_binding_hash")
+    )
+    destination[HostileVerifierFieldName("operator_subclass_destination")] = True
+
+    errors = "\n".join(verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane]))
+
+    assert (
+        "all-lanes summary lane domain 1 destination_binding contains malformed "
+        "unknown field name"
+    ) in errors
+    assert (
+        "all-lanes summary lane domain 1 destination_binding missing field: "
+        "destination_binding_hash"
+    ) in errors
+    assert "operator_subclass_destination" not in errors
+    assert "secret-token" not in errors
+    assert "hostile verifier" not in errors
+
+
+def test_release_bundle_verifier_source_record_exact_key_helpers_reject_hostile_required_keys(
+) -> None:
+    """All-lanes source-record hash keys must be exact builtin strings."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    lane = json.loads(
+        json.dumps(
+            next(
+                lane
+                for lane in summary["lanes"]
+                if lane["domain"] == verifier.SCCP_DOMAIN_ETH
+            )
+        )
+    )
+    source_hashes = lane["source_record_hashes"]
+    source_hashes[HostileVerifierFieldName("source_verifier_material_hash")] = (
+        source_hashes.pop("source_verifier_material_hash")
+    )
+    source_hashes[HostileVerifierFieldName("operator_subclass_source")] = True
+
+    errors = "\n".join(
+        verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+    )
+
+    assert (
+        "all-lanes summary lane domain 1 source_record_hashes contains "
+        "malformed unknown field name"
+    ) in errors
+    assert (
+        "all-lanes summary lane domain 1 source_record_hashes missing field: "
+        "source_verifier_material_hash"
+    ) in errors
+    assert "operator_subclass_source" not in errors
+    assert "secret-token" not in errors
+    assert "hostile verifier" not in errors
+
+
+def test_release_bundle_verifier_route_allowlist_exact_key_helpers_reject_hostile_required_keys(
+) -> None:
+    """All-lanes route allowlist keys must be exact builtin strings."""
+
+    verifier = load_verify_helpers()
+    helpers = load_all_lanes_helpers()
+    evidence_module = helpers.load_evidence_module()
+    summary = evidence_module.validate_evidence_bundle(
+        helpers.complete_bundle(evidence_module)
+    )
+    lane = json.loads(
+        json.dumps(
+            next(
+                lane
+                for lane in summary["lanes"]
+                if lane["domain"] == verifier.SCCP_DOMAIN_ETH
+            )
+        )
+    )
+    route_allowlist = lane["route_allowlist"]
+    route_allowlist[HostileVerifierFieldName("route_allowlist_hash")] = (
+        route_allowlist.pop("route_allowlist_hash")
+    )
+    route_allowlist[HostileVerifierFieldName("operator_subclass_route")] = True
+
+    errors = "\n".join(
+        verifier._all_lanes_lane_schema_errors("all-lanes summary", [lane])
+    )
+
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist contains malformed "
+        "unknown field name"
+    ) in errors
+    assert (
+        "all-lanes summary lane domain 1 route_allowlist missing field: "
+        "route_allowlist_hash"
+    ) in errors
+    assert "operator_subclass_route" not in errors
+    assert "secret-token" not in errors
+    assert "hostile verifier" not in errors
+
+
 def test_release_bundle_verifier_rejects_not_ready_public_nested_hash_mismatch() -> None:
     """Copied not-ready nested lane evidence must keep internal hashes coherent."""
 
@@ -13097,18 +13846,19 @@ def test_release_bundle_verifier_expected_crypto_evidence_redacts_hostile_audit_
 
     verifier = load_verify_helpers()
     hostile_key = HostilePublicKey()
+    hostile_alias = HostileVerifierFieldName("solana_full_light_client_gate_hash")
     expected_audit_hashes = {
         "solana_tower_replay_verifier_hash": fixed_hex32(0x61),
         "solana_full_accountsdb_lattice_verifier_hash": fixed_hex32(0x62),
         "solana_bank_fork_choice_verifier_hash": fixed_hex32(0x63),
-        "solana_full_light_client_gate_hash": fixed_hex32(0x64),
         hostile_key: fixed_hex32(0x65),
+        hostile_alias: fixed_hex32(0x64),
     }
     evidence = {
         "lanes": [
             {
                 "domain": verifier.SCCP_DOMAIN_SOL,
-                "chain": "solana",
+                "chain": verifier.ALL_LANES_CHAIN_BY_DOMAIN[verifier.SCCP_DOMAIN_SOL],
                 "source_adapter_gate": {
                     "required": True,
                     "ready": True,
@@ -13130,11 +13880,70 @@ def test_release_bundle_verifier_expected_crypto_evidence_redacts_hostile_audit_
     )
 
     assert audit_hashes[hostile_key] == fixed_hex32(0x65)
+    assert audit_hashes[hostile_alias] == fixed_hex32(0x64)
     assert (
         "readiness report cryptographic evidence row "
         "source_adapter_gate_audit_hashes contains an empty key"
     ) in errors
+    assert (
+        "readiness report cryptographic evidence row "
+        "source_adapter_gate_audit_hashes missing field: "
+        "solana_full_light_client_gate_hash"
+    ) in errors
     assert "hostile" not in errors
+    assert "hostile verifier" not in errors
+    assert "__str__" not in errors
+
+
+def test_release_bundle_verifier_expected_crypto_evidence_uses_exact_nested_keys(
+    tmp_path: Path,
+) -> None:
+    """Expected crypto rows must not consume hostile nested key aliases."""
+
+    verifier = load_verify_helpers()
+    report_module = load_report_module()
+    evidence_path, _ = write_active_launch_evidence(tmp_path)
+    evidence = report_module._load_evidence_summary([evidence_path])
+    active_lane = report_module._active_launch_lane(evidence)
+    assert active_lane is not None
+    source_hashes = active_lane["source_record_hashes"]
+    source_hashes[HostileVerifierFieldName("source_verifier_material_hash")] = (
+        source_hashes.pop("source_verifier_material_hash")
+    )
+    destination = active_lane["destination_binding"]
+    destination[HostileVerifierFieldName("destination_binding_hash")] = (
+        destination.pop("destination_binding_hash")
+    )
+    route = active_lane["route_allowlist"]
+    route[HostileVerifierFieldName("route_allowlist_hash")] = (
+        route.pop("route_allowlist_hash")
+    )
+    canary = route["route_canary"]
+    canary[HostileVerifierFieldName("evidence_hash")] = canary.pop("evidence_hash")
+    source_gate = active_lane["source_adapter_gate"]
+    source_gate[HostileVerifierFieldName("gate_hash")] = source_gate.pop("gate_hash")
+    live_metadata = active_lane["evm_live_metadata"]
+    live_metadata[HostileVerifierFieldName("source_rpc_chain_id")] = (
+        live_metadata.pop("source_rpc_chain_id")
+    )
+
+    rows = verifier._expected_cryptographic_evidence(evidence)
+    active_crypto = next(
+        row
+        for row in rows
+        if row["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    errors = "\n".join(verifier._cryptographic_evidence_row_schema_errors(active_crypto))
+
+    assert active_crypto["evm_source_rpc_chain_id"] == ""
+    assert active_crypto["source_verifier_material_hash"] is None
+    assert active_crypto["destination_binding_hash"] is None
+    assert active_crypto["route_allowlist_hash"] is None
+    assert active_crypto["route_canary_evidence_hash"] is None
+    assert active_crypto["source_adapter_gate_hash"] == ""
+    assert "secret-token" not in errors
+    assert "hostile" not in errors
+    assert "__eq__" not in errors
     assert "__str__" not in errors
 
 
@@ -13716,6 +14525,63 @@ def test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_rende
         )
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_hostile_copied_crypto_lane_binding_without_comparing() -> None:
+    """Copied crypto lane bindings must reject hostile scalars without hooks."""
+
+    bundle = load_bundle_module()
+    hostile_scalar = HostilePublicCryptoScalar()
+    hostile_text = HostileMarkdownString("eth")
+    source_hash = fixed_hex32(0xA1)
+    audit_hash = fixed_hex32(0xA2)
+    lane = {
+        "domain": 1,
+        "chain": "eth",
+        "source_record_hashes": {
+            "source_verifier_material_hash": source_hash,
+        },
+        "source_adapter_gate": {
+            "audit_hashes": {
+                "evm_source_gate_hash": audit_hash,
+            },
+        },
+    }
+    crypto_row = {
+        "domain": 1,
+        "chain": hostile_text,
+        "source_verifier_material_hash": hostile_scalar,
+        "source_adapter_gate_audit_hashes": {
+            "evm_source_gate_hash": hostile_scalar,
+        },
+    }
+
+    assert bundle._public_copied_value_matches(
+        {"evm_source_gate_hash": audit_hash},
+        {"evm_source_gate_hash": audit_hash},
+    )
+    assert not bundle._public_copied_value_matches(hostile_scalar, source_hash)
+
+    errors = bundle._cryptographic_evidence_lane_binding_bundle_errors(
+        [crypto_row],
+        [lane],
+        crypto_label="bundled report.cryptographic_evidence",
+        lanes_label="bundled report.evidence.lanes",
+    )
+    joined_errors = "\n".join(errors)
+
+    assert (
+        "bundled report.cryptographic_evidence[0] "
+        "source_verifier_material_hash must match "
+        "bundled report.evidence.lanes[0].source_record_hashes."
+        "source_verifier_material_hash"
+    ) in errors
+    assert (
+        "bundled report.cryptographic_evidence[0] "
+        "source_adapter_gate_audit_hashes must match "
+        "bundled report.evidence.lanes[0].source_adapter_gate.audit_hashes"
+    ) in errors
+    assert "secret-token" not in joined_errors
 
 
 def test_release_bundle_rejects_unknown_copied_submission_surface_before_render(
@@ -14532,6 +15398,9 @@ def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_rende
                     "audit_hashes": {
                         "operator_attestation": "0x" + "41" * 32,
                         audit_secret: "0x" + "42" * 32,
+                        HostileVerifierFieldName(
+                            "operator_subclass_native_audit"
+                        ): "0x" + "43" * 32,
                     },
                     "validation_blockers": [
                         "stale blocker",
@@ -14548,6 +15417,9 @@ def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_rende
                             "implementation": "native-js",
                             "operator_attestation": "reviewed outside evidence",
                             sdk_secret: "runtime secret",
+                            HostileVerifierFieldName(
+                                "operator_subclass_native_sdk_field"
+                            ): "runtime subclass",
                         },
                         {
                             "sdk": "secret-token-sdk",
@@ -14558,10 +15430,25 @@ def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_rende
                                 "bytes": 1,
                                 "sha256": "99" * 32,
                             },
+                        },
+                        {
+                            "sdk": HostileVerifierFieldName(
+                                "operator_subclass_native_sdk"
+                            ),
+                            "implementation": "native-subclass",
+                            "implementation_hash": "0x" + "98" * 32,
+                            "implementation_artifact": {
+                                "path": "native-prover/subclass.bin",
+                                "bytes": 1,
+                                "sha256": "98" * 32,
+                            },
                         }
                     ],
                     "operator_attestation": "reviewed outside evidence",
                     root_secret: "runtime secret",
+                    HostileVerifierFieldName(
+                        "operator_subclass_native_summary"
+                    ): "runtime subclass",
                 }
             return report
 
@@ -14649,6 +15536,8 @@ def test_release_bundle_rejects_malformed_copied_native_evm_summary_before_rende
     assert "secret_token_native_sdk_field" not in captured.err
     assert "secret-token-native-audit-field" not in captured.err
     assert "secret-token-sdk" not in captured.err
+    assert "operator_subclass_native" not in captured.err
+    assert "hostile verifier" not in captured.err
     assert control_blocker not in captured.err
     assert markdown_blocker not in captured.err
     assert confusable_blocker not in captured.err
@@ -15185,6 +16074,109 @@ def test_release_bundle_rejects_copied_native_evm_summary_scalar_drift_before_re
     assert f"{label} proof_backend must be evm-groth16-bn254-v1" in captured.err
     assert fake_report_module.calls == 2
     assert not (output_dir / "sccp-release-readiness.md").exists()
+
+
+def test_release_bundle_rejects_hostile_native_evm_root_identity_without_comparing(
+    tmp_path: Path,
+) -> None:
+    """Native EVM root identity fields must reject exact-value subclasses."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    output_dir = build_ready_bundle(tmp_path)
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    native_payload = json.loads(native_path.read_text(encoding="utf-8"))
+    evidence_summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+    label = "readiness report native_evm_prover_bundle"
+    summary_cases = (
+        (
+            "schema",
+            HostileMarkdownString(verifier.NATIVE_EVM_PROVER_BUNDLE_SCHEMA),
+            f"{label} schema must be {verifier.NATIVE_EVM_PROVER_BUNDLE_SCHEMA}",
+        ),
+        (
+            "bundle_id",
+            HostileMarkdownString(verifier.NATIVE_EVM_PROVER_BUNDLE_ID),
+            f"{label} bundle_id must be {verifier.NATIVE_EVM_PROVER_BUNDLE_ID}",
+        ),
+        (
+            "lanes",
+            HostileMarkdownString(verifier.ACTIVE_LAUNCH_CHAIN),
+            f"{label} lanes must be {verifier.ACTIVE_LAUNCH_CHAIN}",
+        ),
+        (
+            "proof_backend",
+            HostileMarkdownString("evm-groth16-bn254-v1"),
+            f"{label} proof_backend must be evm-groth16-bn254-v1",
+        ),
+    )
+    manifest_cases = (
+        (
+            "schema",
+            HostileMarkdownString(verifier.NATIVE_EVM_PROVER_BUNDLE_SCHEMA),
+            f"native EVM Groth16 prover bundle schema must be {verifier.NATIVE_EVM_PROVER_BUNDLE_SCHEMA!r}",
+        ),
+        (
+            "bundle_id",
+            HostileMarkdownString(verifier.NATIVE_EVM_PROVER_BUNDLE_ID),
+            f"native EVM Groth16 prover bundle bundle_id must be {verifier.NATIVE_EVM_PROVER_BUNDLE_ID!r}",
+        ),
+        (
+            "domain",
+            True,
+            f"native EVM Groth16 prover bundle domain must be {verifier.ACTIVE_LAUNCH_DOMAIN!r}",
+        ),
+        (
+            "chain",
+            HostileMarkdownString(verifier.ACTIVE_LAUNCH_CHAIN),
+            f"native EVM Groth16 prover bundle chain must be {verifier.ACTIVE_LAUNCH_CHAIN!r}",
+        ),
+        (
+            "proof_backend",
+            HostileMarkdownString("evm-groth16-bn254-v1"),
+            "native EVM Groth16 prover bundle proof_backend must be 'evm-groth16-bn254-v1'",
+        ),
+        (
+            "browser_implementation",
+            HostileMarkdownString("pure-typescript"),
+            "native EVM Groth16 prover bundle browser_implementation must be 'pure-typescript'",
+        ),
+    )
+
+    for field, value, expected_error in summary_cases:
+        native_summary = json.loads(json.dumps(report["native_evm_prover_bundle"]))
+        native_summary[field] = value
+        verifier_errors = verifier._native_evm_prover_bundle_summary_schema_errors(
+            native_summary
+        )
+        bundle_errors = bundle._native_evm_prover_summary_errors(
+            native_summary,
+            label,
+        )
+
+        assert expected_error in verifier_errors, field
+        assert expected_error in bundle_errors, field
+        assert "secret-token" not in "\n".join((*verifier_errors, *bundle_errors))
+
+    for field, value, expected_blocker in manifest_cases:
+        payload = dict(native_payload)
+        payload[field] = value
+        status = verifier._native_evm_prover_bundle_status_from_payload(
+            None,
+            native_path,
+            payload,
+            evidence_summary,
+        )
+        blockers = "\n".join(status["validation_blockers"])
+
+        assert status["validation_status"] == "blocked", field
+        assert expected_blocker in status["validation_blockers"], field
+        assert "secret-token" not in blockers
 
 
 def test_release_bundle_rejects_copied_native_evm_sdk_artifact_order_before_render(
@@ -21243,9 +22235,16 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
                         "operator note": "whitespace local claim",
                         markdown_field: "markdown local claim",
                         confusable_field: "confusable local claim",
+                        HostileVerifierFieldName(
+                            "operator_subclass_source_field"
+                        ): "subclass local claim",
                         HostilePublicKey(): "secret-token hostile source field",
                     },
                     HostilePublicKey(): {
+                        "validation_status": "passed",
+                        "validation_blockers": [],
+                    },
+                    HostileVerifierFieldName("operator_subclass_source_gate"): {
                         "validation_status": "passed",
                         "validation_blockers": [],
                     },
@@ -21397,6 +22396,7 @@ def test_release_bundle_rejects_malformed_copied_source_inventory_before_render(
     assert confusable_field not in captured.err
     assert confusable_gate not in captured.err
     assert secret_gate not in captured.err
+    assert "operator_subclass_source" not in captured.err
     assert "secret-token gate blocker" not in captured.err
     assert "hostile" not in captured.err
     assert "__str__" not in captured.err
@@ -23710,6 +24710,45 @@ def test_release_bundle_native_evm_duplicate_json_redacts_sensitive_key_causes(
             raise AssertionError(
                 "sensitive duplicate native EVM prover key was accepted"
             )
+
+
+def test_release_bundle_native_evm_payload_sources_ignore_hostile_aliases(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Native prover pre-copy path collection must ignore hostile aliases."""
+
+    module = load_bundle_module()
+    native_bundle = tmp_path / "native-prover.json"
+    native_bundle.write_text("{}\n", encoding="utf-8")
+    artifact_dir = tmp_path / "native-prover-artifacts"
+    artifact_dir.mkdir()
+    artifact_path = artifact_dir / "proving-key.bin"
+    artifact_path.write_bytes(b"native proving key")
+    relative_path = artifact_path.relative_to(tmp_path).as_posix()
+    payload = {
+        "proving_key": relative_path,
+        HostileVerifierFieldName("proof_artifact"): relative_path,
+        "native_sdk_artifacts": [
+            {
+                "sdk": "js-sdk",
+                HostileVerifierFieldName("implementation_artifact"): relative_path,
+            }
+        ],
+    }
+    original_loader = module._load_json_without_duplicate_keys
+
+    def hostile_loader(path: Path):
+        if path == native_bundle:
+            return payload
+        return original_loader(path)
+
+    monkeypatch.setattr(module, "_load_json_without_duplicate_keys", hostile_loader)
+
+    sources = module._native_evm_prover_payload_sources(native_bundle)
+
+    assert [relative.as_posix() for relative, _path in sources] == [relative_path]
+    assert [path for _relative, path in sources] == [artifact_path]
 
 
 def test_release_bundle_json_loader_rejects_unreadable_file_shapes(
@@ -28019,6 +29058,320 @@ def test_release_bundle_verifier_numbers_repeated_native_evm_prover_summary_audi
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_native_evm_exact_key_helpers_reject_hostile_required_keys(
+    tmp_path: Path,
+) -> None:
+    """Strict native prover helpers must not compare hostile required-key aliases."""
+
+    verifier = load_verify_helpers()
+    report_module = load_report_module()
+    evidence_path, _ = write_complete_evidence(tmp_path)
+    evidence = report_module._load_evidence_summary([evidence_path])
+    native_bundle_path = write_native_evm_prover_bundle(tmp_path, evidence_path)
+    payload = json.loads(native_bundle_path.read_text(encoding="utf-8"))
+    payload[HostileVerifierFieldName("schema")] = payload.pop("schema")
+    payload["audit_hashes"][HostileVerifierFieldName("cross_sdk_fixture_parity")] = (
+        payload["audit_hashes"].pop("cross_sdk_fixture_parity")
+    )
+
+    status = verifier._native_evm_prover_bundle_status_from_payload(
+        None,
+        native_bundle_path,
+        payload,
+        evidence,
+    )
+    payload_errors = "\n".join(status["validation_blockers"])
+
+    assert "native EVM Groth16 prover bundle contains malformed unknown field name" in (
+        payload_errors
+    )
+    assert "native EVM Groth16 prover bundle missing field: schema" in payload_errors
+    assert (
+        "native EVM Groth16 prover bundle audit_hashes contains malformed "
+        "unexpected field name"
+    ) in payload_errors
+    assert (
+        "native EVM Groth16 prover bundle audit_hashes missing field: "
+        "cross_sdk_fixture_parity"
+    ) in payload_errors
+    assert "operator_subclass" not in payload_errors
+    assert "secret-token" not in payload_errors
+    assert "hostile verifier" not in payload_errors
+
+    output_dir = build_ready_bundle(tmp_path)
+    ready_report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = dict(ready_report["native_evm_prover_bundle"])
+    summary["audit_hashes"] = dict(summary["audit_hashes"])
+    summary["audit_hashes"][HostileVerifierFieldName("cross_sdk_fixture_parity")] = (
+        summary["audit_hashes"].pop("cross_sdk_fixture_parity")
+    )
+
+    summary_errors = "\n".join(
+        verifier._native_evm_prover_bundle_summary_schema_errors(summary)
+    )
+
+    assert (
+        "readiness report native_evm_prover_bundle audit_hashes contains "
+        "malformed unexpected field name"
+    ) in summary_errors
+    assert (
+        "readiness report native_evm_prover_bundle audit_hashes missing field: "
+        "cross_sdk_fixture_parity"
+    ) in summary_errors
+    assert "secret-token" not in summary_errors
+    assert "hostile verifier" not in summary_errors
+
+
+def test_release_bundle_verifier_native_evm_role_helpers_ignore_hostile_aliases() -> None:
+    """Native prover role-reuse checks must ignore hostile non-exact aliases."""
+
+    verifier = load_verify_helpers()
+    hash_value = fixed_hex32(0x71)
+    hash_payload = {
+        "proving_key_hash": hash_value,
+        HostileVerifierFieldName("proof_artifact_hash"): hash_value,
+        "native_sdk_artifacts": [
+            {
+                "sdk": "js-sdk",
+                HostileVerifierFieldName("implementation_hash"): hash_value,
+            }
+        ],
+    }
+
+    hash_blockers = "\n".join(
+        verifier._native_evm_prover_hash_role_blockers(hash_payload)
+    )
+
+    assert "must not reuse proof_artifact_hash" not in hash_blockers
+    assert "native_sdk_artifacts[0].implementation_hash" not in hash_blockers
+    assert "secret-token" not in hash_blockers
+    assert "hostile verifier" not in hash_blockers
+    assert "__eq__" not in hash_blockers
+    assert "__str__" not in hash_blockers
+
+    path_value = "native-prover-artifacts/proving-key.bin"
+    path_payload = {
+        "proving_key": path_value,
+        HostileVerifierFieldName("proof_artifact"): path_value,
+        "native_sdk_artifacts": [
+            {
+                "sdk": "js-sdk",
+                HostileVerifierFieldName("implementation_artifact"): path_value,
+            }
+        ],
+    }
+
+    path_blockers = "\n".join(
+        verifier._native_evm_prover_payload_path_role_blockers(path_payload)
+    )
+
+    assert "must not reuse proof_artifact" not in path_blockers
+    assert "native_sdk_artifacts[0].implementation_artifact" not in path_blockers
+    assert "secret-token" not in path_blockers
+    assert "hostile verifier" not in path_blockers
+    assert "__eq__" not in path_blockers
+    assert "__str__" not in path_blockers
+
+    fixture_blockers = "\n".join(
+        verifier._native_evm_prover_fixture_hash_role_blockers(
+            "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact",
+            {
+                "receipt_proof_hash": hash_value,
+                HostileVerifierFieldName("source_proof_hash"): hash_value,
+            },
+            verifier.NATIVE_EVM_PROVER_PARITY_HASH_ROLE_KEYS,
+        )
+    )
+
+    assert "source_proof_hash must not reuse" not in fixture_blockers
+    assert "secret-token" not in fixture_blockers
+    assert "hostile verifier" not in fixture_blockers
+    assert "__eq__" not in fixture_blockers
+    assert "__str__" not in fixture_blockers
+
+    artifact = {
+        "path": "native-prover-artifacts/proving-key.bin",
+        "bytes": 1,
+        "sha256": "11" * 32,
+    }
+    summary_path_errors = "\n".join(
+        verifier._native_evm_prover_summary_path_role_errors(
+            "readiness report native_evm_prover_bundle",
+            {
+                "proving_key": artifact,
+                "sdk_artifacts": [
+                    {
+                        "sdk": "js-sdk",
+                        HostileVerifierFieldName(
+                            "implementation_artifact"
+                        ): artifact,
+                    }
+                ],
+            },
+        )
+    )
+
+    assert "implementation_artifact path must not reuse" not in summary_path_errors
+    assert "secret-token" not in summary_path_errors
+    assert "hostile verifier" not in summary_path_errors
+    assert "__eq__" not in summary_path_errors
+    assert "__str__" not in summary_path_errors
+
+
+def test_release_bundle_verifier_native_evm_summary_audit_roles_ignore_hostile_aliases(
+    tmp_path: Path,
+) -> None:
+    """Native prover summary audit reuse checks must ignore hostile SDK aliases."""
+
+    verifier = load_verify_helpers()
+    output_dir = build_ready_bundle(tmp_path)
+    ready_report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = dict(ready_report["native_evm_prover_bundle"])
+    summary["audit_hashes"] = dict(summary["audit_hashes"])
+    summary["sdk_artifacts"] = [
+        dict(row) for row in summary["sdk_artifacts"]
+    ]
+    reused_hash = summary["audit_hashes"]["circuit_security_audit"]
+    first_sdk_artifact = summary["sdk_artifacts"][0]
+    first_sdk_artifact.pop("implementation_hash")
+    first_sdk_artifact[HostileVerifierFieldName("implementation_hash")] = reused_hash
+
+    summary_errors = "\n".join(
+        verifier._native_evm_prover_bundle_summary_schema_errors(summary)
+    )
+
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] missing "
+        "field: implementation_hash"
+    ) in summary_errors
+    assert (
+        "audit_hashes.circuit_security_audit must not reuse "
+        "sdk_artifacts[0].implementation_hash"
+    ) not in summary_errors
+    assert "secret-token" not in summary_errors
+    assert "hostile verifier" not in summary_errors
+    assert "__eq__" not in summary_errors
+    assert "__str__" not in summary_errors
+
+
+def test_release_bundle_verifier_native_evm_markdown_cells_ignore_hostile_aliases(
+) -> None:
+    """Native EVM Markdown cells must ignore hostile non-exact aliases."""
+
+    verifier = load_verify_helpers()
+    sdk_artifacts = [
+        {
+            "sdk": sdk,
+            "implementation": implementation,
+            "implementation_hash": fixed_hex32(0x88),
+        }
+        for sdk, implementation in sorted(
+            verifier.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS.items()
+        )
+    ]
+    sdk_artifacts[0][HostileVerifierFieldName("implementation_hash")] = (
+        sdk_artifacts[0].pop("implementation_hash")
+    )
+
+    sdk_cell = verifier._readiness_native_evm_sdk_artifacts_cell(sdk_artifacts)
+    artifact_path_cell = verifier._readiness_native_evm_artifact_path_cell(
+        {HostileVerifierFieldName("path"): "native-prover-artifacts/proving-key.bin"},
+        field_label="proving_key",
+    )
+    support_artifact_cell = verifier._readiness_native_evm_support_artifact_cell(
+        {
+            HostileVerifierFieldName("path"): "native-prover-artifacts/proving-key.bin",
+            "sha256": "11" * 32,
+        },
+        field_label="proving_key",
+    )
+    row_cells = verifier._readiness_native_evm_bundle_row_cells(
+        {
+            HostileVerifierFieldName("required"): True,
+            "validation_status": "passed",
+            "validation_blockers": [],
+        }
+    )
+
+    rendered = "\n".join(
+        [sdk_cell, artifact_path_cell, support_artifact_cell, *row_cells]
+    )
+    assert sdk_cell == "`<invalid sdk_artifacts>`"
+    assert artifact_path_cell == "`<invalid proving_key>`"
+    assert support_artifact_cell == "`<invalid proving_key>`"
+    assert row_cells[0] == "no"
+    assert "secret-token" not in rendered
+    assert "hostile verifier" not in rendered
+    assert "__eq__" not in rendered
+    assert "__str__" not in rendered
+
+
+def test_release_bundle_verifier_native_evm_status_ignores_hostile_active_destination_alias(
+    tmp_path: Path,
+) -> None:
+    """Native prover status must compare active destination hashes by exact key."""
+
+    verifier = load_verify_helpers()
+    report_module = load_report_module()
+    evidence_path, _ = write_active_launch_evidence(tmp_path)
+    evidence = report_module._load_evidence_summary([evidence_path])
+    active_lane = report_module._active_launch_lane(evidence)
+    assert active_lane is not None
+    destination = active_lane["destination_binding"]
+    destination[HostileVerifierFieldName("destination_binding_hash")] = (
+        destination.pop("destination_binding_hash")
+    )
+    native_bundle_path = write_native_evm_prover_bundle(tmp_path, evidence_path)
+    payload = json.loads(native_bundle_path.read_text(encoding="utf-8"))
+
+    status = verifier._native_evm_prover_bundle_status_from_payload(
+        None,
+        native_bundle_path,
+        payload,
+        evidence,
+    )
+    blockers = "\n".join(status["validation_blockers"])
+
+    assert status["validation_status"] == "passed"
+    assert (
+        "native EVM Groth16 prover bundle destination_binding_hash must match"
+        not in blockers
+    )
+    assert "secret-token" not in blockers
+    assert "hostile" not in blockers
+    assert "__eq__" not in blockers
+    assert "__str__" not in blockers
+
+
+def test_release_bundle_verifier_native_evm_sdk_results_redacts_hostile_keys() -> None:
+    """Strict native EVM SDK-result maps must reject hostile SDK key aliases."""
+
+    verifier = load_verify_helpers()
+    hostile_key = HostilePublicKey()
+    hostile_alias = HostileVerifierFieldName("operator-subclass-sdk")
+    first_sdk = next(iter(verifier.NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS))
+
+    _canonical, blockers = verifier._native_evm_prover_sdk_results_by_sdk(
+        "native EVM Groth16 prover bundle parity fixture",
+        {
+            first_sdk: {},
+            hostile_key: {},
+            hostile_alias: {},
+        },
+    )
+
+    rendered = "\n".join(blockers)
+    assert "sdk_results contains malformed sdk key" in rendered
+    assert "secret-token" not in rendered
+    assert "hostile" not in rendered
+    assert "hostile verifier" not in rendered
+    assert "AssertionError" not in rendered
+
+
 def test_release_bundle_verifier_rejects_native_evm_prover_report_sdk_artifact_order(
     tmp_path: Path,
 ) -> None:
@@ -28128,6 +29481,58 @@ def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_dr
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
     ) in verified.stdout
+
+
+def test_release_bundle_rejects_hostile_native_evm_sdk_implementation_without_comparing(
+    tmp_path: Path,
+) -> None:
+    """Native SDK implementation binding must reject string subclasses exactly."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    row = payload["native_sdk_artifacts"][0]
+    sdk = row["sdk"]
+    expected_implementation = row["implementation"]
+    row["implementation"] = HostileMarkdownString(expected_implementation)
+
+    sdk_artifacts, blockers = verifier._native_evm_prover_bundle_artifact_summary(
+        payload["native_sdk_artifacts"],
+        payload["proof_artifact_hash"],
+        payload["proving_key_hash"],
+        native_path,
+        None,
+    )
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    report["native_evm_prover_bundle"]["sdk_artifacts"][0][
+        "implementation"
+    ] = HostileMarkdownString(expected_implementation)
+    verifier_errors = verifier._native_evm_prover_bundle_summary_schema_errors(
+        report["native_evm_prover_bundle"]
+    )
+    bundle_errors = bundle._native_evm_prover_summary_errors(
+        report["native_evm_prover_bundle"],
+        "readiness report native_evm_prover_bundle",
+    )
+    markdown = verifier._readiness_native_evm_sdk_artifacts_cell(sdk_artifacts)
+
+    assert f"{sdk} implementation must be {expected_implementation}" in blockers
+    assert (
+        "readiness report native_evm_prover_bundle sdk_artifacts[0] "
+        f"implementation must be {expected_implementation}"
+    ) in verifier_errors
+    assert (
+        "readiness report native_evm_prover_bundle.sdk_artifacts[0] "
+        f"implementation must be {expected_implementation}"
+    ) in bundle_errors
+    assert markdown == "`<invalid sdk_artifacts>`"
+    assert "secret-token" not in "\n".join(
+        (*blockers, *verifier_errors, *bundle_errors, markdown)
+    )
 
 
 def test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift(
@@ -28680,6 +30085,94 @@ def test_release_bundle_verifier_rejects_native_evm_self_test_malformed_unknown_
         "readiness report native_evm_prover_bundle does not match bundled native "
         "prover manifest"
     ) in verified.stdout
+
+
+def test_release_bundle_verifier_native_evm_fixture_exact_key_helpers_reject_hostile_required_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict native EVM fixture validators must reject hostile key aliases."""
+
+    verifier = load_verify_helpers()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    payload = json.loads(native_bundle.read_text(encoding="utf-8"))
+    parity_path = tmp_path / payload["cross_sdk_fixture_parity_artifact"]
+    self_test_path = tmp_path / payload["native_prover_self_test_artifact"]
+
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_sdk = sorted(parity_payload["sdk_results"])[0]
+    parity_payload[HostileVerifierFieldName("schema")] = parity_payload.pop("schema")
+    parity_payload["sdk_results"][parity_sdk][
+        HostileVerifierFieldName("receipt_proof_hash")
+    ] = parity_payload["sdk_results"][parity_sdk].pop("receipt_proof_hash")
+
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_sdk = sorted(self_test_payload["sdk_results"])[0]
+    self_test_payload[HostileVerifierFieldName("schema")] = self_test_payload.pop(
+        "schema"
+    )
+    self_test_payload["sdk_results"][self_test_sdk][
+        HostileVerifierFieldName("proof_hash")
+    ] = self_test_payload["sdk_results"][self_test_sdk].pop("proof_hash")
+
+    original_loader = verifier._load_json
+
+    def hostile_fixture_loader(path: Path):
+        if path == parity_path:
+            return parity_payload
+        if path == self_test_path:
+            return self_test_payload
+        return original_loader(path)
+
+    monkeypatch.setattr(verifier, "_load_json", hostile_fixture_loader)
+
+    _, parity_blockers = verifier._native_evm_prover_parity_fixture_status(
+        native_bundle,
+        None,
+        payload,
+    )
+    _, self_test_blockers = verifier._native_evm_prover_self_test_status(
+        native_bundle,
+        None,
+        payload,
+    )
+    blockers = "\n".join([*parity_blockers, *self_test_blockers])
+
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "contains malformed unknown field name"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        "missing field: schema"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        f"sdk_results.{parity_sdk} contains malformed unknown field name"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle cross_sdk_fixture_parity_artifact "
+        f"sdk_results.{parity_sdk} missing field: receipt_proof_hash"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        "contains malformed unknown field name"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        "missing field: schema"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        f"sdk_results.{self_test_sdk} contains malformed unknown field name"
+    ) in blockers
+    assert (
+        "native EVM Groth16 prover bundle native_prover_self_test_artifact "
+        f"sdk_results.{self_test_sdk} missing field: proof_hash"
+    ) in blockers
+    assert "secret-token" not in blockers
+    assert "hostile verifier" not in blockers
 
 
 def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_sdk_result_keys(
@@ -35639,6 +37132,37 @@ def test_release_bundle_verifier_rejects_missing_tron_route_config_canonical_man
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_missing_tron_route_manifest_cli_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the TRON route-manifest CLI gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("tron_route_manifest_cli_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "tron_route_manifest_cli_gate"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_missing_ton_route_manifest_cli_inventory_gate(
     tmp_path: Path,
 ) -> None:
@@ -35667,6 +37191,68 @@ def test_release_bundle_verifier_rejects_missing_ton_route_manifest_cli_inventor
     assert (
         "readiness report source_inventory missing required gate: "
         "ton_route_manifest_cli_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_bsc_route_manifest_cli_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the BSC route-manifest CLI gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("bsc_route_manifest_cli_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "bsc_route_manifest_cli_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_solana_route_manifest_cli_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the Solana route-manifest CLI gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("solana_route_manifest_cli_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "solana_route_manifest_cli_gate"
     ) in verified.stdout
 
 
@@ -37426,6 +39012,427 @@ def test_release_bundle_verifier_rejects_source_inventory_gate_malformed_unknown
     assert confusable_field not in verified.stdout
 
 
+def test_release_bundle_verifier_source_inventory_exact_key_helpers_reject_hostile_required_keys(
+    tmp_path: Path,
+) -> None:
+    """Strict source-inventory helpers must not compare hostile required-key aliases."""
+
+    verifier = load_verify_helpers()
+    output_dir = build_ready_bundle(tmp_path)
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    source_inventory = report["source_inventory"]
+    source_inventory[HostileVerifierFieldName("proof_request_bundle_gate")] = (
+        source_inventory.pop("proof_request_bundle_gate")
+    )
+    gate = source_inventory["release_public_json_root_schema_gate"]
+    gate[HostileVerifierFieldName("validation_status")] = gate.pop(
+        "validation_status"
+    )
+
+    errors = "\n".join(verifier._source_inventory_schema_errors(source_inventory))
+
+    assert (
+        "readiness report source_inventory contains malformed unknown gate name"
+        in errors
+    )
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "proof_request_bundle_gate"
+    ) in errors
+    assert (
+        "readiness report source_inventory.release_public_json_root_schema_gate "
+        "contains malformed unknown field name"
+    ) in errors
+    assert (
+        "readiness report source_inventory.release_public_json_root_schema_gate "
+        "missing field: validation_status"
+    ) in errors
+    assert "secret-token" not in errors
+    assert "hostile verifier" not in errors
+
+
+def test_release_bundle_verifier_public_schema_exact_key_helpers_reject_hostile_required_keys(
+    tmp_path: Path,
+) -> None:
+    """Public schema helpers must not compare hostile required-key aliases."""
+
+    verifier = load_verify_helpers()
+    output_dir = build_ready_bundle(tmp_path)
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+
+    summary[HostileVerifierFieldName("production_ready")] = summary.pop(
+        "production_ready"
+    )
+    summary_errors = "\n".join(
+        verifier._all_lanes_summary_schema_errors("all-lanes summary", summary)
+    )
+    assert "all-lanes summary contains malformed unknown field name" in summary_errors
+    assert "all-lanes summary missing field: production_ready" in summary_errors
+
+    checklist = dict(report["release_checklist"])
+    checklist[HostileVerifierFieldName("items")] = checklist.pop("items")
+    checklist_errors = "\n".join(
+        verifier._release_checklist_schema_errors("readiness report", checklist)
+    )
+    assert (
+        "readiness report release_checklist contains malformed unknown field name"
+        in checklist_errors
+    )
+    assert "readiness report release_checklist missing field: items" in checklist_errors
+
+    corridor = dict(report["corridor"])
+    corridor[HostileVerifierFieldName("phases")] = corridor.pop("phases")
+    corridor_errors = "\n".join(verifier._corridor_schema_errors(corridor))
+    assert (
+        "readiness report corridor contains malformed unknown field name"
+        in corridor_errors
+    )
+    assert "readiness report corridor missing field: phases" in corridor_errors
+
+    surface = dict(report["user_prover_submission_surfaces"][0])
+    surface[HostileVerifierFieldName("lanes")] = surface.pop("lanes")
+    surface_errors = [
+        verifier._native_evm_prover_field_name_blocker(
+            "readiness report user prover submission surface row",
+            key,
+            "unknown",
+        )
+        for key in verifier._public_unknown_mapping_fields(
+            surface,
+            verifier.USER_PROVER_SUBMISSION_SURFACE_KEYS,
+        )
+    ]
+    surface_errors.extend(
+        "readiness report user prover submission surface row missing field: "
+        f"{key}"
+        for key in sorted(
+            verifier.USER_PROVER_SUBMISSION_SURFACE_KEYS
+            - verifier._public_mapping_string_keys(surface)
+        )
+    )
+    surface_errors.extend(verifier._submission_surface_row_schema_errors(surface))
+    surface_errors_text = "\n".join(surface_errors)
+    assert (
+        "readiness report user prover submission surface row contains malformed "
+        "unknown field name"
+    ) in surface_errors_text
+    assert (
+        "readiness report user prover submission surface row missing field: lanes"
+        in surface_errors_text
+    )
+
+    crypto_row = dict(report["cryptographic_evidence"][0])
+    crypto_row[HostileVerifierFieldName("domain")] = crypto_row.pop("domain")
+    crypto_errors = [
+        verifier._cryptographic_evidence_row_unknown_field_blocker(key)
+        for key in verifier._public_unknown_mapping_fields(
+            crypto_row,
+            verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS,
+        )
+    ]
+    crypto_errors.extend(verifier._cryptographic_evidence_row_schema_errors(crypto_row))
+    crypto_errors_text = "\n".join(crypto_errors)
+    assert (
+        "readiness report cryptographic evidence row contains malformed unknown "
+        "field name"
+    ) in crypto_errors_text
+    assert (
+        "readiness report cryptographic evidence row missing field: domain"
+        in crypto_errors_text
+    )
+
+    strict_summary = {
+        "verified": True,
+        "errors": [],
+        "artifacts": [
+            {
+                HostileVerifierFieldName("path"): "manifest.json",
+                "bytes": 1,
+                "sha256": "ab" * 32,
+            }
+        ],
+        "manifest_sha256": "cd" * 32,
+    }
+    strict_summary[HostileVerifierFieldName("verified")] = strict_summary.pop(
+        "verified"
+    )
+    strict_summary_payload = verifier._public_verifier_summary_payload(strict_summary)
+    strict_summary_errors = "\n".join(strict_summary_payload["errors"])
+    assert (
+        "strict verifier summary contains malformed unknown field name"
+        in strict_summary_errors
+    )
+    assert "strict verifier summary verified must be boolean" in strict_summary_errors
+    assert (
+        "strict verifier summary artifact 0 contains unknown field"
+        in strict_summary_errors
+    )
+    assert (
+        "strict verifier summary artifact 0 missing field: path"
+        in strict_summary_errors
+    )
+
+    combined_errors = "\n".join(
+        (
+            summary_errors,
+            checklist_errors,
+            corridor_errors,
+            surface_errors_text,
+            crypto_errors_text,
+            strict_summary_errors,
+        )
+    )
+    assert "secret-token" not in combined_errors
+    assert "hostile verifier" not in combined_errors
+
+
+def test_release_bundle_pre_render_exact_key_helpers_reject_hostile_required_keys(
+    tmp_path: Path,
+) -> None:
+    """Release-bundle pre-render helpers must reject hostile required-key aliases."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    report = minimal_release_bundle_report()
+
+    preflight_report = {HostileVerifierFieldName("production_ready"): True, "blockers": []}
+    artifact = {
+        HostileVerifierFieldName("path"): "evidence/00-input.toml",
+        "bytes": 1,
+        "sha256": "ab" * 32,
+    }
+    checklist = {
+        "ready": True,
+        "items": [
+            {
+                HostileVerifierFieldName("id"): "operator-signoff",
+                "title": "Operator signoff",
+                "ready": True,
+                "blockers": [],
+            }
+        ],
+    }
+    native_summary = {
+        field: None for field in bundle.NATIVE_EVM_PROVER_BUNDLE_SUMMARY_FIELDS
+    }
+    native_summary.update(
+        {
+            "validation_status": "passed",
+            "required": True,
+            "schema": bundle._native_evm_prover_bundle_schema(),
+            "sdk_artifacts": [
+                {
+                    HostileVerifierFieldName("sdk"): "js-sdk",
+                    "implementation": "native prover helper",
+                    "implementation_hash": fixed_hex32(0x71),
+                    "implementation_artifact": {
+                        "path": "native/js-sdk.json",
+                        "bytes": 1,
+                        "sha256": "cd" * 32,
+                    },
+                }
+            ],
+            "audit_hashes": {},
+        }
+    )
+    native_summary[HostileVerifierFieldName("required")] = native_summary.pop("required")
+    crypto_row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    crypto_row.update({"chain": "eth", "source_adapter_gate_required": False})
+    crypto_row[HostileVerifierFieldName("domain")] = crypto_row.pop("domain")
+    nested_lane = {
+        "domain": verifier.SCCP_DOMAIN_BSC,
+        "chain": "bsc",
+        "source_record_hashes": {
+            HostileVerifierFieldName(
+                "source_verifier_material_hash"
+            ): fixed_hex32(0x81),
+            "source_adapter_engine_deployment_hash": fixed_hex32(0x83),
+        },
+        "source_adapter_gate": {
+            "audit_hashes": {
+                HostileVerifierFieldName("evm_source_gate_hash"): fixed_hex32(0x82),
+            },
+        },
+        "route_allowlist": {
+            HostileVerifierFieldName("route_allowlist_hash"): fixed_hex32(0x84),
+            "expected_route_allowlist_hash": fixed_hex32(0x84),
+        },
+    }
+    surface = {
+        "lanes": "eth,bsc",
+        "proof_backend": "evm-groth16-bn254-v1",
+        "sdk_helper_symbols": [
+            "buildEvmSccpProofRequest",
+            "witnessProvider",
+            "proveFn",
+        ],
+        "sdk_helper_symbols_by_sdk": {
+            "js-sdk": [
+                "buildEvmSccpProofRequest",
+                "witnessProvider",
+                "proveFn",
+            ],
+        },
+        "sdk_helpers": "buildEvmSccpProofRequest, witnessProvider, proveFn",
+        "on_chain_submission": "Torii bridge-proof submit payload",
+        "required_phases": ["js-sdk"],
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    surface[HostileVerifierFieldName("lanes")] = surface.pop("lanes")
+    report_with_hostile_root = dict(report)
+    report_with_hostile_root[HostileVerifierFieldName("input_artifacts")] = (
+        report_with_hostile_root.pop("input_artifacts")
+    )
+    report_with_hostile_corridor = dict(report)
+    report_with_hostile_corridor["corridor"] = dict(report["corridor"])
+    report_with_hostile_corridor["corridor"][HostileVerifierFieldName("phases")] = (
+        report_with_hostile_corridor["corridor"].pop("phases")
+    )
+    manifest = {
+        "schema": verifier.SCHEMA,
+        "production_ready": True,
+        "release_checklist_ready": True,
+        "corridor_ready": True,
+        "blockers": [],
+        "artifacts": [],
+    }
+    manifest[HostileVerifierFieldName("schema")] = manifest.pop("schema")
+
+    errors = "\n".join(
+        [
+            *bundle._release_report_preflight_errors(
+                preflight_report,
+                label="bundled report",
+            ),
+            *bundle._artifact_row_errors(
+                artifact,
+                "bundled report.input_artifacts[0]",
+            ),
+            *bundle._native_evm_artifact_summary_errors(
+                artifact,
+                "bundled report.native_evm_prover_bundle.artifact",
+            ),
+            *bundle._release_checklist_bundle_errors(
+                checklist,
+                "bundled report.release_checklist",
+                require_ready=True,
+            ),
+            *bundle._native_evm_prover_summary_errors(
+                native_summary,
+                "bundled report.native_evm_prover_bundle",
+            ),
+            *bundle._cryptographic_evidence_row_bundle_errors(
+                crypto_row,
+                "bundled report.cryptographic_evidence[0]",
+            ),
+            *bundle._all_lanes_nested_bundle_errors(
+                nested_lane,
+                "bundled report.evidence.lanes[0]",
+            ),
+            *bundle._submission_surface_row_bundle_errors(
+                surface,
+                "bundled report.user_prover_submission_surfaces[0]",
+            ),
+            *bundle._release_report_bundle_errors(
+                report_with_hostile_root,
+                label="bundled report",
+            ),
+            *bundle._release_report_bundle_errors(
+                report_with_hostile_corridor,
+                label="bundled report",
+            ),
+            *bundle._release_bundle_manifest_errors(
+                manifest,
+                tmp_path,
+                report,
+                report["evidence"],
+            ),
+        ]
+    )
+
+    assert "bundled report contains malformed unknown field name" in errors
+    assert "bundled report missing field: production_ready" in errors
+    assert "bundled report.input_artifacts[0] missing field: path" in errors
+    assert (
+        "bundled report.release_checklist.items[0] missing field: id"
+        in errors
+    )
+    assert "bundled report.native_evm_prover_bundle missing field: required" in errors
+    assert (
+        "bundled report.native_evm_prover_bundle.sdk_artifacts[0] missing field: sdk"
+        in errors
+    )
+    assert (
+        "bundled report.cryptographic_evidence[0] missing field: domain"
+        in errors
+    )
+    assert (
+        "bundled report.evidence.lanes[0].source_record_hashes missing field: "
+        "source_verifier_material_hash"
+    ) in errors
+    assert (
+        "bundled report.evidence.lanes[0].source_adapter_gate audit_hashes "
+        "missing field: evm_source_gate_hash"
+    ) in errors
+    assert (
+        "bundled report.evidence.lanes[0].route_allowlist missing field: "
+        "route_allowlist_hash"
+    ) in errors
+    assert (
+        "bundled report.user_prover_submission_surfaces[0] missing field: lanes"
+        in errors
+    )
+    assert "bundled report missing field: input_artifacts" in errors
+    assert "bundled report.corridor missing field: phases" in errors
+    assert "manifest missing top-level field: schema" in errors
+    assert "secret-token" not in errors
+    assert "hostile verifier" not in errors
+
+
+def test_release_bundle_verifier_manifest_root_rejects_hostile_required_key_alias(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The standalone verifier must not compare hostile manifest field aliases."""
+
+    verifier = load_verify_helpers()
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    hostile_manifest = {
+        HostileVerifierFieldName("schema"): verifier.SCHEMA,
+        "production_ready": True,
+        "release_checklist_ready": True,
+        "corridor_ready": True,
+        "blockers": [],
+        "artifacts": [],
+    }
+    original_load_json = verifier._load_json
+
+    def hostile_manifest_loader(path: Path):
+        if path == manifest_path:
+            return hostile_manifest
+        return original_load_json(path)
+
+    monkeypatch.setattr(verifier, "_load_json", hostile_manifest_loader)
+    monkeypatch.setattr(verifier, "_canonical_json_file_errors", lambda *args: [])
+
+    verified = verifier.verify_bundle(tmp_path)
+    errors = "\n".join(verified["errors"])
+
+    assert "manifest contains malformed unknown top-level field name" in errors
+    assert "manifest missing top-level field: schema" in errors
+    assert "secret-token" not in errors
+    assert "hostile verifier" not in errors
+
+
 def test_release_bundle_verifier_rejects_manifest_readiness_claim_drift(
     tmp_path: Path,
 ) -> None:
@@ -37642,6 +39649,11 @@ def test_release_bundle_verifier_recomputes_active_required_record_identity_scal
     cases = (
         ("domain.string", "1", "missing launch lane evidence"),
         ("chain.padded", " eth", "active launch lane chain must be eth"),
+        (
+            "chain.hostile",
+            HostileMarkdownString(verifier.ACTIVE_LAUNCH_CHAIN),
+            "active launch lane chain must be eth",
+        ),
         ("production_ready.string", "true", "active launch lane must be production ready"),
         *required_record_flag_exactness_cases,
     )
@@ -37655,7 +39667,7 @@ def test_release_bundle_verifier_recomputes_active_required_record_identity_scal
         )
         if field == "domain.string":
             active_lane["domain"] = value
-        elif field == "chain.padded":
+        elif field.startswith("chain."):
             active_lane["chain"] = value
         elif field == "production_ready.string":
             active_lane["production_ready"] = value
@@ -37709,6 +39721,10 @@ def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_c
         ),
         (
             123,
+            "route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            HostileMarkdownString(verifier.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE),
             "route canary evidence source must be a non-empty canonical string",
         ),
         (
@@ -38018,7 +40034,14 @@ def test_release_bundle_verifier_recomputes_active_route_canary_status_exactly(
     summary_payload = (output_dir / "sccp-all-lanes-summary.json").read_text(
         encoding="utf-8"
     )
-    route_canary_status_exactness_cases = (None, "", " passed ", "passed ", 1)
+    route_canary_status_exactness_cases = (
+        None,
+        "",
+        " passed ",
+        "passed ",
+        1,
+        HostileMarkdownString("passed"),
+    )
 
     for value in route_canary_status_exactness_cases:
         summary = json.loads(summary_payload)
@@ -39928,6 +41951,52 @@ def test_release_bundle_verifier_rejects_hostile_public_scalar_strings(
         hostile_block_tag,
     ):
         assert hostile not in verified.stdout
+
+
+def test_release_bundle_route_canary_common_semantics_reject_hostile_status_source_without_comparing() -> None:
+    """Route-canary status/source comparisons must reject string subclasses."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    report = load_report_module()
+    active_domain = report.ACTIVE_LAUNCH_DOMAIN
+    hostile_status = HostileMarkdownString("failed")
+    hostile_source = HostileMarkdownString("forged-source")
+    hostile_route_hash = HostileMarkdownString(fixed_hex32(0x32))
+    hostile_destination_hash = HostileMarkdownString(fixed_hex32(0x33))
+    route_canary = {
+        "evidence_hash": fixed_hex32(0x31),
+        "route_allowlist_hash": hostile_route_hash,
+        "destination_binding_hash": hostile_destination_hash,
+        "status": hostile_status,
+        "evidence_source": hostile_source,
+        "evidence_bound": True,
+    }
+    lane = {
+        "domain": active_domain,
+        "route_allowlist": {"route_allowlist_hash": fixed_hex32(0x32)},
+        "destination_binding": {"destination_binding_hash": fixed_hex32(0x33)},
+    }
+
+    bundle_errors = bundle._route_canary_common_present_semantic_errors(
+        "lane",
+        lane,
+        route_canary,
+    )
+    verifier_errors = verifier._all_lanes_route_canary_common_present_semantic_errors(
+        "lane.route_allowlist.route_canary",
+        active_domain,
+        route_canary,
+    )
+
+    for errors in (bundle_errors, verifier_errors):
+        assert "secret-token" not in "\n".join(errors)
+        assert not any("status must be passed" in error for error in errors)
+        assert not any("evidence_source must be" in error for error in errors)
+        assert not any("route_allowlist_hash must match lane" in error for error in errors)
+        assert not any(
+            "destination_binding_hash must match lane" in error for error in errors
+        )
 
 
 def test_release_bundle_verifier_rejects_release_checklist_blocked_items(
@@ -47680,6 +49749,45 @@ def test_release_bundle_verifier_markdown_invariants_require_user_prover_helper_
     ) in errors
 
 
+def test_release_bundle_verifier_user_prover_helper_sets_reject_hostile_sdk_aliases(
+    tmp_path: Path,
+) -> None:
+    """Strict verifier helper-set maps must require exact builtin-string SDK keys."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    surface = report["user_prover_submission_surfaces"][0]
+    helper_sets = dict(surface["sdk_helper_symbols_by_sdk"])
+    helper_sets[HostileVerifierFieldName("js-sdk")] = helper_sets.pop("js-sdk")
+    surface["sdk_helper_symbols_by_sdk"] = helper_sets
+
+    helper_cell = verifier._readiness_markdown_sdk_helper_sets_cell(surface)
+    schema_errors = "\n".join(
+        verifier._submission_surface_row_schema_errors(surface)
+    )
+    inventory_errors = "\n".join(
+        verifier._submission_surface_inventory_errors([surface])
+    )
+
+    assert helper_cell == "`<invalid sdk_helper_symbols_by_sdk>`"
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk contains malformed SDK key"
+    ) in schema_errors
+    assert (
+        "readiness report user prover submission surface row "
+        "sdk_helper_symbols_by_sdk[js-sdk] must be a list of non-empty strings"
+    ) in schema_errors
+    combined = "\n".join((schema_errors, inventory_errors))
+    assert "secret-token" not in combined
+    assert "hostile verifier" not in combined
+    assert "__eq__" not in combined
+    assert "__str__" not in combined
+
+
 def test_release_bundle_verifier_markdown_invariants_require_native_prover_status(
     tmp_path: Path,
 ) -> None:
@@ -50215,6 +52323,133 @@ def test_release_bundle_verifier_rejects_absent_crypto_route_canary_evm_metadata
             ) in errors, (domain, field)
 
 
+def test_release_bundle_rejects_hostile_absent_crypto_route_canary_scalars_without_comparing() -> None:
+    """Builder and strict verifier must classify absent public canary scalars exactly."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    hex32 = lambda byte: "0x" + byte * 32
+    hostile_fields = (
+        "route_canary_evidence_hash",
+        "route_canary_evidence_source",
+        "route_canary_transaction_id",
+        "route_canary_transaction_owner_address",
+        "route_canary_signature_sha256",
+        "route_canary_signature_recovered_address",
+        "route_canary_transaction_hash",
+        "route_canary_receipt_block_hash",
+        "route_canary_block_receipts_root",
+        "route_canary_message_id",
+    )
+    empty_when_absent_fields = tuple(
+        field for field in hostile_fields if field != "route_canary_evidence_hash"
+    )
+
+    # Source-inventory marker: strict verifier public crypto hostile absent route-canary scalar exactness covers every launch domain
+    for domain, chain in sorted(verifier.ALL_LANES_CHAIN_BY_DOMAIN.items()):
+        row = {field: None for field in verifier.CRYPTOGRAPHIC_EVIDENCE_KEYS}
+        row.update(
+            {
+                "domain": domain,
+                "chain": chain,
+                "evm_source_rpc_chain_id": "",
+                "evm_source_block_tag": "",
+                "evm_destination_rpc_chain_id": "",
+                "evm_destination_block_tag": "",
+                "route_canary_evidence_bound": False,
+                "route_canary_message_proof_used": None,
+                "route_canary_receipt_block_number": None,
+                "route_canary_receipt_block_finalized": None,
+                "source_adapter_gate_required": True,
+                "source_adapter_gate_hash": hex32("aa"),
+                "source_adapter_gate_audit_hashes": {
+                    verifier.ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN[
+                        domain
+                    ]: hex32("aa")
+                },
+            }
+        )
+        for field in hostile_fields:
+            row[field] = HostilePublicCryptoScalar()
+
+        bundle_errors = bundle._cryptographic_evidence_row_bundle_errors(
+            row,
+            f"bundled report.cryptographic_evidence[{domain}]",
+        )
+        verifier_errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+        for errors in (bundle_errors, verifier_errors):
+            joined_errors = "\n".join(errors)
+
+            assert "secret-token" not in joined_errors
+            for field in empty_when_absent_fields:
+                assert any(
+                    f"{field} must be empty when route canary evidence is absent"
+                    in error
+                    for error in errors
+                ), (domain, field, errors)
+
+
+def test_release_bundle_rejects_hostile_present_route_canary_source_without_comparing() -> None:
+    """Present public route-canary sources must be exact strings before matching."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    domain = verifier.SCCP_DOMAIN_ETH
+    row = {field: None for field in bundle.CRYPTOGRAPHIC_EVIDENCE_ROW_FIELDS}
+    row.update(
+        {
+            "domain": domain,
+            "chain": "eth",
+            "source_verifier_material_hash": fixed_hex32(0x11),
+            "source_adapter_engine_deployment_hash": fixed_hex32(0x12),
+            "destination_binding_hash": fixed_hex32(0x13),
+            "route_allowlist_hash": fixed_hex32(0x14),
+            "route_canary_evidence_hash": fixed_hex32(0x15),
+            "route_canary_evidence_source": HostilePublicCryptoScalar(),
+            "route_canary_evidence_bound": True,
+            "route_canary_message_proof_used": True,
+            "route_canary_log_index": 0,
+            "route_canary_target_domain": domain,
+            "route_canary_proof_version": 1,
+            "route_canary_proof_source_domain": verifier.SCCP_DOMAIN_SORA,
+            "route_canary_call_data_sha256": fixed_hex32(0x16),
+            "route_canary_payload_hash": fixed_hex32(0x17),
+            "route_canary_statement_hash": fixed_hex32(0x18),
+            "route_canary_commitment_root": fixed_hex32(0x19),
+            "route_canary_finality_height": fixed_hex32(0x1A),
+            "route_canary_finality_block_hash": fixed_hex32(0x1B),
+            "route_canary_transaction_hash": fixed_hex32(0x1C),
+            "route_canary_receipt_block_number": 1,
+            "route_canary_receipt_block_hash": fixed_hex32(0x1D),
+            "route_canary_receipt_block_finalized": True,
+            "route_canary_block_receipts_root": fixed_hex32(0x1E),
+            "route_canary_message_id": fixed_hex32(0x1F),
+            "source_adapter_gate_required": False,
+            "source_adapter_gate_hash": "",
+            "source_adapter_gate_audit_hashes": {},
+        }
+    )
+
+    bundle_errors = bundle._cryptographic_evidence_row_bundle_errors(
+        row,
+        "bundled report.cryptographic_evidence[0]",
+    )
+    verifier_errors = verifier._cryptographic_evidence_row_schema_errors(row)
+
+    for errors in (bundle_errors, verifier_errors):
+        assert "secret-token" not in "\n".join(errors)
+    assert any(
+        "route_canary_evidence_source must be "
+        "evm_message_proof_accepted_transaction" in error
+        for error in bundle_errors
+    )
+    assert any(
+        "route_canary_evidence_source must be a non-empty string" in error
+        for error in verifier_errors
+    )
+
+
 def test_release_bundle_verifier_rejects_tron_crypto_owner_signature_drift() -> None:
     """TRON crypto rows must prove raw-data owner and recovered signature flags."""
 
@@ -52146,6 +54381,106 @@ def test_release_bundle_verifier_rejects_submission_surface_malformed_proof_back
     assert confusable_backend not in verified.stdout
     assert malformed_backend not in verified.stdout
     assert sensitive_backend not in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_hostile_user_prover_submission_surface_without_comparing(
+) -> None:
+    """Copied user-prover rows must reject str subclasses before matching."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    phase_status = {phase: "passed" for phase in PHASES}
+    report = {"corridor": {"phases": phase_status}}
+    surfaces = verifier._expected_submission_surfaces(report)
+    hostile_surface = surfaces[0]
+    hostile_surface["proof_backend"] = HostileMarkdownString(
+        hostile_surface["proof_backend"]
+    )
+    hostile_surface["on_chain_submission"] = HostileMarkdownString(
+        hostile_surface["on_chain_submission"]
+    )
+    hostile_surface["sdk_helpers"] = HostileMarkdownString(
+        hostile_surface["sdk_helpers"]
+    )
+    hostile_surface["sdk_helper_symbols"] = [
+        HostileMarkdownString(hostile_surface["sdk_helper_symbols"][0]),
+        *hostile_surface["sdk_helper_symbols"][1:],
+    ]
+    hostile_helper_sets = {
+        sdk: list(helpers)
+        for sdk, helpers in hostile_surface["sdk_helper_symbols_by_sdk"].items()
+    }
+    js_helpers = hostile_helper_sets["js-sdk"]
+    hostile_helper_sets["js-sdk"] = [
+        HostileMarkdownString(js_helpers[0]),
+        *js_helpers[1:],
+    ]
+    hostile_surface["sdk_helper_symbols_by_sdk"] = hostile_helper_sets
+    hostile_surface["required_phases"] = [
+        HostileMarkdownString(hostile_surface["required_phases"][0]),
+        *hostile_surface["required_phases"][1:],
+    ]
+    hostile_surface["validation_status"] = HostileMarkdownString("passed")
+    hostile_surface["validation_blockers"] = [
+        HostileMarkdownString("safe user prover blocker")
+    ]
+
+    row_errors = verifier._submission_surface_row_schema_errors(hostile_surface)
+    inventory_errors = verifier._submission_surface_inventory_errors(surfaces)
+    bundle_row_errors = bundle._submission_surface_row_bundle_errors(
+        hostile_surface,
+        "bundled report.user_prover_submission_surfaces[0]",
+    )
+    binding_errors = bundle._submission_surface_binding_bundle_errors(
+        surfaces,
+        report,
+        "bundled report",
+    )
+    cells = verifier._readiness_markdown_user_prover_surface_row_cells(
+        hostile_surface
+    )
+
+    assert (
+        "readiness report user prover submission surface row proof_backend must "
+        "be a non-empty string with no surrounding whitespace"
+    ) in row_errors
+    assert (
+        "readiness report user prover submission surface row on_chain_submission "
+        "must be a non-empty string with no surrounding whitespace"
+    ) in row_errors
+    assert (
+        "readiness report user prover submission surface row sdk_helper_symbols "
+        "must be a list of non-empty strings"
+    ) in row_errors
+    assert (
+        "readiness report user prover submission surface row required_phases "
+        "must be a list of non-empty strings with no surrounding whitespace"
+    ) in row_errors
+    assert (
+        "readiness report user prover submission surface row validation_status "
+        "must be passed or blocked"
+    ) in row_errors
+    assert isinstance(inventory_errors, list)
+    assert (
+        "bundled report.user_prover_submission_surfaces[0] proof_backend must "
+        "be a non-empty string with no surrounding whitespace"
+    ) in bundle_row_errors
+    assert (
+        "bundled report.user_prover_submission_surfaces[0] sdk_helpers must be "
+        "a non-empty string with no surrounding whitespace"
+    ) in bundle_row_errors
+    assert (
+        "bundled report.user_prover_submission_surfaces must match copied "
+        "corridor phases"
+    ) in binding_errors
+    assert cells[:5] == [
+        "`eth,bsc`",
+        "`<invalid proof_backend>`",
+        "`<invalid sdk_helper_symbols_by_sdk>`",
+        "`<invalid on_chain_submission>`",
+        "`<invalid required_phases>`",
+    ]
+    assert cells[5].startswith("blocked: ")
 
 
 def test_release_bundle_verifier_numbers_repeated_submission_surface_row_errors(
@@ -59092,7 +61427,33 @@ def test_release_bundle_verifier_guards_sccp_unready_removed_surface_sources(
         and str(sparse_source_proof_gates) in error
         and "cfg-gates 3 source-proof allow_unready build/admission call sites"
         in error
-        and "expected at least 4" in error
+        and "expected exactly 4" in error
+        for error in errors
+    )
+    extra_source_proof_gates = tmp_path / f"extra-source-proof-{Path(sccp_source_path).name}"
+    extra_source_proof_gates.write_text(
+        "\n".join(sccp_required_markers)
+        + "\n"
+        + "\n".join(
+            verifier.SCCP_UNREADY_SOURCE_PROOF_BYPASS_CALL_SITE_MARKER
+            for _ in range(verifier.SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES)
+        ),
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+        ((extra_source_proof_gates, sccp_required_markers),),
+        (),
+        (),
+        (),
+        (),
+        (),
+    )
+    assert any(
+        "SCCP unready transparent-proof removed-surface source inventory" in error
+        and str(extra_source_proof_gates) in error
+        and "cfg-gates 5 source-proof allow_unready build/admission call sites"
+        in error
+        and "expected exactly 4" in error
         for error in errors
     )
 
@@ -59193,7 +61554,34 @@ def test_release_bundle_verifier_guards_sccp_unready_removed_surface_sources(
         "SCCP unready transparent-proof removed-surface source inventory" in error
         and str(sparse_torii_route_gates) in error
         and "cfg-gates 7 Torii allow_unready route/proof call sites" in error
-        and "expected at least 8" in error
+        and "expected exactly 8" in error
+        for error in errors
+    )
+    extra_torii_route_gates = (
+        tmp_path / f"extra-torii-route-{Path(torii_source_path).name}"
+    )
+    extra_torii_route_gates.write_text(
+        "\n".join(torii_required_markers)
+        + "\n"
+        + "\n".join(
+            verifier.SCCP_UNREADY_TORII_ROUTE_BYPASS_CALL_SITE_MARKER
+            for _ in range(verifier.SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES)
+        ),
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_unready_transparent_proof_config_inventory_errors(
+        ((extra_torii_route_gates, torii_required_markers),),
+        (),
+        (),
+        (),
+        (),
+        (),
+    )
+    assert any(
+        "SCCP unready transparent-proof removed-surface source inventory" in error
+        and str(extra_torii_route_gates) in error
+        and "cfg-gates 9 Torii allow_unready route/proof call sites" in error
+        and "expected exactly 8" in error
         for error in errors
     )
 
@@ -64232,18 +66620,18 @@ def test_release_bundle_verifier_guards_ethereum_source_event_mode_tests(
         (
             "sccp_evm_receipt_proof_evidence_test.py",
             (
-                "test_collect_receipt_proof_requires_explicit_receipt_only_mode_without_source_bridge",
-                "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
+                "test_collect_receipt_proof_requires_source_bridge_without_receipt_only_bypass",
+                "test_cli_rejects_removed_receipt_only_mode_before_collection",
             ),
-            "test_collect_receipt_proof_allows_explicit_receipt_only_mode",
+            "test_cli_rejects_removed_receipt_only_mode_before_collection",
         ),
         (
             "sccp_evm_receipt_proof_evidence.py",
             (
-                "allow_receipt_only_evidence: bool = False",
                 "source_bridge_address is required for SCCP source-event evidence",
+                '"evidence_mode": "sccp_source_event"',
             ),
-            "source_bridge_address is required for SCCP source-event evidence",
+            '"evidence_mode": "sccp_source_event"',
         ),
     )
     for index, (filename, required_markers, removed_marker) in enumerate(cases):

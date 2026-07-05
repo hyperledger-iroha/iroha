@@ -327,6 +327,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "weekly_report_generated": True,
                 "status_export_verified": True,
                 "governance_archive_handoff_verified": True,
+                "governance_archive_handoff_digest_hex": (
+                    args.governance_archive_handoff_digest_hex
+                ),
                 "archive_retention_bound": True,
                 "operator_archive_decision_recorded": True,
                 "archive_backend": args.archive_backend,
@@ -447,11 +450,22 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         require_kind_options(
             args,
             errors,
-            (("--report-digest-hex", args.report_digest_hex),),
+            (
+                (
+                    "--governance-archive-handoff-digest-hex",
+                    args.governance_archive_handoff_digest_hex,
+                ),
+                ("--report-digest-hex", args.report_digest_hex),
+            ),
         )
         validate_hex64(
             args.route_body_blake3_hex,
             option="--route-body-blake3-hex",
+            errors=errors,
+        )
+        validate_hex64(
+            args.governance_archive_handoff_digest_hex,
+            option="--governance-archive-handoff-digest-hex",
             errors=errors,
         )
         validate_hex64(
@@ -583,6 +597,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--seed-replay-digest-hex")
     parser.add_argument("--validation-bundle-digest-hex")
     parser.add_argument("--report-digest-hex")
+    parser.add_argument("--governance-archive-handoff-digest-hex")
     parser.add_argument("--policy-digest-hex")
     parser.add_argument("--provider", action="append", default=[])
     parser.add_argument("--challenge", action="append", default=[])

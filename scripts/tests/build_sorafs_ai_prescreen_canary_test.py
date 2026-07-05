@@ -222,6 +222,16 @@ def test_generated_canaries_pass_full_ai_prescreen_gate(tmp_path: Path) -> None:
         assert payload["required"][kind]["artifacts"][0]["valid"] is True
 
 
+def test_runner_status_kind_inventory_matches_generated_statuses(tmp_path: Path) -> None:
+    assert MODULE.RUNNER_STATUS_KINDS == {"runner", "committee"}
+
+    for kind in MODULE.CANARY_KINDS:
+        assert MODULE.main(args_for(kind, tmp_path)) == 0
+        payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
+        expected_status = "verified" if kind in MODULE.RUNNER_STATUS_KINDS else "passed"
+        assert payload["status"] == expected_status
+
+
 def test_response_file_can_build_end_to_end_workflow_canary(tmp_path: Path) -> None:
     args_file = tmp_path / "e2e.args"
     args_file.write_text(
@@ -394,6 +404,22 @@ def test_operator_workflow_canary_records_passed_route_count(tmp_path: Path) -> 
     assert {
         route["name"]: route["content_type"] for route in payload["routes"]
     } == CHECKER.REQUIRED_OPERATOR_CONTENT_TYPES
+
+
+def test_executor_service_name_must_match_reviewed_service_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("commit_reveal_executor", tmp_path)
+    args.extend(["--service-name", "sorafs-moderation-ballots-debug"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="commit_reveal_executor",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--service-name must match the reviewed executor service",
+    )
 
 
 def test_committee_result_count_must_cover_quorum(

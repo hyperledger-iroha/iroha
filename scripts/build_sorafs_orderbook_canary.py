@@ -39,6 +39,7 @@ from check_sorafs_orderbook_rollout_evidence import (  # noqa: E402
     REQUIRED_RECONCILIATION_SOURCES,
     REQUIRED_SDK_LANGUAGES,
     REQUIRED_STREAMS,
+    SDK_ARTIFACT_LANGUAGE_PREFIXES,
     ValidationOptions,
     validate_evidence_payload,
 )
@@ -284,22 +285,47 @@ def parse_artifacts(values: Sequence[str], errors: list[str]) -> list[dict[str, 
 
     artifacts: list[dict[str, str]] = []
     seen_artifact_ids: set[str] = set()
+    covered_languages: set[str] = set()
+    found_unknown_artifact_family = False
     for index, value in enumerate(values):
         if ":" not in value:
             errors.append("--artifact must use id:sha256")
             continue
         artifact_id, sha256 = value.split(":", 1)
-        validate_canonical_string(artifact_id, label=f"--artifact[{index}].id", errors=errors)
+        validate_canonical_string(
+            artifact_id,
+            label=f"--artifact[{index}].id",
+            errors=errors,
+        )
         validate_hex64(sha256, option=f"--artifact[{index}].sha256", errors=errors)
         if artifact_id in seen_artifact_ids:
             errors.append("duplicate --artifact id")
             continue
         seen_artifact_ids.add(artifact_id)
+        language = next(
+            (
+                language
+                for language, prefix in SDK_ARTIFACT_LANGUAGE_PREFIXES
+                if artifact_id.startswith(prefix)
+            ),
+            None,
+        )
+        if language is None:
+            found_unknown_artifact_family = True
+        else:
+            covered_languages.add(language)
         artifacts.append({"id": artifact_id, "sha256": sha256})
     if len(artifacts) < len(REQUIRED_SDK_LANGUAGES):
         errors.append(
             "--artifact must include at least one distinct SDK release artifact "
             "per reviewed language"
+        )
+    if found_unknown_artifact_family:
+        errors.append("--artifact id must start with a reviewed SDK language prefix")
+    if set(REQUIRED_SDK_LANGUAGES) - covered_languages:
+        errors.append(
+            "--artifact must include at least one SDK release artifact for every "
+            "reviewed language"
         )
     return artifacts
 

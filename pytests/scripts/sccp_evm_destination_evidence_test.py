@@ -74,6 +74,115 @@ class HostileExpectedDestinationBindingHash:
         )
 
 
+class HostileRouteCanaryBlockNumber:
+    def __str__(self):
+        raise AssertionError(
+            "secret-token EVM destination route canary block number was stringified"
+        )
+
+    def __repr__(self):
+        raise AssertionError(
+            "secret-token EVM destination route canary block number was repr'd"
+        )
+
+    def __eq__(self, _other):
+        raise AssertionError(
+            "secret-token EVM destination route canary block number was compared"
+        )
+
+    def __int__(self):
+        raise AssertionError(
+            "secret-token EVM destination route canary block number was coerced"
+        )
+
+
+class HostileTomlString(str):
+    def __new__(cls):
+        return str.__new__(cls, "blocked")
+
+    def __str__(self):
+        raise AssertionError("secret-token EVM destination TOML string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM destination TOML string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM destination TOML string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token EVM destination TOML string was compared")
+
+
+class HostileTomlInt(int):
+    def __new__(cls):
+        return int.__new__(cls, 1)
+
+    def __str__(self):
+        raise AssertionError("secret-token EVM destination TOML integer was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM destination TOML integer was repr'd")
+
+
+class HostileTomlList(list):
+    def __iter__(self):
+        raise AssertionError("secret-token EVM destination TOML list was iterated")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM destination TOML list was repr'd")
+
+
+class HostileDestinationDomain(str):
+    def __new__(cls):
+        return str.__new__(cls, "eth")
+
+    def __str__(self):
+        raise AssertionError(
+            "secret-token EVM destination domain was stringified"
+        )
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM destination domain was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM destination domain was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token EVM destination domain was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token EVM destination domain was stripped")
+
+    def lower(self):
+        raise AssertionError("secret-token EVM destination domain was lowered")
+
+
+class HostileBscNetwork(str):
+    def __new__(cls):
+        return str.__new__(cls, "mainnet")
+
+    def __str__(self):
+        raise AssertionError("secret-token EVM destination BSC network was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM destination BSC network was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM destination BSC network was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token EVM destination BSC network was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token EVM destination BSC network was stripped")
+
+    def lower(self):
+        raise AssertionError("secret-token EVM destination BSC network was lowered")
+
+    def replace(self, _old, _new):
+        raise AssertionError("secret-token EVM destination BSC network was replaced")
+
+
 def test_evm_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
@@ -393,41 +502,56 @@ def test_evm_destination_domain_parser_accepts_eth_and_bsc_only():
     module = load_evidence_module()
 
     assert module.parse_destination_domain("eth") == 1
-    assert module.parse_destination_domain("ethereum") == 1
-    assert module.parse_destination_domain("1") == 1
     assert module.parse_destination_domain("bsc") == 2
-    assert module.parse_destination_domain("bnb") == 2
-    assert module.parse_destination_domain("2") == 2
 
-    try:
-        module.parse_destination_domain("tron")
-    except module.argparse.ArgumentTypeError as exc:
-        assert "domain must be eth or bsc" in str(exc)
-    else:
-        raise AssertionError("non-EVM destination domain was accepted")
-
-    try:
-        module.parse_destination_domain(" eth ")
-    except module.argparse.ArgumentTypeError as exc:
-        assert "domain must be eth or bsc" in str(exc)
-    else:
-        raise AssertionError("padded EVM destination domain was accepted")
+    for value in (
+        "ethereum",
+        "1",
+        "bnb",
+        "2",
+        "ETH",
+        "BSC",
+        " eth ",
+        "tron",
+        "secret-token-evm-destination-domain",
+        HostileDestinationDomain(),
+    ):
+        try:
+            module.parse_destination_domain(value)
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == "domain must be eth or bsc"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("non-canonical EVM destination domain was accepted")
 
     assert module.parse_bsc_network("mainnet") == "mainnet"
-    assert module.parse_bsc_network("bsc-mainnet") == "mainnet"
-    assert module.parse_bsc_network("56") == "mainnet"
     assert module.parse_bsc_network("testnet") == "testnet"
-    assert module.parse_bsc_network("bsc-testnet") == "testnet"
-    assert module.parse_bsc_network("chapel") == "testnet"
-    assert module.parse_bsc_network("97") == "testnet"
 
-    for value in (" testnet ", "nile", "bnb-testnet"):
+    for value in (
+        " testnet ",
+        "bsc-mainnet",
+        "56",
+        "bsc-testnet",
+        "chapel",
+        "97",
+        "nile",
+        "bnb-testnet",
+        "secret-token-evm-destination-bsc-network",
+        HostileBscNetwork(),
+    ):
         try:
             module.parse_bsc_network(value)
         except module.argparse.ArgumentTypeError as exc:
-            assert "BSC network must be mainnet or testnet" in str(exc)
+            rendered = str(exc)
+            assert rendered == "BSC network must be mainnet or testnet"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
         else:
-            raise AssertionError(f"non-canonical BSC network {value!r} was accepted")
+            raise AssertionError("non-canonical BSC network was accepted")
 
 
 def test_evm_destination_domain_parsers_redact_parser_causes():
@@ -615,10 +739,40 @@ def test_evm_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
     directory_input.mkdir()
     missing_input = tmp_path / "secret-token-evm-runtime-missing.hex"
 
-    for path in (symlink_input, directory_input, missing_input):
+    class HostileRuntimeBytecodePath(str):
+        def __new__(cls):
+            return str.__new__(cls, str(outside))
+
+        def __str__(self):
+            raise AssertionError("secret-token EVM runtime path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM runtime path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token EVM runtime path was coerced")
+
+    class HostileRuntimeBytecodePathLike:
+        def __str__(self):
+            raise AssertionError("secret-token EVM runtime path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token EVM runtime path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token EVM runtime path-like was coerced")
+
+    for path in (
+        str(symlink_input),
+        str(directory_input),
+        str(missing_input),
+        outside,
+        HostileRuntimeBytecodePath(),
+        HostileRuntimeBytecodePathLike(),
+    ):
         try:
             module.parse_runtime_bytecode_file(
-                str(path),
+                path,
                 label="bridge runtime bytecode",
             )
         except module.argparse.ArgumentTypeError as exc:
@@ -1799,6 +1953,107 @@ def test_evm_full_toml_rejects_route_canary_transaction_readback_drift():
             assert expected in str(exc)
         else:
             raise AssertionError(f"EVM destination TOML accepted drifted {field}")
+
+
+def test_evm_route_canary_block_numbers_reject_hostile_without_stringifying():
+    module = load_evidence_module()
+    eth = evm_runtime_material(module, domain=1)
+
+    for field in (
+        "route_canary_transaction_block_number",
+        "route_canary_receipt_block_number",
+    ):
+        args = full_toml_args(eth)
+        setattr(args, field, HostileRouteCanaryBlockNumber())
+        expected = f"{field} must be an exact u64"
+
+        try:
+            module.render_toml(args, eth.destination_binding_hash)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"EVM destination TOML accepted hostile {field}")
+
+        try:
+            module._json_summary(args, eth.destination_binding_hash, True)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"EVM destination JSON accepted hostile {field}")
+
+
+def test_evm_destination_toml_renderer_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    cases = (
+        lambda: module._toml_string(HostileTomlString()),
+        lambda: module._toml_line("verifier_identity", HostileTomlString()),
+        lambda: module._toml_line("blockers", [HostileTomlString()]),
+        lambda: module._toml_line("version", HostileTomlInt()),
+        lambda: module._toml_line("blockers", HostileTomlList(["blocked"])),
+    )
+
+    for render in cases:
+        try:
+            render()
+        except TypeError as exc:
+            rendered = str(exc)
+            assert "unsupported TOML" in rendered
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "EVM destination TOML renderer accepted hostile subclass value"
+            )
+
+
+def test_evm_route_canary_hash_rejects_hostile_receipt_block_number_without_stringifying():
+    module = load_evidence_module()
+    eth = evm_runtime_material(module, domain=1)
+
+    try:
+        module.evm_route_canary_transaction_evidence_hash(
+            route_allowlist_hash=eth.route_allowlist_hash,
+            bridge_address=eth.bridge_address,
+            transaction_hash=eth.route_canary_transaction_hash,
+            log_index=eth.route_canary_log_index,
+            receipt_block_number=HostileRouteCanaryBlockNumber(),
+            receipt_block_hash=eth.route_canary_receipt_block_hash,
+            block_receipts_root=eth.route_canary_block_receipts_root,
+            call_data_sha256=eth.route_canary_call_data_sha256,
+            message_id=eth.route_canary_message_id,
+            payload_hash=eth.route_canary_payload_hash,
+            source_domain=0,
+            target_domain=eth.domain,
+            commitment_root=eth.route_canary_commitment_root,
+            finality_height=eth.route_canary_finality_height,
+            finality_block_hash=eth.route_canary_finality_block_hash,
+            statement_hash=eth.route_canary_statement_hash,
+            proof_version=eth.route_canary_proof_version,
+            proof_source_domain=eth.route_canary_proof_source_domain,
+            destination_binding_hash=eth.destination_binding_hash,
+            verifier_backend_hash=module.evm_verifier_backend_hash(),
+            proof_family_hash=module.evm_proof_family_hash(),
+            network_id=eth.network_id,
+            used_message_proof=True,
+            receipt_block_finalized=True,
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "receipt_block_number must be an exact u64"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError("EVM route canary hash accepted hostile receipt block number")
 
 
 def test_evm_full_toml_rejects_route_canary_transcript_hash_reuse():

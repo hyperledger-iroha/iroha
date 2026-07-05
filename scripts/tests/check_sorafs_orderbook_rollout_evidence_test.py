@@ -301,6 +301,22 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+CONTRACT_BOUND_FIXTURES = (
+    ("matcher_service", "matcher-service.json", matcher_service),
+    ("settlement_service", "settlement-service.json", settlement_service),
+    ("api_gateway", "api-gateway.json", api_gateway),
+    ("event_streams", "event-streams.json", event_streams),
+    ("sdk_release", "sdk-release.json", sdk_release),
+    ("observability", "observability.json", observability),
+    ("reconciliation", "reconciliation.json", reconciliation),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -325,6 +341,30 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     )
     assert observability_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
+    )
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in CONTRACT_BOUND_FIXTURES)
+        == MODULE.CONTRACT_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(route["name"] for route in api_gateway()["routes"]) == (
+        MODULE.REQUIRED_API_ROUTES
+    )
+    assert tuple(stream["name"] for stream in event_streams()["streams"]) == (
+        MODULE.REQUIRED_STREAMS
+    )
+    assert tuple(observability()["metrics"]) == MODULE.REQUIRED_METRICS
+    assert tuple(source["name"] for source in reconciliation()["sources"]) == (
+        MODULE.REQUIRED_RECONCILIATION_SOURCES
     )
 
 
@@ -525,6 +565,31 @@ def test_contract_bound_artifact_must_match_contract_surface_digest(tmp_path: Pa
     assert artifact["errors"] == [
         "api_gateway contract_digest_hex must reference a valid contract_surface contract_digest_hex"
     ]
+
+
+def test_all_contract_bound_artifacts_reject_contract_surface_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in CONTRACT_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["contract_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} contract_digest_hex must reference a valid "
+            "contract_surface contract_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_integer_unit_latency_and_lag_fields_reject_fractional_or_negative_values(
@@ -1067,6 +1132,43 @@ def test_sdk_artifact_count_must_cover_reviewed_languages(tmp_path: Path) -> Non
     assert "artifact_count must be at least 6" in artifact["errors"]
 
 
+def test_sdk_artifacts_must_cover_every_reviewed_language(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sdk_release()
+    payload["artifacts"] = [
+        {"id": f"rust-orderbook-{index:02d}", "sha256": DIGEST}
+        for index in range(len(MODULE.REQUIRED_SDK_LANGUAGES))
+    ]
+    payload["artifact_count"] = len(payload["artifacts"])
+    write_json(tmp_path / "sdk-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sdk_release"]["artifacts"][0]
+    assert (
+        "artifacts must include at least one SDK release artifact for every "
+        "reviewed language"
+    ) in artifact["errors"]
+
+
+def test_sdk_artifacts_must_use_reviewed_language_prefixes(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sdk_release()
+    payload["artifacts"][0]["id"] = "go-orderbook-private-key-placeholder"
+    write_json(tmp_path / "sdk-release.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = result["required"]["sdk_release"]["artifacts"][0]
+    errors = "\n".join(artifact["errors"])
+    assert "artifacts[].id must start with a reviewed SDK language prefix" in errors
+    assert "go-orderbook-private-key-placeholder" not in errors
+
+
 def test_sdk_release_debug_artifacts_flag_is_required(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = sdk_release()
@@ -1212,6 +1314,32 @@ def test_governance_approval_must_match_contract_surface_policy_digest(
         "governance_approval policy_digest_hex must reference a valid "
         "contract_surface policy_digest_hex"
     ]
+
+
+def test_all_policy_bound_artifacts_reject_contract_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must reference a valid "
+            "contract_surface policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_reconciliation_source_count_must_match_unique_sources(

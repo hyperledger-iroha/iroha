@@ -34,6 +34,7 @@ NOW_UNIX = 1_800_100_000
 GENERATED_AT = NOW_UNIX - 120
 SNAPSHOT_ID = "11" * 16
 MERKLE_ROOT = "22" * 32
+WEIGHTS_DIGEST = "55" * 32
 PROVIDER_ID = "provider-a"
 PROOF_SIBLING = "33" * 32
 
@@ -60,6 +61,8 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
         SNAPSHOT_ID,
         "--merkle-root-hex",
         MERKLE_ROOT,
+        "--weights-digest-hex",
+        WEIGHTS_DIGEST,
         "--provider-id",
         PROVIDER_ID,
         "--provider-name",
@@ -150,10 +153,51 @@ def test_generated_canaries_pass_full_reputation_gate(tmp_path: Path) -> None:
     assert payload["status"] == "ready"
     assert payload["snapshot_id_hex"] == SNAPSHOT_ID
     assert payload["merkle_root_hex"] == MERKLE_ROOT
+    assert payload["valid_reputation_weight_digests"] == [WEIGHTS_DIGEST]
     assert payload["provider_ids"] == [PROVIDER_ID]
     for kind in MODULE.CANARY_KINDS:
         assert payload["required"][kind]["artifact_count"] == 1
         assert payload["required"][kind]["artifacts"][0]["valid"] is True
+
+
+def test_publish_anchor_includes_weight_digest(tmp_path: Path) -> None:
+    assert MODULE.main(args_for("publish", tmp_path)) == 0
+
+    payload = json.loads(canary_path(tmp_path, "publish").read_text("utf-8"))
+
+    assert payload["schema"] == "sorafs.reputation.publish_snapshot_summary.v1"
+    assert payload["weights_digest_hex"] == WEIGHTS_DIGEST
+
+
+def test_weight_digest_is_required_before_write(tmp_path: Path, capsys) -> None:
+    args = args_for("latest", tmp_path)
+    index = args.index("--weights-digest-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "--weights-digest-hex" in captured.err
+    assert "required" in captured.err
+    assert not canary_path(tmp_path, "latest").exists()
+
+
+def test_weight_digest_must_be_lowercase_hex_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("latest", tmp_path)
+    args[args.index("--weights-digest-hex") + 1] = "AB" * 32
+
+    assert_rejected_without_artifact(
+        args,
+        kind="latest",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--weights-digest-hex must be exact lowercase hex length 64"
+        ),
+    )
 
 
 def test_provider_id_must_be_canonical(tmp_path: Path, capsys) -> None:

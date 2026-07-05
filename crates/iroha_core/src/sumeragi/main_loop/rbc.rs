@@ -6840,12 +6840,8 @@ impl Actor {
             let now = Instant::now();
             self.note_rbc_ready_dependency_progress(key, now);
         }
-        let telemetry_ref = self.telemetry_handle();
         self.publish_rbc_backlog_snapshot();
         if recorded_ready {
-            if let Some(telemetry) = telemetry_ref {
-                telemetry.inc_rbc_ready_broadcasts();
-            }
             iroha_logger::info!(
                 height = key.1,
                 view = key.2,
