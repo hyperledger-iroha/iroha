@@ -248,6 +248,8 @@ def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:
 def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     """Parse runtime bytecode from a file containing hex text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     path = Path(value).expanduser()
     text = _read_runtime_bytecode_file_text(path, label=label)
     return _parse_runtime_bytecode_text(
@@ -270,7 +272,7 @@ def parse_u32(value: object, *, label: str) -> int:
 
     if type(value) is int:
         parsed = value
-    elif isinstance(value, str) and _is_canonical_decimal_text(value):
+    elif type(value) is str and _is_canonical_decimal_text(value):
         parsed = int(value, 10)
     else:
         raise argparse.ArgumentTypeError(f"{label} must be a u32")
@@ -284,7 +286,7 @@ def parse_u64(value: object, *, label: str) -> int:
 
     if type(value) is int:
         parsed = value
-    elif isinstance(value, str) and _is_canonical_decimal_text(value):
+    elif type(value) is str and _is_canonical_decimal_text(value):
         parsed = int(value, 10)
     else:
         raise argparse.ArgumentTypeError(f"{label} must be a u64")
@@ -1254,13 +1256,25 @@ def apply_runtime_bytecode_hashes(args: argparse.Namespace) -> None:
     )
 
 
-def _toml_line(key: str, value: str | int | bool) -> str:
-    if isinstance(value, bool):
+def _toml_string(value: str) -> str:
+    if type(value) is not str:
+        raise TypeError("unsupported TOML string value")
+    return json.dumps(value)
+
+
+def _toml_line(key: str, value: str | int | bool | list[str]) -> str:
+    if type(value) is bool:
         encoded = "true" if value else "false"
-    elif isinstance(value, int):
+    elif type(value) is int:
         encoded = str(value)
+    elif type(value) is str:
+        encoded = _toml_string(value)
+    elif type(value) is list:
+        if not all(type(item) is str for item in value):
+            raise TypeError(f"unsupported TOML list value for {key}")
+        encoded = "[" + ", ".join(_toml_string(item) for item in value) + "]"
     else:
-        encoded = json.dumps(value)
+        raise TypeError(f"unsupported TOML value for {key}")
     return f"{key} = {encoded}"
 
 

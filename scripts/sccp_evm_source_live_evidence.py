@@ -49,8 +49,10 @@ PUBLIC_SUMMARY_FIELDS = (
 def default_block_tag_for_domain(domain: int) -> str:
     """Return the default live-code block tag for an EVM-family source lane."""
 
-    if type(domain) is not int:
-        raise argparse.ArgumentTypeError("domain must be an EVM-family source lane")
+    domain = _require_source_domain(
+        domain,
+        error_type=argparse.ArgumentTypeError,
+    )
     return "finalized" if domain == SCCP_DOMAIN_ETH else "latest"
 
 
@@ -74,6 +76,7 @@ def _hex(raw: bytes) -> str:
 
 
 def _load_evidence_module(domain: int) -> Any:
+    domain = _require_source_domain(domain)
     filename = {
         SCCP_DOMAIN_ETH: "sccp_eth_source_bridge_evidence.py",
         SCCP_DOMAIN_BSC: "sccp_bsc_source_bridge_evidence.py",
@@ -98,22 +101,22 @@ def parse_domain(value: str) -> int:
     """Parse an EVM-family source domain selector."""
 
     if type(value) is not str:
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    if value != value.strip():
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    text = value.lower()
-    if text == "eth":
+        raise argparse.ArgumentTypeError("domain must be eth or bsc") from None
+    if value == "eth":
         return SCCP_DOMAIN_ETH
-    if text == "bsc":
+    if value == "bsc":
         return SCCP_DOMAIN_BSC
-    if not text or not text.isascii() or not text.isdecimal():
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    if len(text) > 1 and text.startswith("0"):
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    parsed = int(text, 10)
-    if parsed not in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
-        raise argparse.ArgumentTypeError("domain must be eth, bsc, 1, or 2")
-    return parsed
+    raise argparse.ArgumentTypeError("domain must be eth or bsc") from None
+
+
+def _require_source_domain(
+    value: object,
+    *,
+    error_type: type[Exception] = ValueError,
+) -> int:
+    if type(value) is not int or value not in EXPECTED_RPC_CHAIN_IDS:
+        raise error_type("domain must be an EVM-family source lane") from None
+    return value
 
 
 def _parse_hex_bytes(value: str, *, label: str, byte_length: int) -> bytes:
@@ -257,15 +260,28 @@ def parse_block_tag(value: str) -> str:
     )
 
 
+def _summary_block_tag(summary: dict[str, Any]) -> str:
+    try:
+        return parse_block_tag(summary.get("block_tag"))
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
+        raise ValueError("source block tag metadata is invalid") from None
+
+
+def _require_exact_literal(value: object, *, expected: str, label: str) -> str:
+    if type(value) is not str or value != expected:
+        raise ValueError(f"{label} must be exact {expected}") from None
+    return value
+
+
 def _require_exact_positive_u64(value: object, *, label: str) -> int:
     if type(value) is not int or value <= 0 or value > 0xFFFF_FFFF_FFFF_FFFF:
-        raise ValueError(f"{label} must be an exact positive u64")
+        raise ValueError(f"{label} must be an exact positive u64") from None
     return value
 
 
 def _require_exact_u32(value: object, *, label: str) -> int:
     if type(value) is not int or value < 0 or value > 0xFFFF_FFFF:
-        raise ValueError(f"{label} must be an exact u32")
+        raise ValueError(f"{label} must be an exact u32") from None
     return value
 
 
@@ -338,7 +354,7 @@ def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[st
 
 def _normalize_evm_rpc_url(rpc_url: str) -> str:
     if (
-        not isinstance(rpc_url, str)
+        type(rpc_url) is not str
         or rpc_url != rpc_url.strip()
         or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in rpc_url)
     ):
@@ -737,14 +753,23 @@ def _deployment_receipt_finalized_block_summary(
         byte_length=32,
         blocker="deployment receipt finalized block hash must be a non-zero bytes32",
     )
-    receipt_block_number = int(receipt_summary["deployment_receipt_block_number"])
+    try:
+        receipt_block_number = _require_exact_positive_u64(
+            receipt_summary.get("deployment_receipt_block_number"),
+            label="deployment receipt block number",
+        )
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
+        raise RuntimeError(
+            "deployment receipt block number metadata is invalid"
+        ) from None
     if receipt_block_number > finalized_block_number:
         raise RuntimeError(
             "deployment receipt block is newer than the finalized execution block"
         )
     try:
-        receipt_block_hash = _parse_hex32(
-            str(receipt_summary["deployment_receipt_block_hash"]),
+        receipt_block_hash = _summary_hex32(
+            receipt_summary,
+            "deployment_receipt_block_hash",
             label="deployment receipt block hash",
         )
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -775,6 +800,7 @@ def collect_source_bridge_evidence(
 ) -> dict[str, Any]:
     """Collect and verify read-only EVM-family source bridge evidence."""
 
+    domain = _require_source_domain(domain)
     block_tag = parse_block_tag(block_tag)
     evidence = _load_evidence_module(domain)
     bridge = _hex(evidence.parse_evm_address(bridge_address, label="bridge address"))
@@ -891,6 +917,7 @@ def _component_hash_args_present(args: argparse.Namespace) -> bool:
 
 
 def _adapter_verifier_vk_hash(evidence: Any, domain: int) -> bytes:
+    domain = _require_source_domain(domain)
     if domain == SCCP_DOMAIN_ETH:
         return evidence.eth_source_adapter_verifier_vk_hash()
     if domain == SCCP_DOMAIN_BSC:
@@ -907,9 +934,10 @@ def _source_args(
             "source TOML output requires source component hashes and "
             "--deployment-receipt-hash"
         )
-    evidence = _load_evidence_module(args.domain)
+    domain = _require_source_domain(args.domain)
+    evidence = _load_evidence_module(domain)
     return SimpleNamespace(
-        source_domain=args.domain,
+        source_domain=domain,
         target_domain=SCCP_DOMAIN_SORA,
         bridge_address=evidence.parse_evm_address(
             source_bridge["bridge_address"],
@@ -997,8 +1025,10 @@ def _source_args(
         expected_source_adapter_engine_deployment_hash=(
             args.expected_source_adapter_engine_deployment_hash
         ),
-        source_bridge_runtime_bytecode_hex=evidence.parse_runtime_bytecode_hex(
-            str(source_bridge["bridge_runtime_bytecode_hex"]),
+        source_bridge_runtime_bytecode_hex=_summary_runtime_bytes(
+            evidence,
+            source_bridge,
+            "bridge_runtime_bytecode_hex",
             label="source bridge runtime bytecode",
         ),
         source_bridge_runtime_bytecode_file=None,
@@ -1006,6 +1036,7 @@ def _source_args(
 
 
 def _source_record_hashes(evidence: Any, domain: int, args: SimpleNamespace) -> tuple[bytes, bytes]:
+    domain = _require_source_domain(domain)
     if domain == SCCP_DOMAIN_ETH:
         return (
             evidence.eth_source_verifier_material_record_hash(args),
@@ -1023,9 +1054,10 @@ def _offline_args(args: argparse.Namespace, source_bridge: dict[str, Any]) -> li
     if not _component_hash_args_present(args):
         return []
     source_args = _source_args(args, source_bridge)
+    source_domain = _require_source_domain(source_args.source_domain)
     rendered = [
         "--source-domain",
-        str(args.domain),
+        str(source_domain),
         "--target-domain",
         str(SCCP_DOMAIN_SORA),
         "--bridge-address",
@@ -1121,7 +1153,8 @@ def _offline_args(args: argparse.Namespace, source_bridge: dict[str, Any]) -> li
 
 
 def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any]) -> bool:
-    if source_bridge.get("deployment_receipt_status") != "0x1":
+    receipt_status = source_bridge.get("deployment_receipt_status")
+    if type(receipt_status) is not str or receipt_status != "0x1":
         return False
     if source_bridge.get("deployment_receipt_block_hash_matches") is not True:
         return False
@@ -1213,7 +1246,7 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
         raise ValueError("source chain metadata must match domain")
     rpc_chain_id = source_bridge.get("rpc_chain_id")
     if type(rpc_chain_id) is not int:
-        raise ValueError("EVM source RPC chain id metadata must be an integer")
+        raise ValueError("EVM source RPC chain id metadata must be an integer") from None
     expected_rpc_chain_id = EXPECTED_RPC_CHAIN_IDS[domain]
     if rpc_chain_id != expected_rpc_chain_id:
         raise ValueError(
@@ -1260,8 +1293,11 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
             raise ValueError(
                 "expected source bridge code hash metadata must match bridge_code_hash"
             )
-    if source_bridge.get("deployment_receipt_status") != "0x1":
-        raise ValueError("source deployment receipt status must be 0x1")
+    _require_exact_literal(
+        source_bridge.get("deployment_receipt_status"),
+        expected="0x1",
+        label="source deployment receipt status",
+    )
     deployment_transaction_hash = _summary_hex32(
         source_bridge,
         "deployment_transaction_hash",
@@ -1497,6 +1533,8 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
 
 
 def _validate_copied_source_summary_metadata(summary: dict[str, Any]) -> None:
+    if "block_tag" in summary:
+        _summary_block_tag(summary)
     source_bridge = summary.get("source_bridge")
     if isinstance(source_bridge, dict):
         domain = source_bridge.get("domain")
@@ -1505,6 +1543,16 @@ def _validate_copied_source_summary_metadata(summary: dict[str, Any]) -> None:
             if type(domain) is int and domain in EXPECTED_RPC_CHAIN_IDS
             else None
         )
+        if "rpc_chain_id" in source_bridge:
+            _require_exact_u32(
+                source_bridge.get("rpc_chain_id"),
+                label="source RPC chain id",
+            )
+        if "expected_rpc_chain_id" in source_bridge:
+            _require_exact_u32(
+                source_bridge.get("expected_rpc_chain_id"),
+                label="expected source RPC chain id",
+            )
         if "bridge_address" in source_bridge:
             _summary_address(
                 source_bridge,
@@ -1529,6 +1577,12 @@ def _validate_copied_source_summary_metadata(summary: dict[str, Any]) -> None:
                 source_bridge,
                 "bridge_runtime_bytecode_hex",
                 label="source bridge runtime bytecode",
+            )
+        if "deployment_receipt_status" in source_bridge:
+            _require_exact_literal(
+                source_bridge.get("deployment_receipt_status"),
+                expected="0x1",
+                label="source deployment receipt status",
             )
         for field, label in (
             ("deployment_transaction_hash", "deployment transaction hash"),
@@ -1558,6 +1612,19 @@ def _validate_copied_source_summary_metadata(summary: dict[str, Any]) -> None:
                 "deployment_receipt_contract_address",
                 label="deployment receipt contract address",
             )
+        for field, label in (
+            (
+                "deployment_transaction_block_number",
+                "deployment transaction block number",
+            ),
+            ("deployment_receipt_block_number", "deployment receipt block number"),
+            (
+                "deployment_receipt_finalized_block_number",
+                "deployment receipt finalized block number",
+            ),
+        ):
+            if field in source_bridge:
+                _require_exact_positive_u64(source_bridge.get(field), label=label)
     source_records = summary.get("source_records")
     if isinstance(source_records, dict):
         for field, label in (
@@ -1651,61 +1718,139 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     args = summary["_source_args"]
     evidence = _load_evidence_module(args.source_domain)
     source_bridge = summary["source_bridge"]
-    args.deployment_transaction_block_hash = _parse_hex32(
-        source_bridge["deployment_transaction_block_hash"],
+    block_tag = _summary_block_tag(summary)
+    source_domain = _require_exact_u32(
+        source_bridge.get("domain"),
+        label="source domain",
+    )
+    rpc_chain_id = _require_exact_u32(
+        source_bridge.get("rpc_chain_id"),
+        label="source RPC chain id",
+    )
+    bridge_address = _hex(
+        _summary_address(source_bridge, "bridge_address", label="source bridge address")
+    )
+    bridge_code_hash = _hex(
+        _summary_hex32(
+            source_bridge,
+            "bridge_code_hash",
+            label="source bridge code hash",
+        )
+    )
+    bridge_runtime_bytecode_hex = _hex(
+        _summary_runtime_bytes(
+            evidence,
+            source_bridge,
+            "bridge_runtime_bytecode_hex",
+            label="source bridge runtime bytecode",
+        )
+    )
+    deployment_transaction_hash = _hex(
+        _summary_hex32(
+            source_bridge,
+            "deployment_transaction_hash",
+            label="deployment transaction hash",
+        )
+    )
+    deployment_transaction_block_hash = _summary_hex32(
+        source_bridge,
+        "deployment_transaction_block_hash",
         label="deployment transaction block hash",
     )
-    args.deployment_transaction_block_number = _require_exact_positive_u64(
-        source_bridge["deployment_transaction_block_number"],
+    deployment_transaction_block_number = _require_exact_positive_u64(
+        source_bridge.get("deployment_transaction_block_number"),
         label="deployment transaction block number",
     )
-    args.deployment_transaction_input_sha256 = _parse_hex32(
-        source_bridge["deployment_transaction_input_sha256"],
+    deployment_transaction_input_sha256 = _summary_hex32(
+        source_bridge,
+        "deployment_transaction_input_sha256",
         label="deployment transaction input SHA-256",
     )
+    deployment_receipt_status = _require_exact_literal(
+        source_bridge.get("deployment_receipt_status"),
+        expected="0x1",
+        label="source deployment receipt status",
+    )
+    deployment_receipt_contract_address = _hex(
+        _summary_address(
+            source_bridge,
+            "deployment_receipt_contract_address",
+            label="deployment receipt contract address",
+        )
+    )
+    deployment_receipt_block_hash = _hex(
+        _summary_hex32(
+            source_bridge,
+            "deployment_receipt_block_hash",
+            label="deployment receipt block hash",
+        )
+    )
+    deployment_receipt_block_number = _require_exact_positive_u64(
+        source_bridge.get("deployment_receipt_block_number"),
+        label="deployment receipt block number",
+    )
+    deployment_receipt_block_receipts_root = _hex(
+        _summary_hex32(
+            source_bridge,
+            "deployment_receipt_block_receipts_root",
+            label="deployment receipt block receiptsRoot",
+        )
+    )
+    args.deployment_transaction_block_hash = deployment_transaction_block_hash
+    args.deployment_transaction_block_number = deployment_transaction_block_number
+    args.deployment_transaction_input_sha256 = deployment_transaction_input_sha256
     rendered = evidence.render_toml(args)
     comments = [
-        "# sccp_evm_source_block_tag = " + json.dumps(str(summary["block_tag"])),
+        "# sccp_evm_source_block_tag = " + json.dumps(block_tag),
         "# sccp_evm_source_rpc_chain_id = "
-        + json.dumps(str(source_bridge["rpc_chain_id"])),
+        + json.dumps(str(rpc_chain_id)),
         "# sccp_evm_source_bridge_address = "
-        + json.dumps(str(source_bridge["bridge_address"])),
+        + json.dumps(bridge_address),
         "# sccp_evm_source_bridge_runtime_code_hash = "
-        + json.dumps(str(source_bridge["bridge_code_hash"])),
+        + json.dumps(bridge_code_hash),
         "# sccp_evm_source_bridge_runtime_bytecode_hex = "
-        + json.dumps(str(source_bridge["bridge_runtime_bytecode_hex"])),
+        + json.dumps(bridge_runtime_bytecode_hex),
     ]
     comments.extend(
         [
             "# sccp_evm_source_deployment_transaction_hash = "
-            + json.dumps(str(source_bridge["deployment_transaction_hash"])),
+            + json.dumps(deployment_transaction_hash),
             "# sccp_evm_source_deployment_transaction_block_hash = "
-            + json.dumps(str(source_bridge["deployment_transaction_block_hash"])),
+            + json.dumps(_hex(deployment_transaction_block_hash)),
             "# sccp_evm_source_deployment_transaction_block_number = "
-            + json.dumps(str(source_bridge["deployment_transaction_block_number"])),
+            + json.dumps(str(deployment_transaction_block_number)),
             "# sccp_evm_source_deployment_transaction_input_sha256 = "
-            + json.dumps(str(source_bridge["deployment_transaction_input_sha256"])),
+            + json.dumps(_hex(deployment_transaction_input_sha256)),
             "# sccp_evm_source_deployment_receipt_status = "
-            + json.dumps(str(source_bridge["deployment_receipt_status"])),
+            + json.dumps(deployment_receipt_status),
             "# sccp_evm_source_deployment_contract_address = "
-            + json.dumps(str(source_bridge["deployment_receipt_contract_address"])),
+            + json.dumps(deployment_receipt_contract_address),
             "# sccp_evm_source_deployment_block_hash = "
-            + json.dumps(str(source_bridge["deployment_receipt_block_hash"])),
+            + json.dumps(deployment_receipt_block_hash),
             "# sccp_evm_source_deployment_block_number = "
-            + json.dumps(str(source_bridge["deployment_receipt_block_number"])),
+            + json.dumps(str(deployment_receipt_block_number)),
             "# sccp_evm_source_deployment_block_receipts_root = "
-            + json.dumps(str(source_bridge["deployment_receipt_block_receipts_root"])),
+            + json.dumps(deployment_receipt_block_receipts_root),
         ]
     )
-    if source_bridge["domain"] == SCCP_DOMAIN_ETH:
+    if source_domain == SCCP_DOMAIN_ETH:
+        deployment_receipt_finalized_block_hash = _hex(
+            _summary_hex32(
+                source_bridge,
+                "deployment_receipt_finalized_block_hash",
+                label="deployment receipt finalized block hash",
+            )
+        )
+        deployment_receipt_finalized_block_number = _require_exact_positive_u64(
+            source_bridge.get("deployment_receipt_finalized_block_number"),
+            label="deployment receipt finalized block number",
+        )
         comments.extend(
             [
                 "# sccp_evm_source_deployment_finalized_block_hash = "
-                + json.dumps(str(source_bridge["deployment_receipt_finalized_block_hash"])),
+                + json.dumps(deployment_receipt_finalized_block_hash),
                 "# sccp_evm_source_deployment_finalized_block_number = "
-                + json.dumps(
-                    str(source_bridge["deployment_receipt_finalized_block_number"])
-                ),
+                + json.dumps(str(deployment_receipt_finalized_block_number)),
                 "# sccp_evm_source_deployment_block_finalized = "
                 + json.dumps(
                     source_bridge["deployment_receipt_block_finalized"] is True
@@ -1736,17 +1881,19 @@ def collect_live_evidence(
 ) -> dict[str, Any]:
     """Collect live EVM-family source evidence and return a JSON summary."""
 
+    domain = _require_source_domain(args.domain)
+    args.domain = domain
     block_tag = parse_block_tag(
         args.block_tag
         if args.block_tag is not None
-        else default_block_tag_for_domain(args.domain)
+        else default_block_tag_for_domain(domain)
     )
     summary: dict[str, Any] = {
         "rpc_url": args.rpc_url,
         "read_only": True,
         "block_tag": block_tag,
     }
-    canonical_rpc_chain_id = EXPECTED_RPC_CHAIN_IDS[args.domain]
+    canonical_rpc_chain_id = EXPECTED_RPC_CHAIN_IDS[domain]
     expected_rpc_chain_id = args.expected_rpc_chain_id
     if expected_rpc_chain_id is None:
         expected_rpc_chain_id = canonical_rpc_chain_id
@@ -1757,7 +1904,7 @@ def collect_live_evidence(
     ):
         raise ValueError("--expected-rpc-chain-id must be a positive u64 integer")
     elif expected_rpc_chain_id != canonical_rpc_chain_id:
-        chain = "eth" if args.domain == SCCP_DOMAIN_ETH else "bsc"
+        chain = "eth" if domain == SCCP_DOMAIN_ETH else "bsc"
         raise ValueError(
             "--expected-rpc-chain-id must match the canonical "
             f"{chain} mainnet chain id {canonical_rpc_chain_id}"
@@ -1819,7 +1966,7 @@ def collect_live_evidence(
     )
     source_bridge = collect_source_bridge_evidence(
         args.rpc_url,
-        domain=args.domain,
+        domain=domain,
         bridge_address=args.bridge_address,
         block_tag=block_tag,
         deployment_transaction_hash=deployment_transaction_hash,
@@ -1851,10 +1998,10 @@ def collect_live_evidence(
 
     if _component_hash_args_present(args):
         source_args = _source_args(args, source_bridge)
-        evidence = _load_evidence_module(args.domain)
+        evidence = _load_evidence_module(domain)
         material_hash, deployment_hash = _source_record_hashes(
             evidence,
-            args.domain,
+            domain,
             source_args,
         )
         source_records = {

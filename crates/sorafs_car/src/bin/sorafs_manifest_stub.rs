@@ -1650,39 +1650,22 @@ fn verify_manifest_signatures_file(
             ));
         }
 
-        match PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes) {
-            Ok(public_key) => {
-                let signature =
-                    iroha_crypto::ed25519_parse_signature(&signature_bytes).map_err(|err| {
-                        format!(
-                            "invalid council signature material for signer `{signer_hex}`: {err}"
-                        )
-                    })?;
-                signature
-                    .verify(&public_key, manifest_digest.as_bytes())
-                    .map_err(|err| {
-                        format!(
-                            "failed to verify council signature for signer `{signer_hex}`: {err}"
-                        )
-                    })?;
-                if let Some(multihash) = obj.get("signer_multihash").and_then(Value::as_str) {
-                    let expected_multihash = public_key.to_string();
-                    if multihash != expected_multihash {
-                        return Err(format!(
-                            "signer multihash `{multihash}` does not match expected `{expected_multihash}` for signer `{signer_hex}`"
-                        ));
-                    }
-                }
-            }
-            Err(_) => {
-                if let Some(multihash) = obj.get("signer_multihash").and_then(Value::as_str) {
-                    let fallback = format!("hex:{signer_hex}");
-                    if multihash != fallback {
-                        return Err(format!(
-                            "signer `{signer_hex}` uses fallback multihash `{multihash}`, expected `{fallback}`"
-                        ));
-                    }
-                }
+        let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &signer_bytes)
+            .map_err(|err| format!("invalid council signature signer `{signer_hex}`: {err}"))?;
+        let signature = iroha_crypto::ed25519_parse_signature(&signature_bytes).map_err(|err| {
+            format!("invalid council signature material for signer `{signer_hex}`: {err}")
+        })?;
+        signature
+            .verify(&public_key, manifest_digest.as_bytes())
+            .map_err(|err| {
+                format!("failed to verify council signature for signer `{signer_hex}`: {err}")
+            })?;
+        if let Some(multihash) = obj.get("signer_multihash").and_then(Value::as_str) {
+            let expected_multihash = public_key.to_string();
+            if multihash != expected_multihash {
+                return Err(format!(
+                    "signer multihash `{multihash}` does not match expected `{expected_multihash}` for signer `{signer_hex}`"
+                ));
             }
         }
     }
@@ -1723,10 +1706,9 @@ fn write_manifest_signatures_file(
     for sig in &manifest.governance.council_signatures {
         let signer_hex = to_hex(&sig.signer);
         let signature_hex = to_hex(&sig.signature);
-        let signer_multihash = match PublicKey::from_bytes(Algorithm::Ed25519, &sig.signer) {
-            Ok(public_key) => public_key.to_string(),
-            Err(_) => format!("hex:{signer_hex}"),
-        };
+        let signer_multihash = PublicKey::from_bytes(Algorithm::Ed25519, &sig.signer)
+            .map_err(|err| format!("invalid council signature signer `{signer_hex}`: {err}"))?
+            .to_string();
         let mut entry = Map::new();
         entry.insert("algorithm".to_owned(), Value::from("ed25519"));
         entry.insert("signer".to_owned(), Value::from(signer_hex));
@@ -1902,10 +1884,44 @@ mod tests {
 
     use super::*;
 
+    const SMALL_ORDER_ED25519: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_ED25519_IDENTITY: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
+
     fn canonical_tempdir() -> (TempDir, PathBuf) {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
+    }
+
+    fn manifest_with_council_signature(
+        signer: [u8; 32],
+        signature: Vec<u8>,
+    ) -> sorafs_manifest::ManifestV1 {
+        let descriptor = chunker_registry::default_descriptor();
+        ManifestBuilder::new()
+            .root_cid(vec![0x01, 0x55, 0xaa])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+            .content_length(17)
+            .car_digest([0x42; 32])
+            .car_size(97)
+            .pin_policy(PinPolicy {
+                min_replicas: 3,
+                storage_class: StorageClass::Hot,
+                retention_epoch: 0,
+            })
+            .governance(GovernanceProofs {
+                council_signatures: vec![sorafs_manifest::CouncilSignature { signer, signature }],
+            })
+            .build()
+            .expect("build test manifest")
     }
 
     #[test]
@@ -1978,15 +1994,6 @@ mod tests {
 
     #[test]
     fn manifest_signatures_file_rejects_malformed_signature_r() {
-        const SMALL_ORDER_R: [u8; 32] = [
-            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-        ];
-        const NONCANONICAL_R: [u8; 32] = [
-            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
         let descriptor = chunker_registry::default_descriptor();
         let profile = format!(
             "{}.{}@{}",
@@ -2000,8 +2007,8 @@ mod tests {
             .expect("test signer public key should parse");
 
         for (label, replacement_r) in [
-            ("small-order", SMALL_ORDER_R),
-            ("noncanonical", NONCANONICAL_R),
+            ("small-order", SMALL_ORDER_ED25519),
+            ("noncanonical", NONCANONICAL_ED25519_IDENTITY),
         ] {
             let mut signature = signing_key.sign(manifest_digest.as_bytes()).to_bytes();
             signature[..32].copy_from_slice(&replacement_r);
@@ -2051,6 +2058,101 @@ mod tests {
             assert!(
                 err.contains("invalid council signature material"),
                 "{label} signature R produced unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_signatures_file_rejects_invalid_signer_fallback_multihash() {
+        let descriptor = chunker_registry::default_descriptor();
+        let profile = format!(
+            "{}.{}@{}",
+            descriptor.namespace, descriptor.name, descriptor.semver
+        );
+        let manifest_digest = Hash::from_bytes([0x33; 32]);
+        let chunk_digest_sha3 = [0x44; 32];
+        let signing_key = SigningKey::from_bytes(&[0xAB; 32]);
+        let signature = signing_key.sign(manifest_digest.as_bytes()).to_bytes();
+
+        for (label, signer_bytes) in [
+            ("small-order", SMALL_ORDER_ED25519),
+            ("noncanonical", NONCANONICAL_ED25519_IDENTITY),
+        ] {
+            let signer_hex = to_hex(&signer_bytes);
+            let mut entry = Map::new();
+            entry.insert("algorithm".to_owned(), Value::from("ed25519"));
+            entry.insert("signer".to_owned(), Value::from(signer_hex.clone()));
+            entry.insert("signature".to_owned(), Value::from(to_hex(&signature)));
+            entry.insert(
+                "signer_multihash".to_owned(),
+                Value::from(format!("hex:{signer_hex}")),
+            );
+
+            let mut root = Map::new();
+            root.insert("profile".to_owned(), Value::from(profile.clone()));
+            root.insert(
+                "profile_aliases".to_owned(),
+                Value::Array(vec![Value::from(profile.clone())]),
+            );
+            root.insert("manifest".to_owned(), Value::from("manifest.norito"));
+            root.insert(
+                "manifest_blake3".to_owned(),
+                Value::from(to_hex(manifest_digest.as_bytes())),
+            );
+            root.insert(
+                "chunk_digest_sha3_256".to_owned(),
+                Value::from(to_hex(&chunk_digest_sha3)),
+            );
+            root.insert(
+                "signatures".to_owned(),
+                Value::Array(vec![Value::Object(entry)]),
+            );
+
+            let file = NamedTempFile::new().expect("temp file");
+            let json = to_string_pretty(&Value::Object(root)).expect("signature json");
+            fs::write(file.path(), json).expect("write signature json");
+
+            let err = verify_manifest_signatures_file(
+                file.path(),
+                descriptor,
+                &manifest_digest,
+                chunk_digest_sha3,
+                Some("manifest.norito"),
+            )
+            .expect_err("invalid signer material must fail closed");
+
+            assert!(
+                err.contains("invalid council signature signer"),
+                "{label} signer produced unexpected error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn manifest_signatures_writer_rejects_invalid_signer_material() {
+        let descriptor = chunker_registry::default_descriptor();
+        let manifest_digest = Hash::from_bytes([0x33; 32]);
+        let chunk_digest_sha3 = [0x44; 32];
+
+        for (label, signer_bytes) in [
+            ("small-order", SMALL_ORDER_ED25519),
+            ("noncanonical", NONCANONICAL_ED25519_IDENTITY),
+        ] {
+            let manifest = manifest_with_council_signature(signer_bytes, vec![0xCD; 64]);
+            let file = NamedTempFile::new().expect("temp file");
+            let err = write_manifest_signatures_file(
+                file.path(),
+                descriptor,
+                &manifest,
+                &manifest_digest,
+                chunk_digest_sha3,
+                "manifest.norito",
+            )
+            .expect_err("invalid signer material must fail closed");
+
+            assert!(
+                err.contains("invalid council signature signer"),
+                "{label} signer produced unexpected error: {err}"
             );
         }
     }

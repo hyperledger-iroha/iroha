@@ -4198,7 +4198,7 @@ pub struct StatusSnapshot {
     pub epoch_commit_deadline_offset: u64,
     /// Reveal window deadline offset from epoch start (blocks; zero when not applicable).
     pub epoch_reveal_deadline_offset: u64,
-    /// PRF epoch seed used for deterministic leader/collector selection (`NPoS` mode).
+    /// PRF seed used for deterministic leader and collector selection.
     pub prf_epoch_seed: Option<[u8; 32]>,
     /// Height associated with the recorded PRF context.
     pub prf_height: u64,

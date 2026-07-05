@@ -45,6 +45,135 @@ def test_documented_fast_table_modes_parses_markdown_rows(tmp_path: Path) -> Non
         "alpha-fast",
         "gamma-fast",
     ]
+    assert module.documented_fast_table_mode_occurrences(readme) == [
+        ("alpha-fast", 7),
+        ("gamma-fast", 9),
+    ]
+
+
+def test_documented_fast_table_duplicate_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "\n".join(
+            [
+                "| Mode | Length | Intended use |",
+                "| --- | ---: | --- |",
+                "| `frontier-fast` | 2 | first declaration |",
+                "| `quorum-fast` | 3 | separate mode |",
+                "| `frontier-fast` | 4 | duplicate fast row |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.duplicate_command_mode_errors(
+        module.documented_fast_table_mode_occurrences(readme),
+        readme,
+        "README fast-mode table",
+    ) == [
+        f"{readme} README fast-mode table repeats mode frontier-fast at "
+        "line 5; first declared at line 3; each README fast-mode table mode "
+        "must be counted once"
+    ]
+
+
+def test_documented_fast_table_tlc_support_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "\n".join(
+            [
+                "| Mode | Length | Intended use |",
+                "| --- | ---: | --- |",
+                "| `frontier-fast` | 2 | documented TLC command |",
+                "| `orphan-fast` | 3 | no TLC runner |",
+                "| `frontier-missing-fast` | 4 | missing README TLC command |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    occurrences = module.documented_fast_table_mode_occurrences(readme)
+    tlc_cases = {
+        "frontier-*": module.RunnerCase(label="frontier-*", body="", line=1),
+    }
+
+    assert module.unsupported_command_mode_errors(
+        occurrences,
+        readme,
+        "README fast-mode table",
+        tlc_cases,
+        "TLC",
+    ) == [
+        f"{readme} README fast-mode table mode orphan-fast at line 4 is "
+        "unsupported by the TLC runner"
+    ]
+    assert module.missing_documented_command_mode_errors(
+        occurrences,
+        readme,
+        "README fast-mode table",
+        {"frontier-fast", "orphan-fast"},
+        "README TLC commands",
+    ) == [
+        f"{readme} README fast-mode table mode frontier-missing-fast at line "
+        "5 is missing from README TLC commands"
+    ]
+
+
+def test_documented_bug_mode_expected_failure_ci_errors_report_source_lines() -> None:
+    module = load_coverage_module()
+    readme = module.display_path(module.README)
+
+    assert module.documented_bug_mode_expected_failure_ci_errors(
+        [
+            ("frontier-fast", 7),
+            ("frontier-bug-stale-owner", 11),
+            ("rbc-bug-missing-deliver", 19),
+            ("rbc-bug-missing-deliver", 22),
+        ],
+        {"frontier-bug-stale-owner"},
+        module.README,
+    ) == [
+        f"{readme} README mutation command mode rbc-bug-missing-deliver "
+        "at line 19 is missing from expected-failure CI"
+    ]
+
+
+def test_apalache_ci_mutation_surface_errors_report_source_lines() -> None:
+    module = load_coverage_module()
+    fast_ci = module.display_path(module.FAST_CI)
+    expected_ci = module.display_path(module.EXPECTED_FAILURE_CI)
+
+    assert module.unexpected_bug_command_mode_errors(
+        [
+            ("frontier-fast", 7),
+            ("rbc-bug-missing-deliver", 19),
+            ("rbc-bug-missing-deliver", 22),
+        ],
+        module.FAST_CI,
+        "PR CI Apalache command",
+        "expected-failure CI",
+    ) == [
+        f"{fast_ci} PR CI Apalache command mode rbc-bug-missing-deliver "
+        "at line 19 belongs in expected-failure CI"
+    ]
+
+    assert module.unexpected_non_bug_command_mode_errors(
+        [
+            ("frontier-fast", 41),
+            ("frontier-fast", 45),
+            ("rbc-bug-missing-deliver", 52),
+        ],
+        module.EXPECTED_FAILURE_CI,
+        "expected-failure CI Apalache command",
+    ) == [
+        f"{expected_ci} expected-failure CI Apalache command mode "
+        "frontier-fast at line 41 is not a mutation mode"
+    ]
 
 
 def test_documented_apalache_length_rows_parses_markdown_rows(
@@ -67,6 +196,10 @@ def test_documented_apalache_length_rows_parses_markdown_rows(
     assert module.documented_apalache_length_rows(readme) == [
         ("fast", 10),
         ("fork-fast", 9),
+    ]
+    assert module.documented_apalache_length_row_occurrences(readme) == [
+        ("fast", 10, 3),
+        ("fork-fast", 9, 4),
     ]
 
 
@@ -126,6 +259,87 @@ def test_documented_apalache_length_row_duplicates_are_visible(
 
     assert module.duplicate_values([mode for mode, _ in rows]) == [
         "frontier-fast"
+    ]
+    assert module.documented_apalache_length_row_occurrences(readme) == [
+        ("frontier-fast", 2, 3),
+        ("quorum-fast", 3, 4),
+        ("frontier-fast", 4, 5),
+    ]
+    assert module.apalache_length_table_occurrence_map(
+        module.documented_apalache_length_row_occurrences(readme),
+        readme,
+    ) == (
+        {"frontier-fast": 2, "quorum-fast": 3},
+        [
+            f"{readme} Apalache length table repeats mode frontier-fast at "
+            "line 5; first declared at line 3 with length 2, then length 4; "
+            "each Apalache length table mode must be counted once"
+        ],
+    )
+    assert module.apalache_length_table_row_map(rows, readme) == (
+        {"frontier-fast": 2, "quorum-fast": 3},
+        [
+            f"{readme} Apalache length table repeats mode frontier-fast; "
+            "first length 2, then 4; each Apalache length table mode must be "
+            "counted once"
+        ],
+    )
+
+
+def test_apalache_length_table_row_map_rejects_duplicate_equal_lengths(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+
+    assert module.apalache_length_table_row_map(
+        [("frontier-fast", 2), ("frontier-fast", 2)],
+        readme,
+    ) == (
+        {"frontier-fast": 2},
+        [
+            f"{readme} Apalache length table repeats mode frontier-fast; "
+            "first length 2, then 2; each Apalache length table mode must be "
+            "counted once"
+        ],
+    )
+
+
+def test_apalache_length_table_coverage_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    runner = tmp_path / "sumeragi_apalache.sh"
+    readme = tmp_path / "README.md"
+    cases = {
+        "frontier-fast": module.RunnerCase("frontier-fast", "", 2),
+        "missing-fast": module.RunnerCase("missing-fast", "", 9),
+    }
+    length_rows = [
+        ("frontier-fast", 2, 3),
+        ("orphan-fast", 4, 5),
+    ]
+
+    assert module.missing_runner_case_mode_errors(
+        cases,
+        {"frontier-fast", "missing-fast"},
+        {"frontier-fast"},
+        runner,
+        "Apalache",
+        "README Apalache length table",
+    ) == [
+        f"Apalache runner {runner} case missing-fast at line 9 is missing "
+        "from README Apalache length table"
+    ]
+    assert module.unsupported_command_mode_errors(
+        [(mode, line_number) for mode, _length, line_number in length_rows],
+        readme,
+        "README Apalache length table",
+        cases,
+        "Apalache",
+    ) == [
+        f"{readme} README Apalache length table mode orphan-fast at line 5 "
+        "is unsupported by the Apalache runner"
     ]
 
 
@@ -229,12 +443,180 @@ def test_active_command_modes_counts_only_direct_active_invocations(
     )
 
     assert module.active_command_modes(script) == ["direct-fast"]
+    assert module.active_command_mode_occurrences(script) == [("direct-fast", 4)]
     assert module.active_command_modes(script, module.TLC_COMMAND_PREFIX) == [
         "frontier-fast"
     ]
+    assert module.active_command_mode_occurrences(
+        script,
+        module.TLC_COMMAND_PREFIX,
+    ) == [("frontier-fast", 6)]
     assert module.active_command_modes(workflow) == ["workflow-fast"]
+    assert module.active_command_mode_occurrences(workflow) == [
+        ("workflow-fast", 1)
+    ]
     assert module.active_command_modes(workflow, module.TLC_COMMAND_PREFIX) == [
         "workflow-tlc-fast"
+    ]
+    assert module.active_command_mode_occurrences(
+        workflow,
+        module.TLC_COMMAND_PREFIX,
+    ) == [("workflow-tlc-fast", 2)]
+
+
+def test_duplicate_active_command_mode_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "ci.sh"
+    script.write_text(
+        "\n".join(
+            [
+                "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+                "bash scripts/formal/sumeragi_apalache.sh quorum-fast",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+                "# bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    occurrences = module.active_command_mode_occurrences(script)
+
+    assert occurrences == [
+        ("frontier-fast", 1),
+        ("quorum-fast", 2),
+        ("frontier-fast", 3),
+        ("frontier-fast", 5),
+    ]
+    assert module.duplicate_active_command_mode_errors(
+        occurrences,
+        script,
+        "PR CI Apalache command",
+    ) == [
+        f"{script} PR CI Apalache command repeats mode frontier-fast at line "
+        "3; first declared at line 1; each PR CI Apalache command mode must "
+        "be counted once",
+        f"{script} PR CI Apalache command repeats mode frontier-fast at line "
+        "5; first declared at line 1; each PR CI Apalache command mode must "
+        "be counted once",
+    ]
+
+    tlc_occurrences = module.active_command_mode_occurrences(
+        script,
+        module.TLC_COMMAND_PREFIX,
+    )
+
+    assert tlc_occurrences == [
+        ("frontier-fast", 6),
+        ("frontier-fast", 7),
+    ]
+    assert module.duplicate_active_command_mode_errors(
+        tlc_occurrences,
+        script,
+        "PR CI TLC command",
+    ) == [
+        f"{script} PR CI TLC command repeats mode frontier-fast at line "
+        "7; first declared at line 6; each PR CI TLC command mode must be "
+        "counted once",
+    ]
+
+
+def test_active_command_support_occurrence_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_ci = tmp_path / "fast.sh"
+    expected_failure_ci = tmp_path / "expected.sh"
+    nightly_workflow = tmp_path / "nightly.yml"
+    apalache_cases = {
+        "frontier-*": module.RunnerCase(label="frontier-*", body="", line=1),
+    }
+
+    surfaces = (
+        (
+            "PR",
+            [
+                ("frontier-fast", 2),
+                ("orphan-fast", 4),
+            ],
+            fast_ci,
+        ),
+        (
+            "expected-failure",
+            [
+                ("bug-orphan", 6),
+                ("orphan-fast", 8),
+            ],
+            expected_failure_ci,
+        ),
+        (
+            "scheduled/manual",
+            [
+                ("frontier-nightly", 10),
+            ],
+            nightly_workflow,
+        ),
+    )
+
+    assert module.active_command_support_occurrence_errors(
+        surfaces,
+        apalache_cases,
+        "Apalache",
+    ) == [
+        f"bug-orphan is invoked by expected-failure CI at "
+        f"{expected_failure_ci}:6 but unsupported by the Apalache runner",
+        f"orphan-fast is invoked by PR CI at {fast_ci}:4 but unsupported by "
+        "the Apalache runner",
+    ]
+
+
+def test_active_command_documentation_occurrence_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_ci = tmp_path / "fast.sh"
+    expected_failure_ci = tmp_path / "expected.sh"
+    nightly_workflow = tmp_path / "nightly.yml"
+
+    surfaces = (
+        (
+            "PR",
+            [
+                ("frontier-fast", 2),
+                ("missing-readme-fast", 4),
+            ],
+            fast_ci,
+        ),
+        (
+            "expected-failure",
+            [
+                ("frontier-bug-drop-vote", 6),
+            ],
+            expected_failure_ci,
+        ),
+        (
+            "scheduled/manual",
+            [
+                ("missing-nightly", 8),
+                ("missing-readme-fast", 10),
+            ],
+            nightly_workflow,
+        ),
+    )
+
+    assert module.active_command_documentation_occurrence_errors(
+        surfaces,
+        {"frontier-fast", "frontier-bug-drop-vote"},
+        "README Apalache commands",
+    ) == [
+        f"missing-nightly is invoked by scheduled/manual CI at "
+        f"{nightly_workflow}:8 but missing from README Apalache commands",
+        f"missing-readme-fast is invoked by PR CI at {fast_ci}:4 but missing "
+        "from README Apalache commands",
     ]
 
 
@@ -266,9 +648,19 @@ def test_workflow_job_active_command_modes_scope_to_named_jobs(
     assert module.workflow_job_active_command_modes(
         workflow, ("frontier-nightly",), module.APALACHE_COMMAND_PREFIX
     ) == ["frontier-nightly"]
+    assert module.workflow_job_active_command_mode_occurrences(
+        workflow,
+        ("frontier-nightly",),
+        module.APALACHE_COMMAND_PREFIX,
+    ) == [("frontier-nightly", 9)]
     assert module.workflow_job_active_command_modes(
         workflow, ("frontier-nightly",), module.TLC_COMMAND_PREFIX
     ) == ["frontier-fast"]
+    assert module.workflow_job_active_command_mode_occurrences(
+        workflow,
+        ("frontier-nightly",),
+        module.TLC_COMMAND_PREFIX,
+    ) == [("frontier-fast", 10)]
 
 
 def test_workflow_job_active_command_modes_require_top_level_jobs_block(
@@ -668,6 +1060,125 @@ def test_command_mode_duplicates_are_visible_to_guard(tmp_path: Path) -> None:
     )
 
     assert module.duplicate_values(module.command_modes(script)) == ["quorum-fast"]
+
+
+def test_duplicate_command_mode_errors_report_source_lines(tmp_path: Path) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "\n".join(
+            [
+                "```bash",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+                "bash scripts/formal/sumeragi_apalache.sh quorum-fast",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+                "# bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+                "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+                "```",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    occurrences = module.command_mode_occurrences(
+        readme, module.APALACHE_COMMAND_RE
+    )
+
+    assert occurrences == [
+        ("frontier-fast", 2),
+        ("quorum-fast", 3),
+        ("frontier-fast", 4),
+        ("frontier-fast", 6),
+    ]
+    assert module.command_modes(readme, module.APALACHE_COMMAND_RE) == [
+        "frontier-fast",
+        "quorum-fast",
+        "frontier-fast",
+        "frontier-fast",
+    ]
+    assert module.duplicate_command_mode_errors(
+        occurrences,
+        readme,
+        "README Apalache command",
+    ) == [
+        f"{readme} README Apalache command repeats mode frontier-fast at "
+        "line 4; first declared at line 2; each README Apalache command mode "
+        "must be counted once",
+        f"{readme} README Apalache command repeats mode frontier-fast at "
+        "line 6; first declared at line 2; each README Apalache command mode "
+        "must be counted once",
+    ]
+
+
+def test_unsupported_command_mode_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "\n".join(
+            [
+                "bash scripts/formal/sumeragi_tlc.sh frontier-fast",
+                "bash scripts/formal/sumeragi_tlc.sh orphan-fast",
+                "# bash scripts/formal/sumeragi_tlc.sh hidden-fast",
+                "bash scripts/formal/sumeragi_tlc.sh orphan-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_cases = {
+        "frontier-*": module.RunnerCase(label="frontier-*", body="", line=1),
+    }
+
+    occurrences = module.command_mode_occurrences(readme, module.TLC_COMMAND_RE)
+
+    assert occurrences == [
+        ("frontier-fast", 1),
+        ("orphan-fast", 2),
+        ("orphan-fast", 4),
+    ]
+    assert module.unsupported_command_mode_errors(
+        occurrences,
+        readme,
+        "README TLC command",
+        tlc_cases,
+        "TLC",
+    ) == [
+        f"{readme} README TLC command mode orphan-fast at line 2 is "
+        "unsupported by the TLC runner"
+    ]
+
+
+def test_unsupported_readme_apalache_command_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "\n".join(
+            [
+                "bash scripts/formal/sumeragi_apalache.sh frontier-fast",
+                "bash scripts/formal/sumeragi_apalache.sh orphan-fast",
+                "# bash scripts/formal/sumeragi_apalache.sh hidden-fast",
+                "bash scripts/formal/sumeragi_apalache.sh orphan-fast",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    apalache_cases = {
+        "frontier-*": module.RunnerCase(label="frontier-*", body="", line=1),
+    }
+
+    assert module.unsupported_command_mode_errors(
+        module.command_mode_occurrences(readme, module.APALACHE_COMMAND_RE),
+        readme,
+        "README Apalache command",
+        apalache_cases,
+        "Apalache",
+    ) == [
+        f"{readme} README Apalache command mode orphan-fast at line 2 is "
+        "unsupported by the Apalache runner"
+    ]
 
 
 def test_required_command_errors_reports_missing_entrypoint(tmp_path: Path) -> None:
@@ -1097,6 +1608,63 @@ def test_formal_workflow_run_command_errors_rejects_ambiguous_steps(
     ]
 
 
+def test_formal_workflow_run_command_errors_rejects_duplicate_workflow_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_command_errors(
+        (
+            (workflow, ("sumeragi_formal",)),
+            (workflow, ("frontier-nightly",)),
+        )
+    ) == [
+        f"formal workflow run-command job inventory repeats {workflow}; first "
+        "expected sumeragi_formal, then frontier-nightly; each formal workflow "
+        "path must be counted once"
+    ]
+
+
+def test_formal_workflow_run_command_errors_rejects_duplicate_job_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_command_errors(
+        ((workflow, ("sumeragi_formal", "sumeragi_formal")),)
+    ) == [
+        f"formal workflow run-command job inventory for {workflow} repeats "
+        "job(s) sumeragi_formal; each checked formal workflow job must be "
+        "counted once"
+    ]
+
+
 def test_formal_workflow_unscoped_command_errors_rejects_stray_jobs(
     tmp_path: Path,
 ) -> None:
@@ -1130,6 +1698,63 @@ def test_formal_workflow_unscoped_command_errors_rejects_stray_jobs(
         "- run: bash scripts/formal/install_apalache.sh 0.52.2",
         f"formal workflow {workflow}:7 must keep formal proof commands inside "
         "checked jobs sumeragi_formal: bash ci/check_sumeragi_formal.sh",
+    ]
+
+
+def test_formal_workflow_unscoped_command_errors_rejects_duplicate_workflow_job_inventory_path(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_unscoped_command_errors(
+        (
+            (workflow, ("sumeragi_formal",)),
+            (workflow, ("other_formal",)),
+        )
+    ) == [
+        f"formal workflow allowed job inventory repeats {workflow}; first "
+        "expected sumeragi_formal, then other_formal; each formal workflow "
+        "path must be counted once"
+    ]
+
+
+def test_formal_workflow_unscoped_command_errors_rejects_duplicate_workflow_job_inventory_name(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_unscoped_command_errors(
+        ((workflow, ("sumeragi_formal", "sumeragi_formal")),)
+    ) == [
+        f"formal workflow allowed job inventory for {workflow} repeats "
+        "job(s) sumeragi_formal; each checked formal workflow job must be "
+        "counted once"
     ]
 
 
@@ -1334,6 +1959,119 @@ def test_formal_workflow_run_inventory_errors_rejects_order_or_extra_runs(
     ]
 
 
+def test_formal_workflow_run_inventory_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                ("bash scripts/formal/install_apalache.sh 0.52.2",),
+            ),
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "duplicate formal workflow job",
+                ("target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",),
+            ),
+        )
+    ) == [
+        f"formal workflow run inventory repeats {workflow} checked job(s) "
+        "sumeragi_formal; first owner PR formal workflow job, then duplicate "
+        "formal workflow job; each checked workflow run inventory must be "
+        "counted once"
+    ]
+
+
+def test_formal_workflow_run_inventory_errors_rejects_duplicate_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal", "sumeragi_formal"),
+                "PR formal workflow job",
+                ("bash scripts/formal/install_apalache.sh 0.52.2",),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job run command inventory for {workflow} repeats "
+        "checked job(s) sumeragi_formal; each checked workflow run inventory "
+        "job must be counted once"
+    ]
+
+
+def test_formal_workflow_run_inventory_errors_rejects_duplicate_expected_commands(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_run_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    "bash scripts/formal/install_apalache.sh 0.52.2",
+                    "bash scripts/formal/install_apalache.sh 0.52.2",
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job run command inventory for {workflow} checked "
+        "job(s) sumeragi_formal repeats command(s) "
+        "bash scripts/formal/install_apalache.sh 0.52.2; each expected "
+        "workflow run command must be counted once"
+    ]
+
+
 def test_formal_workflow_job_inventory_errors_accepts_dedicated_nightly_job(
     tmp_path: Path,
 ) -> None:
@@ -1386,6 +2124,69 @@ def test_formal_workflow_job_inventory_errors_rejects_extra_nightly_jobs(
         "  - frontier-nightly; found:\n"
         "  - 3: frontier-nightly\n"
         "  - 6: publish-formal-summary",
+    ]
+
+
+def test_formal_workflow_job_inventory_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_inventory_errors(
+        (
+            (workflow, "nightly formal workflow", ("frontier-nightly",)),
+            (workflow, "duplicate nightly formal workflow", ("publish-summary",)),
+        )
+    ) == [
+        f"formal workflow job inventory repeats {workflow}; first owner "
+        "nightly formal workflow, then duplicate nightly formal workflow; each "
+        "dedicated formal workflow job inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_job_inventory_errors_rejects_duplicate_expected_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Nightly Sumeragi Formal",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_inventory_errors(
+        (
+            (
+                workflow,
+                "nightly formal workflow",
+                ("frontier-nightly", "frontier-nightly"),
+            ),
+        )
+    ) == [
+        f"nightly formal workflow workflow job inventory for {workflow} "
+        "repeats job(s) frontier-nightly; each expected workflow job must be "
+        "counted once"
     ]
 
 
@@ -1480,6 +2281,63 @@ def test_formal_workflow_checked_job_occurrence_errors_rejects_missing_or_duplic
     ]
 
 
+def test_formal_workflow_checked_job_occurrence_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_checked_job_occurrence_errors(
+        (
+            (workflow, "PR formal workflow", ("sumeragi_formal",)),
+            (workflow, "duplicate PR formal workflow", ("frontier-nightly",)),
+        )
+    ) == [
+        f"formal workflow checked-job declaration inventory repeats {workflow}; "
+        "first owner PR formal workflow, then duplicate PR formal workflow; "
+        "each checked-job declaration inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_checked_job_occurrence_errors_rejects_duplicate_expected_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_checked_job_occurrence_errors(
+        ((workflow, "PR formal workflow", ("sumeragi_formal", "sumeragi_formal")),)
+    ) == [
+        f"PR formal workflow checked-job declaration inventory for {workflow} "
+        "repeats job(s) sumeragi_formal; each checked formal workflow job must "
+        "be counted once"
+    ]
+
+
 def test_formal_workflow_name_errors_accepts_checked_names(tmp_path: Path) -> None:
     module = load_coverage_module()
     pr_workflow = tmp_path / "pr.yml"
@@ -1547,6 +2405,37 @@ def test_formal_workflow_name_errors_rejects_name_drift(tmp_path: Path) -> None:
     ]
 
 
+def test_formal_workflow_name_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_name_errors(
+        (
+            (workflow, "PR formal workflow", "Pull Request CI"),
+            (workflow, "duplicate PR formal workflow", "Duplicate Name"),
+        )
+    ) == [
+        f"formal workflow name inventory repeats {workflow}; first owner "
+        "PR formal workflow, then duplicate PR formal workflow; each formal "
+        "workflow name inventory must be counted once"
+    ]
+
+
 def test_formal_workflow_header_key_errors_accepts_checked_headers(
     tmp_path: Path,
 ) -> None:
@@ -1598,6 +2487,84 @@ def test_formal_workflow_header_key_errors_accepts_checked_headers(
             ),
         )
     ) == []
+
+
+def test_formal_workflow_header_key_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_key_errors(
+        (
+            (workflow, "PR formal workflow", ("name", "on", "concurrency", "env")),
+            (
+                workflow,
+                "duplicate PR formal workflow",
+                ("name", "on", "concurrency", "env"),
+            ),
+        )
+    ) == [
+        f"formal workflow header-key inventory repeats {workflow}; first owner "
+        "PR formal workflow, then duplicate PR formal workflow; each formal "
+        "workflow header-key inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_header_key_errors_rejects_duplicate_expected_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_key_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                ("name", "on", "concurrency", "env", "env"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow header-key inventory for {workflow} repeats key(s) "
+        "env; each expected workflow header key must be counted once"
+    ]
 
 
 def test_formal_workflow_header_key_errors_rejects_extra_or_duplicate_keys(
@@ -1699,6 +2666,89 @@ def test_formal_workflow_top_level_key_errors_accepts_reviewed_keys(
             ),
         )
     ) == []
+
+
+def test_formal_workflow_top_level_key_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_top_level_key_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                ("name", "on", "concurrency", "env", "jobs"),
+            ),
+            (
+                workflow,
+                "duplicate PR formal workflow",
+                ("name", "on", "concurrency", "env", "jobs"),
+            ),
+        )
+    ) == [
+        f"formal workflow full top-level key inventory repeats {workflow}; "
+        "first owner PR formal workflow, then duplicate PR formal workflow; "
+        "each formal workflow full top-level key inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_top_level_key_errors_rejects_duplicate_expected_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_top_level_key_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                ("name", "on", "concurrency", "env", "jobs", "jobs"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow full top-level key inventory for {workflow} "
+        "repeats key(s) jobs; each expected workflow top-level key must be "
+        "counted once"
+    ]
 
 
 def test_formal_workflow_top_level_key_errors_rejects_post_jobs_controls(
@@ -1924,6 +2974,86 @@ def test_formal_workflow_trigger_errors_rejects_extra_nested_pr_filters(
     ]
 
 
+def test_formal_workflow_trigger_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_trigger_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                ("on:", "  pull_request:", "    branches: [main]"),
+            ),
+            (
+                workflow,
+                "duplicate PR formal workflow",
+                ("on:", "  push:"),
+            ),
+        )
+    ) == [
+        f"formal workflow trigger block inventory repeats {workflow}; first "
+        "owner PR formal workflow, then duplicate PR formal workflow; each "
+        "formal workflow trigger block inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_trigger_errors_rejects_duplicate_expected_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_trigger_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (
+                    "on:",
+                    "  pull_request:",
+                    "  pull_request:",
+                    "    branches: [main]",
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow trigger block inventory for {workflow} repeats "
+        "line(s)   pull_request:; each expected trigger block line must be "
+        "counted once"
+    ]
+
+
 def test_formal_workflow_on_event_errors_accepts_checked_events(
     tmp_path: Path,
 ) -> None:
@@ -2033,6 +3163,66 @@ def test_formal_workflow_on_event_errors_rejects_inline_events(
     ]
 
 
+def test_formal_workflow_on_event_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_on_event_errors(
+        (
+            (workflow, "PR formal workflow", ("pull_request",)),
+            (workflow, "duplicate PR formal workflow", ("push",)),
+        )
+    ) == [
+        f"formal workflow trigger event inventory repeats {workflow}; first "
+        "owner PR formal workflow, then duplicate PR formal workflow; each "
+        "formal workflow trigger event inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_on_event_errors_rejects_duplicate_expected_events(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_on_event_errors(
+        ((workflow, "PR formal workflow", ("pull_request", "pull_request")),)
+    ) == [
+        f"PR formal workflow trigger event inventory for {workflow} repeats "
+        "event(s) pull_request; each expected trigger event must be counted once"
+    ]
+
+
 def test_formal_workflow_paths_ignore_errors_accepts_reviewed_pr_filter(
     tmp_path: Path,
 ) -> None:
@@ -2116,6 +3306,77 @@ def test_formal_workflow_paths_ignore_errors_rejects_broad_pr_filter(
         "  - 6: .github/workflows/publish*\n"
         "  - 7: docs/formal/**\n"
         "  - 8: scripts/formal/**",
+    ]
+
+
+def test_formal_workflow_paths_ignore_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "    paths_ignore:",
+                '      - ".github/workflows/publish*"',
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_paths_ignore_errors(
+        (
+            (workflow, "PR formal workflow", (".github/workflows/publish*",)),
+            (workflow, "duplicate PR formal workflow", ("docs/formal/**",)),
+        )
+    ) == [
+        f"formal workflow path-filter inventory repeats {workflow}; first "
+        "owner PR formal workflow, then duplicate PR formal workflow; each "
+        "formal workflow path-filter inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_paths_ignore_errors_rejects_duplicate_expected_paths(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "on:",
+                "  pull_request:",
+                "    branches: [main]",
+                "    paths_ignore:",
+                '      - ".github/workflows/publish*"',
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_paths_ignore_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (".github/workflows/publish*", ".github/workflows/publish*"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow path-filter inventory for {workflow} repeats "
+        "path(s) .github/workflows/publish*; each expected paths_ignore entry "
+        "must be counted once"
     ]
 
 
@@ -2283,6 +3544,90 @@ def test_formal_workflow_concurrency_errors_rejects_extra_duplicate_blocks(
     ]
 
 
+def test_formal_workflow_concurrency_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_concurrency_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: true",
+                ),
+            ),
+            (
+                workflow,
+                "duplicate PR formal workflow",
+                ("concurrency:", "  cancel-in-progress: false"),
+            ),
+        )
+    ) == [
+        f"formal workflow concurrency inventory repeats {workflow}; first "
+        "owner PR formal workflow, then duplicate PR formal workflow; each "
+        "formal workflow concurrency inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_concurrency_errors_rejects_duplicate_expected_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "concurrency:",
+                "  group: ${{ github.workflow }}-${{ github.ref }}",
+                "  cancel-in-progress: true",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_concurrency_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                (
+                    "concurrency:",
+                    "  group: ${{ github.workflow }}-${{ github.ref }}",
+                    "  cancel-in-progress: true",
+                    "  cancel-in-progress: true",
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow concurrency inventory for {workflow} repeats "
+        "line(s)   cancel-in-progress: true; each expected concurrency line "
+        "must be counted once"
+    ]
+
+
 def test_formal_workflow_header_control_errors_allows_checked_headers(
     tmp_path: Path,
 ) -> None:
@@ -2366,6 +3711,61 @@ def test_formal_workflow_header_control_errors_rejects_inherited_controls(
     ]
 
 
+def test_formal_workflow_header_control_errors_rejects_duplicate_workflow_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_control_errors(
+        (
+            (workflow, ("sumeragi_formal",)),
+            (workflow, ("frontier-nightly",)),
+        )
+    ) == [
+        f"formal workflow header-control job inventory repeats {workflow}; "
+        "first expected sumeragi_formal, then frontier-nightly; each formal "
+        "workflow path must be counted once"
+    ]
+
+
+def test_formal_workflow_header_control_errors_rejects_duplicate_job_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_control_errors(
+        ((workflow, ("sumeragi_formal", "sumeragi_formal")),)
+    ) == [
+        f"formal workflow header-control job inventory for {workflow} repeats "
+        "job(s) sumeragi_formal; each checked formal workflow job must be "
+        "counted once"
+    ]
+
+
 def test_formal_workflow_header_env_errors_accepts_reviewed_keys(
     tmp_path: Path,
 ) -> None:
@@ -2423,6 +3823,71 @@ def test_formal_workflow_header_env_errors_accepts_reviewed_keys(
             (nightly_workflow, "nightly formal workflow", ()),
         )
     ) == []
+
+
+def test_formal_workflow_header_env_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_errors(
+        (
+            (workflow, "PR formal workflow", ("CARGO_TERM_COLOR",)),
+            (workflow, "duplicate PR formal workflow", ("NEXTEST_PROFILE",)),
+        )
+    ) == [
+        f"formal workflow top-level env key inventory repeats {workflow}; "
+        "first owner PR formal workflow, then duplicate PR formal workflow; "
+        "each formal workflow top-level env key inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_header_env_errors_rejects_duplicate_expected_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                ("CARGO_TERM_COLOR", "CARGO_TERM_COLOR"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow top-level env key inventory for {workflow} "
+        "repeats key(s) CARGO_TERM_COLOR; each expected top-level env key "
+        "must be counted once"
+    ]
 
 
 def test_formal_workflow_header_env_errors_rejects_inherited_env_drift(
@@ -2542,6 +4007,71 @@ def test_formal_workflow_header_env_binding_errors_accepts_reviewed_bindings(
             (nightly_workflow, "nightly formal workflow", ()),
         )
     ) == []
+
+
+def test_formal_workflow_header_env_binding_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_binding_errors(
+        (
+            (workflow, "PR formal workflow", ("CARGO_TERM_COLOR: always",)),
+            (workflow, "duplicate PR formal workflow", ("NEXTEST_PROFILE: ci",)),
+        )
+    ) == [
+        f"formal workflow top-level env binding inventory repeats {workflow}; "
+        "first owner PR formal workflow, then duplicate PR formal workflow; "
+        "each formal workflow top-level env binding inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_header_env_binding_errors_rejects_duplicate_expected_bindings(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "env:",
+                "  CARGO_TERM_COLOR: always",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps: []",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_header_env_binding_errors(
+        (
+            (
+                workflow,
+                "PR formal workflow",
+                ("CARGO_TERM_COLOR: always", "CARGO_TERM_COLOR: always"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow top-level env binding inventory for {workflow} "
+        "repeats binding(s) CARGO_TERM_COLOR: always; each expected top-level "
+        "env binding must be counted once"
+    ]
 
 
 def test_formal_workflow_header_env_binding_errors_rejects_value_drift(
@@ -2706,6 +4236,63 @@ def test_formal_workflow_action_step_errors_rejects_duplicate_uses_keys(
     ]
 
 
+def test_formal_workflow_action_step_errors_rejects_duplicate_workflow_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_step_errors(
+        (
+            (workflow, ("frontier-nightly",)),
+            (workflow, ("sumeragi_formal",)),
+        )
+    ) == [
+        f"formal workflow action-step job inventory repeats {workflow}; first "
+        "expected frontier-nightly, then sumeragi_formal; each formal workflow "
+        "path must be counted once"
+    ]
+
+
+def test_formal_workflow_action_step_errors_rejects_duplicate_job_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_step_errors(
+        ((workflow, ("frontier-nightly", "frontier-nightly")),)
+    ) == [
+        f"formal workflow action-step job inventory for {workflow} repeats "
+        "job(s) frontier-nightly; each checked formal workflow job must be "
+        "counted once"
+    ]
+
+
 def test_formal_workflow_action_inventory_errors_accepts_checked_jobs(
     tmp_path: Path,
 ) -> None:
@@ -2797,6 +4384,115 @@ def test_formal_workflow_action_inventory_errors_rejects_order_or_extra_actions(
         "  - 6: actions/checkout@v4\n"
         "  - 7: actions/upload-artifact@v4\n"
         "  - 8: actions/setup-java@v4",
+    ]
+
+
+def test_formal_workflow_action_inventory_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                ("actions/checkout@v4",),
+            ),
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "duplicate formal workflow job",
+                ("actions/setup-java@v4",),
+            ),
+        )
+    ) == [
+        f"formal workflow action inventory repeats {workflow} checked job(s) "
+        "sumeragi_formal; first owner PR formal workflow job, then duplicate "
+        "formal workflow job; each checked workflow action inventory must be "
+        "counted once"
+    ]
+
+
+def test_formal_workflow_action_inventory_errors_rejects_duplicate_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal", "sumeragi_formal"),
+                "PR formal workflow job",
+                ("actions/checkout@v4",),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job action step inventory for {workflow} repeats "
+        "checked job(s) sumeragi_formal; each checked workflow action "
+        "inventory job must be counted once"
+    ]
+
+
+def test_formal_workflow_action_inventory_errors_rejects_duplicate_expected_actions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                ("actions/checkout@v4", "actions/checkout@v4"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job action step inventory for {workflow} checked "
+        "job(s) sumeragi_formal repeats action(s) actions/checkout@v4; each "
+        "expected workflow action step must be counted once"
     ]
 
 
@@ -2932,6 +4628,81 @@ def test_formal_workflow_step_name_inventory_errors_rejects_label_drift(
         "  - 9: Install pinned Apalache\n"
         "  - 11: Apalache version\n"
         "  - 13: Sumeragi formal checks",
+    ]
+
+
+def test_formal_workflow_step_name_inventory_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_step_name_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (module.FORMAL_WORKFLOW_UNNAMED_STEP,),
+            ),
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "duplicate formal workflow job",
+                ("Checkout proof inputs",),
+            ),
+        )
+    ) == [
+        f"formal workflow step-name inventory repeats {workflow} checked job(s) "
+        "sumeragi_formal; first owner PR formal workflow job, then duplicate "
+        "formal workflow job; each checked workflow step-name inventory must "
+        "be counted once"
+    ]
+
+
+def test_formal_workflow_step_name_inventory_errors_rejects_duplicate_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_step_name_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal", "sumeragi_formal"),
+                "PR formal workflow job",
+                (module.FORMAL_WORKFLOW_UNNAMED_STEP,),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job step-name inventory for {workflow} repeats "
+        "checked job(s) sumeragi_formal; each checked workflow step-name "
+        "inventory job must be counted once"
     ]
 
 
@@ -3080,6 +4851,81 @@ def test_formal_workflow_step_key_inventory_errors_rejects_step_metadata_drift(
     ]
 
 
+def test_formal_workflow_step_key_inventory_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_step_key_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (("uses",),),
+            ),
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "duplicate formal workflow job",
+                (("name", "uses"),),
+            ),
+        )
+    ) == [
+        f"formal workflow step-key inventory repeats {workflow} checked job(s) "
+        "sumeragi_formal; first owner PR formal workflow job, then duplicate "
+        "formal workflow job; each checked workflow step-key inventory must "
+        "be counted once"
+    ]
+
+
+def test_formal_workflow_step_key_inventory_errors_rejects_duplicate_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: Pull Request CI",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_step_key_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal", "sumeragi_formal"),
+                "PR formal workflow job",
+                (("uses",),),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job step-key inventory for {workflow} repeats "
+        "checked job(s) sumeragi_formal; each checked workflow step-key "
+        "inventory job must be counted once"
+    ]
+
+
 def test_formal_workflow_action_input_errors_accepts_pinned_inputs(
     tmp_path: Path,
 ) -> None:
@@ -3112,6 +4958,137 @@ def test_formal_workflow_action_input_errors_accepts_pinned_inputs(
     assert module.formal_workflow_action_input_errors(
         ((workflow, ("frontier-nightly",)),)
     ) == []
+
+
+def test_formal_workflow_action_input_errors_rejects_duplicate_action_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/setup-java@v4",
+                "        with:",
+                "          distribution: temurin",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_input_errors(
+        ((workflow, ("sumeragi_formal",)),),
+        (
+            ("actions/setup-java@v4", ("distribution: temurin",)),
+            ("actions/setup-java@v4", ("distribution: zulu",)),
+        ),
+    ) == [
+        "formal workflow action input inventory repeats action "
+        "actions/setup-java@v4; first expected distribution: temurin, then "
+        "distribution: zulu; each pinned action input contract must be counted once"
+    ]
+
+
+def test_formal_workflow_action_input_errors_rejects_duplicate_expected_inputs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/setup-java@v4",
+                "        with:",
+                "          distribution: temurin",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_input_errors(
+        ((workflow, ("sumeragi_formal",)),),
+        (
+            (
+                "actions/setup-java@v4",
+                ("distribution: temurin", "distribution: temurin"),
+            ),
+        ),
+    ) == [
+        "formal workflow action input inventory for actions/setup-java@v4 "
+        "repeats input(s) distribution: temurin; each pinned action input "
+        "must be counted once"
+    ]
+
+
+def test_formal_workflow_action_input_errors_rejects_duplicate_workflow_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/setup-java@v4",
+                "        with:",
+                "          distribution: temurin",
+                "          java-version: '17'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_input_errors(
+        (
+            (workflow, ("sumeragi_formal",)),
+            (workflow, ("frontier-nightly",)),
+        )
+    ) == [
+        f"formal workflow action-input job inventory repeats {workflow}; first "
+        "expected sumeragi_formal, then frontier-nightly; each formal workflow "
+        "path must be counted once"
+    ]
+
+
+def test_formal_workflow_action_input_errors_rejects_duplicate_job_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - uses: actions/setup-java@v4",
+                "        with:",
+                "          distribution: temurin",
+                "          java-version: '17'",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_action_input_errors(
+        ((workflow, ("sumeragi_formal", "sumeragi_formal")),)
+    ) == [
+        f"formal workflow action-input job inventory for {workflow} repeats "
+        "job(s) sumeragi_formal; each checked formal workflow job must be "
+        "counted once"
+    ]
 
 
 def test_formal_workflow_action_input_errors_rejects_input_drift(
@@ -3283,6 +5260,63 @@ def test_formal_workflow_setup_action_control_errors_rejects_setup_controls(
     ]
 
 
+def test_formal_workflow_setup_action_control_errors_rejects_duplicate_workflow_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_setup_action_control_errors(
+        (
+            (workflow, ("frontier-nightly",)),
+            (workflow, ("sumeragi_formal",)),
+        )
+    ) == [
+        f"formal workflow setup-action job inventory repeats {workflow}; first "
+        "expected frontier-nightly, then sumeragi_formal; each formal workflow "
+        "path must be counted once"
+    ]
+
+
+def test_formal_workflow_setup_action_control_errors_rejects_duplicate_job_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - uses: actions/checkout@v4",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_setup_action_control_errors(
+        ((workflow, ("frontier-nightly", "frontier-nightly")),)
+    ) == [
+        f"formal workflow setup-action job inventory for {workflow} repeats "
+        "job(s) frontier-nightly; each checked formal workflow job must be "
+        "counted once"
+    ]
+
+
 def test_formal_workflow_job_key_inventory_errors_accepts_checked_jobs(
     tmp_path: Path,
 ) -> None:
@@ -3375,6 +5409,121 @@ def test_formal_workflow_job_key_inventory_errors_rejects_job_key_drift(
     ]
 
 
+def test_formal_workflow_job_key_inventory_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    runs-on: ubuntu-latest",
+                "    timeout-minutes: 45",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_key_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                ("runs-on", "timeout-minutes", "steps"),
+            ),
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "duplicate formal workflow job",
+                ("steps",),
+            ),
+        )
+    ) == [
+        f"formal workflow job-key inventory repeats {workflow} checked job "
+        "sumeragi_formal; first owner PR formal workflow job, then duplicate "
+        "formal workflow job; each checked workflow job-key inventory must be "
+        "counted once"
+    ]
+
+
+def test_formal_workflow_job_key_inventory_errors_rejects_duplicate_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    runs-on: ubuntu-latest",
+                "    timeout-minutes: 45",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_key_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal", "sumeragi_formal"),
+                "PR formal workflow job",
+                ("runs-on", "timeout-minutes", "steps"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job job-key inventory for {workflow} repeats "
+        "checked job(s) sumeragi_formal; each checked workflow job-key "
+        "inventory job must be counted once"
+    ]
+
+
+def test_formal_workflow_job_key_inventory_errors_rejects_duplicate_expected_keys(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    runs-on: ubuntu-latest",
+                "    timeout-minutes: 45",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_key_inventory_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                ("runs-on", "timeout-minutes", "steps", "steps"),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job job-key inventory for {workflow} checked "
+        "job(s) sumeragi_formal repeats key(s) steps; each expected workflow "
+        "job key must be counted once"
+    ]
+
+
 def test_formal_workflow_runner_label_errors_accepts_pinned_runner(
     tmp_path: Path,
 ) -> None:
@@ -3437,6 +5586,65 @@ def test_formal_workflow_runner_label_errors_rejects_runner_drift(
         "runs-on: ubuntu-latest: runs-on: self-hosted",
         f"formal workflow {workflow} checked job sumeragi_formal must set "
         "runs-on: ubuntu-latest",
+    ]
+
+
+def test_formal_workflow_runner_label_errors_rejects_duplicate_workflow_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    runs-on: ubuntu-latest",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_runner_label_errors(
+        (
+            (workflow, ("sumeragi_formal",)),
+            (workflow, ("frontier-nightly",)),
+        )
+    ) == [
+        f"formal workflow runner label inventory repeats {workflow}; first "
+        "expected sumeragi_formal, then frontier-nightly; each formal workflow "
+        "path must be counted once"
+    ]
+
+
+def test_formal_workflow_runner_label_errors_rejects_duplicate_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    runs-on: ubuntu-latest",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_runner_label_errors(
+        ((workflow, ("sumeragi_formal", "sumeragi_formal")),)
+    ) == [
+        f"formal workflow runner label inventory for {workflow} repeats "
+        "job(s) sumeragi_formal; each checked formal workflow job must be "
+        "counted once"
     ]
 
 
@@ -3532,6 +5740,83 @@ def test_formal_workflow_timeout_errors_rejects_budget_drift(
         "frontier-nightly must set timeout-minutes: 90: timeout-minutes: 45",
         f"PR formal workflow job {workflow} checked job sumeragi_formal "
         "must set timeout-minutes: 45",
+    ]
+
+
+def test_formal_workflow_timeout_errors_rejects_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    timeout-minutes: 45",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_timeout_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                "45",
+            ),
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "duplicate formal workflow job",
+                "90",
+            ),
+        )
+    ) == [
+        f"formal workflow timeout inventory repeats {workflow} checked job "
+        "sumeragi_formal; first owner PR formal workflow job, then duplicate "
+        "formal workflow job; each checked workflow timeout inventory must be "
+        "counted once"
+    ]
+
+
+def test_formal_workflow_timeout_errors_rejects_duplicate_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: pr",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    timeout-minutes: 45",
+                "    steps:",
+                "      - run: bash ci/check_sumeragi_formal.sh",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_timeout_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal", "sumeragi_formal"),
+                "PR formal workflow job",
+                "45",
+            ),
+        )
+    ) == [
+        f"PR formal workflow job timeout inventory for {workflow} repeats "
+        "checked job(s) sumeragi_formal; each checked workflow timeout "
+        "inventory job must be counted once"
     ]
 
 
@@ -3751,6 +6036,63 @@ def test_formal_workflow_proof_step_control_errors_rejects_job_gates(
     ]
 
 
+def test_formal_workflow_proof_step_control_errors_rejects_duplicate_workflow_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_proof_step_control_errors(
+        (
+            (workflow, ("frontier-nightly",)),
+            (workflow, ("sumeragi_formal",)),
+        )
+    ) == [
+        f"formal workflow proof-step control job inventory repeats {workflow}; "
+        "first expected frontier-nightly, then sumeragi_formal; each formal "
+        "workflow path must be counted once"
+    ]
+
+
+def test_formal_workflow_proof_step_control_errors_rejects_duplicate_job_names(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "nightly.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: nightly",
+                "jobs:",
+                "  frontier-nightly:",
+                "    steps:",
+                "      - run: bash scripts/formal/sumeragi_apalache.sh frontier-nightly",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_proof_step_control_errors(
+        ((workflow, ("frontier-nightly", "frontier-nightly")),)
+    ) == [
+        f"formal workflow proof-step control job inventory for {workflow} "
+        "repeats job(s) frontier-nightly; each checked formal workflow job "
+        "must be counted once"
+    ]
+
+
 def test_formal_workflow_proof_step_control_errors_normalizes_yaml_field_spacing(
     tmp_path: Path,
 ) -> None:
@@ -3955,6 +6297,173 @@ def test_formal_workflow_job_entrypoint_errors_reject_duplicate_entrypoints(
     ]
 
 
+def test_formal_workflow_job_entrypoint_errors_reject_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_entrypoint_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (module.INSTALL_APALACHE_COMMAND_PREFIX,),
+                (),
+            ),
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "duplicate formal workflow job",
+                (module.FORMAL_APALACHE_VERSION_COMMAND,),
+                (),
+            ),
+        )
+    ) == [
+        f"formal workflow entrypoint inventory repeats {workflow} checked "
+        "job(s) sumeragi_formal; first owner PR formal workflow job, then "
+        "duplicate formal workflow job; each checked workflow entrypoint "
+        "inventory must be counted once"
+    ]
+
+
+def test_formal_workflow_job_entrypoint_errors_reject_duplicate_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_entrypoint_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal", "sumeragi_formal"),
+                "PR formal workflow job",
+                (module.INSTALL_APALACHE_COMMAND_PREFIX,),
+                (),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job entrypoint inventory for {workflow} repeats "
+        "checked job(s) sumeragi_formal; each checked workflow entrypoint job "
+        "must be counted once"
+    ]
+
+
+def test_formal_workflow_job_entrypoint_errors_reject_duplicate_required_commands(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_entrypoint_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    module.INSTALL_APALACHE_COMMAND_PREFIX,
+                    module.INSTALL_APALACHE_COMMAND_PREFIX,
+                ),
+                (),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job entrypoint inventory for {workflow} checked "
+        "job(s) sumeragi_formal repeats command(s) "
+        "bash scripts/formal/install_apalache.sh; each required workflow "
+        "entrypoint command must be counted once"
+    ]
+
+
+def test_formal_workflow_job_entrypoint_errors_reject_duplicate_order_pairs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "      - run: target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_workflow_job_entrypoint_errors(
+        (
+            (
+                workflow,
+                ("sumeragi_formal",),
+                "PR formal workflow job",
+                (
+                    module.INSTALL_APALACHE_COMMAND_PREFIX,
+                    module.FORMAL_APALACHE_VERSION_COMMAND,
+                ),
+                (
+                    (
+                        module.INSTALL_APALACHE_COMMAND_PREFIX,
+                        module.FORMAL_APALACHE_VERSION_COMMAND,
+                    ),
+                    (
+                        module.INSTALL_APALACHE_COMMAND_PREFIX,
+                        module.FORMAL_APALACHE_VERSION_COMMAND,
+                    ),
+                ),
+            ),
+        )
+    ) == [
+        f"PR formal workflow job entrypoint order inventory for {workflow} "
+        "checked job(s) sumeragi_formal repeats order pair(s) bash "
+        "scripts/formal/install_apalache.sh -> target/apalache/toolchains/"
+        "v0.52.2/bin/apalache-mc --version; each workflow entrypoint order "
+        "pair must be counted once"
+    ]
+
+
 def test_formal_ci_singleton_command_errors_reject_duplicate_preflights(
     tmp_path: Path,
 ) -> None:
@@ -4024,6 +6533,70 @@ def test_formal_ci_singleton_command_errors_reject_duplicate_preflights(
         "at most once:\n"
         '  - 3: echo "[formal] Sumeragi expected-failure checks behaved as expected"\n'
         '  - 4: echo "[formal] Sumeragi expected-failure checks behaved as expected"',
+    ]
+
+
+def test_formal_ci_singleton_command_errors_reject_duplicate_contract_rows(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "check_sumeragi_formal.sh"
+    script.write_text(
+        "\n".join(
+            [
+                "python3 scripts/formal/check_sumeragi_formal_coverage.py",
+                "target/apalache/toolchains/v0.52.2/bin/apalache-mc --version",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.formal_ci_singleton_command_errors(
+        (
+            (
+                script,
+                "formal baseline script",
+                (module.FORMAL_COVERAGE_COMMAND,),
+            ),
+            (
+                script,
+                "formal duplicate script",
+                (module.FORMAL_APALACHE_VERSION_COMMAND,),
+            ),
+        )
+    ) == [
+        f"formal CI singleton command inventory repeats {script}; first owner "
+        "formal baseline script, then formal duplicate script; each formal CI "
+        "script must be counted once"
+    ]
+
+
+def test_formal_ci_singleton_command_errors_reject_duplicate_contract_commands(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "check_sumeragi_formal.sh"
+    script.write_text(
+        "python3 scripts/formal/check_sumeragi_formal_coverage.py\n",
+        encoding="utf-8",
+    )
+
+    assert module.formal_ci_singleton_command_errors(
+        (
+            (
+                script,
+                "formal baseline script",
+                (
+                    module.FORMAL_COVERAGE_COMMAND,
+                    module.FORMAL_COVERAGE_COMMAND,
+                ),
+            ),
+        )
+    ) == [
+        f"formal baseline script singleton command inventory for {script} "
+        "repeats command(s) "
+        "python3 scripts/formal/check_sumeragi_formal_coverage.py; each "
+        "singleton evidence command must be counted once"
     ]
 
 
@@ -4646,6 +7219,59 @@ def test_version_values_mismatch_errors_rejects_missing_and_mismatched_pin(
     ]
 
 
+def test_version_values_mismatch_errors_rejects_duplicate_static_pins(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    duplicate = tmp_path / "duplicate.md"
+    duplicate.write_text(
+        "\n".join(
+            [
+                "bash scripts/formal/install_apalache.sh 0.52.2",
+                "bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.version_values_mismatch_errors(
+        duplicate,
+        module.INSTALL_APALACHE_COMMAND_VERSION_RE,
+        "0.52.2",
+        "workflow install command",
+    ) == [
+        f"workflow install command {duplicate} repeats Apalache version "
+        "pin(s) 0.52.2; each version pin must be counted once"
+    ]
+
+
+def test_version_values_mismatch_errors_can_allow_repeated_static_pins(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    duplicate = tmp_path / "duplicate.md"
+    duplicate.write_text(
+        "\n".join(
+            [
+                "ghcr.io/apalache-mc/apalache:0.52.2",
+                "ghcr.io/apalache-mc/apalache:0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.version_values_mismatch_errors(
+            duplicate,
+            module.APALACHE_DOCKER_IMAGE_VERSION_RE,
+            "0.52.2",
+            "formal README Docker image",
+            allow_repeated_values=True,
+        )
+        == []
+    )
+
+
 def test_active_version_values_mismatch_errors_ignore_inactive_workflow_pins(
     tmp_path: Path,
 ) -> None:
@@ -4703,6 +7329,32 @@ def test_active_version_values_mismatch_errors_ignore_inactive_workflow_pins(
     )
 
 
+def test_active_version_values_mismatch_errors_rejects_duplicate_active_pins(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "duplicate.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+                "run: bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.active_version_values_mismatch_errors(
+        workflow,
+        module.INSTALL_APALACHE_COMMAND_VERSION_RE,
+        "0.52.2",
+        "workflow install command",
+    ) == [
+        f"workflow install command {workflow} repeats active Apalache version "
+        "pin(s) 0.52.2; each active version pin must be counted once"
+    ]
+
+
 def test_workflow_job_version_values_mismatch_errors_scope_to_named_jobs(
     tmp_path: Path,
 ) -> None:
@@ -4756,6 +7408,36 @@ def test_workflow_job_version_values_mismatch_errors_scope_to_named_jobs(
     ) == [
         f"PR formal workflow job install command {mismatched} uses "
         "Apalache 0.53.0, expected 0.52.2"
+    ]
+
+
+def test_workflow_job_version_values_mismatch_errors_rejects_duplicate_checked_jobs(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    workflow = tmp_path / "pr.yml"
+    workflow.write_text(
+        "\n".join(
+            [
+                "name: test",
+                "jobs:",
+                "  sumeragi_formal:",
+                "    steps:",
+                "      - run: bash scripts/formal/install_apalache.sh 0.52.2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.workflow_job_version_values_mismatch_errors(
+        workflow,
+        ("sumeragi_formal", "sumeragi_formal"),
+        module.INSTALL_APALACHE_COMMAND_VERSION_RE,
+        "0.52.2",
+        "PR formal workflow job install command",
+    ) == [
+        f"PR formal workflow job install command {workflow} repeats checked "
+        "job(s) sumeragi_formal; each workflow version-pin job must be counted once"
     ]
 
 
@@ -4946,6 +7628,51 @@ def test_exact_fast_runner_modes_ignores_wildcards_and_nonfast() -> None:
     assert module.exact_fast_runner_modes(cases) == {"alpha-fast"}
 
 
+def test_undocumented_exact_fast_runner_mode_errors_report_source_lines() -> None:
+    module = load_coverage_module()
+    runner = module.display_path(module.TLC_RUNNER)
+    cases = {
+        "alpha-fast": module.RunnerCase("alpha-fast", "", 11),
+        "beta-fast": module.RunnerCase("beta-fast", "", 17),
+        "gamma-bug-*": module.RunnerCase("gamma-bug-*", "", 21),
+        "delta-small": module.RunnerCase("delta-small", "", 25),
+    }
+
+    assert module.undocumented_exact_fast_runner_mode_errors(
+        cases,
+        {"beta-fast"},
+        module.TLC_RUNNER,
+        "README fast-mode table",
+    ) == [
+        f"TLC runner {runner} case alpha-fast at line 11 is missing from "
+        "README fast-mode table"
+    ]
+
+
+def test_missing_runner_case_mode_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    runner = tmp_path / "sumeragi_apalache.sh"
+    cases = {
+        "alpha-fast": module.RunnerCase("alpha-fast", "", 1),
+        "beta-fast": module.RunnerCase("beta-fast", "", 2),
+        "deep": module.RunnerCase("deep", "", 7),
+    }
+
+    assert module.missing_runner_case_mode_errors(
+        cases,
+        {"alpha-fast", "beta-fast", "deep"},
+        {"alpha-fast"},
+        runner,
+        "Apalache",
+        "PR CI",
+    ) == [
+        f"Apalache runner {runner} case beta-fast at line 2 is missing from PR CI",
+        f"Apalache runner {runner} case deep at line 7 is missing from PR CI",
+    ]
+
+
 def test_unused_runner_case_labels_reports_unmatched_branches() -> None:
     module = load_coverage_module()
     cases = {
@@ -4957,6 +7684,27 @@ def test_unused_runner_case_labels_reports_unmatched_branches() -> None:
     assert module.unused_runner_case_labels(
         {"frontier-fast", "frontier-bug-stale-owner"}, cases
     ) == ["stale-bug-*"]
+
+
+def test_unused_runner_case_label_errors_report_source_lines() -> None:
+    module = load_coverage_module()
+    runner = module.display_path(module.APALACHE_RUNNER)
+    cases = {
+        "frontier-fast": module.RunnerCase("frontier-fast", "", 11),
+        "frontier-bug-*": module.RunnerCase("frontier-bug-*", "", 17),
+        "stale-bug-*": module.RunnerCase("stale-bug-*", "", 23),
+    }
+
+    assert module.unused_runner_case_label_errors(
+        {"frontier-fast", "frontier-bug-stale-owner"},
+        cases,
+        module.APALACHE_RUNNER,
+        "Apalache",
+        "CI or README modes",
+    ) == [
+        f"Apalache runner {runner} case stale-bug-* at line 23 is unused "
+        "by CI or README modes"
+    ]
 
 
 def test_runner_case_shadow_errors_detects_prior_wildcards() -> None:
@@ -5129,6 +7877,39 @@ def test_expected_failure_marker_check_uses_matching_case_body() -> None:
     ) == ["rbc-bug-duplicate-ready: TLC runner case 'rbc-bug-*' at line 20"]
 
 
+def test_sourced_modes_without_expected_failure_marker_errors_report_source_lines(
+) -> None:
+    module = load_coverage_module()
+    expected_ci = module.display_path(module.EXPECTED_FAILURE_CI)
+    cases = {
+        "frontier-bug-*": module.RunnerCase(
+            "frontier-bug-*", "\n    expect_failure=1\n", 10
+        ),
+        "rbc-bug-*": module.RunnerCase("rbc-bug-*", "\n", 20),
+    }
+
+    assert module.sourced_modes_without_expected_failure_marker_errors(
+        (
+            (
+                "expected-failure CI Apalache command",
+                module.EXPECTED_FAILURE_CI,
+                [
+                    ("frontier-bug-stale-owner", 41),
+                    ("rbc-bug-duplicate-ready", 52),
+                    ("rbc-bug-duplicate-ready", 53),
+                    ("quorum-bug-orphan", 61),
+                ],
+            ),
+        ),
+        cases,
+        "Apalache",
+    ) == [
+        "expected-failure CI Apalache command mode rbc-bug-duplicate-ready "
+        f"at {expected_ci}:52 maps to Apalache runner case 'rbc-bug-*' "
+        "at line 20 without expect_failure=1"
+    ]
+
+
 def test_expected_failure_marker_check_ignores_comments_or_malformed_assignment(
 ) -> None:
     module = load_coverage_module()
@@ -5156,6 +7937,36 @@ def test_expected_failure_marker_check_ignores_comments_or_malformed_assignment(
     ]
 
 
+def test_documented_modes_without_expected_failure_marker_errors_report_source_lines(
+) -> None:
+    module = load_coverage_module()
+    readme = module.display_path(module.README)
+    cases = {
+        "frontier-bug-*": module.RunnerCase(
+            "frontier-bug-*", "\n    expect_failure=1\n", 10
+        ),
+        "rbc-bug-*": module.RunnerCase("rbc-bug-*", "\n", 20),
+    }
+
+    assert module.documented_modes_without_expected_failure_marker_errors(
+        [
+            ("frontier-bug-stale-owner", 31),
+            ("rbc-bug-missing-deliver", 41),
+            ("rbc-bug-missing-deliver", 45),
+            ("quorum-bug-orphan", 51),
+            ("quorum-fast", 52),
+        ],
+        cases,
+        module.README,
+        "README mutation command",
+        "TLC",
+    ) == [
+        f"{readme} README mutation command mode rbc-bug-missing-deliver "
+        "at line 41 maps to TLC runner case 'rbc-bug-*' at line 20 "
+        "without expect_failure=1"
+    ]
+
+
 def test_unexpected_failure_marker_check_rejects_baseline_modes() -> None:
     module = load_coverage_module()
     cases = {
@@ -5170,6 +7981,102 @@ def test_unexpected_failure_marker_check_rejects_baseline_modes() -> None:
         cases,
         "Apalache",
     ) == ["frontier-fast: Apalache runner case 'frontier-fast' at line 10"]
+
+
+def test_sourced_modes_with_unexpected_failure_marker_errors_report_source_lines(
+) -> None:
+    module = load_coverage_module()
+    readme = module.display_path(module.README)
+    fast_ci = module.display_path(module.FAST_CI)
+    nightly = module.display_path(module.NIGHTLY_WORKFLOW)
+    cases = {
+        "frontier-fast": module.RunnerCase(
+            "frontier-fast", "\n    expect_failure=1\n", 10
+        ),
+        "quorum-fast": module.RunnerCase("quorum-fast", "\n", 20),
+        "rbc-bug-*": module.RunnerCase(
+            "rbc-bug-*", "\n    expect_failure=1\n", 30
+        ),
+    }
+
+    assert module.sourced_modes_with_unexpected_failure_marker_errors(
+        (
+            (
+                "README fast-mode table",
+                module.README,
+                [("frontier-fast", 41), ("rbc-bug-missing-deliver", 42)],
+            ),
+            (
+                "PR CI TLC command",
+                module.FAST_CI,
+                [("frontier-fast", 55), ("quorum-fast", 56)],
+            ),
+        ),
+        {"rbc-bug-missing-deliver"},
+        cases,
+        "TLC",
+    ) == [
+        "README fast-mode table mode frontier-fast "
+        f"at {readme}:41 maps to TLC runner case 'frontier-fast' "
+        "at line 10 with unexpected expect_failure=1"
+    ]
+
+    assert module.sourced_modes_with_unexpected_failure_marker_errors(
+        (
+            ("README TLC command", module.README, []),
+            ("PR CI TLC command", module.FAST_CI, [("frontier-fast", 55)]),
+        ),
+        set(),
+        cases,
+        "TLC",
+    ) == [
+        "PR CI TLC command mode frontier-fast "
+        f"at {fast_ci}:55 maps to TLC runner case 'frontier-fast' "
+        "at line 10 with unexpected expect_failure=1"
+    ]
+
+    assert module.sourced_modes_with_unexpected_failure_marker_errors(
+        (
+            ("PR CI Apalache command", module.FAST_CI, []),
+            (
+                "scheduled/manual CI Apalache command",
+                module.NIGHTLY_WORKFLOW,
+                [("frontier-fast", 71)],
+            ),
+        ),
+        set(),
+        cases,
+        "Apalache",
+    ) == [
+        "scheduled/manual CI Apalache command mode frontier-fast "
+        f"at {nightly}:71 maps to Apalache runner case 'frontier-fast' "
+        "at line 10 with unexpected expect_failure=1"
+    ]
+
+
+def test_unsupported_documented_bug_mode_errors_report_source_lines() -> None:
+    module = load_coverage_module()
+    readme = module.display_path(module.README)
+    cases = {
+        "frontier-bug-*": module.RunnerCase(
+            "frontier-bug-*", "\n    expect_failure=1\n", 10
+        ),
+    }
+
+    assert module.unsupported_documented_bug_mode_errors(
+        [
+            ("frontier-bug-stale-owner", 31),
+            ("quorum-fast", 32),
+            ("rbc-bug-missing-deliver", 41),
+            ("rbc-bug-missing-deliver", 45),
+        ],
+        cases,
+        module.README,
+        "README mutation command",
+    ) == [
+        f"{readme} README mutation command mode rbc-bug-missing-deliver "
+        "at line 41 is unsupported by the TLC runner"
+    ]
 
 
 def test_expected_failure_default_errors_accepts_top_level_zero(
@@ -5517,6 +8424,24 @@ def test_apalache_typecheck_only_mode_errors_rejects_stale_allowlist() -> None:
     ]
 
 
+def test_apalache_typecheck_only_mode_errors_rejects_duplicate_allowlist(
+) -> None:
+    module = load_coverage_module()
+    cases = {
+        "fast": module.RunnerCase("fast", "\n    typecheck_only=1\n", 10),
+        "frontier-fast": module.RunnerCase("frontier-fast", "\n", 20),
+    }
+
+    assert module.apalache_typecheck_only_mode_errors(
+        {"fast", "frontier-fast"},
+        cases,
+        allowed_modes=("fast", "fast"),
+    ) == [
+        "Apalache typecheck-only runner mode allowlist inventory repeats "
+        "fast; each proof mode must be counted once"
+    ]
+
+
 def test_apalache_only_typecheck_contract_errors_accepts_top_corridor_alignment(
 ) -> None:
     module = load_coverage_module()
@@ -5565,6 +8490,35 @@ def test_apalache_only_typecheck_contract_errors_rejects_stale_exception(
     ) == [
         "Apalache-only bounded PR exception entries are stale:\n"
         "  - deep"
+    ]
+
+
+def test_apalache_only_typecheck_contract_errors_rejects_duplicate_inventories(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.apalache_only_typecheck_contract_errors(
+        apalache_only_modes=(
+            "deep",
+            "deep",
+            "byzantine-direct-top-fast",
+        ),
+        typecheck_only_modes=(
+            "fast",
+            "byzantine-direct-top-fast",
+            "byzantine-direct-top-fast",
+        ),
+        bounded_exceptions=(
+            "deep",
+            "deep",
+        ),
+    ) == [
+        "Apalache-only PR mode allowlist inventory repeats deep; each proof "
+        "mode must be counted once",
+        "Apalache typecheck-only mode allowlist inventory repeats "
+        "byzantine-direct-top-fast; each proof mode must be counted once",
+        "Apalache-only bounded PR exception inventory repeats deep; each "
+        "proof mode must be counted once",
     ]
 
 
@@ -5635,6 +8589,45 @@ def test_mutation_cfg_equivalence_rejects_unexpected_tlc_cfg() -> None:
     ) == [
         f"frontier-bug-stale-owner: Apalache cfg {apalache_cfg} "
         f"differs from TLC cfg {tlc_cfg}"
+    ]
+
+
+def test_documented_mutation_cfg_equivalence_errors_report_source_lines() -> None:
+    module = load_coverage_module()
+    readme = module.display_path(module.README)
+    apalache_cases = {
+        "frontier-bug-*": module.RunnerCase(
+            "frontier-bug-*",
+            '\n    cfg_file="$spec_dir/SumeragiFrontier_bug_${cfg_bug_name}.cfg"\n',
+            10,
+        )
+    }
+    tlc_cases = {
+        "frontier-bug-*": module.RunnerCase(
+            "frontier-bug-*",
+            '\n    cfg_file="$spec_dir/SumeragiFrontier_tlc_bug_${cfg_bug_name}.cfg"\n',
+            20,
+        )
+    }
+    apalache_cfg = module.display_path(
+        module.SPEC_DIR / "SumeragiFrontier_bug_stale_owner.cfg"
+    )
+    tlc_cfg = module.display_path(
+        module.SPEC_DIR / "SumeragiFrontier_tlc_bug_stale_owner.cfg"
+    )
+
+    assert module.documented_mutation_cfg_equivalence_errors(
+        [
+            ("frontier-fast", 7),
+            ("frontier-bug-stale-owner", 31),
+            ("frontier-bug-stale-owner", 34),
+        ],
+        module.README,
+        apalache_cases,
+        tlc_cases,
+    ) == [
+        f"{readme} README mutation command mode frontier-bug-stale-owner "
+        f"at line 31 resolves Apalache cfg {apalache_cfg} but TLC cfg {tlc_cfg}"
     ]
 
 
@@ -6003,6 +8996,33 @@ def test_cfg_required_behavior_contract_errors_rejects_wrong_behavior_form(
     ]
 
 
+def test_cfg_required_behavior_contract_errors_rejects_duplicate_required_behavior(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "top.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_behavior_contract_errors(
+        cfg,
+        (("INIT", "Init"), ("INIT", "Init"), ("NEXT", "Next")),
+        "top coverage",
+    ) == [
+        "top coverage required behavior contract repeats expected "
+        "directive(s) INIT; each required CFG behavior directive must be "
+        "counted once"
+    ]
+
+
 def test_cfg_behavior_surface_errors_accepts_single_behavior_surface(
     tmp_path: Path,
 ) -> None:
@@ -6243,6 +9263,33 @@ def test_cfg_proof_surface_errors_rejects_untyped_or_type_only_configs(
         "invariant/property for formal coverage",
         f"{missing_type_cfg} must check INVARIANT TypeInvariant for "
         "formal coverage",
+    ]
+
+
+def test_cfg_proof_surface_errors_rejects_duplicate_proof_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    duplicate_cfg = tmp_path / "SumeragiDuplicateProofTargets_fast.cfg"
+    duplicate_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT TypeInvariant",
+                "PROPERTY EventuallyCommit",
+                "PROPERTY EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_proof_surface_errors(tmp_path) == [
+        f"{duplicate_cfg}:4 repeats INVARIANT check TypeInvariant first "
+        "declared at line 3; CFG proof targets must be duplicate-free",
+        f"{duplicate_cfg}:6 repeats PROPERTY check EventuallyCommit first "
+        "declared at line 5; CFG proof targets must be duplicate-free",
     ]
 
 
@@ -7032,6 +10079,62 @@ def test_cfg_required_constant_value_contract_errors_rejects_wrong_value(
     ]
 
 
+def test_cfg_required_constant_values_contract_errors_rejects_duplicate_required_constants(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANT CommitQuorum = 3",
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_constant_values_contract_errors(
+        cfg,
+        (("CommitQuorum", "3"), ("CommitQuorum", "3")),
+        "top-level fast coverage",
+    ) == [
+        "top-level fast coverage required constant value contract repeats "
+        "expected constant(s) CommitQuorum; each required CFG constant must "
+        "be counted once"
+    ]
+
+
+def test_cfg_required_exact_constant_set_contract_errors_rejects_duplicate_required_constants(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANT CommitQuorum = 3",
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_required_exact_constant_set_contract_errors(
+        cfg,
+        (("CommitQuorum", "3"), ("CommitQuorum", "3")),
+        "top-level fast coverage",
+    ) == [
+        "top-level fast coverage required constant value contract repeats "
+        "expected constant(s) CommitQuorum; each required CFG constant must "
+        "be counted once"
+    ]
+
+
 def test_cfg_required_bug_suffix_constant_errors_accepts_matching_suffix(
     tmp_path: Path,
 ) -> None:
@@ -7736,6 +10839,49 @@ def test_mutation_cfg_custom_init_exception_errors_accepts_live_exception(
     ) == []
 
 
+def test_mutation_cfg_custom_init_exception_errors_rejects_duplicate_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiFrontierRecovery.tla"
+    cfg = tmp_path / "SumeragiFrontierRecovery_bug_custom_seed.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFrontierRecovery ----",
+                "CustomSeedBugInit == TRUE",
+                "OtherSeedBugInit == TRUE",
+                "Next == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "INIT CustomSeedBugInit\nNEXT Next\nINVARIANT TypeInvariant\n",
+        encoding="utf-8",
+    )
+    custom_init_contracts = (
+        ("SumeragiFrontierRecovery_bug_custom_seed.cfg", "CustomSeedBugInit"),
+        ("SumeragiFrontierRecovery_bug_custom_seed.cfg", "OtherSeedBugInit"),
+    )
+    expected_error = (
+        "custom mutation INIT exception inventory repeats "
+        "SumeragiFrontierRecovery_bug_custom_seed.cfg; first expected "
+        "CustomSeedBugInit, then OtherSeedBugInit; each custom INIT exception "
+        "must be counted once"
+    )
+
+    assert module.mutation_cfg_behavior_errors(
+        tmp_path,
+        custom_init_operators=custom_init_contracts,
+    ) == [expected_error]
+    assert module.mutation_cfg_custom_init_exception_errors(
+        tmp_path,
+        custom_init_contracts,
+    ) == [expected_error]
+
+
 def test_mutation_cfg_custom_init_exception_errors_rejects_stale_entries(
     tmp_path: Path,
 ) -> None:
@@ -8204,6 +11350,30 @@ def test_boolean_bug_selector_one_hot_errors_accepts_one_hot_and_compound(
     assert module.boolean_bug_selector_one_hot_errors(tmp_path) == []
 
 
+def test_boolean_bug_selector_one_hot_errors_rejects_duplicate_compound_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiGate_bug_compound.cfg"
+    cfg.write_text(
+        "CONSTANTS\n  BugOne = TRUE\n  BugTwo = TRUE\n  BugThree = FALSE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_one_hot_errors(
+        tmp_path,
+        compound_exceptions=(
+            ("SumeragiGate_bug_compound.cfg", ("BugOne", "BugTwo")),
+            ("SumeragiGate_bug_compound.cfg", ("BugOne", "BugThree")),
+        ),
+    ) == [
+        "boolean mutation compound selector inventory repeats "
+        "SumeragiGate_bug_compound.cfg; first expected BugOne, BugTwo, "
+        "then BugOne, BugThree; each compound boolean selector exception "
+        "must be counted once"
+    ]
+
+
 def test_boolean_bug_selector_one_hot_errors_rejects_multiple_true_selectors(
     tmp_path: Path,
 ) -> None:
@@ -8357,6 +11527,42 @@ def test_boolean_bug_selector_name_errors_rejects_alias_suffix_drift(
     ]
 
 
+def test_boolean_bug_selector_name_errors_rejects_duplicate_alias_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANTS",
+                "  BugSkipHighestRecord = TRUE",
+                "  BugSkipLockRecord = FALSE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_name_errors(
+        tmp_path,
+        alias_contracts=(
+            (
+                "SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg",
+                "BugSkipHighestRecord",
+            ),
+            (
+                "SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg",
+                "BugSkipLockRecord",
+            ),
+        ),
+    ) == [
+        "boolean mutation selector alias inventory repeats "
+        "SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg; first "
+        "expected BugSkipHighestRecord, then BugSkipLockRecord; each boolean "
+        "selector alias must be counted once"
+    ]
+
+
 def test_boolean_bug_selector_exception_errors_accepts_live_exceptions(
     tmp_path: Path,
 ) -> None:
@@ -8383,6 +11589,56 @@ def test_boolean_bug_selector_exception_errors_accepts_live_exceptions(
         )
         == []
     )
+
+
+def test_boolean_bug_selector_exception_errors_rejects_duplicate_alias_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiGate_bug_missing_record.cfg"
+    cfg.write_text(
+        "CONSTANTS\n  BugSkipRecord = TRUE\n  BugKeepRecord = FALSE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_exception_errors(
+        tmp_path,
+        alias_exceptions=(
+            ("SumeragiGate_bug_missing_record.cfg", "BugSkipRecord"),
+            ("SumeragiGate_bug_missing_record.cfg", "BugKeepRecord"),
+        ),
+        compound_exceptions={},
+    ) == [
+        "boolean mutation selector alias inventory repeats "
+        "SumeragiGate_bug_missing_record.cfg; first expected BugSkipRecord, "
+        "then BugKeepRecord; each boolean selector alias must be counted once"
+    ]
+
+
+def test_boolean_bug_selector_exception_errors_rejects_duplicate_compound_selectors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiGate_bug_compound.cfg"
+    cfg.write_text(
+        "CONSTANTS\n  BugOne = TRUE\n  BugTwo = TRUE\n",
+        encoding="utf-8",
+    )
+
+    assert module.boolean_bug_selector_exception_errors(
+        tmp_path,
+        alias_exceptions={},
+        compound_exceptions=(
+            (
+                "SumeragiGate_bug_compound.cfg",
+                ("BugOne", "BugOne", "BugTwo"),
+            ),
+        ),
+    ) == [
+        "boolean mutation compound selector inventory repeats selector "
+        "BugOne for SumeragiGate_bug_compound.cfg; each compound boolean "
+        "selector must be counted once"
+    ]
 
 
 def test_boolean_bug_selector_exception_errors_rejects_stale_entries(
@@ -8926,6 +12182,66 @@ def test_byzantine_top_cfg_errors_accepts_required_checks(
         cfg_contracts.append((tmp_cfg, required_checks, coverage_label))
 
     assert module.byzantine_top_cfg_errors(tuple(cfg_contracts)) == []
+
+
+def test_byzantine_top_cfg_errors_rejects_duplicate_auxiliary_contracts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_byzantine_delivered_first_top_fast.cfg"
+    required_checks = module.BYZANTINE_TOP_CFG_REQUIRED_CHECKS[0][1]
+    required_behavior = module.BYZANTINE_TOP_CFG_REQUIRED_BEHAVIORS[0][1]
+    write_cfg_with_behavior_constants_and_checks(
+        cfg,
+        tuple(f"{directive} {operator}" for directive, operator in required_behavior),
+        module.SUMERAGI_FAST_CONSTANT_VALUES,
+        required_checks,
+    )
+
+    assert module.byzantine_top_cfg_errors(
+        (
+            (
+                cfg,
+                required_checks,
+                "Byzantine delivered-first top coverage",
+            ),
+        ),
+        behavior_contracts=(
+            (
+                cfg,
+                required_behavior,
+                "Byzantine delivered-first top coverage",
+            ),
+            (
+                cfg,
+                required_behavior,
+                "duplicate behavior coverage",
+            ),
+        ),
+        constant_contracts=(
+            (
+                cfg,
+                module.SUMERAGI_FAST_CONSTANT_VALUES,
+                "Byzantine delivered-first top coverage",
+            ),
+            (
+                cfg,
+                module.SUMERAGI_FAST_CONSTANT_VALUES,
+                "duplicate constant coverage",
+            ),
+        ),
+    ) == [
+        "Byzantine top behavior CFG contract inventory repeats "
+        "Sumeragi_byzantine_delivered_first_top_fast.cfg; first declared for "
+        "Byzantine delivered-first top coverage, then for duplicate behavior "
+        "coverage; each Byzantine top behavior CFG contract must be counted "
+        "once",
+        "Byzantine top constant CFG contract inventory repeats "
+        "Sumeragi_byzantine_delivered_first_top_fast.cfg; first declared for "
+        "Byzantine delivered-first top coverage, then for duplicate constant "
+        "coverage; each Byzantine top constant CFG contract must be counted "
+        "once",
+    ]
 
 
 def test_byzantine_top_cfg_errors_rejects_missing_or_downgraded_checks(
@@ -10037,6 +13353,54 @@ def test_direct_mutation_family_alignment_errors_rejects_stale_allowlist_and_ext
     ]
 
 
+def test_direct_mutation_family_alignment_errors_rejects_duplicate_allowlist(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+
+    assert module.direct_mutation_family_alignment_errors(
+        delivered_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        delivered_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_DELIVERED_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_MUTATION_STEM_PREFIX,
+            ("a", "safety_only"),
+        ),
+        vote_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_VOTE_FIRST_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.DIRECT_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            ("a",),
+        ),
+        vote_progress_safety_only_mutations=(
+            "safety_only",
+            "safety_only",
+        ),
+        interleaving_progress_safety_only_mutations=frozenset(),
+    ) == [
+        "direct vote-first progress safety-only mutation allowlist inventory "
+        "repeats safety_only; each safety-only mutation suffix must be "
+        "counted once"
+    ]
+
+
 def test_byzantine_mutation_family_alignment_errors_accepts_aligned_families(
     tmp_path: Path,
 ) -> None:
@@ -10142,6 +13506,44 @@ def test_byzantine_mutation_family_alignment_errors_rejects_unapproved_progress_
         "mutation suffixes:\n  - b",
         "projection progress mutation CFGs are missing projection safety "
         "minus safety-only mutations mutation suffixes:\n  - b",
+    ]
+
+
+def test_byzantine_mutation_family_alignment_errors_rejects_duplicate_allowlist(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    safety_suffixes = ("a", "safety_only")
+    progress_suffixes = ("a",)
+
+    assert module.byzantine_mutation_family_alignment_errors(
+        interleaving_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_MUTATION_STEM_PREFIX,
+            safety_suffixes,
+        ),
+        interleaving_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.BYZANTINE_INTERLEAVING_PROGRESS_MUTATION_STEM_PREFIX,
+            progress_suffixes,
+        ),
+        projection_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_MUTATION_STEM_PREFIX,
+            safety_suffixes,
+        ),
+        projection_progress_cfg_paths=make_byzantine_mutation_cfgs(
+            tmp_path,
+            module.PROJECTION_PROGRESS_MUTATION_STEM_PREFIX,
+            progress_suffixes,
+        ),
+        progress_safety_only_mutations=(
+            "safety_only",
+            "safety_only",
+        ),
+    ) == [
+        "Byzantine progress safety-only mutation allowlist inventory repeats "
+        "safety_only; each safety-only mutation suffix must be counted once"
     ]
 
 
@@ -10291,6 +13693,27 @@ def test_byzantine_top_corridor_contract_alignment_errors_rejects_direct_missing
     ]
 
 
+def test_byzantine_top_corridor_contract_alignment_errors_rejects_duplicate_actual(
+) -> None:
+    module = load_coverage_module()
+    top_contracts = copied_contracts(module.SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS)
+    duplicate = "RbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    top_contracts["ByzantineDirectTopExactness"] = (
+        *top_contracts["ByzantineDirectTopExactness"],
+        duplicate,
+    )
+
+    errors = module.byzantine_top_corridor_contract_alignment_errors(
+        top_contracts=top_contracts,
+    )
+
+    assert errors == [
+        "Byzantine top corridor actual ByzantineDirectTopExactness conjunct "
+        f"contract repeats conjunct(s) {duplicate}; each Byzantine top "
+        "corridor obligation must be counted once"
+    ]
+
+
 def test_byzantine_top_projection_contract_alignment_errors_accepts_mirror(
 ) -> None:
     module = load_coverage_module()
@@ -10345,6 +13768,119 @@ def test_byzantine_top_projection_contract_alignment_errors_rejects_extra_conjun
     ]
 
 
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_actual(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    projection_contracts["ProjectedByzantineDirectTopExactness"] = (
+        *projection_contracts["ProjectedByzantineDirectTopExactness"],
+        duplicate,
+    )
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "Byzantine top/projection actual ProjectedByzantineDirectTopExactness "
+        f"conjunct contract repeats conjunct(s) {duplicate}; each Byzantine "
+        "top/projection obligation must be counted once"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_operator_map_source(
+) -> None:
+    module = load_coverage_module()
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        operator_map=(
+            (
+                "ByzantineDeliveredFirstTopExactness",
+                "ProjectedByzantineDeliveredFirstTopExactness",
+            ),
+            (
+                "ByzantineDeliveredFirstTopExactness",
+                "ProjectedByzantineVoteFirstTopExactness",
+            ),
+        ),
+        top_implication_contracts={},
+    )
+
+    assert errors == [
+        "Byzantine top/projection operator alignment inventory repeats "
+        "ByzantineDeliveredFirstTopExactness; first expected "
+        "ProjectedByzantineDeliveredFirstTopExactness, then "
+        "ProjectedByzantineVoteFirstTopExactness; each Byzantine "
+        "top/projection operator alignment must be counted once"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_operator_map_target(
+) -> None:
+    module = load_coverage_module()
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        operator_map=(
+            (
+                "ByzantineDeliveredFirstTopExactness",
+                "ProjectedByzantineDeliveredFirstTopExactness",
+            ),
+            (
+                "ByzantineVoteFirstTopExactness",
+                "ProjectedByzantineDeliveredFirstTopExactness",
+            ),
+        ),
+        top_implication_contracts={},
+    )
+
+    assert errors == [
+        "Byzantine top/projection operator alignment inventory maps "
+        "ByzantineDeliveredFirstTopExactness and ByzantineVoteFirstTopExactness "
+        "to ProjectedByzantineDeliveredFirstTopExactness; each projected top "
+        "operator must be aligned once"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_literal_source(
+) -> None:
+    module = load_coverage_module()
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        literal_conjuncts=(
+            ("TypeInvariant", "TypeInvariant"),
+            ("TypeInvariant", "ProjectedTypeInvariant"),
+        ),
+    )
+
+    assert errors == [
+        "Byzantine top/projection literal conjunct inventory repeats "
+        "TypeInvariant; first expected TypeInvariant, then "
+        "ProjectedTypeInvariant; each literal top/projection conjunct "
+        "alignment must be counted once"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_literal_target(
+) -> None:
+    module = load_coverage_module()
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        literal_conjuncts=(
+            ("TypeInvariant", "TypeInvariant"),
+            ("OtherLiteral", "TypeInvariant"),
+        ),
+    )
+
+    assert errors == [
+        "Byzantine top/projection literal conjunct inventory maps "
+        "TypeInvariant and OtherLiteral to TypeInvariant; each projected "
+        "literal conjunct must be aligned once"
+    ]
+
+
 def test_byzantine_top_projection_contract_alignment_errors_rejects_implication_drift(
 ) -> None:
     module = load_coverage_module()
@@ -10362,6 +13898,62 @@ def test_byzantine_top_projection_contract_alignment_errors_rejects_implication_
         "mirror ByzantineDirectTopCoversOrderedTopCorridors; expected "
         "ProjectedByzantineDirectTopExactness, found "
         "ProjectedByzantineDeliveredFirstTopExactness"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_source_implication(
+) -> None:
+    module = load_coverage_module()
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        top_implication_contracts=(
+            (
+                "ByzantineDirectTopCoversOrderedTopCorridors",
+                "ByzantineDirectTopExactness",
+            ),
+            (
+                "ByzantineDirectTopCoversOrderedTopCorridors",
+                "ByzantineDeliveredFirstTopExactness",
+            ),
+        ),
+    )
+
+    assert errors == [
+        "Byzantine top/projection source implication inventory repeats "
+        "ByzantineDirectTopCoversOrderedTopCorridors; first expected "
+        "ByzantineDirectTopExactness, then "
+        "ByzantineDeliveredFirstTopExactness; each implication antecedent "
+        "contract must be counted once"
+    ]
+
+
+def test_byzantine_top_projection_contract_alignment_errors_rejects_duplicate_projection_implication(
+) -> None:
+    module = load_coverage_module()
+
+    errors = module.byzantine_top_projection_contract_alignment_errors(
+        projection_implication_contracts=(
+            (
+                "ProjectionBridgeCoversOrderedTopCorridors",
+                "ProjectedByzantineDirectTopExactness",
+            ),
+            (
+                "ProjectionBridgeCoversOrderedTopCorridors",
+                "ProjectedByzantineDeliveredFirstTopExactness",
+            ),
+            (
+                "ProjectionBridgeMatchesInterleavingCore",
+                "ProjectedByzantineDirectTopExactness",
+            ),
+        ),
+    )
+
+    assert errors == [
+        "Byzantine top/projection projection implication inventory repeats "
+        "ProjectionBridgeCoversOrderedTopCorridors; first expected "
+        "ProjectedByzantineDirectTopExactness, then "
+        "ProjectedByzantineDeliveredFirstTopExactness; each implication "
+        "antecedent contract must be counted once"
     ]
 
 
@@ -10448,6 +14040,30 @@ def test_projection_bridge_interleaving_contract_alignment_errors_rejects_extra_
     ]
 
 
+def test_projection_bridge_interleaving_contract_alignment_errors_rejects_duplicate_component(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "ProjectedRbcDeliveredWithoutFinalityWaitsForCommitEvidence"
+    projection_contracts["ProjectedByzantineDirectTopExactness"] = (
+        *projection_contracts["ProjectedByzantineDirectTopExactness"],
+        duplicate,
+    )
+
+    errors = module.projection_bridge_interleaving_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projection bridge interleaving expected "
+        "ProjectionBridgeMatchesInterleavingExactness conjunct contract "
+        f"repeats conjunct(s) {duplicate}; each projection bridge "
+        "interleaving obligation must be counted once"
+    ]
+
+
 def test_projection_bridge_core_source_alignment_errors_accepts_source_exactness(
 ) -> None:
     module = load_coverage_module()
@@ -10497,6 +14113,30 @@ def test_projection_bridge_core_source_alignment_errors_rejects_extra_conjunct(
     assert errors == [
         "ProjectionBridgeMatchesInterleavingCore must mirror "
         f"ByzantineCommitInterleavingExactness; unexpected conjunct(s) {extra}"
+    ]
+
+
+def test_projection_bridge_core_source_alignment_errors_rejects_duplicate_actual(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "BufferedVotesWaitForDelivery"
+    projection_contracts["ProjectionBridgeMatchesInterleavingCore"] = (
+        *projection_contracts["ProjectionBridgeMatchesInterleavingCore"],
+        duplicate,
+    )
+
+    errors = module.projection_bridge_core_source_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projection bridge core/source actual "
+        "ProjectionBridgeMatchesInterleavingCore conjunct contract repeats "
+        f"conjunct(s) {duplicate}; each projection bridge core/source "
+        "obligation must be counted once"
     ]
 
 
@@ -10580,6 +14220,51 @@ def test_source_progress_safety_contract_alignment_errors_rejects_extra_conjunct
     ]
 
 
+def test_source_progress_safety_contract_alignment_errors_rejects_duplicate_actual(
+) -> None:
+    module = load_coverage_module()
+    envelope = "DirectCommitProgressSafetyEnvelope"
+    direct_contracts = copied_contracts(
+        module.SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "TypeInvariant"
+    direct_contracts[envelope] = (*direct_contracts[envelope], duplicate)
+
+    errors = module.source_progress_safety_contract_alignment_errors(
+        alignment_contracts=replace_source_progress_alignment_contract(
+            module,
+            envelope,
+            direct_contracts,
+        ),
+    )
+
+    assert errors == [
+        "direct interleaving progress safety actual "
+        f"{envelope} conjunct contract repeats conjunct(s) {duplicate}; "
+        "each direct interleaving progress safety obligation must be counted "
+        "once"
+    ]
+
+
+def test_source_progress_safety_contract_alignment_errors_rejects_duplicate_inventory_row(
+) -> None:
+    module = load_coverage_module()
+    duplicate_row = module.SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS[2]
+
+    errors = module.source_progress_safety_contract_alignment_errors(
+        alignment_contracts=(
+            *module.SOURCE_PROGRESS_SAFETY_ENVELOPE_ALIGNMENT_CONTRACTS,
+            duplicate_row,
+        ),
+    )
+
+    assert errors == [
+        "source progress safety alignment inventory repeats direct "
+        "interleaving -> DirectCommitProgressSafetyEnvelope; each source "
+        "progress safety alignment must be counted once"
+    ]
+
+
 def test_projected_commit_progress_contract_alignment_errors_accepts_bridge_components(
 ) -> None:
     module = load_coverage_module()
@@ -10636,6 +14321,29 @@ def test_projected_commit_progress_contract_alignment_errors_rejects_extra_compo
     ]
 
 
+def test_projected_commit_progress_contract_alignment_errors_rejects_duplicate_actual(
+) -> None:
+    module = load_coverage_module()
+    projection_contracts = copied_contracts(
+        module.SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "ProjectionBridgeCoversOrderedTopCorridors"
+    projection_contracts["ProjectedCommitProgressSafetyEnvelope"] = (
+        *projection_contracts["ProjectedCommitProgressSafetyEnvelope"],
+        duplicate,
+    )
+
+    errors = module.projected_commit_progress_contract_alignment_errors(
+        projection_contracts=projection_contracts,
+    )
+
+    assert errors == [
+        "projected commit progress actual ProjectedCommitProgressSafetyEnvelope "
+        f"conjunct contract repeats conjunct(s) {duplicate}; each projected "
+        "commit progress obligation must be counted once"
+    ]
+
+
 def projected_commit_progress_spec_contract_text(
     module,
     *,
@@ -10676,6 +14384,28 @@ def test_projected_commit_progress_spec_contract_errors_accepts_named_fairness(
     assert module.projected_commit_progress_spec_contract_errors(tla) == []
 
 
+def test_projected_commit_progress_spec_contract_errors_rejects_duplicate_expected_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    fairness_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    duplicate = fairness_actions[0]
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(module),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(
+        tla,
+        expected_fairness_actions=(*fairness_actions, duplicate),
+    ) == [
+        "projected commit progress fairness ProjectedCommitProgressFairness "
+        f"action contract repeats expected action(s) {duplicate}; each "
+        "projected commit progress fairness action must be counted once"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_raw_spec_fairness(
     tmp_path: Path,
 ) -> None:
@@ -10703,6 +14433,32 @@ def test_projected_commit_progress_spec_contract_errors_rejects_raw_spec_fairnes
         f"{tla}:11 defines ProjectedCommitProgressSpec, but must compose "
         "ProjectedCommitProgressFairness instead of raw WF_vars fairness "
         "clauses: HonestPropose, PrepareVote"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_compound_raw_spec_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            spec_lines=[
+                "ProjectedCommitProgressSpec ==",
+                "  /\\ Init",
+                "  /\\ [][Next]_vars",
+                "  /\\ ProjectedCommitProgressFairness",
+                "  /\\ WF_vars(HonestPropose /\\ PrepareVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:11 defines ProjectedCommitProgressSpec, but must compose "
+        "ProjectedCommitProgressFairness instead of raw WF_vars fairness "
+        "clauses: HonestPropose /\\ PrepareVote"
     ]
 
 
@@ -10760,6 +14516,30 @@ def test_projected_commit_progress_spec_contract_errors_rejects_fairness_drift(
         f"{tla}:2 defines ProjectedCommitProgressFairness, but contains "
         "unexpected WF_vars action(s) TimeoutTick; keep projected commit "
         "progress fairness on the documented action contract",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_compound_fairness_operand(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            fairness_actions=(
+                *module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS,
+                "HonestPropose /\\ PrepareVote",
+            ),
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but contains "
+        "non-static WF_vars operand(s) HonestPropose /\\ PrepareVote; "
+        "projected commit progress fairness actions must be named zero-arity "
+        "operators"
     ]
 
 
@@ -10943,6 +14723,50 @@ def test_source_commit_progress_spec_contract_errors_rejects_fairness_drift(
         f"{tla}:2 defines {fairness_operator}, but contains unexpected "
         f"WF_vars action(s) TimeoutTick; keep {root_kind} fairness on the "
         "documented action contract",
+    ]
+
+
+def test_source_commit_progress_spec_contract_errors_rejects_duplicate_expected_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_SOURCE_COMMIT_PROGRESS_SPEC_CONTRACTS[0]
+    duplicate = fairness_actions[0]
+    tla = tmp_path / "SumeragiDirectDeliveredFirstCorridorGate.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.source_commit_progress_spec_contract_errors(
+        (
+            (
+                tla,
+                spec_operator,
+                fairness_operator,
+                next_closure,
+                (*fairness_actions, duplicate),
+                root_kind,
+            ),
+        )
+    )
+
+    assert errors == [
+        f"{root_kind} fairness {fairness_operator} action contract repeats "
+        f"expected action(s) {duplicate}; each {root_kind} fairness action "
+        "must be counted once"
     ]
 
 
@@ -11420,6 +15244,29 @@ def test_byzantine_interleaving_exactness_alignment_errors_rejects_extra_core(
     ]
 
 
+def test_byzantine_interleaving_exactness_alignment_errors_rejects_duplicate_actual(
+) -> None:
+    module = load_coverage_module()
+    byzantine_contracts = copied_contracts(
+        module.SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS
+    )
+    duplicate = "BufferedVotesWaitForDelivery"
+    byzantine_contracts["ByzantineCommitInterleavingExactness"] = (
+        *byzantine_contracts["ByzantineCommitInterleavingExactness"],
+        duplicate,
+    )
+
+    errors = module.byzantine_interleaving_exactness_alignment_errors(
+        byzantine_contracts=byzantine_contracts,
+    )
+
+    assert errors == [
+        "Byzantine interleaving actual ByzantineCommitInterleavingExactness "
+        f"conjunct contract repeats conjunct(s) {duplicate}; each Byzantine "
+        "interleaving exactness obligation must be counted once"
+    ]
+
+
 def projection_gate_contract_text(
     module,
     *,
@@ -11565,6 +15412,34 @@ def test_mutation_cfg_name_errors_rejects_mismatched_cfg_fragment() -> None:
     ]
 
 
+def test_documented_mutation_cfg_name_errors_report_source_lines() -> None:
+    module = load_coverage_module()
+    readme = module.display_path(module.README)
+    cases = {
+        "frontier-bug-*": module.RunnerCase(
+            "frontier-bug-*",
+            '\n    cfg_file="$spec_dir/SumeragiFrontier_bug_other_case.cfg"\n',
+            10,
+        )
+    }
+    cfg = module.display_path(module.SPEC_DIR / "SumeragiFrontier_bug_other_case.cfg")
+
+    assert module.documented_mutation_cfg_name_errors(
+        [
+            ("frontier-fast", 7),
+            ("frontier-bug-stale-owner", 31),
+            ("frontier-bug-stale-owner", 34),
+        ],
+        module.README,
+        cases,
+        "Apalache",
+    ) == [
+        f"{readme} README mutation command mode frontier-bug-stale-owner "
+        f"at line 31 resolves Apalache cfg {cfg} without expected mutation "
+        "fragment _bug_stale_owner"
+    ]
+
+
 def test_module_identity_allows_matching_specs_and_tlc_only_modes() -> None:
     module = load_coverage_module()
     apalache_cases = {
@@ -11617,6 +15492,40 @@ def test_module_identity_rejects_cross_runner_module_drift() -> None:
     ]
 
 
+def test_sourced_module_identity_errors_report_source_lines() -> None:
+    module = load_coverage_module()
+    readme = module.display_path(module.README)
+    apalache_cases = {
+        "frontier-fast": module.RunnerCase(
+            "frontier-fast",
+            '\n    spec_file="$spec_dir/SumeragiFrontier.tla"\n',
+            10,
+        )
+    }
+    tlc_cases = {
+        "frontier-fast": module.RunnerCase(
+            "frontier-fast", '\n    module="SumeragiQuorumPolicy"\n', 20
+        )
+    }
+    apalache_spec = module.display_path(module.SPEC_DIR / "SumeragiFrontier.tla")
+    tlc_module = module.display_path(module.SPEC_DIR / "SumeragiQuorumPolicy.tla")
+
+    assert module.sourced_module_identity_errors(
+        (
+            (
+                "README TLC command",
+                module.README,
+                [("frontier-fast", 41), ("frontier-fast", 45)],
+            ),
+        ),
+        apalache_cases,
+        tlc_cases,
+    ) == [
+        f"README TLC command mode frontier-fast at {readme}:41 resolves "
+        f"Apalache spec {apalache_spec} but TLC module {tlc_module}"
+    ]
+
+
 def test_referenced_files_rejects_missing_duplicate_and_dynamic_inputs() -> None:
     module = load_coverage_module()
     files, errors = module.referenced_files(
@@ -11656,6 +15565,27 @@ def test_referenced_files_rejects_missing_duplicate_and_dynamic_inputs() -> None
             "assigns cfg_file 0 times",
         ],
     )
+
+
+def test_missing_referenced_file_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    existing = tmp_path / "SumeragiFrontier.tla"
+    missing = tmp_path / "SumeragiMissing.cfg"
+    existing.write_text("---- MODULE SumeragiFrontier ----\n====\n", encoding="utf-8")
+    runner = module.display_path(module.APALACHE_RUNNER)
+
+    assert module.missing_referenced_file_errors(
+        "frontier-fast",
+        module.RunnerCase("frontier-fast", "", 17),
+        [existing, missing],
+        module.APALACHE_RUNNER,
+        "Apalache",
+    ) == [
+        f"Apalache runner {runner} case 'frontier-fast' at line 17 mode "
+        f"frontier-fast references missing file {missing}"
+    ]
 
 
 def test_referenced_files_rejects_malformed_proof_input_assignments() -> None:
@@ -12243,6 +16173,8 @@ def test_apalache_length_errors_rejects_malformed_assignments() -> None:
 
 def test_apalache_length_table_errors_rejects_documented_runner_drift() -> None:
     module = load_coverage_module()
+    readme = module.ROOT_DIR / "docs/formal/sumeragi/README.md"
+    displayed_readme = module.display_path(readme)
     cases = {
         "frontier-fast": module.RunnerCase(
             "frontier-fast", "\n    apalache_length=1\n", 7
@@ -12253,11 +16185,12 @@ def test_apalache_length_table_errors_rejects_documented_runner_drift() -> None:
     }
 
     assert module.apalache_length_table_errors(
-        {"frontier-fast": 2, "quorum-fast": 2},
+        [("frontier-fast", 2, 44), ("quorum-fast", 2, 47)],
         cases,
+        readme,
     ) == [
-        "frontier-fast: README length 2 differs from "
-        "Apalache runner length 1"
+        f"{displayed_readme}:44: frontier-fast: README length 2 differs from "
+        "Apalache runner case 'frontier-fast' at line 7 length 1"
     ]
 
 
@@ -12547,6 +16480,26 @@ def test_cfg_shape_errors_rejects_incomplete_configs(tmp_path: Path) -> None:
     ]
 
 
+def test_runner_cfg_shape_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing_check = tmp_path / "MissingCheck.cfg"
+    missing_check.write_text("INIT Init\nNEXT Next\n", encoding="utf-8")
+    runner = module.display_path(module.TLC_RUNNER)
+
+    assert module.runner_cfg_shape_errors(
+        "frontier-fast",
+        module.RunnerCase("frontier-fast", "", 29),
+        [missing_check],
+        module.TLC_RUNNER,
+        "TLC",
+    ) == [
+        f"TLC runner {runner} case 'frontier-fast' at line 29: "
+        f"frontier-fast: {missing_check} has no invariant or property checks"
+    ]
+
+
 def test_cfg_shape_errors_rejects_indented_directive_spoofing(
     tmp_path: Path,
 ) -> None:
@@ -12648,6 +16601,55 @@ def test_cfg_check_operator_names_returns_only_invariants_and_properties(
             "EventuallyCommits": "PROPERTY",
         },
         [],
+    )
+
+
+def test_cfg_check_operator_kinds_rejects_duplicate_or_conflicting_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Model.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION Spec",
+                "INVARIANT TypeInvariant",
+                "INVARIANT TypeInvariant",
+                "PROPERTIES",
+                "  EventuallyCommits",
+                "  EventuallyCommits",
+                "PROPERTY TypeInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_check_operator_names(cfg) == (
+        {"TypeInvariant", "EventuallyCommits"},
+        [
+            f"{cfg}:3 repeats INVARIANT check TypeInvariant first declared "
+            "at line 2; CFG proof targets must be duplicate-free",
+            f"{cfg}:6 repeats PROPERTY check EventuallyCommits first declared "
+            "at line 5; CFG proof targets must be duplicate-free",
+            f"{cfg}:7 references PROPERTY check TypeInvariant, but line 2 "
+            "already references it as INVARIANT; CFG proof targets must not "
+            "be both INVARIANT and PROPERTY",
+        ],
+    )
+    assert module.cfg_check_operator_kinds(cfg) == (
+        {
+            "TypeInvariant": "INVARIANT",
+            "EventuallyCommits": "PROPERTY",
+        },
+        [
+            f"{cfg}:3 repeats INVARIANT check TypeInvariant first declared "
+            "at line 2; CFG proof targets must be duplicate-free",
+            f"{cfg}:6 repeats PROPERTY check EventuallyCommits first declared "
+            "at line 5; CFG proof targets must be duplicate-free",
+            f"{cfg}:7 references PROPERTY check TypeInvariant, but line 2 "
+            "already references it as INVARIANT; CFG proof targets must not "
+            "be both INVARIANT and PROPERTY",
+        ],
     )
 
 
@@ -13074,6 +17076,50 @@ def test_top_level_fast_cfg_check_errors_rejects_replaced_fast_root(
     ]
 
 
+def test_cfg_required_check_contract_errors_rejects_duplicate_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT Next"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.cfg_required_check_contract_errors(
+        cfg,
+        (("TypeInvariant", "INVARIANT"), ("TypeInvariant", "INVARIANT")),
+        "top-level fast sentinel coverage",
+    ) == [
+        "top-level fast sentinel coverage required proof-check contract "
+        "repeats expected check target(s) TypeInvariant; each required CFG "
+        "proof check must be counted once"
+    ]
+
+
+def test_cfg_required_exact_check_set_contract_errors_rejects_duplicate_required_checks(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Sumeragi_fast.cfg"
+    write_cfg_with_behavior_and_checks(
+        cfg,
+        ("INIT Init", "NEXT Next"),
+        (("TypeInvariant", "INVARIANT"),),
+    )
+
+    assert module.cfg_required_exact_check_set_contract_errors(
+        cfg,
+        (("TypeInvariant", "INVARIANT"), ("TypeInvariant", "INVARIANT")),
+        "top-level fast sentinel coverage",
+    ) == [
+        "top-level fast sentinel coverage required proof-check contract "
+        "repeats expected check target(s) TypeInvariant; each required CFG "
+        "proof check must be counted once"
+    ]
+
+
 def test_top_level_cfg_check_set_errors_accepts_exact_sentinel_sets(
     tmp_path: Path,
 ) -> None:
@@ -13255,6 +17301,41 @@ def test_top_level_cfg_check_parity_errors_rejects_check_kind_drift(
     ]
 
 
+def test_top_level_cfg_check_parity_errors_rejects_duplicate_cfg_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    deep_cfg = tmp_path / "Sumeragi_deep.cfg"
+    tlc_cfg = tmp_path / "Sumeragi_tlc_fast.cfg"
+    deep_cfg.write_text(
+        "\n".join(
+            [
+                "SPECIFICATION Spec",
+                "INVARIANT TypeInvariant",
+                "PROPERTY EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tlc_cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY EventuallyCommit",
+                "PROPERTY EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.top_level_cfg_check_parity_errors(deep_cfg, tlc_cfg) == [
+        f"{tlc_cfg}:5 repeats PROPERTY check EventuallyCommit first declared "
+        "at line 4; CFG proof targets must be duplicate-free"
+    ]
+
+
 def test_cfg_property_root_reachability_errors_accepts_connected_graph(
     tmp_path: Path,
 ) -> None:
@@ -13373,6 +17454,44 @@ def test_cfg_property_root_reachability_errors_rejects_disconnected_property(
     ]
 
 
+def test_cfg_property_root_reachability_errors_rejects_duplicate_cfg_properties(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "Root ==",
+                "  /\\ Branch",
+                "Branch ==",
+                "  TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY Root",
+                "PROPERTY Branch",
+                "PROPERTY Branch",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_property_root_reachability_errors(
+        tla,
+        (cfg,),
+        root_property="Root",
+    ) == [
+        f"{cfg}:3 repeats PROPERTY check Branch first declared at line 2; "
+        "CFG proof targets must be duplicate-free"
+    ]
+
+
 def test_cfg_state_invariant_root_reachability_errors_accepts_connected_graph(
     tmp_path: Path,
 ) -> None:
@@ -13455,6 +17574,47 @@ def test_cfg_state_invariant_root_reachability_errors_rejects_disconnected_graph
         f"{cfg}:3 checks INVARIANT DisconnectedInvariant, but it is not "
         "reachable from state invariant root StateRoot through zero-arity TLA "
         "operator references"
+    ]
+
+
+def test_cfg_state_invariant_root_reachability_errors_rejects_conflicting_cfg_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "StateRoot ==",
+                "  /\\ BranchInvariant",
+                "BranchInvariant ==",
+                "  TRUE",
+                "TypeInvariant ==",
+                "  TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "INVARIANT BranchInvariant",
+                "PROPERTY BranchInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_state_invariant_root_reachability_errors(
+        tla,
+        (cfg,),
+        root_invariant="StateRoot",
+    ) == [
+        f"{cfg}:3 references PROPERTY check BranchInvariant, but line 2 "
+        "already references it as INVARIANT; CFG proof targets must not be "
+        "both INVARIANT and PROPERTY"
     ]
 
 
@@ -13546,6 +17706,31 @@ def test_consensus_core_root_conjunct_contract_errors_allows_documented_wrapper(
         )
         == []
     )
+
+
+def test_consensus_core_root_conjunct_contract_errors_rejects_duplicate_contract_inventory(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "Root ==",
+                "  /\\ Named",
+                "Named == checked = ready",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.consensus_core_root_conjunct_contract_errors(
+        tla,
+        contracts={"Root": ("Named", "Named")},
+    ) == [
+        "consensus-core proof root Root conjunct contract repeats conjunct(s) "
+        "Named; each consensus-core root obligation must be counted once"
+    ]
 
 
 def test_consensus_core_root_cfg_check_contract_errors_accepts_expected_roles(
@@ -13672,6 +17857,49 @@ def test_consensus_core_root_cfg_check_contract_errors_rejects_kind_drift(
         f"{tla}:6 defines SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope, "
         "but direct conjunct EventuallyCommit is checked as INVARIANT by "
         f"{cfg}; expected PROPERTY"
+    ]
+
+
+def test_consensus_core_root_cfg_check_contract_errors_rejects_duplicate_cfg_targets(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Sumeragi.tla"
+    cfg = tmp_path / "Sumeragi.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TypeInvariant == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesExactness == TRUE",
+                "SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope == [] safe",
+                "EventuallyCommit == [] committed",
+                "SumeragiConsensusCoreAlwaysMatchesCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesExactness",
+                "  /\\ SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "  /\\ EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "PROPERTY SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope",
+                "PROPERTY EventuallyCommit",
+                "PROPERTY EventuallyCommit",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.consensus_core_root_cfg_check_contract_errors(
+        tla,
+        (cfg,),
+    ) == [
+        f"{cfg}:4 repeats PROPERTY check EventuallyCommit first declared "
+        "at line 3; CFG proof targets must be duplicate-free"
     ]
 
 
@@ -14860,6 +19088,44 @@ def test_state_invariant_root_cfg_coverage_errors_rejects_one_cfg_missing_conjun
     ]
 
 
+def test_state_invariant_root_cfg_coverage_errors_rejects_duplicate_cfg_invariants(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "StateRoot ==",
+                "  /\\ CheckedA",
+                "CheckedA == TRUE",
+                "TypeInvariant == TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INVARIANT TypeInvariant",
+                "INVARIANT CheckedA",
+                "INVARIANT CheckedA",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.state_invariant_root_cfg_coverage_errors(
+        tla,
+        (cfg,),
+        root_invariant="StateRoot",
+    ) == [
+        f"{cfg}:3 repeats INVARIANT check CheckedA first declared at line 2; "
+        "CFG proof targets must be duplicate-free"
+    ]
+
+
 def test_state_invariant_root_cfg_coverage_errors_rejects_non_named_conjunct(
     tmp_path: Path,
 ) -> None:
@@ -15053,6 +19319,43 @@ def test_temporal_property_root_cfg_coverage_errors_rejects_one_cfg_missing_conj
         f"{tla}:2 defines TemporalRoot, but direct temporal property "
         "conjunct(s) CheckedB are not checked as top-level PROPERTY entries by "
         f"{tlc_cfg}"
+    ]
+
+
+def test_temporal_property_root_cfg_coverage_errors_rejects_duplicate_cfg_properties(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "TemporalRoot ==",
+                "  /\\ CheckedA",
+                "CheckedA == [] safe_a",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "PROPERTY TemporalRoot",
+                "PROPERTY CheckedA",
+                "PROPERTY CheckedA",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.temporal_property_root_cfg_coverage_errors(
+        tla,
+        (cfg,),
+        root_properties=("TemporalRoot",),
+    ) == [
+        f"{cfg}:3 repeats PROPERTY check CheckedA first declared at line 2; "
+        "CFG proof targets must be duplicate-free"
     ]
 
 
@@ -20302,6 +24605,54 @@ def test_tla_module_validation_errors_check_reachable_dependency_modules(
     ]
 
 
+def test_runner_tla_module_validation_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    root = tmp_path / "Model.tla"
+    helper = tmp_path / "LocalHelpers.tla"
+    root.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "EXTENDS LocalHelpers",
+                "VARIABLE state",
+                "vars == <<state>>",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    helper.write_text(
+        "\n".join(
+            [
+                "---- MODULE DriftedHelpers ----",
+                "VARIABLE state",
+                "vars == <<state>>",
+                "AXIOM FALSE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = module.display_path(module.TLC_RUNNER)
+
+    assert module.runner_tla_module_validation_errors(
+        "frontier-fast",
+        module.RunnerCase("frontier-fast", "", 31),
+        root,
+        module.TLC_RUNNER,
+        "TLC",
+    ) == [
+        f"TLC runner {runner} case 'frontier-fast' at line 31: "
+        f"frontier-fast: {helper} declares MODULE DriftedHelpers, "
+        "expected LocalHelpers",
+        f"TLC runner {runner} case 'frontier-fast' at line 31: "
+        f"frontier-fast: {helper}:4 uses top-level AXIOM directive; "
+        "Sumeragi formal modules must be assumption-free",
+    ]
+
+
 def test_tla_module_surface_errors_accepts_valid_local_modules(
     tmp_path: Path,
 ) -> None:
@@ -21267,6 +25618,52 @@ def test_cfg_constant_binding_errors_rejects_unbound_declared_constant(
     ]
 
 
+def test_runner_cfg_constant_binding_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "CONSTANTS",
+                "  Bug,",
+                "  MissingBinding",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "known"',
+                'CONSTANT Extra = "unknown"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = module.display_path(module.TLC_RUNNER)
+
+    assert module.runner_cfg_constant_binding_errors(
+        "frontier-fast",
+        module.RunnerCase("frontier-fast", "", 53),
+        tla,
+        cfg,
+        module.TLC_RUNNER,
+        "TLC",
+    ) == [
+        f"TLC runner {runner} case 'frontier-fast' at line 53: "
+        f"frontier-fast: {cfg}:2 binds constant Extra, but {tla} does not "
+        "declare it",
+        f"TLC runner {runner} case 'frontier-fast' at line 53: "
+        f"frontier-fast: {cfg} does not bind constant MissingBinding "
+        f"declared by {tla}",
+    ]
+
+
 def test_cfg_module_ownership_errors_accepts_module_prefixed_cfg_names(
     tmp_path: Path,
 ) -> None:
@@ -21312,6 +25709,30 @@ def test_cfg_duplicate_constant_binding_errors_accepts_unique_bindings(
     assert module.cfg_duplicate_constant_binding_errors("frontier-fast", cfg) == []
 
 
+def test_cfg_duplicate_constant_binding_errors_rejects_malformed_binding(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "MalformedConstants.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "CONSTANT Bug",
+                "CONSTANTS",
+                "  MaxView = 2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_duplicate_constant_binding_errors(
+        "frontier-fast", cfg
+    ) == [
+        f"frontier-fast: {cfg}:1 directive CONSTANT must bind exactly one "
+        "constant"
+    ]
+
+
 def test_cfg_duplicate_constant_binding_errors_rejects_repeated_bindings(
     tmp_path: Path,
 ) -> None:
@@ -21334,6 +25755,43 @@ def test_cfg_duplicate_constant_binding_errors_rejects_repeated_bindings(
     ) == [
         f"frontier-fast: {cfg}:4 repeats constant binding Bug "
         "first declared at line 1"
+    ]
+
+
+def test_runner_cfg_inventory_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "DuplicateInventory.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                'CONSTANT Bug = "first"',
+                "CONSTANTS",
+                '  Bug = "second"',
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT Safety",
+                "INVARIANT Safety",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = module.display_path(module.APALACHE_RUNNER)
+
+    assert module.runner_cfg_inventory_errors(
+        "frontier-fast",
+        module.RunnerCase("frontier-fast", "", 41),
+        cfg,
+        module.APALACHE_RUNNER,
+        "Apalache",
+    ) == [
+        f"Apalache runner {runner} case 'frontier-fast' at line 41: "
+        f"frontier-fast: {cfg}:3 repeats constant binding Bug first declared "
+        "at line 1",
+        f"Apalache runner {runner} case 'frontier-fast' at line 41: "
+        f"frontier-fast: {cfg}:7 repeats INVARIANT check Safety first "
+        "declared at line 6",
     ]
 
 
@@ -21372,6 +25830,53 @@ def test_cfg_operator_reference_errors_rejects_missing_module_operator(
         f"but {tla} does not define it",
         f"frontier-fast: {cfg}:4 references PROPERTY operator MissingLiveness, "
         f"but {tla} does not define it",
+    ]
+
+
+def test_runner_cfg_module_binding_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Other_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "Init ==",
+                "Next ==",
+                "TypeInvariant ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANTS TypeInvariant MissingInvariant",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = module.display_path(module.APALACHE_RUNNER)
+
+    assert module.runner_cfg_module_binding_errors(
+        "frontier-fast",
+        module.RunnerCase("frontier-fast", "", 47),
+        tla,
+        cfg,
+        module.APALACHE_RUNNER,
+        "Apalache",
+    ) == [
+        f"Apalache runner {runner} case 'frontier-fast' at line 47: "
+        f"frontier-fast: CFG {cfg} does not belong to TLA module {tla}; "
+        "expected filename stem Model or Model_*",
+        f"Apalache runner {runner} case 'frontier-fast' at line 47: "
+        f"frontier-fast: {cfg}:3 references INVARIANTS operator "
+        f"MissingInvariant, but {tla} does not define it",
     ]
 
 
@@ -21595,6 +26100,45 @@ def test_cfg_trivial_check_operator_errors_rejects_trivial_constraints(
     ]
 
 
+def test_cfg_trivial_check_operator_errors_rejects_malformed_check_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    cfg = tmp_path / "Model.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "Safety == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_trivial_check_operator_errors(
+        "frontier-fast", tla, cfg, "Apalache"
+    ) == [
+        f"frontier-fast: {cfg}:4 directive INVARIANT must reference exactly "
+        "one operator"
+    ]
+
+
 def test_cfg_duplicate_operator_reference_errors_accepts_unique_checks(
     tmp_path: Path,
 ) -> None:
@@ -21615,6 +26159,31 @@ def test_cfg_duplicate_operator_reference_errors_accepts_unique_checks(
     )
 
     assert module.cfg_duplicate_operator_reference_errors("frontier-fast", cfg) == []
+
+
+def test_cfg_duplicate_operator_reference_errors_rejects_malformed_check_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "Malformed.cfg"
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_duplicate_operator_reference_errors(
+        "frontier-fast", cfg
+    ) == [
+        f"frontier-fast: {cfg}:4 directive PROPERTY must reference exactly "
+        "one operator"
+    ]
 
 
 def test_cfg_duplicate_operator_reference_errors_rejects_repeated_constraint(
@@ -21771,6 +26340,24 @@ def test_cfg_semantic_check_errors_rejects_type_only_check(
     ]
 
 
+def test_cfg_semantic_check_errors_rejects_malformed_check_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    cfg.write_text(
+        "\n".join(["INIT Init", "NEXT Next", "PROPERTY"]),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_semantic_check_errors(
+        "frontier-fast", cfg, "TLC"
+    ) == [
+        f"frontier-fast: {cfg}:3 directive PROPERTY must reference exactly "
+        "one operator"
+    ]
+
+
 def test_cfg_fast_generic_check_errors_rejects_fast_generic_checks(
     tmp_path: Path,
 ) -> None:
@@ -21828,6 +26415,49 @@ def test_cfg_fast_generic_check_errors_rejects_fast_checks_without_envelope(
     ]
 
 
+def test_runner_cfg_proof_target_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    cfg.write_text(
+        "\n".join(["INIT Init", "NEXT Next", "INVARIANT TypeInvariant"]),
+        encoding="utf-8",
+    )
+    runner = module.display_path(module.TLC_RUNNER)
+
+    assert module.runner_cfg_proof_target_errors(
+        "frontier-fast",
+        module.RunnerCase("frontier-fast", "", 43),
+        cfg,
+        module.TLC_RUNNER,
+        "TLC",
+    ) == [
+        f"TLC runner {runner} case 'frontier-fast' at line 43: "
+        f"frontier-fast: TLC cfg {cfg} has no non-TypeInvariant "
+        "invariant/property check",
+        f"TLC runner {runner} case 'frontier-fast' at line 43: "
+        f"frontier-fast: TLC cfg {cfg} has no model-specific "
+        "*CorrectnessEnvelope invariant/property check",
+    ]
+
+
+def test_cfg_fast_generic_check_errors_rejects_malformed_check_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    cfg.write_text(
+        "\n".join(["INIT Init", "NEXT Next", "INVARIANT TypeInvariant", "PROPERTY"]),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_fast_generic_check_errors("frontier-fast", cfg, "TLC") == [
+        f"frontier-fast: {cfg}:4 directive PROPERTY must reference exactly "
+        "one operator"
+    ]
+
+
 def test_cfg_fast_generic_check_errors_accepts_enveloped_fast_checks(
     tmp_path: Path,
 ) -> None:
@@ -21872,6 +26502,48 @@ def test_cfg_fast_generic_check_errors_ignores_mutation_configs(
         )
         == []
     )
+
+
+def test_cfg_correctness_envelope_shape_errors_rejects_malformed_check_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiFrontier.tla"
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFrontier ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "FrontierExactness == TRUE",
+                "FrontierCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ FrontierExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_correctness_envelope_shape_errors(
+        "frontier-fast", tla, cfg, "TLC"
+    ) == [
+        f"frontier-fast: {cfg}:4 directive PROPERTY must reference exactly "
+        "one operator"
+    ]
 
 
 def test_cfg_correctness_envelope_shape_errors_rejects_missing_type_invariant(
@@ -35921,6 +40593,48 @@ def test_cfg_correctness_envelope_shape_errors_rejects_top_level_direct_alias_ex
     ]
 
 
+def test_cfg_direct_exactness_shape_errors_rejects_malformed_check_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectMalformed.tla"
+    cfg = tmp_path / "SumeragiDirectMalformed_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectMalformed ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "DirectMalformedExactness == TRUE",
+                "DirectMalformedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectMalformedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_shape_errors(
+        "direct-malformed-fast", tla, cfg, "Apalache"
+    ) == [
+        f"direct-malformed-fast: {cfg}:4 directive INVARIANT must reference "
+        "exactly one operator"
+    ]
+
+
 def test_cfg_direct_exactness_shape_errors_rejects_mixed_generic_exactness(
     tmp_path: Path,
 ) -> None:
@@ -36257,6 +40971,48 @@ def test_cfg_direct_exactness_shape_errors_rejects_unnamed_parameterized_checks(
     ]
 
 
+def test_cfg_direct_exactness_envelope_pairing_errors_rejects_malformed_check_surface(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiMalformedPairing.tla"
+    cfg = tmp_path / "SumeragiMalformedPairing_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiMalformedPairing ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "MalformedPairingExactness == TRUE",
+                "MalformedPairingCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ MalformedPairingExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "PROPERTY",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.cfg_direct_exactness_envelope_pairing_errors(
+        "malformed-pairing-fast", tla, cfg, "TLC"
+    ) == [
+        f"malformed-pairing-fast: {cfg}:4 directive PROPERTY must reference "
+        "exactly one operator"
+    ]
+
+
 def test_cfg_direct_exactness_envelope_pairing_errors_rejects_unpaired_exactness(
     tmp_path: Path,
 ) -> None:
@@ -36475,58 +41231,105 @@ def test_duplicate_values_reports_each_duplicate_once() -> None:
 
 def test_pr_tlc_cross_check_errors_rejects_missing_non_allowlisted_mode() -> None:
     module = load_coverage_module()
+    apalache_runner = module.display_path(module.APALACHE_RUNNER)
+    apalache_cases = {
+        "fast": module.RunnerCase("fast", "", 10),
+        "deep": module.RunnerCase("deep", "", 20),
+        "fork-npos": module.RunnerCase("fork-npos", "", 30),
+    }
+    tlc_cases = {"fast": module.RunnerCase("fast", "", 70)}
 
     errors = module.pr_tlc_cross_check_errors(
         {"fast", "deep", "fork-npos"},
-        {"fast"},
-        {"fast"},
+        apalache_cases,
+        tlc_cases,
+        [("fast", 90)],
         apalache_only_modes={"deep"},
     )
 
     assert len(errors) == 2
     assert errors[0] == (
-        "Sumeragi PR baseline modes without TLC runner cases "
-        "(not explicitly Apalache-only):\n"
-        "  - fork-npos"
+        "Sumeragi PR baseline mode fork-npos from Apalache runner case "
+        f"'fork-npos' at {apalache_runner}:30 has no TLC runner case "
+        "(not explicitly Apalache-only)"
     )
     assert errors[1] == (
-        "Sumeragi PR baseline modes without README TLC commands "
-        "(not explicitly Apalache-only):\n"
-        "  - fork-npos"
+        "Sumeragi PR baseline mode fork-npos from Apalache runner case "
+        f"'fork-npos' at {apalache_runner}:30 has no README TLC command "
+        "(not explicitly Apalache-only)"
     )
 
 
 def test_pr_tlc_cross_check_errors_accepts_documented_apalache_only_deep() -> None:
     module = load_coverage_module()
+    apalache_cases = {
+        "fast": module.RunnerCase("fast", "", 10),
+        "deep": module.RunnerCase("deep", "", 20),
+        "fork-npos": module.RunnerCase("fork-npos", "", 30),
+    }
+    tlc_cases = {
+        "fast": module.RunnerCase("fast", "", 70),
+        "fork-npos": module.RunnerCase("fork-npos", "", 80),
+    }
 
     assert (
         module.pr_tlc_cross_check_errors(
             {"fast", "deep", "fork-npos"},
-            {"fast", "fork-npos"},
-            {"fast", "fork-npos"},
+            apalache_cases,
+            tlc_cases,
+            [("fast", 90), ("fork-npos", 91)],
             apalache_only_modes={"deep"},
         )
         == []
     )
 
 
+def test_pr_tlc_cross_check_errors_rejects_duplicate_apalache_only_allowlist(
+) -> None:
+    module = load_coverage_module()
+    apalache_cases = {
+        "fast": module.RunnerCase("fast", "", 10),
+        "deep": module.RunnerCase("deep", "", 20),
+    }
+    tlc_cases = {"fast": module.RunnerCase("fast", "", 70)}
+
+    assert module.pr_tlc_cross_check_errors(
+        {"fast", "deep"},
+        apalache_cases,
+        tlc_cases,
+        [("fast", 90)],
+        apalache_only_modes=("deep", "deep"),
+    ) == [
+        "Apalache-only PR mode allowlist inventory repeats deep; each proof "
+        "mode must be counted once"
+    ]
+
+
 def test_pr_tlc_cross_check_errors_rejects_stale_or_routed_allowlist() -> None:
     module = load_coverage_module()
+    tlc_runner = module.display_path(module.TLC_RUNNER)
+    readme = module.display_path(module.README)
+    apalache_cases = {"fast": module.RunnerCase("fast", "", 10)}
+    tlc_cases = {
+        "fast": module.RunnerCase("fast", "", 70),
+        "deep": module.RunnerCase("deep", "", 80),
+    }
 
     errors = module.pr_tlc_cross_check_errors(
         {"fast"},
-        {"fast", "deep"},
-        {"fast", "deep"},
+        apalache_cases,
+        tlc_cases,
+        [("fast", 90), ("deep", 91)],
         apalache_only_modes={"deep"},
     )
 
     assert errors == [
         "Sumeragi Apalache-only PR mode allowlist entries are stale:\n"
         "  - deep",
-        "Sumeragi Apalache-only PR modes unexpectedly have TLC runner cases:\n"
-        "  - deep",
-        "Sumeragi Apalache-only PR modes unexpectedly have README TLC commands:\n"
-        "  - deep",
+        "Sumeragi Apalache-only PR mode deep unexpectedly has TLC runner "
+        f"case 'deep' at {tlc_runner}:80",
+        "Sumeragi Apalache-only PR mode deep unexpectedly has README TLC "
+        f"command at {readme}:91",
     ]
 
 
@@ -36562,6 +41365,56 @@ def test_ci_tlc_inventory_errors_rejects_duplicate_modes() -> None:
     ) == ["frontier-fast is invoked by CI/workflow more than once"]
 
 
+def test_ci_tlc_inventory_occurrence_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_ci = tmp_path / "fast.sh"
+    expected_failure_ci = tmp_path / "expected.sh"
+    nightly_workflow = tmp_path / "nightly.yml"
+    tlc_cases = {
+        "frontier-*": module.RunnerCase(label="frontier-*", body="", line=1),
+    }
+
+    surfaces = (
+        (
+            "PR",
+            [
+                ("frontier-fast", 2),
+                ("frontier-missing", 4),
+            ],
+            fast_ci,
+        ),
+        (
+            "expected-failure",
+            [
+                ("frontier-bug-drop-vote", 6),
+            ],
+            expected_failure_ci,
+        ),
+        (
+            "scheduled/manual",
+            [
+                ("nightly-orphan", 8),
+            ],
+            nightly_workflow,
+        ),
+    )
+
+    assert module.ci_tlc_inventory_occurrence_errors(
+        surfaces,
+        {"frontier-fast", "frontier-bug-drop-vote"},
+        tlc_cases,
+    ) == [
+        f"nightly-orphan is invoked by scheduled/manual CI at "
+        f"{nightly_workflow}:8 but unsupported by the TLC runner",
+        f"frontier-missing is invoked by PR CI at {fast_ci}:4 but missing from "
+        "README TLC commands",
+        f"nightly-orphan is invoked by scheduled/manual CI at "
+        f"{nightly_workflow}:8 but missing from README TLC commands",
+    ]
+
+
 def test_ci_tlc_inventory_errors_accepts_documented_runner_modes() -> None:
     module = load_coverage_module()
     tlc_cases = {
@@ -36575,6 +41428,122 @@ def test_ci_tlc_inventory_errors_accepts_documented_runner_modes() -> None:
             tlc_cases,
         )
         == []
+    )
+
+
+def test_ci_apalache_mode_surface_errors_accepts_disjoint_surfaces() -> None:
+    module = load_coverage_module()
+
+    assert (
+        module.ci_apalache_mode_surface_errors(
+            ["fast", "frontier-fast"],
+            ["frontier-bug-drop-vote"],
+            ["frontier-nightly"],
+        )
+        == []
+    )
+
+
+def test_ci_apalache_mode_surface_errors_rejects_all_surface_overlaps() -> None:
+    module = load_coverage_module()
+
+    assert module.ci_apalache_mode_surface_errors(
+        ["fast", "shared-pr-expected", "shared-pr-nightly"],
+        ["frontier-bug-drop-vote", "shared-pr-expected", "shared-expected-nightly"],
+        ["frontier-nightly", "shared-pr-nightly", "shared-expected-nightly"],
+    ) == [
+        "Sumeragi formal modes appear in both PR and expected-failure CI:\n"
+        "  - shared-pr-expected",
+        "Sumeragi formal modes appear in both PR and scheduled/manual CI:\n"
+        "  - shared-pr-nightly",
+        "Sumeragi formal modes appear in both expected-failure and scheduled/manual CI:\n"
+        "  - shared-expected-nightly",
+    ]
+
+
+def test_ci_tlc_mode_surface_errors_accepts_disjoint_surfaces() -> None:
+    module = load_coverage_module()
+
+    assert (
+        module.ci_tlc_mode_surface_errors(
+            ["frontier-fast"],
+            ["frontier-bug-drop-vote"],
+            ["frontier-nightly"],
+        )
+        == []
+    )
+
+
+def test_ci_tlc_mode_surface_errors_rejects_all_surface_overlaps() -> None:
+    module = load_coverage_module()
+
+    assert module.ci_tlc_mode_surface_errors(
+        ["frontier-fast", "shared-pr-expected", "shared-pr-nightly"],
+        ["frontier-bug-drop-vote", "shared-pr-expected", "shared-expected-nightly"],
+        ["frontier-nightly", "shared-pr-nightly", "shared-expected-nightly"],
+    ) == [
+        "Sumeragi TLC modes appear in both PR and expected-failure CI:\n"
+        "  - shared-pr-expected",
+        "Sumeragi TLC modes appear in both PR and scheduled/manual CI:\n"
+        "  - shared-pr-nightly",
+        "Sumeragi TLC modes appear in both expected-failure and scheduled/manual CI:\n"
+        "  - shared-expected-nightly",
+    ]
+
+
+def test_ci_mode_surface_occurrence_errors_report_source_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fast_ci = tmp_path / "fast.sh"
+    expected_failure_ci = tmp_path / "expected.sh"
+    nightly_workflow = tmp_path / "nightly.yml"
+
+    surfaces = (
+        (
+            "PR",
+            [
+                ("frontier-fast", 2),
+                ("shared-pr-expected", 4),
+                ("shared-pr-nightly", 6),
+            ],
+            fast_ci,
+        ),
+        (
+            "expected-failure",
+            [
+                ("frontier-bug-drop-vote", 8),
+                ("shared-pr-expected", 10),
+                ("shared-expected-nightly", 12),
+            ],
+            expected_failure_ci,
+        ),
+        (
+            "scheduled/manual",
+            [
+                ("frontier-nightly", 14),
+                ("shared-pr-nightly", 16),
+                ("shared-expected-nightly", 18),
+            ],
+            nightly_workflow,
+        ),
+    )
+
+    assert module.ci_mode_surface_occurrence_errors(surfaces, "formal") == [
+        "Sumeragi formal modes appear in both PR and expected-failure CI:\n"
+        f"  - shared-pr-expected (PR {fast_ci}:4; expected-failure "
+        f"{expected_failure_ci}:10)",
+        "Sumeragi formal modes appear in both PR and scheduled/manual CI:\n"
+        f"  - shared-pr-nightly (PR {fast_ci}:6; scheduled/manual "
+        f"{nightly_workflow}:16)",
+        "Sumeragi formal modes appear in both expected-failure and scheduled/manual CI:\n"
+        f"  - shared-expected-nightly (expected-failure {expected_failure_ci}:12; "
+        f"scheduled/manual {nightly_workflow}:18)",
+    ]
+    assert module.ci_mode_surface_occurrence_errors(surfaces, "TLC")[0] == (
+        "Sumeragi TLC modes appear in both PR and expected-failure CI:\n"
+        f"  - shared-pr-expected (PR {fast_ci}:4; expected-failure "
+        f"{expected_failure_ci}:10)"
     )
 
 
@@ -36602,6 +41571,20 @@ def test_runner_case_labels_parse_duplicates_for_guarding(tmp_path: Path) -> Non
         "quorum-fast",
         "frontier-fast",
     ]
+    assert module.runner_case_label_occurrences(runner) == [
+        ("frontier-fast", 2),
+        ("quorum-fast", 4),
+        ("frontier-fast", 6),
+    ]
     assert module.duplicate_values(module.runner_case_labels(runner)) == [
         "frontier-fast"
+    ]
+    assert module.duplicate_runner_case_label_errors(
+        module.runner_case_label_occurrences(runner),
+        runner,
+        "Apalache",
+    ) == [
+        f"Apalache runner {runner} repeats case label frontier-fast at line "
+        "6; first declared at line 2; each runner case label must be counted "
+        "once"
     ]

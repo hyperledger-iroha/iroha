@@ -220,6 +220,8 @@ def _read_runtime_bytecode_file_text(path: Path, *, label: str) -> str:
 def parse_runtime_bytecode_file(value: str, *, label: str) -> bytes:
     """Parse runtime bytecode from a file containing hex text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None
     path = Path(value).expanduser()
     text = _read_runtime_bytecode_file_text(path, label=label)
     return parse_runtime_bytecode_hex("".join(text.split()), label=label)
@@ -244,24 +246,13 @@ def parse_u32(value: str, *, label: str) -> int:
 def parse_bsc_network(value: str) -> str:
     """Parse the BSC network profile selector."""
 
-    if value != value.strip():
-        raise argparse.ArgumentTypeError("BSC network must be mainnet or testnet")
-    normalized = value.lower().replace("_", "-")
-    aliases = {
-        "mainnet": "mainnet",
-        "bsc-mainnet": "mainnet",
-        "56": "mainnet",
-        "testnet": "testnet",
-        "bsc-testnet": "testnet",
-        "chapel": "testnet",
-        "97": "testnet",
-    }
-    try:
-        return aliases[normalized]
-    except KeyError:
+    if type(value) is not str:
         raise argparse.ArgumentTypeError(
             "BSC network must be mainnet or testnet"
-        ) from None
+        )
+    if value not in BSC_NETWORK_PROFILES:
+        raise argparse.ArgumentTypeError("BSC network must be mainnet or testnet")
+    return value
 
 
 def _bsc_network_from_value(value: str | None) -> str:
@@ -762,15 +753,17 @@ def bsc_source_gate_hash(args: argparse.Namespace) -> bytes:
 
 
 def _toml_string(value: str) -> str:
+    if type(value) is not str:
+        raise TypeError("unsupported TOML string value")
     return json.dumps(value)
 
 
 def _toml_line(key: str, value: object) -> str:
-    if isinstance(value, bool):
+    if type(value) is bool:
         rendered = "true" if value else "false"
-    elif isinstance(value, int):
+    elif type(value) is int:
         rendered = str(value)
-    elif isinstance(value, str):
+    elif type(value) is str:
         rendered = _toml_string(value)
     else:
         raise TypeError(f"unsupported TOML value for {key}")
@@ -959,22 +952,33 @@ def _require_toml_receipt_metadata(
         raise ValueError(
             "--deployment-receipt-contract-address must match --bridge-address"
         )
-    block_number = args.deployment_receipt_block_number
-    if type(block_number) is not int or block_number <= 0:
-        raise ValueError("--deployment-receipt-block-number must be positive")
-    transaction_block_number = args.deployment_transaction_block_number
-    if type(transaction_block_number) is not int or transaction_block_number <= 0:
-        raise ValueError("--deployment-transaction-block-number must be positive")
     if args.deployment_transaction_block_hash != args.deployment_receipt_block_hash:
         raise ValueError(
             "--deployment-transaction-block-hash must match "
             "--deployment-receipt-block-hash"
         )
-    if args.deployment_transaction_block_number != args.deployment_receipt_block_number:
+    _deployment_block_numbers(args)
+
+
+def _deployment_block_numbers(args: argparse.Namespace) -> tuple[int, int]:
+    receipt_block_number = getattr(args, "deployment_receipt_block_number", None)
+    if type(receipt_block_number) is not int or receipt_block_number <= 0:
+        raise ValueError("--deployment-receipt-block-number must be positive") from None
+    transaction_block_number = getattr(
+        args,
+        "deployment_transaction_block_number",
+        None,
+    )
+    if type(transaction_block_number) is not int or transaction_block_number <= 0:
+        raise ValueError(
+            "--deployment-transaction-block-number must be positive"
+        ) from None
+    if transaction_block_number != receipt_block_number:
         raise ValueError(
             "--deployment-transaction-block-number must match "
             "--deployment-receipt-block-number"
         )
+    return transaction_block_number, receipt_block_number
 
 
 def _toml_receipt_metadata_ready(args: argparse.Namespace) -> bool:
@@ -1157,6 +1161,10 @@ def render_toml(args: argparse.Namespace) -> str:
     _require_expected_record_hashes(args, output="toml")
     _require_toml_receipt_metadata(args, output="toml")
     _require_toml_runtime_bytecode_metadata(args, output="toml")
+    (
+        deployment_transaction_block_number,
+        deployment_receipt_block_number,
+    ) = _deployment_block_numbers(args)
     block_tag = _block_tag_from_args(args)
     comments = [
         "# sccp_evm_source_rpc_chain_id = "
@@ -1184,7 +1192,7 @@ def render_toml(args: argparse.Namespace) -> str:
             "# sccp_evm_source_deployment_transaction_block_hash = "
             + json.dumps(_hex(args.deployment_transaction_block_hash)),
             "# sccp_evm_source_deployment_transaction_block_number = "
-            + json.dumps(str(args.deployment_transaction_block_number)),
+            + json.dumps(str(deployment_transaction_block_number)),
             "# sccp_evm_source_deployment_transaction_input_sha256 = "
             + json.dumps(_hex(args.deployment_transaction_input_sha256)),
             "# sccp_evm_source_deployment_receipt_status = " + json.dumps("0x1"),
@@ -1193,7 +1201,7 @@ def render_toml(args: argparse.Namespace) -> str:
             "# sccp_evm_source_deployment_block_hash = "
             + json.dumps(_hex(args.deployment_receipt_block_hash)),
             "# sccp_evm_source_deployment_block_number = "
-            + json.dumps(str(args.deployment_receipt_block_number)),
+            + json.dumps(str(deployment_receipt_block_number)),
             "# sccp_evm_source_deployment_block_receipts_root = "
             + json.dumps(_hex(args.deployment_receipt_block_receipts_root)),
             "# sccp_bsc_source_verifier_material_hash = "
@@ -1281,6 +1289,10 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
     if runtime_bytecode_hex is not None:
         summary["source_bridge_runtime_bytecode_hex"] = runtime_bytecode_hex
     if toml_metadata_ready:
+        (
+            deployment_transaction_block_number,
+            _deployment_receipt_block_number,
+        ) = _deployment_block_numbers(args)
         summary.update(
             {
                 "deployment_transaction_hash": _hex(args.deployment_transaction_hash),
@@ -1288,7 +1300,7 @@ def _json_summary(args: argparse.Namespace) -> dict[str, object]:
                     args.deployment_transaction_block_hash
                 ),
                 "deployment_transaction_block_number": (
-                    args.deployment_transaction_block_number
+                    deployment_transaction_block_number
                 ),
                 "deployment_transaction_input_sha256": (
                     _hex(args.deployment_transaction_input_sha256)

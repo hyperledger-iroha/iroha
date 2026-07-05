@@ -57,6 +57,59 @@ class HostileExpectedDestinationBindingHash:
         )
 
 
+class HostileProgramDataAddress:
+    def __str__(self):
+        raise AssertionError("secret-token Solana ProgramData address was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana ProgramData address was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana ProgramData address was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana ProgramData address was compared")
+
+    def strip(self):
+        raise AssertionError("secret-token Solana ProgramData address was stripped")
+
+
+class HostileTomlString(str):
+    def __new__(cls):
+        return str.__new__(cls, "blocked")
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana TOML string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana TOML string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana TOML string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana TOML string was compared")
+
+
+class HostileTomlInt(int):
+    def __new__(cls):
+        return int.__new__(cls, 1)
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana TOML integer was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana TOML integer was repr'd")
+
+
+class HostileTomlList(list):
+    def __iter__(self):
+        raise AssertionError("secret-token Solana TOML list was iterated")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana TOML list was repr'd")
+
+
 def test_solana_destination_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_evidence_module()
 
@@ -413,15 +466,41 @@ def test_solana_program_bytes_file_rejects_unreadable_file_shapes(tmp_path):
     parent_symlink_input = parent_link / "program.so"
     missing_input = tmp_path / "secret-token-solana-program-missing.so"
 
+    class HostileProgramBytesPath(str):
+        def __new__(cls):
+            return str.__new__(cls, str(outside))
+
+        def __str__(self):
+            raise AssertionError("secret-token Solana program path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token Solana program path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token Solana program path was coerced")
+
+    class HostileProgramBytesPathLike:
+        def __str__(self):
+            raise AssertionError("secret-token Solana program path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token Solana program path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token Solana program path-like was coerced")
+
     for path in (
-        symlink_input,
-        directory_input,
-        parent_symlink_input,
-        missing_input,
+        str(symlink_input),
+        str(directory_input),
+        str(parent_symlink_input),
+        str(missing_input),
+        outside,
+        HostileProgramBytesPath(),
+        HostileProgramBytesPathLike(),
     ):
         try:
             module.parse_program_bytes_file(
-                str(path),
+                path,
                 label="verifier program bytes",
             )
         except module.argparse.ArgumentTypeError as exc:
@@ -594,6 +673,66 @@ def test_solana_destination_rejects_hostile_expected_binding_hash_without_hooks(
                 raise AssertionError(
                     "Solana destination main accepted malformed expected binding"
                 )
+
+
+def test_solana_destination_rejects_non_string_programdata_address_without_stringifying():
+    module = load_evidence_module()
+    destination_binding_hash = bytes.fromhex(SOLANA_DESTINATION_BINDING_VECTOR)
+
+    toml_args = solana_toml_args(module)
+    toml_args.programdata_address = HostileProgramDataAddress()
+    try:
+        module.render_toml(toml_args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "programdata_address metadata must be an exact string"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError(
+            "Solana destination TOML accepted hostile ProgramData address metadata"
+        )
+
+    summary_args = solana_toml_args(module)
+    summary_args.programdata_address = HostileProgramDataAddress()
+    try:
+        module._json_summary(summary_args, destination_binding_hash, True)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "programdata_address metadata must be an exact string"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is True
+    else:
+        raise AssertionError(
+            "Solana destination JSON accepted hostile ProgramData address metadata"
+        )
+
+
+def test_solana_destination_toml_renderer_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    cases = (
+        lambda: module._toml_string(HostileTomlString()),
+        lambda: module._toml_line("verifier_identity", HostileTomlString()),
+        lambda: module._toml_line("blockers", [HostileTomlString()]),
+        lambda: module._toml_line("version", HostileTomlInt()),
+        lambda: module._toml_line("blockers", HostileTomlList(["blocked"])),
+    )
+
+    for render in cases:
+        try:
+            render()
+        except TypeError as exc:
+            rendered = str(exc)
+            assert "unsupported TOML" in rendered
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "Solana destination TOML renderer accepted hostile subclass value"
+            )
 
 
 def test_solana_destination_json_summary_rejects_non_boolean_programdata_readiness(

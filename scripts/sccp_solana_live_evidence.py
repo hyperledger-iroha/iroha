@@ -191,7 +191,7 @@ def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[st
 
 def _normalize_solana_rpc_url(rpc_url: str) -> str:
     if (
-        not isinstance(rpc_url, str)
+        type(rpc_url) is not str
         or rpc_url != rpc_url.strip()
         or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in rpc_url)
     ):
@@ -514,7 +514,7 @@ def _live_positive_u64(live: dict[str, Any], field: str, *, label: str) -> int:
     if type(value) is int:
         parsed = value
     elif (
-        isinstance(value, str)
+        type(value) is str
         and value.isascii()
         and value.isdecimal()
         and (len(value) == 1 or not value.startswith("0"))
@@ -749,7 +749,11 @@ def _destination_args_from_validated_live(
     program_bytes: bytes,
 ) -> argparse.Namespace:
     return argparse.Namespace(
-        verifier_program_id=live["verifier_program_id"],
+        verifier_program_id=_exact_live_string(
+            live,
+            "verifier_program_id",
+            label="verifier_program_id",
+        ),
         verifier_code_hash=verifier_code_hash,
         verifier_program_bytes_hex=None,
         verifier_program_bytes_base64=program_bytes,
@@ -759,15 +763,25 @@ def _destination_args_from_validated_live(
         source_adapter_engine_deployment_hash=args.source_adapter_engine_deployment_hash,
         route_canary_evidence_hash=getattr(args, "route_canary_evidence_hash", None),
         expected_destination_binding_hash=args.expected_destination_binding_hash,
-        programdata_address=live["programdata_address"],
-        programdata_slot=int(str(live["programdata_slot"]), 10),
-        program_account_context_slot=int(
-            str(live["program_account_context_slot"]),
-            10,
+        programdata_address=_exact_live_string(
+            live,
+            "programdata_address",
+            label="programdata_address",
         ),
-        programdata_account_context_slot=int(
-            str(live["programdata_account_context_slot"]),
-            10,
+        programdata_slot=_live_positive_u64(
+            live,
+            "programdata_slot",
+            label="Solana ProgramData slot metadata",
+        ),
+        program_account_context_slot=_live_positive_u64(
+            live,
+            "program_account_context_slot",
+            label="Solana program account RPC context slot metadata",
+        ),
+        programdata_account_context_slot=_live_positive_u64(
+            live,
+            "programdata_account_context_slot",
+            label="Solana ProgramData account RPC context slot metadata",
         ),
     )
 
@@ -827,13 +841,18 @@ def _summary(args: argparse.Namespace, live: dict[str, Any]) -> dict[str, Any]:
             "expected_programdata_slot",
             label="expected ProgramData slot",
         )
+    live_programdata_slot = _live_positive_u64(
+        live,
+        "programdata_slot",
+        label="Solana ProgramData slot metadata",
+    )
     if (
         expected_programdata_slot is not None
-        and str(expected_programdata_slot) != live["programdata_slot"]
+        and expected_programdata_slot != live_programdata_slot
     ):
         raise ValueError(
             "--expected-programdata-slot does not match live Solana ProgramData account: "
-            f"expected {expected_programdata_slot}, got {live['programdata_slot']}"
+            f"expected {expected_programdata_slot}, got {live_programdata_slot}"
         )
     summary = evidence._json_summary(
         destination_args,
@@ -988,6 +1007,11 @@ def render_toml(args: argparse.Namespace, live: dict[str, Any]) -> str:
         raise ValueError("--toml requires --expected-programdata-slot")
     if getattr(args, "route_canary_evidence_hash", None) is None:
         raise ValueError("--toml requires --route-canary-evidence-hash")
+    expected_programdata_slot = _live_positive_u64(
+        {"expected_programdata_slot": args.expected_programdata_slot},
+        "expected_programdata_slot",
+        label="expected ProgramData slot",
+    )
     summary = _summary(args, live)
     if summary.get("full_toml_ready") is not True:
         raise ValueError("Solana live evidence is not fully pinned for TOML output")
@@ -1001,37 +1025,91 @@ def render_toml(args: argparse.Namespace, live: dict[str, Any]) -> str:
         ),
         evidence.solana_destination_binding_hash(),
     )
+    program_account_data_len = _live_positive_u64(
+        live,
+        "program_account_data_len",
+        label="Solana Program account data length metadata",
+    )
+    programdata_slot = _live_positive_u64(
+        live,
+        "programdata_slot",
+        label="Solana ProgramData slot metadata",
+    )
+    program_account_context_slot = _live_positive_u64(
+        live,
+        "program_account_context_slot",
+        label="Solana program account RPC context slot metadata",
+    )
+    programdata_account_context_slot = _live_positive_u64(
+        live,
+        "programdata_account_context_slot",
+        label="Solana ProgramData account RPC context slot metadata",
+    )
     comments = [
         "# sccp_solana_rpc_commitment = "
-        + json.dumps(str(live["rpc_commitment"])),
+        + json.dumps(
+            _exact_live_string(live, "rpc_commitment", label="rpc_commitment")
+        ),
         "# sccp_solana_program_owner = "
-        + json.dumps(str(live["program_owner"])),
+        + json.dumps(
+            _exact_live_string(live, "program_owner", label="program_owner")
+        ),
         "# sccp_solana_programdata_owner = "
-        + json.dumps(str(live["programdata_owner"])),
+        + json.dumps(
+            _exact_live_string(live, "programdata_owner", label="programdata_owner")
+        ),
         "# sccp_solana_program_immutable = "
         + json.dumps("true" if live["program_immutable"] is True else "false"),
         "# sccp_solana_program_account_data_len = "
-        + json.dumps(str(live["program_account_data_len"])),
+        + json.dumps(str(program_account_data_len)),
         "# sccp_solana_program_account_data_base64 = "
-        + json.dumps(str(live["program_account_data_base64"])),
+        + json.dumps(
+            _exact_live_string(
+                live,
+                "program_account_data_base64",
+                label="program_account_data_base64",
+            )
+        ),
         "# sccp_solana_programdata_address = "
-        + json.dumps(str(live["programdata_address"])),
+        + json.dumps(
+            _exact_live_string(live, "programdata_address", label="programdata_address")
+        ),
         "# sccp_solana_programdata_slot = "
-        + json.dumps(str(live["programdata_slot"])),
+        + json.dumps(str(programdata_slot)),
         "# sccp_solana_expected_programdata_slot = "
-        + json.dumps(str(args.expected_programdata_slot)),
+        + json.dumps(str(expected_programdata_slot)),
         "# sccp_solana_program_account_context_slot = "
-        + json.dumps(str(live["program_account_context_slot"])),
+        + json.dumps(str(program_account_context_slot)),
         "# sccp_solana_programdata_account_context_slot = "
-        + json.dumps(str(live["programdata_account_context_slot"])),
+        + json.dumps(str(programdata_account_context_slot)),
         "# sccp_solana_programdata_metadata_blake2b256 = "
-        + json.dumps(str(live["programdata_metadata_blake2b256"])),
+        + json.dumps(
+            _exact_live_string(
+                live,
+                "programdata_metadata_blake2b256",
+                label="programdata_metadata_blake2b256",
+            )
+        ),
         "# sccp_solana_programdata_metadata_base64 = "
-        + json.dumps(str(live["programdata_metadata_base64"])),
+        + json.dumps(
+            _exact_live_string(
+                live,
+                "programdata_metadata_base64",
+                label="programdata_metadata_base64",
+            )
+        ),
         "# sccp_solana_programdata_executable_blake2b256 = "
-        + json.dumps(str(live["verifier_code_hash"])),
+        + json.dumps(
+            _exact_live_string(live, "verifier_code_hash", label="verifier_code_hash")
+        ),
         "# sccp_solana_programdata_executable_base64 = "
-        + json.dumps(str(live["programdata_executable_base64"])),
+        + json.dumps(
+            _exact_live_string(
+                live,
+                "programdata_executable_base64",
+                label="programdata_executable_base64",
+            )
+        ),
     ]
     existing_keys = set()
     for line in rendered.splitlines():

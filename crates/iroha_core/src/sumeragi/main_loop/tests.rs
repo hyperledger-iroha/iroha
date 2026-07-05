@@ -2700,7 +2700,38 @@ async fn tick_mode_management_clears_pending_mode_flip() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn tick_mode_management_repairs_npos_epoch_status_before_mode_tag() {
+    let _status_guard = super::status::qc_status_test_guard();
+    let _mode_guard = super::status::mode_tags_test_guard();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.npos.epoch_length_blocks = 6;
+    consensus_cfg.npos.vrf.commit_deadline_offset_blocks = 2;
+    consensus_cfg.npos.vrf.reveal_deadline_offset_blocks = 5;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    super::status::set_epoch_parameters(0, 0, 0);
+    super::status::set_mode_tags(super::PERMISSIONED_TAG, None, None);
+
+    let progressed = harness.actor.tick_mode_management();
+    assert!(
+        !progressed,
+        "steady-state NPoS tick should only republish status"
+    );
+    let snapshot = super::status::snapshot();
+    assert_eq!(snapshot.mode_tag, super::NPOS_TAG);
+    assert_eq!(snapshot.epoch_length_blocks, 6);
+    assert_eq!(snapshot.epoch_commit_deadline_offset, 2);
+    assert_eq!(snapshot.epoch_reveal_deadline_offset, 5);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn apply_mode_flip_defers_while_commit_pipeline_active() {
+    let _status_guard = super::status::qc_status_test_guard();
+    let _mode_guard = super::status::mode_tags_test_guard();
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
 
@@ -2753,6 +2784,27 @@ async fn apply_mode_flip_defers_while_commit_pipeline_active() {
         "pending mode flip should remain queued"
     );
 
+    actor.pending.pending_processing.set(None);
+    actor.pending.pending_processing_parent.set(None);
+    actor.subsystems.commit.inflight = None;
+    let mut timing = actor.effective_timing.get();
+    timing.effective_mode = ConsensusMode::Npos;
+    actor.effective_timing.set(timing);
+
+    let progressed = actor.tick_mode_management();
+    assert!(progressed, "idle pending mode flip should apply");
+    assert_eq!(actor.consensus_mode, ConsensusMode::Npos);
+    assert!(
+        actor.pending_mode_flip.is_none(),
+        "pending flip should clear after successful apply"
+    );
+    let snapshot = super::status::snapshot();
+    assert_eq!(snapshot.mode_tag, super::NPOS_TAG);
+    assert!(
+        snapshot.epoch_length_blocks > 0,
+        "NPoS status should publish epoch parameters after deferred flip"
+    );
+
     harness.shutdown.send();
 }
 
@@ -2760,6 +2812,8 @@ async fn apply_mode_flip_defers_while_commit_pipeline_active() {
 async fn apply_mode_flip_uses_world_epoch_params() {
     use iroha_data_model::parameter::system::SumeragiNposParameters;
 
+    let _status_guard = super::status::qc_status_test_guard();
+    let _mode_guard = super::status::mode_tags_test_guard();
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
     consensus_cfg.da.enabled = true;
@@ -2787,6 +2841,8 @@ async fn apply_mode_flip_uses_world_epoch_params() {
         block.commit();
     }
 
+    super::status::set_epoch_parameters(0, 0, 0);
+    super::status::set_mode_tags(super::PERMISSIONED_TAG, None, None);
     actor
         .apply_mode_flip(ConsensusMode::Npos)
         .expect("mode flip should succeed");
@@ -2794,6 +2850,11 @@ async fn apply_mode_flip_uses_world_epoch_params() {
     assert_eq!(manager.epoch_length_blocks(), 11);
     assert_eq!(manager.commit_window_end(), 4);
     assert_eq!(manager.reveal_window_end(), 9);
+    let snapshot = super::status::snapshot();
+    assert_eq!(snapshot.mode_tag, super::NPOS_TAG);
+    assert_eq!(snapshot.epoch_length_blocks, 11);
+    assert_eq!(snapshot.epoch_commit_deadline_offset, 4);
+    assert_eq!(snapshot.epoch_reveal_deadline_offset, 9);
 
     harness.shutdown.send();
 }
@@ -54447,6 +54508,12 @@ fn rbc_session_record_ready_accepts_distinct_senders_after_deliver() {
 #[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_ready_skips_invalid_session() {
     let mut harness = test_actor_harness(4).await;
+    #[cfg(feature = "telemetry")]
+    let telemetry = harness
+        .actor
+        .telemetry_handle()
+        .expect("telemetry enabled")
+        .clone();
     let height = harness.actor.committed_height_snapshot().saturating_add(1);
     let view = 0_u64;
     let parent = harness.actor.state.view().latest_block_hash();
@@ -54497,6 +54564,15 @@ async fn maybe_emit_rbc_ready_skips_invalid_session() {
     assert!(stored.is_invalid());
     assert!(!stored.sent_ready);
     assert_eq!(stored.ready_signatures.len(), 1);
+    #[cfg(feature = "telemetry")]
+    {
+        let metrics = telemetry.metrics().await;
+        assert_eq!(
+            metrics.sumeragi_rbc_ready_broadcasts_total.get(),
+            0,
+            "invalid sessions must not record outbound READY broadcast telemetry"
+        );
+    }
 
     harness.shutdown.send();
 }
@@ -55503,6 +55579,12 @@ async fn maybe_emit_rbc_ready_for_known_authoritative_seed_session_skips_bootstr
     let mut consensus_cfg = test_sumeragi_config();
     consensus_cfg.rbc.chunk_max_bytes = 1024 * 1024;
     let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    #[cfg(feature = "telemetry")]
+    let telemetry = harness
+        .actor
+        .telemetry_handle()
+        .expect("telemetry enabled")
+        .clone();
 
     let height = harness
         .actor
@@ -55572,6 +55654,15 @@ async fn maybe_emit_rbc_ready_for_known_authoritative_seed_session_skips_bootstr
         ready_broadcasts, 1,
         "known authoritative blocks should broadcast READY immediately"
     );
+    #[cfg(feature = "telemetry")]
+    {
+        let metrics = telemetry.metrics().await;
+        assert_eq!(
+            metrics.sumeragi_rbc_ready_broadcasts_total.get(),
+            1,
+            "local READY broadcast telemetry should track outbound READY scheduling"
+        );
+    }
 
     if let Some(stored) = harness.actor.subsystems.da_rbc.rbc.sessions.get(&key) {
         assert!(
@@ -145236,6 +145327,98 @@ async fn cached_frontier_proposal_without_body_rotates_despite_precommit_votes()
             .current_view(height)
             .is_some_and(|current| current > view),
         "bodyless cached proposal should advance the recovery view"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn exhausted_cached_proposal_cleanup_clears_old_view_marker_after_view_advance() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let stale_view = 1_u64;
+    let current_view = stale_view.saturating_add(1);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, now);
+
+    let stale_block =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x63; Hash::LENGTH]));
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_proposal(sample_proposal(parent, height, stale_view));
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .insert_hint(sample_hint(stale_block, height, stale_view, Some(parent)));
+    actor
+        .slot_tracker
+        .proposals_seen
+        .insert((height, stale_view));
+    actor
+        .slot_tracker
+        .proposals_seen
+        .insert((height, current_view));
+    actor.mark_proposal_liveness_state(
+        height,
+        stale_view,
+        super::ProposalLivenessState::AwaitingProposalAfterMissingQc,
+        now,
+    );
+
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .pop_proposal(height, stale_view)
+            .is_some(),
+        "test setup requires cached stale proposal metadata"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .pop_hint(height, stale_view)
+            .is_some(),
+        "test setup requires cached stale proposal hint"
+    );
+    assert!(
+        actor.clear_exhausted_frontier_proposal_marker(height, stale_view),
+        "exhausted cached proposal cleanup should remove the stale proposal marker"
+    );
+
+    assert!(
+        !actor
+            .slot_tracker
+            .proposals_seen
+            .contains(&(height, stale_view)),
+        "old-view proposal marker must not keep suppressing frontier recovery"
+    );
+    assert!(
+        actor
+            .slot_tracker
+            .proposals_seen
+            .contains(&(height, current_view)),
+        "cleanup must not remove proposal markers for the active view"
+    );
+    assert!(
+        actor.subsystems.propose.proposal_liveness.is_none(),
+        "stale-view liveness state should be cleared with the exhausted marker"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(current_view),
+        "metadata cleanup should not roll the current view back"
     );
 
     harness.shutdown.send();

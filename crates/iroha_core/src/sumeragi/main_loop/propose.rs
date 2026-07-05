@@ -5652,6 +5652,23 @@ impl Actor {
         (view_age >= stale_window).then_some((view_age, stale_window))
     }
 
+    pub(super) fn clear_exhausted_frontier_proposal_marker(
+        &mut self,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        let removed = self.slot_tracker.proposals_seen.remove(&(height, view));
+        if self
+            .subsystems
+            .propose
+            .proposal_liveness
+            .is_some_and(|slot| slot.height == height && slot.view == view)
+        {
+            self.subsystems.propose.proposal_liveness = None;
+        }
+        removed
+    }
+
     pub(super) fn on_pacemaker_backpressure_deferral(
         &mut self,
         now: Instant,
@@ -6945,12 +6962,15 @@ impl Actor {
                     .proposal_cache
                     .pop_hint(height, view_idx)
                     .is_some();
+                let dropped_proposal_seen =
+                    self.clear_exhausted_frontier_proposal_marker(height, view_idx);
                 warn!(
                     height,
                     view = view_idx,
                     queue_len = pending_queue_len,
                     dropped_proposal,
                     dropped_hint,
+                    dropped_proposal_seen,
                     repair_window_ms = repair_window.as_millis(),
                     repair_age_ms = repair_age.map(|age| age.as_millis()),
                     cache_age_ms = cache_age.map(|age| age.as_millis()),
@@ -7337,15 +7357,7 @@ impl Actor {
                     precommit_votes_at_view,
                 )
             {
-                self.slot_tracker.proposals_seen.remove(&(height, view_idx));
-                if self
-                    .subsystems
-                    .propose
-                    .proposal_liveness
-                    .is_some_and(|slot| slot.height == height && slot.view == view_idx)
-                {
-                    self.subsystems.propose.proposal_liveness = None;
-                }
+                self.clear_exhausted_frontier_proposal_marker(height, view_idx);
                 warn!(
                     height,
                     view = view_idx,
@@ -7388,15 +7400,7 @@ impl Actor {
                         highest_qc,
                     )
                 {
-                    self.slot_tracker.proposals_seen.remove(&(height, view_idx));
-                    if self
-                        .subsystems
-                        .propose
-                        .proposal_liveness
-                        .is_some_and(|slot| slot.height == height && slot.view == view_idx)
-                    {
-                        self.subsystems.propose.proposal_liveness = None;
-                    }
+                    self.clear_exhausted_frontier_proposal_marker(height, view_idx);
                     warn!(
                         height,
                         view = view_idx,

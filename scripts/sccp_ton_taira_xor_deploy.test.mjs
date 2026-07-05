@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -18,6 +18,12 @@ const DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO = "100000000";
 const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const DEFAULT_TAIRA_BURN_RECORD_VK_NAME = "taira_bsc_xor_burn_record_v1";
 const DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT = 2_000_000;
+const TON_TESTNET_LEGACY_NETWORK = "testnet";
+const RETIRED_TON_ROUTE_MANIFEST_FIELDS = Object.freeze([
+  "tron_network",
+  "sccp_tron_source_bridge_address",
+  "tron_verifier_address",
+]);
 const malformedBooleanOptionValues = Object.freeze([
   " TRUE",
   "true ",
@@ -217,11 +223,15 @@ function routeManifestArgs(paths, proofArtifactHash, extra = {}) {
 }
 
 function runTonCli(args, options = {}) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env: { ...process.env, ...options.env },
-  });
+  return spawnSync(
+    process.execPath,
+    [...(options.nodeArgs ?? []), SCRIPT, ...args],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, ...options.env },
+    },
+  );
 }
 
 test("TON route manifest renders production-ready offline evidence", async () => {
@@ -262,6 +272,11 @@ test("TON route manifest renders production-ready offline evidence", async () =>
   );
   assert.equal(envelope.manifest.production_ready, true);
   assert.equal(envelope.manifest.disabled_reason, undefined);
+  assert.equal(envelope.manifest.source_bridge_address, tonRaw(0x33));
+  assert.equal(envelope.manifest.destination_verifier_address, tonRaw(0x44));
+  for (const retiredField of RETIRED_TON_ROUTE_MANIFEST_FIELDS) {
+    assert.equal(Object.hasOwn(envelope.manifest, retiredField), false);
+  }
   const rollout = envelope.manifest.destination_rollout;
   assert.equal(rollout.version, 1);
   assert.equal(rollout.destination_network_id, TON_TESTNET_CHAIN_ID_HEX);
@@ -338,6 +353,10 @@ test("TON publish-route-manifest writes a reviewable ISI artifact without submit
     "taira_ton_xor",
   );
   assert.equal(
+    artifact.instruction.UpsertSccpRouteManifest.manifest.tron_network,
+    TON_TESTNET_LEGACY_NETWORK,
+  );
+  assert.equal(
     artifact.instruction.UpsertSccpRouteManifest.manifest
       .sccp_tron_source_bridge_address,
     tonRaw(0x33),
@@ -355,6 +374,61 @@ test("TON publish-route-manifest writes a reviewable ISI artifact without submit
       .destination_verifier_address,
     undefined,
   );
+});
+
+test("TON publish-route-manifest rejects retired TRON manifest aliases without echoing values", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const render = runTonCli(routeManifestArgs(paths, proofArtifactHash));
+  assert.equal(render.status, 0, render.stderr);
+  const envelope = JSON.parse(await readFile(paths.out, "utf8"));
+  const cases = [
+    {
+      field: "tron_network",
+      value: "secret-token-ton-retired-network",
+      expected:
+        /TON route manifest must not use retired tron_network; use chain\./u,
+    },
+    {
+      field: "sccp_tron_source_bridge_address",
+      value: "secret-token-ton-retired-source-bridge",
+      expected:
+        /TON route manifest must not use retired sccp_tron_source_bridge_address; use source_bridge_address\./u,
+    },
+    {
+      field: "tron_verifier_address",
+      value: "secret-token-ton-retired-verifier",
+      expected:
+        /TON route manifest must not use retired tron_verifier_address; use destination_verifier_address\./u,
+    },
+  ];
+
+  for (const [index, testCase] of cases.entries()) {
+    const manifestPath = join(root, `retired-alias-${index}.json`);
+    const outPath = join(root, `retired-alias-${index}.out.json`);
+    const sentinel = `sentinel:retired-alias:${index}\n`;
+    await writeJson(manifestPath, {
+      ...envelope,
+      manifest: {
+        ...envelope.manifest,
+        [testCase.field]: testCase.value,
+      },
+    });
+    await writeFile(outPath, sentinel, "utf8");
+
+    const publish = runTonCli([
+      "publish-route-manifest",
+      "--manifest",
+      manifestPath,
+      "--out",
+      outPath,
+    ]);
+
+    assert.notEqual(publish.status, 0);
+    assert.match(publish.stderr, testCase.expected);
+    assert.doesNotMatch(publish.stderr, new RegExp(testCase.value, "u"));
+    assert.equal(await readFile(outPath, "utf8"), sentinel);
+  }
 });
 
 test("TON publish-route-manifest rejects submit-only options without submit", async () => {
@@ -1031,6 +1105,126 @@ test("TON route manifest rejects output path collisions with inputs", async () =
     await readFile(paths.deploymentEvidence, "utf8"),
     originalEvidence,
   );
+
+  const linkedOutput = join(root, "deployment-evidence-link.json");
+  await symlink(paths.deploymentEvidence, linkedOutput, "file");
+  const linkedResult = runTonCli(
+    routeManifestArgs(paths, proofArtifactHash, {
+      out: linkedOutput,
+    }),
+  );
+
+  assert.notEqual(linkedResult.status, 0);
+  assert.match(
+    linkedResult.stderr,
+    /--out must not be the same path as --deployment-evidence/u,
+  );
+  assert.equal(
+    await readFile(paths.deploymentEvidence, "utf8"),
+    originalEvidence,
+  );
+
+  const linkedRoot = join(root, "linked-root");
+  await symlink(root, linkedRoot, "dir");
+  const linkedParentResult = runTonCli(
+    routeManifestArgs(paths, proofArtifactHash, {
+      out: join(linkedRoot, basename(paths.deploymentEvidence)),
+    }),
+  );
+
+  assert.notEqual(linkedParentResult.status, 0);
+  assert.match(
+    linkedParentResult.stderr,
+    /--out must not be the same path as --deployment-evidence/u,
+  );
+  assert.equal(
+    await readFile(paths.deploymentEvidence, "utf8"),
+    originalEvidence,
+  );
+});
+
+test("TON route manifest replaces output symlinks instead of following them", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const unrelatedTarget = join(root, "unrelated-target.json");
+  const sentinel = '{"sentinel":true}\n';
+  await writeFile(unrelatedTarget, sentinel, "utf8");
+  const linkedOutput = join(root, "route-output-link.json");
+  await symlink(unrelatedTarget, linkedOutput, "file");
+
+  const result = runTonCli(
+    routeManifestArgs(paths, proofArtifactHash, {
+      out: linkedOutput,
+    }),
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(await readFile(unrelatedTarget, "utf8"), sentinel);
+  const manifest = JSON.parse(await readFile(linkedOutput, "utf8"));
+  assert.equal(
+    manifest.schema,
+    "iroha-sccp-taira-ton-xor-route-manifest-draft/v1",
+  );
+});
+
+test("TON route manifest skips hostile temp symlink collisions", async () => {
+  const root = await fixtureRoot();
+  const { paths, proofArtifactHash } = await writeFixtureFiles(root);
+  const outPath = join(root, "route-temp.manifest.json");
+  const trapTarget = join(root, "temp-target.json");
+  const tempRecord = join(root, "temp-paths.json");
+  const preloadPath = join(root, "force-temp-collision.cjs");
+  const sentinel = '{"sentinel":"ton-temp-target"}\n';
+  await writeFile(trapTarget, sentinel, "utf8");
+  await writeFile(
+    preloadPath,
+    `const fs = require("node:fs");
+const out = process.env.SCCP_TON_TEST_OUT;
+const trap = process.env.SCCP_TON_TEST_TRAP;
+const record = process.env.SCCP_TON_TEST_TEMP_RECORD;
+const temps = [
+  \`\${out}.tmp-\${process.pid}-424242-8\`,
+  \`\${out}.tmp-\${process.pid}-424242-c\`,
+];
+for (const temp of temps) {
+  try {
+    fs.symlinkSync(trap, temp);
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+}
+fs.writeFileSync(record, JSON.stringify(temps));
+Date.now = () => 424242;
+const forcedRandoms = [0.5, 0.75, 0.875];
+Math.random = () => forcedRandoms.shift() ?? 0.875;
+`,
+    "utf8",
+  );
+
+  const result = runTonCli(
+    routeManifestArgs(paths, proofArtifactHash, {
+      out: outPath,
+    }),
+    {
+      env: {
+        SCCP_TON_TEST_OUT: outPath,
+        SCCP_TON_TEST_TRAP: trapTarget,
+        SCCP_TON_TEST_TEMP_RECORD: tempRecord,
+      },
+      nodeArgs: ["--require", preloadPath],
+    },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(await readFile(trapTarget, "utf8"), sentinel);
+  const tempPaths = JSON.parse(await readFile(tempRecord, "utf8"));
+  assert.equal(await readFile(tempPaths[0], "utf8"), sentinel);
+  assert.equal(await readFile(tempPaths[1], "utf8"), sentinel);
+  const manifest = JSON.parse(await readFile(outPath, "utf8"));
+  assert.equal(
+    manifest.schema,
+    "iroha-sccp-taira-ton-xor-route-manifest-draft/v1",
+  );
 });
 
 test("TON publish-route-manifest rejects output path collisions with manifest", async () => {
@@ -1050,6 +1244,40 @@ test("TON publish-route-manifest rejects output path collisions with manifest", 
 
   assert.notEqual(publish.status, 0);
   assert.match(publish.stderr, /--out must not be the same path as --manifest/u);
+  assert.equal(await readFile(paths.out, "utf8"), originalManifest);
+
+  const linkedOutput = join(root, "route.manifest-link.json");
+  await symlink(paths.out, linkedOutput, "file");
+  const linkedPublish = runTonCli([
+    "publish-route-manifest",
+    "--manifest",
+    paths.out,
+    "--out",
+    linkedOutput,
+  ]);
+
+  assert.notEqual(linkedPublish.status, 0);
+  assert.match(
+    linkedPublish.stderr,
+    /--out must not be the same path as --manifest/u,
+  );
+  assert.equal(await readFile(paths.out, "utf8"), originalManifest);
+
+  const linkedRoot = join(root, "linked-root");
+  await symlink(root, linkedRoot, "dir");
+  const linkedParentPublish = runTonCli([
+    "publish-route-manifest",
+    "--manifest",
+    paths.out,
+    "--out",
+    join(linkedRoot, basename(paths.out)),
+  ]);
+
+  assert.notEqual(linkedParentPublish.status, 0);
+  assert.match(
+    linkedParentPublish.stderr,
+    /--out must not be the same path as --manifest/u,
+  );
   assert.equal(await readFile(paths.out, "utf8"), originalManifest);
 });
 

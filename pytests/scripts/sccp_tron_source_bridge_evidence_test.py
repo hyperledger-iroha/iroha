@@ -99,6 +99,56 @@ class HostileExpectedRecordHash:
         raise AssertionError("secret-token TRON expected record hash was compared")
 
 
+class HostileDecimalText(str):
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON decimal text was compared")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON decimal text was indexed")
+
+    def isascii(self):
+        raise AssertionError("secret-token TRON decimal text isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token TRON decimal text isdecimal ran")
+
+
+class HostileTomlString(str):
+    def __new__(cls):
+        return str.__new__(cls, "blocked")
+
+    def __str__(self):
+        raise AssertionError("secret-token TRON source TOML string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TRON source TOML string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON source TOML string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TRON source TOML string was compared")
+
+
+class HostileTomlInt(int):
+    def __new__(cls):
+        return int.__new__(cls, 1)
+
+    def __str__(self):
+        raise AssertionError("secret-token TRON source TOML integer was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TRON source TOML integer was repr'd")
+
+
+class HostileTomlList(list):
+    def __iter__(self):
+        raise AssertionError("secret-token TRON source TOML list was iterated")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TRON source TOML list was repr'd")
+
+
 def sample_full_toml_args():
     return SimpleNamespace(
         source_domain=5,
@@ -917,13 +967,54 @@ def test_parse_u32_requires_canonical_decimal_text_and_exact_int():
     assert module.parse_u32("5", label="source domain") == 5
     assert module.parse_u32(5, label="source domain") == 5
 
-    for value in ["05", "0x5", "+5", " 5", "\uff15", False, True]:
+    for value in [
+        "05",
+        "0x5",
+        "+5",
+        " 5",
+        "\uff15",
+        False,
+        True,
+        HostileDecimalText("5"),
+    ]:
         try:
             module.parse_u32(value, label="source domain")
         except module.argparse.ArgumentTypeError as exc:
-            assert "source domain must be a u32" in str(exc)
+            rendered = str(exc)
+            assert "source domain must be a u32" in rendered
+            assert "secret-token" not in rendered
         else:
             raise AssertionError(f"non-canonical u32 value {value!r} was accepted")
+
+
+def test_parse_u64_requires_canonical_decimal_text_and_exact_int():
+    module = load_evidence_module()
+
+    assert module.parse_u64("0", label="route canary block timestamp") == 0
+    assert module.parse_u64("18446744073709551615", label="route canary block timestamp") == (
+        0xFFFFFFFFFFFFFFFF
+    )
+    assert module.parse_u64(5, label="route canary block timestamp") == 5
+
+    for value in [
+        "05",
+        "0x5",
+        "+5",
+        " 5",
+        "\uff15",
+        "18446744073709551616",
+        False,
+        True,
+        HostileDecimalText("5"),
+    ]:
+        try:
+            module.parse_u64(value, label="route canary block timestamp")
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert "route canary block timestamp must be a u64" in rendered
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError(f"non-canonical u64 value {value!r} was accepted")
 
 
 def test_parse_hex_bytes_rejects_padded_tron_source_material():
@@ -1263,10 +1354,40 @@ def test_tron_runtime_bytecode_file_rejects_unreadable_file_shapes(tmp_path):
     directory_input.mkdir()
     missing_input = tmp_path / "secret-token-tron-runtime-missing.hex"
 
-    for path in (symlink_input, directory_input, missing_input):
+    class HostileRuntimeBytecodePath(str):
+        def __new__(cls):
+            return str.__new__(cls, str(outside))
+
+        def __str__(self):
+            raise AssertionError("secret-token TRON runtime path was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TRON runtime path was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token TRON runtime path was coerced")
+
+    class HostileRuntimeBytecodePathLike:
+        def __str__(self):
+            raise AssertionError("secret-token TRON runtime path-like was stringified")
+
+        def __repr__(self):
+            raise AssertionError("secret-token TRON runtime path-like was repr'd")
+
+        def __fspath__(self):
+            raise AssertionError("secret-token TRON runtime path-like was coerced")
+
+    for path in (
+        str(symlink_input),
+        str(directory_input),
+        str(missing_input),
+        outside,
+        HostileRuntimeBytecodePath(),
+        HostileRuntimeBytecodePathLike(),
+    ):
         try:
             module.parse_runtime_bytecode_file(
-                str(path),
+                path,
                 label="source bridge runtime bytecode",
             )
         except module.argparse.ArgumentTypeError as exc:
@@ -1628,6 +1749,30 @@ def test_toml_rendering_carries_mainnet_profile_ids_and_config_hash():
         + '"'
         in full_rendered
     )
+
+
+def test_tron_source_bridge_toml_renderer_rejects_string_subclasses_without_hooks():
+    module = load_evidence_module()
+
+    cases = (
+        lambda: module._toml_string(HostileTomlString()),
+        lambda: module._toml_line("source_chain", HostileTomlString()),
+        lambda: module._toml_line("version", HostileTomlInt()),
+        lambda: module._toml_line("blockers", HostileTomlList(["blocked"])),
+    )
+
+    for render in cases:
+        try:
+            render()
+        except TypeError as exc:
+            rendered = str(exc)
+            assert "unsupported TOML" in rendered
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "TRON source-bridge TOML renderer accepted hostile subclass value"
+            )
 
 
 def test_toml_rendering_rejects_reused_source_role_hashes():

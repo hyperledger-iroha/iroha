@@ -19560,6 +19560,8 @@ mod tests {
                 drop_unsolicited_share_blocks_total: 4,
             },
             pacemaker_backpressure_deferrals_total: 6,
+            proposal_gate: iroha_data_model::block::consensus::SumeragiProposalGateStatus::default(
+            ),
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -23135,6 +23137,8 @@ mod tests {
             peer_key_policy: SumeragiPeerKeyPolicyStatus::default(),
             block_sync_roster: SumeragiBlockSyncRosterStatus::default(),
             pacemaker_backpressure_deferrals_total: 0,
+            proposal_gate: iroha_data_model::block::consensus::SumeragiProposalGateStatus::default(
+            ),
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {
@@ -23574,6 +23578,8 @@ mod tests {
                 ..Default::default()
             },
             pacemaker_backpressure_deferrals_total: 6,
+            proposal_gate: iroha_data_model::block::consensus::SumeragiProposalGateStatus::default(
+            ),
             commit_pipeline_tick_total: 0,
             da_reschedule_total: 0,
             missing_block_fetch: SumeragiMissingBlockFetchStatus {

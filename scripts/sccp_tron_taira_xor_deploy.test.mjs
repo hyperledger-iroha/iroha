@@ -166,7 +166,10 @@ const defineThrowingAccessors = (record, keys) => {
 const deployerSecretRecord = () => ({
   schema: "iroha-sccp-tron-taira-xor-deployer/v1",
   created_at: "2026-06-01T00:00:00.000Z",
+  tron_network: "mainnet",
   network: "tron-mainnet",
+  chain_id_hex: "0x2b6653dc",
+  network_id_hex: TRON_MAINNET_NETWORK_ID_HEX,
   address_base58: deployerAddress.base58,
   address_hex: deployerAddress.hex,
   private_key_hex: bytesToHex(privateKey, false),
@@ -1382,6 +1385,74 @@ test("deployment doctor reports ready local prerequisites without exposing deplo
   });
 });
 
+test("deployment doctor rejects legacy or drifted deployer secret network metadata", async () => {
+  await withTempDir(async (dir) => {
+    const secretPath = join(dir, "deployer.secret.json");
+    const verifierPath = join(dir, "verifier.json");
+    await writeJson(verifierPath, verifierMaterial());
+
+    for (const [name, mutate, pattern] of [
+      [
+        "missing tron_network",
+        (secret) => {
+          delete secret.tron_network;
+        },
+        /deployer secret tron_network is required/u,
+      ],
+      [
+        "missing network_id_hex",
+        (secret) => {
+          delete secret.network_id_hex;
+        },
+        /deployer secret network_id_hex is required/u,
+      ],
+      [
+        "drifted tron_network",
+        (secret) => {
+          secret.tron_network = "secret-token-tron-network";
+        },
+        /deployer secret tron_network does not match mainnet/u,
+      ],
+      [
+        "drifted chain_id_hex",
+        (secret) => {
+          secret.chain_id_hex = "secret-token-chain";
+        },
+        /deployer secret chain_id_hex does not match tron-mainnet/u,
+      ],
+    ]) {
+      const secret = deployerSecretRecord();
+      mutate(secret);
+      await writeJson(secretPath, secret, 0o600);
+
+      const report = await buildDeploymentDoctorReport(
+        {
+          secret: secretPath,
+          verifier: verifierPath,
+          "require-secret": "true",
+        },
+        {
+          resolveNodeModule: (moduleName) =>
+            `/mock/node_modules/${moduleName}/index.js`,
+          nodeVersion: "20.11.0",
+        },
+      );
+      const deployerSecretCheck = report.checks.find(
+        (entry) => entry.name === "deployer_secret",
+      );
+
+      assert.equal(report.ready, false, name);
+      assert.equal(deployerSecretCheck?.status, "error", name);
+      assert.match(deployerSecretCheck?.error ?? "", pattern, name);
+      assert.doesNotMatch(JSON.stringify(report), /secret-token/u, name);
+      assert.equal(
+        JSON.stringify(report).includes(bytesToHex(privateKey, false)),
+        false,
+      );
+    }
+  });
+});
+
 test("deployment doctor rejects non-0600 or symlinked deployer secrets", async () => {
   await withTempDir(async (dir) => {
     const secretPath = join(dir, "permissive-deployer.secret.json");
@@ -1747,6 +1818,107 @@ test("TRON route-config CLI rejects removed allow-unready before writing artifac
   });
 });
 
+test("TRON CLI rejects unknown commands without echoing values", async () => {
+  const secretCommand = "secret-token-tron-command";
+  await assert.rejects(
+    () =>
+      execFileAsync(process.execPath, [
+        TRON_SCRIPT_PATH,
+        secretCommand,
+        "--out",
+        "ignored.json",
+      ]),
+    (error) => {
+      assert.match(error.stderr, /Unknown command\./u);
+      assert.doesNotMatch(error.stderr, new RegExp(secretCommand, "u"));
+      assert.doesNotMatch(error.stderr, /Usage:/u);
+      return true;
+    },
+  );
+});
+
+test("TRON CLI rejects unknown options without echoing names or values", async () => {
+  const secretOption = "secret-token-tron-option";
+  const secretValue = "secret-token-tron-value";
+  await assert.rejects(
+    () =>
+      execFileAsync(process.execPath, [
+        TRON_SCRIPT_PATH,
+        "route-config",
+        `--${secretOption}`,
+        secretValue,
+      ]),
+    (error) => {
+      assert.match(error.stderr, /Unknown option\./u);
+      assert.doesNotMatch(error.stderr, new RegExp(secretOption, "u"));
+      assert.doesNotMatch(error.stderr, new RegExp(secretValue, "u"));
+      return true;
+    },
+  );
+});
+
+test("TRON CLI rejects positional arguments without echoing values", async () => {
+  const secretArgument = "secret-token-tron-positional";
+  await assert.rejects(
+    () =>
+      execFileAsync(process.execPath, [
+        TRON_SCRIPT_PATH,
+        "route-config",
+        secretArgument,
+      ]),
+    (error) => {
+      assert.match(error.stderr, /Unexpected positional argument\./u);
+      assert.doesNotMatch(error.stderr, new RegExp(secretArgument, "u"));
+      return true;
+    },
+  );
+});
+
+test("TRON CLI rejects duplicate options before work", async () => {
+  await assert.rejects(
+    () =>
+      execFileAsync(process.execPath, [
+        TRON_SCRIPT_PATH,
+        "route-config",
+        "--manifest",
+        "missing-a.json",
+        "--manifest",
+        "missing-b.json",
+      ]),
+    (error) => {
+      assert.match(error.stderr, /Option must be specified at most once\./u);
+      assert.doesNotMatch(error.stderr, /missing-a\.json/u);
+      assert.doesNotMatch(error.stderr, /missing-b\.json/u);
+      return true;
+    },
+  );
+});
+
+test("TRON evidence CLI rejects bare valued options before work", async () => {
+  await assert.rejects(
+    () =>
+      execFileAsync(process.execPath, [
+        TRON_SCRIPT_PATH,
+        "evidence",
+        "--token",
+        routeAddresses.token.base58,
+        "--bridge",
+        routeAddresses.bridge.base58,
+        "--source-bridge",
+        routeAddresses.sourceBridge.base58,
+        "--verifier",
+      ]),
+    (error) => {
+      assert.match(
+        error.stderr,
+        /--verifier must be specified with an explicit value\./u,
+      );
+      assert.doesNotMatch(error.stderr, /routeAddresses/u);
+      return true;
+    },
+  );
+});
+
 test("TRON route-config CLI rejects route output path collisions with inputs before writing artifacts", async () => {
   await withTempDir(async (dir) => {
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
@@ -1859,6 +2031,25 @@ test("TRON route-config CLI rejects route output path collisions before reading 
         assert.match(
           `${error.message}\n${error.stderr ?? ""}`,
           /--out must not be the same path as --base-config/u,
+        );
+        return true;
+      },
+    );
+    assert.equal(await readFile(manifestPath, "utf8"), manifestSentinel);
+    assert.equal(await readFile(baseConfigPath, "utf8"), baseConfigSentinel);
+
+    const linkedInputDir = join(dir, "linked-inputs");
+    await symlink(dir, linkedInputDir);
+    await assert.rejects(
+      () =>
+        execFileAsync(
+          process.execPath,
+          routeOutputCollisionArgs(join(linkedInputDir, "malformed-route.manifest.json")),
+        ),
+      (error) => {
+        assert.match(
+          `${error.message}\n${error.stderr ?? ""}`,
+          /--out must not be the same path as --manifest/u,
         );
         return true;
       },
@@ -2076,6 +2267,69 @@ test("TRON route-manifest CLI rejects output path collisions with inputs before 
       liveEvidencePath,
       /--out must not be the same path as --live-evidence/u,
     );
+
+    const linkedInputDir = join(dir, "linked-inputs");
+    await symlink(dir, linkedInputDir);
+    await assertCollisionRejected(
+      join(linkedInputDir, "deployment.evidence.json"),
+      /--out must not be the same path as --evidence/u,
+    );
+  });
+});
+
+test("TRON route-manifest CLI does not follow predictable temp symlinks", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } =
+      await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const outPath = join(dir, "route.manifest.json");
+    const trapTarget = join(dir, "predictable-temp-target.json");
+    const sentinel = "sentinel:predictable-temp-target\n";
+    await writeFile(trapTarget, sentinel);
+    await symlink(trapTarget, `${outPath}.tmp`);
+
+    const { stdout } = await execFileAsync(process.execPath, [
+      TRON_SCRIPT_PATH,
+      "route-manifest",
+      "--evidence",
+      evidencePath,
+      "--taira-contract",
+      contractPath,
+      "--verifier",
+      verifierPath,
+      "--live-evidence",
+      liveEvidencePath,
+      "--verifier-code-hash",
+      verifierCodeHash,
+      "--settlement-asset-definition-id",
+      "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "--vk-backend",
+      "halo2/ipa",
+      "--vk-name",
+      "taira_xor_burn_record_v1",
+      "--production-ready",
+      "true",
+      "--live-readback-checked",
+      "true",
+      "--confirm-mainnet",
+      "taira_tron_xor",
+      "--out",
+      outPath,
+    ]);
+
+    const summary = JSON.parse(stdout);
+    assert.equal(summary.wrote, outPath);
+    assert.equal(summary.productionReady, true);
+    assert.equal(await readFile(trapTarget, "utf8"), sentinel);
+    assert.equal(await readFile(`${outPath}.tmp`, "utf8"), sentinel);
+    const manifest = JSON.parse(await readFile(outPath, "utf8"));
+    assert.equal(
+      manifest.schema,
+      "iroha-sccp-taira-xor-route-manifest-draft/v1",
+    );
+    assert.equal(manifest.productionReady, true);
   });
 });
 
@@ -2700,6 +2954,101 @@ test("TRON route-config rejects duplicate route manifest aliases", async () => {
       assert.throws(
         () => buildTairaXorRouteConfigToml(patchedManifest),
         pattern,
+      );
+    }
+  });
+});
+
+test("TRON route-config rejects retired route manifest aliases without echoing values", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    const cloneManifest = () => JSON.parse(JSON.stringify(manifest));
+    const secret = "secret-token-tron-retired-alias";
+    const cases = [
+      [
+        (patched) => {
+          delete patched.productionReady;
+          patched.production_ready = secret;
+        },
+        /route manifest productionReady must not use retired alias production_ready; use productionReady/u,
+      ],
+      [
+        (patched) => {
+          delete patched.routeId;
+          patched.route_id = secret;
+        },
+        /route manifest routeId must not use retired alias route_id; use routeId/u,
+      ],
+      [
+        (patched) => {
+          delete patched.destinationRollout;
+          patched.destination_rollout = { ...manifest.destinationRollout };
+        },
+        /route manifest destinationRollout in route manifest must not use retired alias destination_rollout; use destinationRollout/u,
+      ],
+      [
+        (patched) => {
+          delete patched.destinationRollout.sourceDomain;
+          patched.destinationRollout.source_domain = secret;
+        },
+        /route manifest destinationRollout\.sourceDomain must not use retired alias source_domain; use sourceDomain/u,
+      ],
+      [
+        (patched) => {
+          delete patched.destinationBinding.key;
+          patched.destinationBinding.destinationBindingKey = secret;
+        },
+        /route manifest destinationBinding\.key must not use retired alias destinationBindingKey; use key/u,
+      ],
+      [
+        (patched) => {
+          delete patched.tairaXorBurnRecord.vkRef;
+          patched.tairaXorBurnRecord.vk_ref = { ...manifest.tairaXorBurnRecord.vkRef };
+        },
+        /route manifest tairaXorBurnRecord\.vkRef in route manifest tairaXorBurnRecord must not use retired alias vk_ref; use vkRef/u,
+      ],
+      [
+        (patched) => {
+          delete patched.settlement.routeId;
+          patched.settlement.route_id = secret;
+        },
+        /route manifest settlement\.routeId must not use retired alias route_id; use routeId/u,
+      ],
+      [
+        (patched) => {
+          delete patched.postDeployLiveEvidence.fullTomlReady;
+          patched.postDeployLiveEvidence.full_toml_ready = secret;
+        },
+        /route manifest postDeployLiveEvidence\.fullTomlReady must not use retired alias full_toml_ready; use fullTomlReady/u,
+      ],
+    ];
+
+    for (const [mutate, pattern] of cases) {
+      const patchedManifest = cloneManifest();
+      mutate(patchedManifest);
+      assert.throws(
+        () => buildTairaXorRouteConfigToml(patchedManifest),
+        (error) => {
+          assert.match(error.message, pattern);
+          assert.doesNotMatch(error.message, /secret-token-tron-retired-alias/u);
+          return true;
+        },
       );
     }
   });

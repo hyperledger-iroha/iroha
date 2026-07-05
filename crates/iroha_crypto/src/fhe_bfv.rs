@@ -5639,7 +5639,7 @@ impl BfvEvaluationKeyBundle {
 /// Decode canonical BFV evaluation-key bundle bytes under a parameter set.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito evaluation-key bundle material, fail bundle digest
 /// validation, or are not the canonical v1 Norito encoding of the decoded
 /// bundle.
@@ -5719,9 +5719,9 @@ pub fn bfv_full_bootstrap_galois_key_set_digest_v1(
 /// before hashing externally held key material.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
-/// not valid Norito Galois key-set material, fail Galois key validation, or are
-/// not the canonical v1 Norito encoding sorted by automorphism power.
+/// Returns [`BfvError`] when `bytes` are empty, all-zero, not valid Norito
+/// Galois key-set material, fail Galois key validation, or are not the
+/// canonical v1 Norito encoding sorted by automorphism power.
 pub fn decode_bfv_full_bootstrap_galois_key_set_bytes_v1(
     params: &BfvParameters,
     bytes: &[u8],
@@ -5737,7 +5737,6 @@ pub fn decode_bfv_full_bootstrap_galois_key_set_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let galois_keys = norito::decode_from_bytes::<Vec<BfvGaloisKey>>(bytes).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "{label} must be Norito-encoded Galois key-set material: {err}"
@@ -6288,9 +6287,9 @@ pub fn bfv_public_key_digest(
 /// Decode canonical BFV public key bytes under a parameter set.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
-/// not valid Norito public-key material, fail public-key digest validation, or
-/// are not the canonical v1 Norito encoding of the decoded key.
+/// Returns [`BfvError`] when `bytes` are empty, all-zero, not valid Norito
+/// public-key material, fail public-key digest validation, or are not the
+/// canonical v1 Norito encoding of the decoded key.
 pub fn decode_bfv_public_key_bytes_v1(
     params: &BfvParameters,
     bytes: &[u8],
@@ -6357,9 +6356,9 @@ pub fn bfv_ciphertext_digest(
 /// Decode canonical BFV ciphertext bytes under a parameter set.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
-/// not valid Norito ciphertext material, fail ciphertext digest validation, or
-/// are not the canonical v1 Norito encoding of the decoded ciphertext.
+/// Returns [`BfvError`] when `bytes` are empty, all-zero, not valid Norito
+/// ciphertext material, fail ciphertext digest validation, or are not the
+/// canonical v1 Norito encoding of the decoded ciphertext.
 pub fn decode_bfv_ciphertext_bytes_v1(
     params: &BfvParameters,
     bytes: &[u8],
@@ -6412,7 +6411,6 @@ where
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let material = norito::decode_from_bytes::<T>(bytes).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "{label} must be Norito-encoded BFV material: {err}"
@@ -7544,7 +7542,7 @@ pub fn bfv_exact_residual_public_key_proof_input_material_digest_v1(
 /// Decode canonical exact-residual BFV public-key proof input material bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito proof input material, fail material validation, or are not
 /// the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_exact_residual_public_key_proof_input_material_bytes_v1(
@@ -7742,7 +7740,7 @@ pub fn bfv_bounded_noise_public_key_proof_input_material_digest_v1(
 /// Decode canonical bounded-noise BFV public-key proof input material bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito proof input material, fail material validation, or are not
 /// the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_bounded_noise_public_key_proof_input_material_bytes_v1(
@@ -7940,7 +7938,7 @@ pub fn bfv_exact_residual_ciphertext_proof_input_material_digest_v1(
 /// Decode canonical exact-residual BFV ciphertext proof input material bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito proof input material, fail material validation, or are not
 /// the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_exact_residual_ciphertext_proof_input_material_bytes_v1(
@@ -8210,7 +8208,7 @@ pub fn bfv_bounded_noise_ciphertext_proof_input_material_digest_v1(
 /// Decode canonical bounded-noise BFV ciphertext proof input material bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito proof input material, fail material validation, or are not
 /// the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_bounded_noise_ciphertext_proof_input_material_bytes_v1(
@@ -8562,7 +8560,6 @@ where
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let material = norito::decode_from_bytes::<T>(bytes).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "{label} must be Norito-encoded BFV proof input material: {err}"
@@ -10779,7 +10776,7 @@ pub fn bfv_full_bootstrap_circuit_material_digest(
 /// Decode canonical BFV full-bootstrap circuit material bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito circuit material, fail governed material validation, or
 /// are not the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_full_bootstrap_circuit_material_bytes_v1(
@@ -13043,7 +13040,7 @@ pub fn bfv_full_bootstrap_arithmetic_trace_profile_digest_from_profile_v1(
 /// Decode canonical BFV full-bootstrap arithmetic trace profile bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito trace-profile material, fail trace-profile validation, or
 /// are not the canonical v1 Norito encoding of the decoded profile.
 pub fn decode_bfv_full_bootstrap_arithmetic_trace_profile_bytes_v1(
@@ -13389,7 +13386,7 @@ pub fn bfv_full_bootstrap_arithmetic_air_constraint_system_digest_from_material_
 /// Decode canonical BFV full-bootstrap arithmetic AIR constraint-system material bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito AIR contract material, fail AIR contract validation, or
 /// are not the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_full_bootstrap_arithmetic_air_constraint_system_material_bytes_v1(
@@ -13548,7 +13545,7 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v
 /// Decode canonical BFV full-bootstrap proof public-input schema bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito proof public-input schema material, fail schema validation,
 /// or are not the canonical v1 Norito encoding of the decoded schema.
 pub fn decode_bfv_full_bootstrap_proof_public_input_schema_bytes_v1(
@@ -16343,7 +16340,7 @@ pub fn bfv_full_bootstrap_circuit_artifact_bundle_digest(
 /// Decode canonical BFV full-bootstrap circuit artifact-bundle bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito artifact-bundle material, fail governed artifact-bundle
 /// validation, or are not the canonical v1 Norito encoding of the decoded
 /// artifact bundle.
@@ -16603,7 +16600,6 @@ where
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let value = norito::decode_from_bytes::<T>(bytes).map_err(|err| {
         BfvError::InvalidParameters(format!(
             "{label} must be a Norito-encoded release-audit object: {err}"
@@ -22013,9 +22009,9 @@ pub fn bfv_full_bootstrap_release_audit_package_digest_v1(
 /// the bytes used by the canonical package digest.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` is empty, all-zero, placeholder-looking,
-/// not a release-audit package, malformed, or not the canonical v1 Norito
-/// encoding of the decoded package.
+/// Returns [`BfvError`] when `bytes` is empty, all-zero, not a
+/// release-audit package, malformed, or not the canonical v1 Norito encoding
+/// of the decoded package.
 pub fn decode_bfv_full_bootstrap_release_audit_package_bytes_v1(
     bytes: &[u8],
 ) -> Result<BfvFullBootstrapReleaseAuditPackageV1, BfvError> {
@@ -22029,10 +22025,6 @@ pub fn decode_bfv_full_bootstrap_release_audit_package_bytes_v1(
             "BFV full-bootstrap release audit package bytes must not be all-zero".to_owned(),
         ));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
-        "BFV full-bootstrap release audit package bytes",
-        bytes,
-    )?;
     let package =
         norito::decode_from_bytes::<BfvFullBootstrapReleaseAuditPackageV1>(bytes).map_err(
             |err| {
@@ -26669,7 +26661,7 @@ pub fn bfv_full_bootstrap_material_proof_input_material_digest_v1(
 /// Decode canonical material proof input material bytes for BFV full-bootstrap governance.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito material proof input material, fail proof-input validation,
 /// or are not the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(
@@ -26686,7 +26678,6 @@ pub fn decode_bfv_full_bootstrap_material_proof_input_material_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let material = norito::decode_from_bytes::<BfvFullBootstrapMaterialProofInputMaterialV1>(bytes)
         .map_err(|err| {
             BfvError::InvalidParameters(format!(
@@ -27795,7 +27786,7 @@ pub fn bfv_full_bootstrap_execution_witness_digest_from_material_v1(
 /// Decode canonical deterministic witness material bytes for a BFV full-bootstrap claim.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito witness material, fail witness validation, or are not the
 /// canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_full_bootstrap_execution_witness_digest_material_bytes_v1(
@@ -27812,7 +27803,6 @@ pub fn decode_bfv_full_bootstrap_execution_witness_digest_material_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let material =
         norito::decode_from_bytes::<BfvFullBootstrapExecutionWitnessDigestMaterialV1>(bytes)
             .map_err(|err| {
@@ -28337,7 +28327,7 @@ pub fn bfv_full_bootstrap_execution_proof_input_material_digest_v1(
 /// Decode canonical execution proof input material bytes for a BFV full-bootstrap proof.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito proof input material, fail proof-input validation, or are
 /// not the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
@@ -28354,7 +28344,6 @@ pub fn decode_bfv_full_bootstrap_execution_proof_input_material_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let material = norito::decode_from_bytes::<BfvFullBootstrapExecutionProofInputMaterialV1>(
         bytes,
     )
@@ -29811,7 +29800,7 @@ pub fn bfv_full_bootstrap_arithmetic_trace_public_opening_material_digest_v1(
 /// Decode canonical transcript-derived public opening material bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito public opening material, fail public-opening validation, or
 /// are not the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_v1(
@@ -29828,7 +29817,6 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_public_opening_material_bytes_
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let material =
         norito::decode_from_bytes::<BfvFullBootstrapArithmeticTracePublicOpeningMaterialV1>(bytes)
             .map_err(|err| {
@@ -30004,7 +29992,7 @@ pub fn bfv_full_bootstrap_arithmetic_trace_material_digest_v1(
 /// Decode canonical row-major native arithmetic trace material bytes.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito trace material, fail trace validation, or are not the
 /// canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_full_bootstrap_arithmetic_trace_material_bytes_v1(
@@ -30021,7 +30009,6 @@ pub fn decode_bfv_full_bootstrap_arithmetic_trace_material_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let material = norito::decode_from_bytes::<BfvFullBootstrapArithmeticTraceMaterialV1>(bytes)
         .map_err(|err| {
             BfvError::InvalidParameters(format!(
@@ -30553,7 +30540,7 @@ pub fn bfv_full_bootstrap_arithmetic_air_evaluation_material_digest_v1(
 /// Decode canonical typed AIR evaluation material bytes for a BFV full-bootstrap trace.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito AIR evaluation material, fail AIR evaluation validation, or
 /// are not the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_v1(
@@ -30570,7 +30557,6 @@ pub fn decode_bfv_full_bootstrap_arithmetic_air_evaluation_material_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let material =
         norito::decode_from_bytes::<BfvFullBootstrapArithmeticAirEvaluationMaterialV1>(bytes)
             .map_err(|err| {
@@ -31257,7 +31243,7 @@ pub fn bfv_full_bootstrap_execution_prover_input_material_digest_v1(
 /// Decode canonical release-prover input material bytes for a BFV full-bootstrap proof.
 ///
 /// # Errors
-/// Returns [`BfvError`] when `bytes` are empty, all-zero, placeholder-marked,
+/// Returns [`BfvError`] when `bytes` are empty, all-zero,
 /// not valid Norito prover input material, fail prover-input validation, or are
 /// not the canonical v1 Norito encoding of the decoded material.
 pub fn decode_bfv_full_bootstrap_execution_prover_input_material_bytes_v1(
@@ -31274,7 +31260,6 @@ pub fn decode_bfv_full_bootstrap_execution_prover_input_material_bytes_v1(
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(label, bytes)?;
     let material =
         norito::decode_from_bytes::<BfvFullBootstrapExecutionProverInputMaterialV1>(bytes)
             .map_err(|err| {
@@ -33857,11 +33842,11 @@ pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_regi
     galois_keys: &[BfvGaloisKey],
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvFullBootstrapExecutionPrefixTraceV1, BfvError> {
+    validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     let _decomposition_chain =
         registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
         return Err(err);
     }
     let material = validate_bfv_full_bootstrap_execution_artifact_bundle_preflight_v1(
@@ -34535,11 +34520,11 @@ pub fn bfv_full_bootstrap_bounded_noise_output_bound_v1(
     bootstrap_key: &BfvBootstrapKey,
     input_noise_bound: u128,
 ) -> Result<u128, BfvError> {
+    validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     let _decomposition_chain =
         registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
     if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
         return Err(err);
     }
     validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
@@ -41693,8 +41678,6 @@ fn validate_full_bootstrap_artifact_envelope_bytes_shape_v1(
             "{label} must not be all-zero"
         )));
     }
-    validate_bfv_full_bootstrap_bytes_not_placeholder_text(label, bytes)?;
-    validate_bfv_full_bootstrap_binary_decorated_placeholder_text(label, bytes)?;
     Ok(())
 }
 

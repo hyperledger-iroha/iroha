@@ -262,6 +262,13 @@ def parse_block_tag(value: str) -> str:
     )
 
 
+def _summary_block_tag(summary: dict[str, Any]) -> str:
+    try:
+        return parse_block_tag(summary.get("block_tag"))
+    except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
+        raise ValueError("EVM block tag metadata is invalid") from None
+
+
 def _default_rpc_chain_id_for_domain(domain: int) -> int:
     if type(domain) is not int:
         raise argparse.ArgumentTypeError("domain must have a canonical RPC chain id")
@@ -276,8 +283,13 @@ def _default_rpc_chain_id_for_domain(domain: int) -> int:
 def default_block_tag_for_domain(domain: int) -> str:
     """Return the default live-read block tag for an EVM-family destination lane."""
 
-    if type(domain) is not int:
-        raise argparse.ArgumentTypeError("domain must be an EVM-family SCCP lane")
+    if type(domain) is not int or domain not in (
+        evidence.SCCP_DOMAIN_ETH,
+        evidence.SCCP_DOMAIN_BSC,
+    ):
+        raise argparse.ArgumentTypeError(
+            "domain must be an EVM-family SCCP lane"
+        ) from None
     return "finalized" if domain == evidence.SCCP_DOMAIN_ETH else "latest"
 
 
@@ -301,7 +313,7 @@ def _json_object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[st
 
 def _normalize_evm_rpc_url(rpc_url: str) -> str:
     if (
-        not isinstance(rpc_url, str)
+        type(rpc_url) is not str
         or rpc_url != rpc_url.strip()
         or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in rpc_url)
     ):
@@ -2069,20 +2081,23 @@ def _validate_destination_summary(summary: dict[str, Any]) -> None:
     expected_chain = evidence.DOMAIN_PROFILES[domain]["chain"]
     if destination.get("chain") != expected_chain:
         raise ValueError("destination chain metadata must match domain")
-    rpc_chain_id = destination.get("rpc_chain_id")
-    if type(rpc_chain_id) is not int:
-        raise ValueError("EVM RPC chain id metadata must be an integer")
+    rpc_chain_id = _summary_exact_u32(
+        destination,
+        "rpc_chain_id",
+        label="EVM RPC chain id",
+    )
     expected_rpc_chain_id = EXPECTED_RPC_CHAIN_IDS[domain]
     if rpc_chain_id != expected_rpc_chain_id:
         raise ValueError(
             f"EVM RPC chain id metadata must be {expected_rpc_chain_id} "
             f"for {expected_chain}"
         )
-    destination_expected_rpc_chain_id = destination.get("expected_rpc_chain_id")
-    if (
-        type(destination_expected_rpc_chain_id) is not int
-        or destination_expected_rpc_chain_id != expected_rpc_chain_id
-    ):
+    destination_expected_rpc_chain_id = _summary_exact_u32(
+        destination,
+        "expected_rpc_chain_id",
+        label="expected RPC chain id",
+    )
+    if destination_expected_rpc_chain_id != expected_rpc_chain_id:
         raise ValueError("expected RPC chain id metadata must match the lane")
 
     bridge_address = _summary_address(
@@ -2240,6 +2255,8 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
 
 
 def _validate_copied_route_summary_metadata(summary: dict[str, Any]) -> None:
+    if "block_tag" in summary:
+        _summary_block_tag(summary)
     route_hash = summary.get("route_allowlist_hash")
     if route_hash is not None:
         _summary_hex32(summary, "route_allowlist_hash", label="route allowlist hash")
@@ -2316,23 +2333,78 @@ def render_offline_toml(summary: dict[str, Any]) -> str:
     evidence.apply_runtime_bytecode_hash(args)
     destination_binding_hash = evidence._destination_binding_hash_from_args(args)
     rendered = evidence.render_toml(args, destination_binding_hash)
+    block_tag = _summary_block_tag(summary)
+    rpc_chain_id = _summary_exact_u32(
+        destination,
+        "rpc_chain_id",
+        label="EVM RPC chain id",
+    )
+    bridge_code_hash = _hex(
+        _summary_hex32(
+            destination,
+            "bridge_code_hash",
+            label="bridge code hash",
+        )
+    )
+    bridge_runtime_bytecode_hex = _hex(
+        _summary_runtime_bytes(
+            destination,
+            "bridge_runtime_bytecode_hex",
+            label="bridge runtime bytecode",
+        )
+    )
+    verifier_code_hash = _hex(
+        _summary_hex32(
+            destination,
+            "eth_getcode_verifier_code_hash",
+            label="eth_getCode verifier code hash",
+        )
+    )
+    verifier_runtime_bytecode_hex = _hex(
+        _summary_runtime_bytes(
+            destination,
+            "verifier_runtime_bytecode_hex",
+            label="verifier runtime bytecode",
+        )
+    )
+    verifier_key_hash = _hex(
+        _summary_hex32(
+            destination,
+            "verifier_verifying_key_hash",
+            label="verifier verifyingKeyHash",
+        )
+    )
+    verifier_backend_hash = _hex(
+        _summary_hex32(
+            destination,
+            "verifier_backend_hash",
+            label="verifier backend hash",
+        )
+    )
+    proof_family_hash = _hex(
+        _summary_hex32(
+            destination,
+            "proof_family_hash",
+            label="proof family hash",
+        )
+    )
     comments = [
-        "# sccp_evm_block_tag = " + json.dumps(str(summary["block_tag"])),
-        "# sccp_evm_rpc_chain_id = " + json.dumps(str(destination["rpc_chain_id"])),
+        "# sccp_evm_block_tag = " + json.dumps(block_tag),
+        "# sccp_evm_rpc_chain_id = " + json.dumps(str(rpc_chain_id)),
         "# sccp_evm_bridge_runtime_code_hash = "
-        + json.dumps(str(destination["bridge_code_hash"])),
+        + json.dumps(bridge_code_hash),
         "# sccp_evm_bridge_runtime_bytecode_hex = "
-        + json.dumps(str(destination["bridge_runtime_bytecode_hex"])),
+        + json.dumps(bridge_runtime_bytecode_hex),
         "# sccp_evm_verifier_runtime_code_hash = "
-        + json.dumps(str(destination["eth_getcode_verifier_code_hash"])),
+        + json.dumps(verifier_code_hash),
         "# sccp_evm_verifier_runtime_bytecode_hex = "
-        + json.dumps(str(destination["verifier_runtime_bytecode_hex"])),
+        + json.dumps(verifier_runtime_bytecode_hex),
         "# sccp_evm_verifier_key_hash = "
-        + json.dumps(str(destination["verifier_verifying_key_hash"])),
+        + json.dumps(verifier_key_hash),
         "# sccp_evm_verifier_backend_hash = "
-        + json.dumps(str(destination["verifier_backend_hash"])),
+        + json.dumps(verifier_backend_hash),
         "# sccp_evm_proof_family_hash = "
-        + json.dumps(str(destination["proof_family_hash"])),
+        + json.dumps(proof_family_hash),
     ]
     existing_keys = set()
     for line in rendered.splitlines():

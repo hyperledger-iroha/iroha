@@ -613,15 +613,17 @@ def _hex(value: bytes) -> str:
 
 
 def _toml_string(value: str) -> str:
+    if type(value) is not str:
+        raise TypeError("unsupported TOML string value")
     return json.dumps(value)
 
 
 def _toml_line(key: str, value: object) -> str:
-    if isinstance(value, bool):
+    if type(value) is bool:
         rendered = "true" if value else "false"
-    elif isinstance(value, int):
+    elif type(value) is int:
         rendered = str(value)
-    elif isinstance(value, str):
+    elif type(value) is str:
         rendered = _toml_string(value)
     else:
         raise TypeError(f"unsupported TOML value for {key}")

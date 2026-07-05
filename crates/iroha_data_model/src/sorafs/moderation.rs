@@ -281,132 +281,186 @@ impl ModerationReproManifestV1 {
     pub fn validate(
         &self,
     ) -> Result<ModerationReproManifestSummary, ModerationReproValidationError> {
-        if self.body.schema_version != MODERATION_REPRO_MANIFEST_VERSION_V1 {
-            return Err(ModerationReproValidationError::UnsupportedVersion {
-                expected: MODERATION_REPRO_MANIFEST_VERSION_V1,
-                found: self.body.schema_version,
-            });
-        }
-        if self.body.models.is_empty() {
-            return Err(ModerationReproValidationError::MissingModels);
-        }
-        if self.body.manifest_digest == [0; 32] {
-            return Err(ModerationReproValidationError::MissingDigest {
-                field: "manifest_digest",
-            });
-        }
-        if self.body.runner_hash == [0; 32] {
-            return Err(ModerationReproValidationError::MissingDigest {
-                field: "runner_hash",
-            });
-        }
-        if self.body.seed_material.run_nonce == [0; 32] {
-            return Err(ModerationReproValidationError::MissingDigest { field: "run_nonce" });
-        }
-        let thresholds = self.body.thresholds;
-        if thresholds.quarantine > MODERATION_REPRO_MAX_BPS {
-            return Err(ModerationReproValidationError::InvalidThresholdBps {
-                field: "quarantine",
-                value: thresholds.quarantine,
-            });
-        }
-        if thresholds.escalate > MODERATION_REPRO_MAX_BPS {
-            return Err(ModerationReproValidationError::InvalidThresholdBps {
-                field: "escalate",
-                value: thresholds.escalate,
-            });
-        }
-        if thresholds.quarantine > thresholds.escalate {
-            return Err(ModerationReproValidationError::InvalidThresholdOrder {
-                quarantine: thresholds.quarantine,
-                escalate: thresholds.escalate,
-            });
-        }
-        let mut model_ids = BTreeSet::new();
-        let mut artifact_digests = BTreeSet::new();
-        let mut weights_digests = BTreeSet::new();
-        let mut has_positive_model_weight = false;
-        for model in &self.body.models {
-            if model.model_id == [0; 16] {
-                return Err(ModerationReproValidationError::MissingModelId);
-            }
-            if !model_ids.insert(model.model_id) {
-                return Err(ModerationReproValidationError::DuplicateModelId {
-                    model_id: model.model_id,
-                });
-            }
-            if model.artifact_digest == [0; 32] {
-                return Err(ModerationReproValidationError::MissingModelDigest {
-                    model_id: model.model_id,
-                    field: "artifact_digest",
-                });
-            }
-            if !artifact_digests.insert(model.artifact_digest) {
-                return Err(ModerationReproValidationError::DuplicateArtifactDigest {
-                    model_id: model.model_id,
-                });
-            }
-            if model.weights_digest == [0; 32] {
-                return Err(ModerationReproValidationError::MissingModelDigest {
-                    model_id: model.model_id,
-                    field: "weights_digest",
-                });
-            }
-            if !weights_digests.insert(model.weights_digest) {
-                return Err(ModerationReproValidationError::DuplicateWeightsDigest {
-                    model_id: model.model_id,
-                });
-            }
-            if model.opset != MODERATION_REPRO_MODEL_OPSET_V1 {
-                return Err(ModerationReproValidationError::UnsupportedModelOpset {
-                    model_id: model.model_id,
-                    expected: MODERATION_REPRO_MODEL_OPSET_V1,
-                    found: model.opset,
-                });
-            }
-            let weight = model.weight.unwrap_or(MODERATION_REPRO_MAX_BPS);
-            if weight > MODERATION_REPRO_MAX_BPS {
-                return Err(ModerationReproValidationError::InvalidModelWeight {
-                    model_id: model.model_id,
-                    weight,
-                });
-            }
-            has_positive_model_weight |= weight > 0;
-        }
-        if !has_positive_model_weight {
-            return Err(ModerationReproValidationError::MissingPositiveModelWeight);
-        }
-        if self.signatures.is_empty() {
-            return Err(ModerationReproValidationError::MissingSignatures);
-        }
-
-        let mut seen = BTreeSet::new();
-        for signer in &self.signatures {
-            if !seen.insert(signer.public_key.clone()) {
-                return Err(ModerationReproValidationError::DuplicateSigner);
-            }
-            if let Err(source) =
-                verify_repro_signature(&signer.signature, &signer.public_key, &self.body)
-            {
-                return Err(ModerationReproValidationError::BadSignature {
-                    role: signer.role.clone(),
-                    source,
-                });
-            }
-        }
-
-        let model_count = u32::try_from(self.body.models.len())
-            .map_err(|_| ModerationReproValidationError::MissingModels)?;
-        let signer_count = u32::try_from(self.signatures.len())
-            .map_err(|_| ModerationReproValidationError::MissingSignatures)?;
-
-        Ok(ModerationReproManifestSummary {
-            manifest_id: self.body.manifest_id,
-            issued_at_unix: self.body.issued_at_unix,
-            model_count,
-            signer_count,
-        })
+        validate_repro_body_header(&self.body)?;
+        validate_repro_thresholds(self.body.thresholds)?;
+        validate_repro_models(&self.body.models)?;
+        validate_repro_signatures(&self.signatures, &self.body)?;
+        moderation_repro_summary(&self.body, self.signatures.len())
     }
+}
+
+fn validate_repro_body_header(
+    body: &ModerationReproBodyV1,
+) -> Result<(), ModerationReproValidationError> {
+    if body.schema_version != MODERATION_REPRO_MANIFEST_VERSION_V1 {
+        return Err(ModerationReproValidationError::UnsupportedVersion {
+            expected: MODERATION_REPRO_MANIFEST_VERSION_V1,
+            found: body.schema_version,
+        });
+    }
+    if body.models.is_empty() {
+        return Err(ModerationReproValidationError::MissingModels);
+    }
+    if body.manifest_digest == [0; 32] {
+        return Err(ModerationReproValidationError::MissingDigest {
+            field: "manifest_digest",
+        });
+    }
+    if body.runner_hash == [0; 32] {
+        return Err(ModerationReproValidationError::MissingDigest {
+            field: "runner_hash",
+        });
+    }
+    if body.seed_material.run_nonce == [0; 32] {
+        return Err(ModerationReproValidationError::MissingDigest { field: "run_nonce" });
+    }
+    Ok(())
+}
+
+fn validate_repro_thresholds(
+    thresholds: ModerationThresholdsV1,
+) -> Result<(), ModerationReproValidationError> {
+    if thresholds.quarantine > MODERATION_REPRO_MAX_BPS {
+        return Err(ModerationReproValidationError::InvalidThresholdBps {
+            field: "quarantine",
+            value: thresholds.quarantine,
+        });
+    }
+    if thresholds.escalate > MODERATION_REPRO_MAX_BPS {
+        return Err(ModerationReproValidationError::InvalidThresholdBps {
+            field: "escalate",
+            value: thresholds.escalate,
+        });
+    }
+    if thresholds.quarantine > thresholds.escalate {
+        return Err(ModerationReproValidationError::InvalidThresholdOrder {
+            quarantine: thresholds.quarantine,
+            escalate: thresholds.escalate,
+        });
+    }
+    Ok(())
+}
+
+fn validate_repro_models(
+    models: &[ModerationModelFingerprintV1],
+) -> Result<(), ModerationReproValidationError> {
+    let mut model_ids = BTreeSet::new();
+    let mut artifact_digests = BTreeSet::new();
+    let mut weights_digests = BTreeSet::new();
+    let mut has_positive_model_weight = false;
+    for model in models {
+        validate_repro_model_uniqueness(model, &mut model_ids)?;
+        validate_repro_model_digests(model, &mut artifact_digests, &mut weights_digests)?;
+        validate_repro_model_shape(model)?;
+        has_positive_model_weight |= model.weight.unwrap_or(MODERATION_REPRO_MAX_BPS) > 0;
+    }
+    if !has_positive_model_weight {
+        return Err(ModerationReproValidationError::MissingPositiveModelWeight);
+    }
+    Ok(())
+}
+
+fn validate_repro_model_uniqueness(
+    model: &ModerationModelFingerprintV1,
+    model_ids: &mut BTreeSet<[u8; 16]>,
+) -> Result<(), ModerationReproValidationError> {
+    if model.model_id == [0; 16] {
+        return Err(ModerationReproValidationError::MissingModelId);
+    }
+    if !model_ids.insert(model.model_id) {
+        return Err(ModerationReproValidationError::DuplicateModelId {
+            model_id: model.model_id,
+        });
+    }
+    Ok(())
+}
+
+fn validate_repro_model_digests(
+    model: &ModerationModelFingerprintV1,
+    artifact_digests: &mut BTreeSet<[u8; 32]>,
+    weights_digests: &mut BTreeSet<[u8; 32]>,
+) -> Result<(), ModerationReproValidationError> {
+    if model.artifact_digest == [0; 32] {
+        return Err(ModerationReproValidationError::MissingModelDigest {
+            model_id: model.model_id,
+            field: "artifact_digest",
+        });
+    }
+    if !artifact_digests.insert(model.artifact_digest) {
+        return Err(ModerationReproValidationError::DuplicateArtifactDigest {
+            model_id: model.model_id,
+        });
+    }
+    if model.weights_digest == [0; 32] {
+        return Err(ModerationReproValidationError::MissingModelDigest {
+            model_id: model.model_id,
+            field: "weights_digest",
+        });
+    }
+    if !weights_digests.insert(model.weights_digest) {
+        return Err(ModerationReproValidationError::DuplicateWeightsDigest {
+            model_id: model.model_id,
+        });
+    }
+    Ok(())
+}
+
+fn validate_repro_model_shape(
+    model: &ModerationModelFingerprintV1,
+) -> Result<(), ModerationReproValidationError> {
+    if model.opset != MODERATION_REPRO_MODEL_OPSET_V1 {
+        return Err(ModerationReproValidationError::UnsupportedModelOpset {
+            model_id: model.model_id,
+            expected: MODERATION_REPRO_MODEL_OPSET_V1,
+            found: model.opset,
+        });
+    }
+    let weight = model.weight.unwrap_or(MODERATION_REPRO_MAX_BPS);
+    if weight > MODERATION_REPRO_MAX_BPS {
+        return Err(ModerationReproValidationError::InvalidModelWeight {
+            model_id: model.model_id,
+            weight,
+        });
+    }
+    Ok(())
+}
+
+fn validate_repro_signatures(
+    signatures: &[ModerationReproSignatureV1],
+    body: &ModerationReproBodyV1,
+) -> Result<(), ModerationReproValidationError> {
+    if signatures.is_empty() {
+        return Err(ModerationReproValidationError::MissingSignatures);
+    }
+    let mut seen = BTreeSet::new();
+    for signer in signatures {
+        if !seen.insert(signer.public_key.clone()) {
+            return Err(ModerationReproValidationError::DuplicateSigner);
+        }
+        verify_repro_signature(&signer.signature, &signer.public_key, body).map_err(|source| {
+            ModerationReproValidationError::BadSignature {
+                role: signer.role.clone(),
+                source,
+            }
+        })?;
+    }
+    Ok(())
+}
+
+fn moderation_repro_summary(
+    body: &ModerationReproBodyV1,
+    signature_count: usize,
+) -> Result<ModerationReproManifestSummary, ModerationReproValidationError> {
+    let model_count = u32::try_from(body.models.len())
+        .map_err(|_| ModerationReproValidationError::MissingModels)?;
+    let signer_count = u32::try_from(signature_count)
+        .map_err(|_| ModerationReproValidationError::MissingSignatures)?;
+    Ok(ModerationReproManifestSummary {
+        manifest_id: body.manifest_id,
+        issued_at_unix: body.issued_at_unix,
+        model_count,
+        signer_count,
+    })
 }
 
 fn verify_repro_signature(
