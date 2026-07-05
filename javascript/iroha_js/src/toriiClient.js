@@ -46,7 +46,10 @@ import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto
 import {
   getCurveEntryByPublicKeyMulticodec,
 } from "./curveRegistry.js";
-import { noritoEncodeMultisigProposeRequest } from "./norito.js";
+import {
+  noritoEncodeMultisigProposeRequest,
+  noritoEncodeTransactionPayloadBatch,
+} from "./norito.js";
 import {
   evmSccpDestinationBindingHash,
   tronSccpDestinationBindingHash,
@@ -355,6 +358,58 @@ function toVersionedTransactionPayload(payload, nativeBinding) {
     Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
     rawPayload,
   ]);
+}
+
+function toVersionedTransactionPayloadStrict(payload, nativeBinding) {
+  const rawPayload = unwrapNrt0NoritoFrame(payload);
+  const native = resolveOptionalNativeBinding(nativeBinding);
+  if (
+    native &&
+    typeof native.encodeSignedTransactionVersioned === "function"
+  ) {
+    const encoded = Buffer.from(native.encodeSignedTransactionVersioned(rawPayload));
+    if (encoded.length === 0) {
+      throw new Error("Native signed transaction version encoder returned an empty payload.");
+    }
+    return encoded;
+  }
+  if (
+    native &&
+    typeof native.encodeSignedTransactionNorito === "function"
+  ) {
+    const encoded = Buffer.from(native.encodeSignedTransactionNorito(rawPayload));
+    const noritoPayload = unwrapNrt0NoritoFrame(encoded);
+    if (noritoPayload.length === 0) {
+      throw new Error("Native signed transaction Norito encoder returned an empty payload.");
+    }
+    return Buffer.concat([
+      Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
+      noritoPayload,
+    ]);
+  }
+  return Buffer.concat([
+    Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
+    rawPayload,
+  ]);
+}
+
+function encodeTransactionPayloadBatch(payloads, nativeBinding) {
+  const native = resolveOptionalNativeBinding(nativeBinding);
+  if (
+    native &&
+    typeof native.encodeTransactionPayloadBatch === "function"
+  ) {
+    const encoded = Buffer.from(
+      native.encodeTransactionPayloadBatch(
+        payloads.map((payload) => Buffer.from(payload)),
+      ),
+    );
+    if (encoded.length === 0) {
+      throw new Error("Native transaction batch encoder returned an empty payload.");
+    }
+    return encoded;
+  }
+  return noritoEncodeTransactionPayloadBatch(payloads);
 }
 
 function isSecureProtocol(protocol) {
@@ -4509,6 +4564,51 @@ export class ToriiClient {
       return enrichSubmission(decodeTransactionReceiptPayload(body));
     }
     return enrichSubmission(await this._maybeJson(response));
+  }
+
+  /**
+   * Submit an input-ordered batch of Norito-encoded signed transaction payloads.
+   * Throws ToriiDataModelMismatchError when the node data model version mismatches.
+   * @param {ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>} payloads
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<{acceptedCount: number, route?: object}>}
+   */
+  async submitTransactionBatch(payloads, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "submitTransactionBatch");
+    if (!Array.isArray(payloads)) {
+      throw new TypeError("submitTransactionBatch payloads must be an array");
+    }
+    if (payloads.length === 0) {
+      throw new TypeError("submitTransactionBatch requires at least one payload");
+    }
+    const versionedPayloads = payloads.map((payload) =>
+      toVersionedTransactionPayloadStrict(toBuffer(payload), this._nativeBinding),
+    );
+    await this._ensureDataModelValidation();
+    const response = await this._request(
+      "POST",
+      "/v1/pipeline/transactions/batch",
+      {
+        headers: {
+          "Content-Type": "application/x-norito",
+          Accept: "application/json",
+        },
+        body: encodeTransactionPayloadBatch(versionedPayloads, this._nativeBinding),
+        retryProfile: "pipeline",
+        signal,
+      },
+    );
+    await this._expectStatus(response, [202]);
+    const acceptedHeader = this._getHeader(response, "x-iroha-transactions-accepted");
+    const acceptedCount =
+      acceptedHeader == null || String(acceptedHeader).trim() === ""
+        ? versionedPayloads.length
+        : ToriiClient._normalizeUnsignedInteger(
+            acceptedHeader,
+            "submitTransactionBatch.acceptedCount",
+          );
+    const route = this._extractSubmissionRoute(response);
+    return route ? { acceptedCount, route } : { acceptedCount };
   }
 
   _extractSubmissionRoute(response) {
@@ -21773,11 +21873,21 @@ function normalizeContractTargetSelector(record, context) {
 
 function normalizeContractCallRequest(input) {
   const record = ensureRecord(input, "contractCall request");
-  const credentials = normalizeAuthorityCredentials(record, "contractCall");
   const normalized = {
-    ...credentials,
+    authority: ToriiClient._normalizeAccountId(
+      record.authority,
+      "contractCall.authority",
+    ),
     ...normalizeContractTargetSelector(record, "contractCall"),
   };
+  const hasPrivateKey =
+    pickOverride(record, "private_key", "privateKey") !== undefined ||
+    pickOverride(record, "private_key_multihash", "privateKeyMultihash") !== undefined ||
+    pickOverride(record, "private_key_hex", "privateKeyHex") !== undefined ||
+    pickOverride(record, "private_key_bytes", "privateKeyBytes") !== undefined;
+  if (hasPrivateKey) {
+    normalized.private_key = resolveAuthorityPrivateKey(record, "contractCall");
+  }
   if (record.entrypoint !== undefined && record.entrypoint !== null) {
     normalized.entrypoint = requireNonEmptyString(
       record.entrypoint,

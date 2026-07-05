@@ -40,8 +40,15 @@ existing ancestors without creating missing parent directories before runbook
 JSON parsing; after planning, the same output must still remain separate from
 the config input and all planned stage artifacts before any child command is
 executed.
-Production runbooks must use real operator endpoints. Reserved placeholder
-hosts such as `.example`, `example.com`, `example.net`, `example.org`, or
-`example.invalid` are rejected before planning or network delivery, and archived
-production evidence also rejects the checked-in `operator-canary.bank` template
-endpoint suffix.
+Production runbooks must use real operator endpoints and non-placeholder
+`provider`/`environment` IDs. Reserved placeholder hosts such as `.example`,
+`example.com`, `example.net`, `example.org`, or `example.invalid` are rejected
+before planning or network delivery. The checked-in `operator-canary.bank`
+template endpoint suffix and placeholder context labels such as `example-bank`
+are accepted only for `--plan-only` validation; live execution and archived
+production evidence reject them. Plan-only summaries intentionally record
+`ok: false`; executed diagnostic canaries also record `ok: false` unless the
+run used `--require-explicit-policy`, planned and ran the exact ordered rail,
+notary, and verify stage records without skips or producer dry-runs, avoided
+local diagnostic allowances such as insecure HTTP, default profiles, or failed
+receipts, and kept verifier source-file checks enabled.

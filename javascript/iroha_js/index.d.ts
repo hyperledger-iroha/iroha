@@ -16408,13 +16408,24 @@ export interface SetContractAliasResponse {
 
 export interface ContractCallRequest {
   authority: string;
-  privateKey: string;
+  privateKey?: string | null;
+  private_key?: string | null;
+  privateKeyHex?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
+  private_key_hex?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
+  privateKeyBytes?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
+  private_key_bytes?: string | ArrayBufferView | ArrayBuffer | Buffer | null;
+  privateKeyMultihash?: string | null;
+  private_key_multihash?: string | null;
   contractAddress?: string;
   contractAlias?: string;
   entrypoint?: string | null;
   payload?: unknown;
   gasAssetId?: string | null;
+  gas_asset_id?: string | null;
+  feeSponsor?: string | null;
+  fee_sponsor?: string | null;
   gasLimit: NumericLike;
+  gas_limit?: NumericLike;
 }
 
 export interface ContractCallResponse {
@@ -18788,6 +18799,10 @@ export declare class ToriiClient {
   submitTransaction(
     payload: ArrayBufferView | ArrayBuffer | Buffer,
   ): Promise<unknown>;
+  submitTransactionBatch(
+    payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
+    options?: { signal?: AbortSignal },
+  ): Promise<{ acceptedCount: number; route?: unknown }>;
   getTransactionStatus(
     hashHex: string,
     options?: {
@@ -20210,6 +20225,9 @@ export function sm2FixtureFromSeed(
 ): Sm2Fixture;
 
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
+export function noritoEncodeTransactionPayloadBatch(
+  payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
+): Buffer;
 export function noritoEncodePrivacyProofEnvelope(envelope: object): Buffer;
 export function noritoDecodePrivacyProofEnvelope(
   bytes: ArrayBufferView | ArrayBuffer | Buffer | string,

@@ -1984,6 +1984,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
             self.assertEqual(summary["version"], VERIFIER.RECEIPT_SUMMARY_VERSION)
+            self.assertFalse(summary["ok"])
             self.assertEqual(summary["verified_receipts"], 2)
             self.assertEqual(
                 summary["receipt_kind"],
@@ -6245,6 +6246,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             )
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
+            self.assertFalse(summary["ok"])
             self.assertTrue(summary["allow_default_profile"])
             self.assertIsNone(summary["receipts"][0]["profile"])
             self.assertEqual(summary["receipts"][0]["rail_message_id"], "rail-drop-1")

@@ -762,7 +762,7 @@ test("listAccountAssets rejects Local-8 segments", async () => {
     called = true;
     return createResponse({ status: 200, jsonData: { items: [], total: 0 } });
   };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: {} });
   await assert.rejects(
     () => client.listAccountAssets(forms.local8),
     (error) => {
@@ -8108,6 +8108,310 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
       globalThis.__IROHA_NATIVE_BINDING__ = originalBinding;
     }
   }
+});
+
+test("submitTransactionBatch posts a Norito transaction payload vector", async () => {
+  const payloads = [Buffer.from([0xde, 0xad]), new Uint8Array([0xbe, 0xef])];
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
+    assert.equal(init.method, "POST");
+    assert.equal(init.headers["Content-Type"], "application/x-norito");
+    assert.equal(init.headers.Accept, "application/json");
+    assert.ok(Buffer.isBuffer(init.body));
+    const body = Buffer.from(init.body);
+    let offset = 0;
+    const count = readU64Length(body, offset, "batch.count");
+    assert.equal(count.length, 2);
+    offset += count.bytes;
+    for (const [index, payload] of payloads.entries()) {
+      const item = readNoritoFieldPayload(body, offset, `batch.item${index}`, false);
+      const itemLength = readU64Length(item.payload, 0, `batch.item${index}.bytes`);
+      assert.deepEqual(
+        [...item.payload.subarray(itemLength.bytes)],
+        [0x01, ...payload],
+      );
+      assert.equal(itemLength.length, payload.length + 1);
+      offset = item.offset;
+    }
+    assert.equal(offset, body.length);
+    return createResponse({
+      status: 202,
+      headers: {
+        "x-iroha-transactions-accepted": "2",
+        "x-iroha-route-lane-id": "7",
+        "x-iroha-route-dataspace-id": "10",
+      },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: {} });
+
+  const result = await client.submitTransactionBatch(payloads);
+
+  assert.deepEqual(result, {
+    acceptedCount: 2,
+    route: {
+      acceptedBy: BASE_URL,
+      laneId: 7,
+      dataspaceId: 10,
+    },
+  });
+});
+
+test("submitTransactionBatch uses native framed Norito batch encoder when available", async () => {
+  const payloads = [Buffer.from([0xde, 0xad]), new Uint8Array([0xbe, 0xef])];
+  const framedBody = Buffer.concat([
+    Buffer.from("NRT0", "ascii"),
+    Buffer.alloc(36, 0x42),
+  ]);
+  let encodedInputs;
+  const nativeBinding = {
+    encodeTransactionPayloadBatch: (items) => {
+      encodedInputs = items.map((item) => Buffer.from(item));
+      return framedBody;
+    },
+  };
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
+    assert.equal(init.method, "POST");
+    assert.equal(init.headers["Content-Type"], "application/x-norito");
+    assert.equal(init.headers.Accept, "application/json");
+    assert.ok(Buffer.isBuffer(init.body));
+    assert.deepEqual(Buffer.from(init.body), framedBody);
+    return createResponse({
+      status: 202,
+      headers: {
+        "x-iroha-transactions-accepted": "2",
+      },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: nativeBinding,
+  });
+
+  const result = await client.submitTransactionBatch(payloads);
+
+  assert.deepEqual(
+    encodedInputs.map((payload) => [...payload]),
+    payloads.map((payload) => [0x01, ...payload]),
+  );
+  assert.deepEqual(result, {
+    acceptedCount: 2,
+  });
+});
+
+test("submitTransactionBatch rejects malformed batch inputs before network submit", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("submitTransactionBatch should not issue a request");
+    },
+    __nativeBinding: {},
+  });
+
+  await assert.rejects(
+    () => client.submitTransactionBatch(Buffer.from([0x01])),
+    /payloads must be an array/,
+  );
+  await assert.rejects(
+    () => client.submitTransactionBatch([]),
+    /requires at least one payload/,
+  );
+  await assert.rejects(
+    () => client.submitTransactionBatch([{}]),
+    /payload must be a Buffer or ArrayBuffer view/,
+  );
+});
+
+test("submitTransactionBatch rejects native transaction versioning failures before network submit", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("submitTransactionBatch should not issue a request");
+    },
+    __nativeBinding: {
+      encodeSignedTransactionVersioned: () => {
+        throw new Error("native versioning failed");
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    /native versioning failed/,
+  );
+});
+
+test("submitTransactionBatch rejects empty native transaction Norito frames before network submit", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("submitTransactionBatch should not issue a request");
+    },
+    __nativeBinding: {
+      encodeSignedTransactionNorito: () => Buffer.alloc(0),
+    },
+  });
+
+  await assert.rejects(
+    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    /Native signed transaction Norito encoder returned an empty payload/,
+  );
+});
+
+test("submitTransactionBatch rejects native batch encoder failures without posting the batch", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`Unexpected URL ${url}`);
+  };
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl,
+    __nativeBinding: {
+      encodeTransactionPayloadBatch: () => {
+        throw new Error("native batch encoder failed");
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => client.submitTransactionBatch([Buffer.from([0xde, 0xad])]),
+    /native batch encoder failed/,
+  );
+  assert.deepEqual(calls.map((call) => call.url), [`${BASE_URL}/v1/node/capabilities`]);
+});
+
+test("submitTransactionBatch rejects malformed accepted-count admission headers", async () => {
+  const payloads = [Buffer.from([0xde, 0xad])];
+  const fetchImpl = async (url, init) => {
+    if (url === `${BASE_URL}/v1/node/capabilities`) {
+      return createResponse({
+        status: 200,
+        jsonData: {
+          abi_version: 1,
+          data_model_version: 1,
+          crypto: {
+            sm: {
+              enabled: false,
+              default_hash: "sha2_256",
+              allowed_signing: ["ed25519"],
+              sm2_distid_default: "",
+              openssl_preview: false,
+              acceleration: {
+                scalar: true,
+                neon_sm3: false,
+                neon_sm4: false,
+                policy: "scalar-only",
+              },
+            },
+            curves: {
+              registry_version: 1,
+              allowed_curve_ids: [1],
+            },
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    }
+    assert.equal(url, `${BASE_URL}/v1/pipeline/transactions/batch`);
+    assert.equal(init.method, "POST");
+    return createResponse({
+      status: 202,
+      headers: {
+        "x-iroha-transactions-accepted": "NaN",
+      },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl, __nativeBinding: {} });
+
+  await assert.rejects(
+    () => client.submitTransactionBatch(payloads),
+    /submitTransactionBatch\.acceptedCount/,
+  );
 });
 
 test("submitTransaction deframes NRT0 payloads before posting versioned pipeline bytes", async () => {

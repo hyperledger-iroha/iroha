@@ -251,6 +251,7 @@ export {
   noritoDecodeInstruction,
   noritoEncodePrivacyProofEnvelope,
   noritoDecodePrivacyProofEnvelope,
+  noritoEncodeTransactionPayloadBatch,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigContractCallApproveRequest,

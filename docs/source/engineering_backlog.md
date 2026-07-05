@@ -2061,6 +2061,15 @@ successful proofs: `ok=true`, a 2xx integer HTTP status, and a canonical
 nonzero response digest. Any failed, mismatched, incomplete, or malformed
 triplet is normalized to `"unsupported"` in public readiness output after the
 existing blocker is emitted.
+Receipt-verifier summaries also carry an aggregate `ok` verdict, which is true
+only when both production receipt kinds are present, every receipt entry
+succeeds, source files were required, and no local receipt override
+(`allow_failed`, `allow_insecure_http`, or `allow_default_profile`) was used.
+Evidence and readiness replay recompute that verdict and report
+`evidence.receipt_summary_not_ok`, `evidence.receipt_summary_ok_drift`,
+`evidence.archive_receipt_summary_not_ok`, or
+`evidence.archive_receipt_summary_ok_drift` for diagnostic or forged receipt
+summaries.
 Final readiness also accepts digest-bound pending-XSD probe summaries and
 requires them when reviewed pending-source gaps are allowed, rechecking official
 ISO URL metadata, freshness, counts, bounded sample digest shape,
@@ -2346,7 +2355,17 @@ timestamp, and HTTP URL helpers. Receipt-verifier raw CLI, receipt path, and
 HTTP URL helpers plus canary raw CLI, URL, output/runbook path, runbook string,
 and numeric preflight helpers now use the same policy too. Trust-bundle raw
 CLI, output path, and source-age integer preflight helpers also reject Unicode
-format controls at the raw guard layer.
+format controls at the raw guard layer. ISO operator canary, trust-bundle,
+operator-evidence, and final production-readiness replay now also require
+`provider` and `environment` context labels to be canonical lowercase IDs with
+hyphen separators, rejecting uppercase, slash-bearing, and
+leading/trailing-hyphen labels before they can label archived production
+evidence. Executed canaries, operator-evidence archival, and final readiness
+replay also reject exact placeholder/non-production context IDs such as
+`example`, `sample`, `template`, `ci`, and `test`, plus hyphen-tokenized
+placeholder aliases such as `example-bank`, `sample-preprod`, and
+`test-preprod`, including digest-correct forged canary, evidence-policy, and
+compact trust-profile summaries.
 ISO URL port parser failures now report only label-level invalid-port
 diagnostics instead of including parser exception text that may contain the raw
 operator-provided port string.
@@ -2407,7 +2426,12 @@ blocked-source, or pending-source gap warnings, never repository fixture
 manifest blockers or a truly unreviewed profile-catalog-only schema gap;
 advertised profile-version gaps remain blockers unless the exact message
 definition also has reviewed missing-schema, schema-only, blocked-source, or
-pending-source evidence. Cross-summary XSD material replay checks also include
+pending-source evidence. XSD preflight summaries now carry `ok: true` only when
+all strict schema-backed, fixture-backed, profile-backed, and XML schema
+validation checks pass against non-repository material with no reviewed or
+pending gaps; repository fixture manifests and diagnostic reviewed-gap summaries
+record `ok: false`, and final readiness recomputes the verdict before accepting
+the summary. Cross-summary XSD material replay checks also include
 pending-source message IDs, official catalogue/source references, and bounded
 direct download URLs, so one operator package cannot satisfy another by
 replaying the same pending-source record. Pending-source
@@ -2599,7 +2623,11 @@ to compact canary provider/environment fields, evidence policy context, trust
 profile IDs/rails/environments, trust embedded-signature policies,
 profile-override policies, trust source authority/version strings, and archived
 trust DER labels before release summaries can preserve those values. Archived
-trust embedded-signature policies and source authority/version provenance also
+provider/environment and trust-profile environment checks now reject both exact
+placeholder IDs and hyphen-tokenized placeholder aliases such as `example-bank`,
+`sample-preprod`, and `test-preprod` without echoing the submitted value.
+Archived trust embedded-signature policies and source authority/version
+provenance also
 reject non-ASCII confusable spellings before readiness blockers or evidence
 summaries can preserve forged policy or provenance values.
 Direct trust-bundle material and archived evidence replay also require DER labels
@@ -6579,8 +6607,8 @@ redistributable schemas, and official trust/revocation bundles.
   explicitly revoked.
 - Completed 2026-06-02: tightened ISO XMLDSig X.509 production admission so
   Torii config and shared profile JSON SHA-256 trust/revocation pins must
-  already be canonical lowercase hex, `x509_trust_anchor_sha256_pins` and
-  legacy certificate pins require a linked issuer certificate beyond the leaf,
+  already be canonical lowercase hex, and `x509_trust_anchor_sha256_pins`
+  require a linked issuer certificate beyond the leaf,
   and CRL/OCSP freshness plus delegated OCSP responder certificate validity are
   evaluated at verified XAdES `SigningTime` or BAH `CreDt` rather than local
   wall clock.
@@ -6640,9 +6668,9 @@ redistributable schemas, and official trust/revocation bundles.
   certificate-policy OID lists plus CRL/OCSP DER base64 material now reject
   padded or duplicate entries instead of silently trimming or de-duplicating, so
   padded trust/revocation profile config fails before runtime admission.
-  Current public-key and X.509 trust-anchor pin fields now also fail closed when
-  they overlap with their legacy alias fields in embedded or runtime profile
-  configuration.
+  Stale XMLDSig trust-pin alias fields now fail as malformed input, and the
+  current public-key, X.509 trust-anchor, and revoked-certificate pin roles must
+  not overlap in embedded or runtime profile configuration.
   Final production-readiness XSD replay now also recomputes
   profile-version `schema_backed` flags from the schema-backed XML fixture
   message-definition IDs in the same digest-bound summary, so forged archived
@@ -7272,8 +7300,21 @@ redistributable schemas, and official trust/revocation bundles.
 	  exclusive same-directory owner-private temporary files with
 	  bounded digest-derived names that are descriptor-rechecked, fsynced, and
 	  atomically replaced where available.
-  `--plan-only` validates runbooks and prints redacted child commands without
-  contacting Torii or notary endpoints.
+  `--plan-only` validates runbooks, prints redacted child commands without
+  contacting Torii or notary endpoints, and emits `ok=false` so planned output
+  cannot be confused with an executed canary. Executed direct summaries now
+  emit `ok=true` only when `--require-explicit-policy` was used, planned policy
+  records and executed results are the exact ordered rail/notary/verify
+  records, no stage skipped or producer dry-run was used, local diagnostic
+  allowances such as insecure HTTP, default profiles, or failed receipts were
+  absent, and verifier source-file checks stayed enabled. Aggregate evidence
+  summaries now preserve a compact canary `ok` verdict that is true only for
+  executed, explicit-policy, non-dry-run canaries with all production stages and
+  a production-complete receipt summary; final readiness recomputes that verdict
+  and reports
+  `evidence.canary_summary_not_ok` or
+  `evidence.canary_summary_ok_drift` for diagnostic or relabelled canary
+  evidence.
 - Completed 2026-06-04: added checked-in ISO operator canary runbook templates
   under `fixtures/iso20022/operator_canary/` for Swift CBPR+, Fedwire Funds,
   SEPA SCT Inst, and securities CSD profile families. The script tests validate
@@ -7329,6 +7370,9 @@ redistributable schemas, and official trust/revocation bundles.
 		  `--allow-synthetic-der` flags unless a verified bundle actually carries
 		  matching non-production policy, insecure source URL, or synthetic DER
 		  evidence; private synthetic-DER usage is stripped before summary emission.
+		  Trust summaries now record `ok=true` only when profile JSON was emitted,
+		  `profile_json_emittable` remains true, and no local trust diagnostic
+		  override was used.
 	- Completed 2026-06-04: added checked-in trust-bundle templates under
 	  `fixtures/iso20022/trust_bundles/` for Swift CBPR+, Fedwire Funds, SEPA SCT
   Inst, and securities CSD profile families. The templates use synthetic DER
@@ -7367,6 +7411,12 @@ redistributable schemas, and official trust/revocation bundles.
 					  non-production signature policy or `http://` or local/private
 					  source provenance per trust summary, so one diagnostic trust
 					  summary cannot mask hidden diagnostic material in another,
+					  emits `ok=false` on evidence summaries whenever any local
+					  non-production `allow_*` policy flag is in force, with
+					  final readiness recomputing the top-level evidence verdict,
+					  preserving diagnostic policy flags as `"unsupported"`, and
+					  reporting `evidence.summary_ok_drift` when a digest-correct
+					  summary relabels local policy as production-ready,
 					  rejects unused dry-run,
 					  failed-receipt, insecure-HTTP, and receipt-source-missing diagnostic overrides unless an
 					  archived canary command actually targets HTTP or local/private
@@ -7722,7 +7772,12 @@ redistributable schemas, and official trust/revocation bundles.
   evidence, and
   `--allow-canary-stage-receipts-only` requires an
   evidence summary with canary-stage-only receipt policy and missing direct
-  receipt archive verification. Compact trust summaries that explicitly record
+  receipt archive verification. Both overrides still emit stable
+  `readiness.policy.*` blockers, so local diagnostic rollups cannot return
+  `ok: true` as production-ready release evidence. XSD summaries also expose
+  `ok=false` for repository fixture or reviewed-gap diagnostic material, with
+  final readiness emitting `xsd.summary_not_ok` or `xsd.summary_ok_drift` when
+  replayed fields disagree with that verdict. Compact trust summaries that explicitly record
   `allow_insecure_source_url=true` can replay `http://` or local/private
   trust-source URLs as diagnostic evidence and still produce readiness blockers
   instead of aborting as malformed.

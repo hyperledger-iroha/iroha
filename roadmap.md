@@ -16177,7 +16177,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   duplicate-free profile/reference/message-profile config,
   trimmed non-empty profile config literals, duplicate-free trimmed
   trust/revocation material config, CRL/OCSP DER-shape evidence preflight,
-  non-overlapping trust-pin alias fields, bounded profile numeric scalars, and
+  stale XMLDSig trust-pin alias rejection, non-overlapping current
+  public-key/trust-anchor/revoked-certificate pin roles, bounded profile numeric
+  scalars, and
   bounded ISO 4217 minor-unit overrides in runtime and profile-catalog evidence
   preflight, plus official-MDR XSD
   assertions for
@@ -16336,12 +16338,17 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   first-release runtime surface; operator receipt/evidence/readiness gates
   reject retired rail receipts and stale legacy summary fields with no override. An
   aggregate ISO production-readiness rollup now requires explicit expected
-  provider/environment context, non-empty strict XSD proof, operator evidence
-  summaries, and digest-bound direct receipt-archive verification with
+  canonical lowercase non-placeholder provider/environment context, with
+  executed canaries and archive/readiness replay rejecting exact and
+  hyphen-tokenized placeholder aliases, non-empty
+  strict XSD proof, operator evidence summaries, and digest-bound direct
+  receipt-archive verification with
   unique canonical per-receipt `*.receipt.json` paths, digests, and successful
   2xx receipt status plus kind-specific notary/rail metadata into one release
-  gate; remaining readiness work is making that gate pass without diagnostic
-  overrides and with real provider evidence. Default-profile rail canary
+  gate; final-readiness diagnostic overrides now emit stable
+  `readiness.policy.*` blockers so `ok: true` only means the release gate passed
+  without local exceptions. Remaining readiness work is making that gate pass
+  without diagnostic overrides and with real provider evidence. Default-profile rail canary
   evidence must also carry an explicit `--default-rail-profile` binding so
   `profile=null` receipts prove trust coverage for the configured fallback,
   and custom-profile canary/archive receipts must use a message family covered
@@ -16972,7 +16979,28 @@ digest-bound pending-XSD source probe summaries for reviewed
 			  trust summaries carry the corresponding diagnostic trust material,
 			  binds compact record-only and insecure-source trust policy flags to
 			  actual non-production signature policy or `http://` or local/private
-			  source provenance per trust summary,
+				  source provenance per trust summary, emits `ok=false` on evidence
+				  summaries whenever any local non-production `allow_*` policy flag is
+				  in force, and final readiness recomputes that top-level evidence
+				  verdict while preserving diagnostic evidence policy flags as
+				  `"unsupported"` and reporting `evidence.summary_ok_drift` for
+				  digest-correct relabelled summaries,
+				  preserves compact canary `ok` verdicts and recomputes them from
+				  executed/plan-only state, explicit policy, required stages,
+				  dry-run flags, and production-complete receipt summaries so
+				  diagnostic or relabelled canary evidence emits
+				  `evidence.canary_summary_not_ok` or
+				  `evidence.canary_summary_ok_drift`, while direct executed
+				  canary summaries emit `ok=true` only for explicit-policy
+				  runs whose planned policy records and executed results are
+				  the exact ordered rail/notary/verify records with no skipped stages, producer
+				  dry-runs, local diagnostic allowances, or disabled verifier
+				  source-file checks,
+				  emits and replays XSD summary `ok` verdicts so repository fixture
+				  manifests, reviewed-gap diagnostics, and forged production claims
+				  cannot satisfy final readiness,
+				  requires archived trust summaries to carry an `ok` verdict matching
+				  profile JSON emission, emittability, and local trust diagnostic policy,
 			  rejects unused dry-run, failed-receipt, insecure-HTTP, and receipt-source-missing diagnostic
 			  overrides unless the archived canary command, receipt summary, or trust
 			  summary carries that policy or a receipt summary records
@@ -17034,6 +17062,12 @@ digest-bound pending-XSD source probe summaries for reviewed
 		  `allow_canary_stage_receipts_only` policy flag instead of omitting the
 		  archive field or forging production policy, while still blocking that
 		  policy flag when forged direct archive verification is present, rejects
+		  receipt-verifier summary `ok` drift by recomputing that aggregate from
+		  required receipt kinds, per-receipt success, source-file policy, and
+		  local receipt override flags (`allow_failed`, `allow_insecure_http`,
+		  and `allow_default_profile`), so diagnostic canary-stage or
+		  direct-archive receipt summaries cannot be replayed as production
+		  evidence, rejects
 		  non-boolean direct evidence-gate and readiness production-policy flags
 		  before summary loading and non-boolean direct XSD strict/trust-bundle
 		  policy flags before manifest or bundle loading, plus non-boolean direct
@@ -17191,10 +17225,12 @@ digest-bound pending-XSD source probe summaries for reviewed
   `Document`/payload root attributes, binding parsed XML and summary digests to
   the same checked bytes, capping manifest JSON and profile catalog source at
   4 MiB and schema/fixture XML inputs at 8 MiB before parsing,
-	  requiring XML schema-validation proof for every
-	  schema-backed fixture while redacting local schema/fixture paths from
-	  `xmllint` diagnostics, rejecting unknown XSD summary fields, recomputing
-	  schema-only flags/reasons and reviewed gap-list paths/reasons from the schema/fixture
+		  requiring XML schema-validation proof for every
+		  schema-backed fixture while redacting local schema/fixture paths from
+			  `xmllint` diagnostics, rejecting unknown XSD summary fields, recomputing
+			  the XSD summary `ok` verdict from strict flags, repository-manifest
+			  status, schema/profile counts, and reviewed/pending gap lists, and recomputing
+		  schema-only flags/reasons and reviewed gap-list paths/reasons from the schema/fixture
 	  relationship while rejecting padded, control-bearing, non-ASCII,
 	  secret-looking, or overlong reviewed reason strings plus present
 	  empty/non-string archived reviewed reasons in both the XSD preflight and readiness rollup,

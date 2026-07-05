@@ -543,6 +543,27 @@ export function noritoEncodeInstruction(instruction) {
 }
 
 /**
+ * Encode a `/v1/pipeline/transactions/batch` request body.
+ *
+ * Torii expects a Norito `Vec<Vec<u8>>` where each inner byte vector is one
+ * versioned signed transaction payload.
+ *
+ * @param {ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>} payloads
+ * @returns {Buffer}
+ */
+export function noritoEncodeTransactionPayloadBatch(payloads) {
+  if (!Array.isArray(payloads)) {
+    throw new TypeError("transaction payload batch must be an array");
+  }
+  if (payloads.length === 0) {
+    throw new TypeError("transaction payload batch must contain at least one payload");
+  }
+  return encodeNoritoVec(payloads, (payload, index) =>
+    encodeByteVecValue(payload, `transaction payload batch[${index}]`),
+  );
+}
+
+/**
  * Encode a `/v1/multisig/propose` request DTO as a native Norito body.
  *
  * Torii's `NoritoJson<MultisigProposeDto>` extractor accepts this payload with

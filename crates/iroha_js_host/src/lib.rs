@@ -11532,6 +11532,26 @@ pub fn encode_signed_transaction_versioned(bytes: Uint8Array) -> napi::Result<Bu
     Ok(Buffer::from(encoded))
 }
 
+/// Encode a `/v1/pipeline/transactions/batch` payload as a framed Norito
+/// `Vec<Vec<u8>>`, where every item is a versioned signed transaction payload.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // N-API arrays own their buffers at the boundary
+pub fn encode_transaction_payload_batch(payloads: Vec<Buffer>) -> napi::Result<Buffer> {
+    ensure_packed_struct_disabled();
+    if payloads.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload batch must contain at least one payload",
+        ));
+    }
+    let payloads: Vec<Vec<u8>> = payloads
+        .into_iter()
+        .map(|payload| payload.as_ref().to_vec())
+        .collect();
+    let encoded = norito::to_bytes(&payloads).map_err(norito_to_napi)?;
+    Ok(Buffer::from(encoded))
+}
+
 /// Decode a Norito-framed transaction submission receipt into its JSON representation.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership

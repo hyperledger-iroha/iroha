@@ -114,9 +114,9 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
   supported P-256/SHA-256 enveloped XMLDSig/XAdES subset for `require-verified` profiles only
   when the verified public key or cryptographically linked terminal CA trust-anchor DER digest
   matches that rail profile's configured `signature_public_key_sha256_pins`,
-  legacy `trusted_public_key_sha256`, or `x509_trust_anchor_sha256_pins`
-  pins; legacy `trusted_certificate_sha256` is normalized into the same
-  terminal trust-anchor policy. Raw `KeyValue/ECKeyValue` public-key
+  or `x509_trust_anchor_sha256_pins` pins; stale
+  `trusted_public_key_sha256` and `trusted_certificate_sha256` aliases are
+  rejected rather than normalized. Raw `KeyValue/ECKeyValue` public-key
   material must decode as an uncompressed P-256 SEC1 point. Leaf certificates
   must carry critical `keyUsage` with `digitalSignature` and must not be CA
   certificates. Each chain link must bind the child issuer
