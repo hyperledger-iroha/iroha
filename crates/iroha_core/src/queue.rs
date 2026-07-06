@@ -7341,6 +7341,36 @@ pub mod tests {
         ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
             self.current().map(Some)
         }
+
+        fn try_route_plan(
+            &self,
+            _tx: &AcceptedTransaction<'_>,
+        ) -> Result<RoutingPlan, RoutingResolveError> {
+            self.current().map(RoutingPlan::single)
+        }
+
+        fn try_route_plan_with_view(
+            &self,
+            _tx: &AcceptedTransaction<'_>,
+            _state_view: &StateView<'_>,
+        ) -> Result<RoutingPlan, RoutingResolveError> {
+            self.current().map(RoutingPlan::single)
+        }
+
+        fn try_route_plan_with_state(
+            &self,
+            _tx: &AcceptedTransaction<'_>,
+            _state: &State,
+        ) -> Result<RoutingPlan, RoutingResolveError> {
+            self.current().map(RoutingPlan::single)
+        }
+
+        fn try_route_plan_without_state(
+            &self,
+            _tx: &AcceptedTransaction<'_>,
+        ) -> Result<Option<RoutingPlan>, RoutingResolveError> {
+            self.current().map(|route| Some(RoutingPlan::single(route)))
+        }
     }
 
     #[tokio::test]
@@ -14197,11 +14227,16 @@ pub mod tests {
     fn proposal_pop_rejects_transaction_that_becomes_unroutable() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        install_test_nexus_routes(&mut state, &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router = Arc::new(MutableRouter::new(RoutingDecision::default()));
-        let mut queue =
-            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        let mut queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router.clone(),
+            &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)],
+        );
         let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
         queue.events_sender = event_sender;
         let queue = Arc::new(queue);
