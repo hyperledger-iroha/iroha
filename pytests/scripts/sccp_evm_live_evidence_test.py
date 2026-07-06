@@ -88,6 +88,40 @@ class HostileLiveDomain:
         raise AssertionError("secret-token EVM live domain was coerced")
 
 
+class HostileEvmLiveString(str):
+    """String subclass that EVM live exact parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM live exact string compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM live exact string iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM live exact string indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token EVM live exact string stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token EVM live exact string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token EVM live exact string lower ran")
+
+    def isascii(self):
+        raise AssertionError("secret-token EVM live exact string isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token EVM live exact string isdecimal ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token EVM live exact string encoded")
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -2928,6 +2962,149 @@ def test_evm_live_cli_parsers_reject_non_string_values_without_stringification()
             assert str(exc) == expected_message
         else:
             raise AssertionError("non-string EVM live parser value was accepted")
+
+
+def test_evm_live_exact_string_parsers_reject_string_subclasses_without_hooks():
+    module = load_live_module()
+    hostile_hex = HostileEvmLiveString("0x" + "11" * 32)
+    hostile_runtime = HostileEvmLiveString("0x6000")
+    hostile_quantity = HostileEvmLiveString("0xa")
+
+    cases = (
+        (
+            lambda: module._summary_hex_bytes(
+                {"component": hostile_hex},
+                "component",
+                label="component hash",
+                byte_length=32,
+            ),
+            ValueError,
+            "component hash must be an exact hex string",
+        ),
+        (
+            lambda: module._summary_exact_string(
+                {"route_allowlist_hash": hostile_hex},
+                "route_allowlist_hash",
+                label="route allowlist hash",
+            ),
+            ValueError,
+            "route allowlist hash must be an exact non-empty string",
+        ),
+        (
+            lambda: module._summary_runtime_bytes(
+                {"runtime": hostile_runtime},
+                "runtime",
+                label="bridge runtime bytecode",
+            ),
+            ValueError,
+            "bridge runtime bytecode must be exact 0x-prefixed hex",
+        ),
+        (
+            lambda: module._rpc_hex_data(hostile_runtime, method="eth_getCode bridge"),
+            RuntimeError,
+            "eth_getCode bridge returned non-string data",
+        ),
+        (
+            lambda: module._rpc_quantity(hostile_quantity, method="eth_chainId"),
+            RuntimeError,
+            "eth_chainId returned non-quantity data",
+        ),
+        (
+            lambda: module._parse_exact_hex_blob(
+                hostile_runtime,
+                label="route-canary calldata",
+            ),
+            RuntimeError,
+            "route-canary calldata must be hex",
+        ),
+    )
+
+    for parser, exception_type, expected_message in cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("string-subclass EVM live parser value was accepted")
+
+    assert (
+        module._route_canary_message_proof_event_summary(
+            {
+                "address": "0x" + "22" * 20,
+                "topics": [hostile_hex],
+            },
+            expected_log_index=0,
+            transaction_hash=bytes.fromhex("33" * 32),
+            expected_block_hash=bytes.fromhex("44" * 32),
+            expected_block_number=1,
+            route_allowlist_hash=bytes.fromhex("55" * 32),
+            bridge_address=bytes.fromhex("22" * 20),
+            expected_source_domain=1,
+            expected_target_domain=0,
+            expected_destination_binding_hash=bytes.fromhex("66" * 32),
+            expected_verifier_backend_hash=bytes.fromhex("77" * 32),
+            expected_proof_family_hash=bytes.fromhex("88" * 32),
+            expected_network_id=bytes.fromhex("99" * 32),
+        )
+        is None
+    )
+
+    def no_rpc_opener(_request, _timeout):
+        raise AssertionError("receipt block summary should reject before RPC")
+
+    try:
+        module._route_canary_receipt_block_summary(
+            "https://ethereum.example",
+            {"blockNumber": hostile_quantity},
+            opener=no_rpc_opener,
+            timeout=3.0,
+        )
+    except RuntimeError as exc:
+        rendered = str(exc)
+        assert rendered == "route-canary receipt blockNumber must be present"
+        assert "secret-token" not in rendered
+    else:
+        raise AssertionError("string-subclass route-canary blockNumber was accepted")
+
+    route_canary_summary = {
+        "route_canary": {
+            "evidence_source": "evm_message_proof_accepted_transaction",
+            "evidence_hash": "0x" + "aa" * 32,
+        },
+        "route_canary_transaction": {
+            "route_canary_evidence_hash": "0x" + "aa" * 32,
+            "event_matches": True,
+            "call_matches": True,
+            "message_proof_used": True,
+            "receipt_block_matches": True,
+            "receipt_block_finalized": True,
+            "transaction_block_matches": True,
+            "block_number": 1,
+            "block_hash": hostile_hex,
+            "transaction_block_number": 1,
+            "transaction_block_hash": "0x" + "bb" * 32,
+            "block_receipts_root": "0x" + "cc" * 32,
+        },
+    }
+    assert module._route_canary_transaction_verified(route_canary_summary) is False
+
+    prerequisites = module._full_toml_prerequisites(
+        {
+            "destination_bridge": {
+                "domain": module.evidence.SCCP_DOMAIN_ETH,
+                "expected_rpc_chain_id_matches": True,
+                "expected_network_id_matches": True,
+                "expected_bridge_code_hash_matches": True,
+                "expected_destination_binding_hash_matches": True,
+            },
+            "block_tag": "finalized",
+            "route_allowlist_hash": hostile_hex,
+            "route_canary": {},
+        }
+    )
+    assert "--route-allowlist-hash" in prerequisites
 
 
 def test_evm_live_namespace_args_reject_non_bytes_without_stringifying():

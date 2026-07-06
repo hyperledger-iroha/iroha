@@ -150,7 +150,7 @@ def _summary_hex_bytes(
     byte_length: int,
 ) -> bytes:
     value = record.get(field)
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise ValueError(f"{label} must be an exact hex string") from None
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
@@ -177,7 +177,7 @@ def _summary_runtime_bytes(
     label: str,
 ) -> bytes:
     value = record.get(field)
-    if not isinstance(value, str) or not value.startswith("0x"):
+    if type(value) is not str or not value.startswith("0x"):
         raise ValueError(f"{label} must be exact 0x-prefixed hex") from None
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise ValueError(f"{label} must not contain whitespace") from None
@@ -470,7 +470,7 @@ def _json_rpc(
 
 
 def _rpc_quantity(result: Any, *, method: str) -> int:
-    if not isinstance(result, str) or not result.startswith("0x"):
+    if type(result) is not str or not result.startswith("0x"):
         raise RuntimeError(f"{method} returned non-quantity data")
     if result != result.strip():
         raise RuntimeError(f"{method} returned non-canonical quantity")
@@ -485,7 +485,7 @@ def _rpc_quantity(result: Any, *, method: str) -> int:
 
 
 def _rpc_hex_data(result: Any, *, method: str) -> bytes:
-    if not isinstance(result, str):
+    if type(result) is not str:
         raise RuntimeError(f"{method} returned non-string data")
     if result != result.strip():
         raise RuntimeError(f"{method} returned non-canonical hex data")

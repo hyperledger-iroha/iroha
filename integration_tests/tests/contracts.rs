@@ -290,9 +290,12 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     }
     let deploy_body: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
     let code_hash_hex = deploy_body
-        .get("code_hash_hex")
+        .get("contracts")
+        .and_then(norito::json::Value::as_array)
+        .and_then(|contracts| contracts.first())
+        .and_then(|contract| contract.get("code_hash_hex"))
         .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("deploy response missing code_hash_hex"))?
+        .ok_or_else(|| eyre!("deploy response missing contracts[0].code_hash_hex"))?
         .to_owned();
 
     // Poll status until we see the deploy transaction committed
@@ -489,9 +492,14 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
     }
     let deploy_payload: norito::json::Value = norito::json::from_str(&deploy_resp.text().await?)?;
     let code_hash_hex = deploy_payload
-        .get("code_hash_hex")
+        .get("contracts")
+        .and_then(norito::json::Value::as_array)
+        .and_then(|contracts| contracts.first())
+        .and_then(|contract| contract.get("code_hash_hex"))
         .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("deploy response missing code_hash_hex: {deploy_payload:?}"))?
+        .ok_or_else(|| {
+            eyre!("deploy response missing contracts[0].code_hash_hex: {deploy_payload:?}")
+        })?
         .to_owned();
     wait_for_approved_txs(&client, baseline, Duration::from_secs(30), "deploy").await?;
 

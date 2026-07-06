@@ -252,7 +252,7 @@ def _json_rpc(
 
 
 def _rpc_quantity(result: Any, *, method: str) -> int:
-    if not isinstance(result, str) or result != result.strip() or not result.startswith("0x"):
+    if type(result) is not str or result != result.strip() or not result.startswith("0x"):
         raise RuntimeError(f"{method} returned non-canonical quantity")
     text = result[2:]
     if (
@@ -265,7 +265,7 @@ def _rpc_quantity(result: Any, *, method: str) -> int:
 
 
 def _rpc_hex_data(result: Any, *, method: str) -> bytes:
-    if not isinstance(result, str) or result != result.strip() or not result.startswith("0x"):
+    if type(result) is not str or result != result.strip() or not result.startswith("0x"):
         raise RuntimeError(f"{method} returned non-canonical lowercase 0x hex data")
     text = result[2:]
     if len(text) % 2 != 0:
@@ -323,12 +323,23 @@ def _rlp_list(items: Sequence[bytes]) -> bytes:
     return bytes([0xF7 + len(length)]) + length + payload
 
 
+def _is_non_text_sequence(value: object) -> bool:
+    value_type = type(value)
+    if (
+        str in value_type.__mro__
+        or bytes in value_type.__mro__
+        or bytearray in value_type.__mro__
+    ):
+        return False
+    return isinstance(value, Sequence)
+
+
 def rlp_encode(value: Any) -> bytes:
     """Encode bytes or nested byte lists using Ethereum RLP."""
 
     if isinstance(value, (bytes, bytearray)):
         return _rlp_bytes(bytes(value))
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+    if _is_non_text_sequence(value):
         return _rlp_list([rlp_encode(item) for item in value])
     raise TypeError("RLP value must be bytes or a sequence")
 
@@ -358,7 +369,7 @@ def _receipt_status_bytes(receipt: dict[str, Any]) -> bytes:
 
 def _receipt_logs(receipt: dict[str, Any]) -> list[Any]:
     logs = receipt.get("logs")
-    if not isinstance(logs, Sequence) or isinstance(logs, (str, bytes, bytearray)):
+    if not _is_non_text_sequence(logs):
         raise RuntimeError("receipt.logs must be a list")
     encoded = []
     for log_index, log in enumerate(logs):
@@ -372,7 +383,7 @@ def _receipt_logs(receipt: dict[str, Any]) -> list[Any]:
             nonzero=False,
         )
         topics = log.get("topics")
-        if not isinstance(topics, Sequence) or isinstance(topics, (str, bytes, bytearray)):
+        if not _is_non_text_sequence(topics):
             raise RuntimeError(f"receipt.logs[{log_index}].topics must be a list")
         if len(topics) > 4:
             raise RuntimeError(f"receipt.logs[{log_index}].topics must contain at most 4 entries")
@@ -696,7 +707,7 @@ def _source_event_digest_from_receipt(
     block_number: int,
 ) -> bytes:
     logs = receipt.get("logs")
-    if not isinstance(logs, Sequence) or isinstance(logs, (str, bytes, bytearray)):
+    if not _is_non_text_sequence(logs):
         raise RuntimeError("receipt.logs is required for SCCP source event validation")
     matched_digest: bytes | None = None
     for index, log in enumerate(logs):
@@ -709,7 +720,7 @@ def _source_event_digest_from_receipt(
             byte_length=20,
         )
         topics = log.get("topics")
-        if not isinstance(topics, Sequence) or isinstance(topics, (str, bytes, bytearray)):
+        if not _is_non_text_sequence(topics):
             raise RuntimeError(f"receipt.logs[{index}].topics must be a list")
         if len(topics) == 0 or topics[0] != EVM_SOURCE_EVENT_TOPIC:
             continue
@@ -846,7 +857,7 @@ def collect_receipt_proof_evidence(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(block_receipts, Sequence) or isinstance(block_receipts, (str, bytes, bytearray)):
+    if not _is_non_text_sequence(block_receipts):
         raise RuntimeError("eth_getBlockReceipts returned a non-list response")
     proof = build_receipt_trie_proof_from_receipts(
         block_receipts,

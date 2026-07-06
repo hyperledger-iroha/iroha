@@ -156,6 +156,54 @@ SCCP_ACTIVE_SOURCE_TEMPLATE_COMPONENT_HASHES: tuple[tuple[str, str, bytes], ...]
 )
 
 
+SOURCE_TEMPLATE_LOCAL_FIELD_LABEL_ERROR = (
+    "source template local field must be a builtin string"
+)
+SOURCE_TEMPLATE_MATCH_LANE_LABEL_ERROR = (
+    "source template match lane must be a builtin string"
+)
+SOURCE_TEMPLATE_MATCH_FIELD_LABEL_ERROR = (
+    "source template match field must be a builtin string"
+)
+SOURCE_TEMPLATE_LOCAL_HASH_ERROR = (
+    "source template local hash must be builtin non-zero bytes32"
+)
+_TEMPLATE_LABEL_ERRORS = {
+    "source template local field": SOURCE_TEMPLATE_LOCAL_FIELD_LABEL_ERROR,
+    "source template match lane": SOURCE_TEMPLATE_MATCH_LANE_LABEL_ERROR,
+    "source template match field": SOURCE_TEMPLATE_MATCH_FIELD_LABEL_ERROR,
+}
+
+
+def _require_builtin_template_label(value: object, *, label: str) -> str:
+    """Return a public template label after rejecting string subclasses."""
+
+    if type(value) is not str:
+        raise TypeError(
+            _TEMPLATE_LABEL_ERRORS.get(
+                label,
+                f"{label} must be a builtin string",
+            )
+        )
+    return value
+
+
+def _is_builtin_template_hash(value: object) -> bool:
+    """Return true only for canonical, non-zero builtin bytes32 hashes."""
+
+    return type(value) is bytes and len(value) == 32 and any(value)
+
+
+def _require_builtin_template_hash(value: object, *, label: str) -> bytes:
+    """Return a public template hash after rejecting bytes subclasses."""
+
+    if not _is_builtin_template_hash(value):
+        if label == "source template local hash":
+            raise TypeError(SOURCE_TEMPLATE_LOCAL_HASH_ERROR)
+        raise TypeError(f"{label} must be builtin non-zero bytes32")
+    return value
+
+
 def sccp_active_source_template_component_hash_errors(
     entries: tuple[object, ...] = SCCP_ACTIVE_SOURCE_TEMPLATE_COMPONENT_HASHES,
 ) -> tuple[str, ...]:
@@ -175,14 +223,14 @@ def sccp_active_source_template_component_hash_errors(
 
         lane, field, template_hash = entry
         if (
-            not isinstance(lane, str)
+            type(lane) is not str
             or lane not in SCCP_ACTIVE_SOURCE_TEMPLATE_FIELDS_BY_LANE
         ):
             errors.append(f"entry {index} lane must be an active launch lane")
             continue
         expected_fields = SCCP_ACTIVE_SOURCE_TEMPLATE_FIELDS_BY_LANE[lane]
 
-        if not isinstance(field, str) or field not in expected_fields:
+        if type(field) is not str or field not in expected_fields:
             errors.append(f"entry {index} field must be expected for lane {lane}")
             continue
 
@@ -193,11 +241,7 @@ def sccp_active_source_template_component_hash_errors(
         else:
             seen_fields.add(lane_field)
 
-        if (
-            not isinstance(template_hash, bytes)
-            or len(template_hash) != 32
-            or not any(template_hash)
-        ):
+        if not _is_builtin_template_hash(template_hash):
             errors.append(f"entry {index} hash must be non-zero bytes32")
             continue
 
@@ -243,8 +287,19 @@ def sccp_source_template_hash_match(
 ) -> tuple[str | None, str] | None:
     """Return the local or active-lane template hash matched by ``value``."""
 
+    if not _is_builtin_template_hash(value):
+        return None
+
     if local_template_hashes is not None:
         for field, template_hash in local_template_hashes.items():
+            field = _require_builtin_template_label(
+                field,
+                label="source template local field",
+            )
+            template_hash = _require_builtin_template_hash(
+                template_hash,
+                label="source template local hash",
+            )
             if value == template_hash:
                 return (None, field)
 
@@ -258,7 +313,18 @@ def sccp_source_template_hash_match(
 def sccp_source_template_hash_human_label(match: tuple[str | None, str]) -> str:
     """Return a diagnostic label for a template-hash match."""
 
+    if not isinstance(match, tuple) or len(match) != 2:
+        raise TypeError("source template match must be a lane, field tuple")
     lane, field = match
+    if lane is not None:
+        lane = _require_builtin_template_label(
+            lane,
+            label="source template match lane",
+        )
+    field = _require_builtin_template_label(
+        field,
+        label="source template match field",
+    )
     label = field.replace("_", " ")
     if lane is None:
         return label

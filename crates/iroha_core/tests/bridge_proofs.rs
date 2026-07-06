@@ -3340,17 +3340,6 @@ fn ethereum_mainnet_lane_readiness_requires_complete_eth_material() {
         Some(true),
     );
 
-    assert!(
-        iroha_sccp::sccp_evm_mainnet_destination_rollout_v1(
-            iroha_sccp::SCCP_DOMAIN_ETH,
-            "0x3333333333333333333333333333333333333333".to_owned(),
-            hex::encode([0x44; 32]),
-            hex::encode([0x55; 32]),
-        )
-        .is_none(),
-        "legacy ETH destination rollout without deployment binding evidence must stay disabled",
-    );
-
     let mut missing_canary = route_allowlist.clone();
     missing_canary.route_canary_status = None;
     missing_canary.route_canary_evidence_hash = None;

@@ -12007,7 +12007,7 @@ test("getSccpCapabilities normalizes discovery response", async () => {
   });
 });
 
-test("getSccpCapabilities accepts live legacy burn registry backend field", async () => {
+test("getSccpCapabilities rejects legacy burn registry backend field", async () => {
   const fetchImpl = async (url) => {
     assert.equal(url, `${BASE_URL}/v1/sccp/capabilities`);
     return createResponse({
@@ -12033,8 +12033,10 @@ test("getSccpCapabilities accepts live legacy burn registry backend field", asyn
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpCapabilities();
-  assert.equal(result.burnRegistryBackend, "bridge/sccp/burn-v1");
+  await assert.rejects(
+    () => client.getSccpCapabilities(),
+    /sccp capabilities response\.burn_registry_backend/u,
+  );
 });
 
 test("getSccpProofManifests normalizes typed manifest response", async () => {

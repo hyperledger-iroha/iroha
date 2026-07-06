@@ -72,6 +72,37 @@ def hex_bytes(byte, count):
     return "0x" + f"{byte:02x}" * count
 
 
+class HostileReceiptString(str):
+    """String subclass that receipt RPC parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token receipt exact string compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token receipt exact string iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token receipt exact string indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token receipt exact string stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token receipt exact string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token receipt exact string lower ran")
+
+    def isascii(self):
+        raise AssertionError("secret-token receipt exact string isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token receipt exact string isdecimal ran")
+
+
 def test_receipt_cli_redacts_top_level_exception_details(monkeypatch, capsys):
     module = load_module()
 
@@ -194,6 +225,147 @@ def test_receipt_cli_parsers_reject_non_string_values_without_stringification():
             assert "HostileParserValue" not in rendered
         else:
             raise AssertionError("hostile receipt parser value was accepted")
+
+
+def test_receipt_rpc_scalar_parsers_reject_string_subclasses_without_hooks():
+    module = load_module()
+    hostile_quantity = HostileReceiptString("0x1")
+    hostile_hex = HostileReceiptString("0x11")
+
+    cases = (
+        (
+            lambda: module._rpc_quantity(hostile_quantity, method="receipt.status"),
+            "receipt.status returned non-canonical quantity",
+        ),
+        (
+            lambda: module._rpc_hex_data(hostile_hex, method="eth_getBlockReceipts"),
+            "eth_getBlockReceipts returned non-canonical lowercase 0x hex data",
+        ),
+    )
+
+    for parser, expected_message in cases:
+        try:
+            parser()
+        except RuntimeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("string-subclass receipt RPC scalar was accepted")
+
+
+def test_receipt_sequence_parsers_reject_string_subclasses_without_iteration():
+    module = load_module()
+    hostile_sequence = HostileReceiptString("[]")
+    valid_receipts = block_receipts(module)
+    transaction_receipt = valid_receipts[0]
+    proof = module.build_receipt_trie_proof_from_receipts(
+        valid_receipts,
+        transaction_index=0,
+    )
+    receipts_root = "0x" + proof["receipts_root"].hex()
+
+    def hostile_block_receipts_opener(request, timeout=15.0):
+        del timeout
+        payload = json.loads(request.data.decode("utf-8"))
+        method = payload["method"]
+        params = payload["params"]
+        if method == "eth_chainId":
+            return FakeResponse(rpc_response(quantity(1)))
+        if method == "eth_getTransactionReceipt":
+            assert params == ["0x" + "11" * 32]
+            return FakeResponse(rpc_response(transaction_receipt))
+        if method == "eth_getBlockByHash":
+            assert params == ["0x" + "aa" * 32, False]
+            return FakeResponse(
+                rpc_response(
+                    {
+                        "hash": "0x" + "aa" * 32,
+                        "number": "0x1234",
+                        "receiptsRoot": receipts_root,
+                    }
+                )
+            )
+        if method == "eth_getBlockReceipts":
+            assert params == ["0x1234"]
+            return FakeResponse(rpc_response(hostile_sequence))
+        raise AssertionError(f"unexpected RPC method {method}")
+
+    sequence_cases = (
+        (
+            lambda: module.rlp_encode(hostile_sequence),
+            TypeError,
+            "RLP value must be bytes or a sequence",
+        ),
+        (
+            lambda: module._receipt_logs({"logs": hostile_sequence}),
+            RuntimeError,
+            "receipt.logs must be a list",
+        ),
+        (
+            lambda: module._receipt_logs(
+                {
+                    "logs": [
+                        {
+                            "address": "0x" + "33" * 20,
+                            "topics": hostile_sequence,
+                            "data": "0x",
+                        }
+                    ]
+                }
+            ),
+            RuntimeError,
+            "receipt.logs[0].topics must be a list",
+        ),
+        (
+            lambda: module._source_event_digest_from_receipt(
+                {"logs": hostile_sequence},
+                source_bridge_address=bytes.fromhex("33" * 20),
+                transaction_hash=bytes.fromhex("11" * 32),
+                block_hash=bytes.fromhex("aa" * 32),
+                block_number=0x1234,
+            ),
+            RuntimeError,
+            "receipt.logs is required for SCCP source event validation",
+        ),
+        (
+            lambda: module._source_event_digest_from_receipt(
+                receipt(
+                    module,
+                    index=0,
+                    tx_byte=0x11,
+                    logs=source_log(module, topics=hostile_sequence),
+                ),
+                source_bridge_address=bytes.fromhex("33" * 20),
+                transaction_hash=bytes.fromhex("11" * 32),
+                block_hash=bytes.fromhex("aa" * 32),
+                block_number=0x1234,
+            ),
+            RuntimeError,
+            "receipt.logs[0].topics must be a list",
+        ),
+        (
+            lambda: module.collect_receipt_proof_evidence(
+                "https://rpc.example",
+                domain=module.SCCP_DOMAIN_ETH,
+                transaction_hash=bytes.fromhex("11" * 32),
+                source_bridge_address=bytes.fromhex("33" * 20),
+                opener=hostile_block_receipts_opener,
+            ),
+            RuntimeError,
+            "eth_getBlockReceipts returned a non-list response",
+        ),
+    )
+
+    for parser, exception_type, expected_message in sequence_cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("string-subclass receipt sequence was accepted")
 
 
 def test_receipt_domain_parser_rejects_retired_aliases_without_stringifying():

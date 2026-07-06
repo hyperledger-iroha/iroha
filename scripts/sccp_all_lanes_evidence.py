@@ -1506,7 +1506,7 @@ def _number_repeated_blocker_list_diagnostics(
 
 def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:
     blockers = record.get("blockers", [])
-    if not isinstance(blockers, list):
+    if type(blockers) is not list:
         return [f"{label} blockers must be a list of non-empty canonical strings"]
     errors: list[str] = []
     seen_blockers: set[str] = set()
@@ -1528,7 +1528,7 @@ def _canonical_blocker_list(
     value: Any,
     label: str,
 ) -> tuple[list[str], list[str]]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [], [f"{label} blockers must be a list of non-empty canonical strings"]
     blockers: list[str] = []
     errors: list[str] = []
@@ -1922,11 +1922,11 @@ def _records_by_domain(
     errors: list[str] = []
     if records is None:
         return by_domain, errors
-    if not isinstance(records, list):
+    if type(records) is not list:
         return by_domain, ["records must be a list"]
     seen: dict[int, int] = {}
     for index, record in enumerate(records):
-        if not isinstance(record, dict):
+        if type(record) is not dict:
             errors.append(f"record {index} must be a table")
             continue
         domain = record.get(domain_field)
@@ -2310,10 +2310,16 @@ def load_evidence_bundle(paths: list[Path]) -> dict[str, list[dict[str, Any]]]:
             label=label,
         )
         document = _load_toml(text, label=label)
+        if type(document) is not dict:
+            raise ValueError(f"{label}: evidence root must be a TOML table")
         zk = document.get("zk", {})
-        if not isinstance(zk, dict):
+        if type(zk) is not dict:
             raise ValueError(f"{label}: [zk] must be a TOML table")
-        for section in sorted(zk):
+        for section in sorted(zk, key=_safe_public_key_sort_key):
+            if type(section) is not str:
+                raise ValueError(
+                    f"{label}: unsupported zk section with malformed name"
+                )
             if section not in SECTION_NAMES:
                 detail = _toml_unsupported_section_detail(section)
                 raise ValueError(f"{label}: {detail}")
@@ -2321,8 +2327,8 @@ def load_evidence_bundle(paths: list[Path]) -> dict[str, list[dict[str, Any]]]:
             records = zk.get(section, [])
             if records is None:
                 continue
-            if not isinstance(records, list) or not all(
-                isinstance(record, dict) for record in records
+            if type(records) is not list or not all(
+                type(record) is dict for record in records
             ):
                 raise ValueError(f"{label}: zk.{section} must be an array of tables")
             if section == "sccp_source_verifier_materials":
@@ -7114,19 +7120,69 @@ def _check_route_canary_evidence_hashes_unique(
 
 
 def _check_route_canary_evidence_hashes_do_not_reuse_governed_hashes(
-    lanes: list[dict[str, Any]],
+    lanes: Any,
 ) -> list[str]:
     errors: list[str] = []
     governed_hashes: dict[bytes, tuple[int, str]] = {}
-    for lane in lanes:
-        domain = lane["domain"]
-        for field, value in lane.get("source_record_hashes", {}).items():
+    if type(lanes) is not list:
+        return ["route canary hash-role lanes must be a list"]
+
+    semantic_lanes: list[tuple[int, dict[str, Any]]] = []
+    for index, lane in enumerate(lanes):
+        if type(lane) is not dict:
+            errors.append(f"route canary hash-role lane {index} must be an object")
+            continue
+        domain = _public_mapping_get_string_key(lane, "domain")
+        if type(domain) is not int:
+            errors.append(f"route canary hash-role lane {index} domain must be an integer")
+            continue
+        semantic_lanes.append((domain, lane))
+
+        source_record_hashes = _public_mapping_get_string_key(
+            lane,
+            "source_record_hashes",
+        )
+        if source_record_hashes is None and not _public_mapping_has_string_key(
+            lane,
+            "source_record_hashes",
+        ):
+            source_record_hashes = {}
+        if type(source_record_hashes) is not dict:
+            errors.append(
+                "route canary hash-role domain "
+                f"{domain} source_record_hashes must be an object"
+            )
+            source_record_hashes = {}
+        for field, value in source_record_hashes.items():
+            if type(field) is not str:
+                errors.append(
+                    "route canary hash-role domain "
+                    f"{domain} source_record_hashes contains non-string field name"
+                )
+                continue
             raw = _hex_bytes(value, byte_length=32)
             if raw is not None and any(raw):
                 governed_hashes.setdefault(raw, (domain, field))
-        destination_binding = lane.get("destination_binding", {})
+        destination_binding = _public_mapping_get_string_key(
+            lane,
+            "destination_binding",
+        )
+        if destination_binding is None and not _public_mapping_has_string_key(
+            lane,
+            "destination_binding",
+        ):
+            destination_binding = {}
+        if type(destination_binding) is not dict:
+            errors.append(
+                "route canary hash-role domain "
+                f"{domain} destination_binding must be an object"
+            )
+            destination_binding = {}
         raw_destination = _hex_bytes(
-            destination_binding.get("destination_binding_hash"),
+            _public_mapping_get_string_key(
+                destination_binding,
+                "destination_binding_hash",
+            ),
             byte_length=32,
         )
         if raw_destination is not None and any(raw_destination):
@@ -7134,9 +7190,23 @@ def _check_route_canary_evidence_hashes_do_not_reuse_governed_hashes(
                 raw_destination,
                 (domain, "destination_binding_hash"),
             )
-        route_allowlist = lane.get("route_allowlist", {})
+        route_allowlist = _public_mapping_get_string_key(
+            lane,
+            "route_allowlist",
+        )
+        if route_allowlist is None and not _public_mapping_has_string_key(
+            lane,
+            "route_allowlist",
+        ):
+            route_allowlist = {}
+        if type(route_allowlist) is not dict:
+            errors.append(
+                "route canary hash-role domain "
+                f"{domain} route_allowlist must be an object"
+            )
+            route_allowlist = {}
         raw_route = _hex_bytes(
-            route_allowlist.get("route_allowlist_hash"),
+            _public_mapping_get_string_key(route_allowlist, "route_allowlist_hash"),
             byte_length=32,
         )
         if raw_route is not None and any(raw_route):
@@ -7145,11 +7215,11 @@ def _check_route_canary_evidence_hashes_do_not_reuse_governed_hashes(
                 (domain, "route_allowlist_hash"),
             )
         route_canary = (
-            route_allowlist.get("route_canary")
-            if isinstance(route_allowlist, dict)
+            _public_mapping_get_string_key(route_allowlist, "route_canary")
+            if type(route_allowlist) is dict
             else None
         )
-        if isinstance(route_canary, dict):
+        if type(route_canary) is dict:
             for field in sorted(
                 PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN.get(
                     domain,
@@ -7162,16 +7232,38 @@ def _check_route_canary_evidence_hashes_do_not_reuse_governed_hashes(
                     "route_allowlist_hash",
                 }:
                     continue
-                raw_canary = _hex_bytes(route_canary.get(field), byte_length=32)
+                raw_canary = _hex_bytes(
+                    _public_mapping_get_string_key(route_canary, field),
+                    byte_length=32,
+                )
                 if raw_canary is not None and any(raw_canary):
                     governed_hashes.setdefault(
                         raw_canary,
                         (domain, f"route_canary.{field}"),
                     )
-        source_adapter_gate = lane.get("source_adapter_gate", {})
+        elif _public_mapping_has_string_key(route_allowlist, "route_canary"):
+            errors.append(
+                "route canary hash-role domain "
+                f"{domain} route_allowlist.route_canary must be an object"
+            )
+        source_adapter_gate = _public_mapping_get_string_key(
+            lane,
+            "source_adapter_gate",
+        )
+        if source_adapter_gate is None and not _public_mapping_has_string_key(
+            lane,
+            "source_adapter_gate",
+        ):
+            source_adapter_gate = {}
+        if type(source_adapter_gate) is not dict:
+            errors.append(
+                "route canary hash-role domain "
+                f"{domain} source_adapter_gate must be an object"
+            )
+            source_adapter_gate = {}
         raw_gate = _hex_bytes(
-            source_adapter_gate.get("gate_hash")
-            if isinstance(source_adapter_gate, dict)
+            _public_mapping_get_string_key(source_adapter_gate, "gate_hash")
+            if type(source_adapter_gate) is dict
             else None,
             byte_length=32,
         )
@@ -7181,11 +7273,11 @@ def _check_route_canary_evidence_hashes_do_not_reuse_governed_hashes(
                 (domain, "source_adapter_gate_hash"),
             )
         audit_hashes = (
-            source_adapter_gate.get("audit_hashes")
-            if isinstance(source_adapter_gate, dict)
+            _public_mapping_get_string_key(source_adapter_gate, "audit_hashes")
+            if type(source_adapter_gate) is dict
             else None
         )
-        if isinstance(audit_hashes, dict):
+        if type(audit_hashes) is dict:
             for field, value in sorted(
                 audit_hashes.items(),
                 key=lambda item: _safe_public_key_sort_key(item[0]),
@@ -7198,12 +7290,27 @@ def _check_route_canary_evidence_hashes_do_not_reuse_governed_hashes(
                         raw_audit,
                         (domain, f"source_adapter_gate.audit_hashes.{field}"),
                     )
+        elif _public_mapping_has_string_key(source_adapter_gate, "audit_hashes"):
+            errors.append(
+                "route canary hash-role domain "
+                f"{domain} source_adapter_gate.audit_hashes must be an object"
+            )
 
-    for lane in lanes:
-        domain = lane["domain"]
-        route = lane.get("route_allowlist", {})
-        canary = route.get("route_canary", {})
-        evidence_hash = _hex_bytes(canary.get("evidence_hash"), byte_length=32)
+    for domain, lane in semantic_lanes:
+        route = _public_mapping_get_string_key(lane, "route_allowlist")
+        if route is None and not _public_mapping_has_string_key(lane, "route_allowlist"):
+            route = {}
+        if type(route) is not dict:
+            continue
+        canary = _public_mapping_get_string_key(route, "route_canary")
+        if canary is None and not _public_mapping_has_string_key(route, "route_canary"):
+            canary = {}
+        if type(canary) is not dict:
+            continue
+        evidence_hash = _hex_bytes(
+            _public_mapping_get_string_key(canary, "evidence_hash"),
+            byte_length=32,
+        )
         if evidence_hash is None or not any(evidence_hash):
             continue
         governed = governed_hashes.get(evidence_hash)
@@ -7374,7 +7481,7 @@ def _source_adapter_gate_release_metadata_blockers(
                 value=gate_hash,
             )
         )
-        if isinstance(audit_hashes, dict):
+        if type(audit_hashes) is dict:
             for field in expected_audit_fields:
                 blockers.extend(
                     _source_adapter_gate_template_hash_blockers(
@@ -7389,7 +7496,7 @@ def _source_adapter_gate_release_metadata_blockers(
             blockers.append(
                 f"{lane_label}: source adapter gate hash must be empty when not required"
             )
-        if not isinstance(audit_hashes, dict):
+        if type(audit_hashes) is not dict:
             blockers.append(
                 f"{lane_label}: source adapter gate audit hashes must be empty when not required"
             )
@@ -7401,7 +7508,7 @@ def _source_adapter_gate_release_metadata_blockers(
             blockers.append(
                 f"{lane_label}: source adapter gate ready must be true when not required"
             )
-        if require_ready_state and isinstance(gate_blockers, list) and gate_blockers:
+        if require_ready_state and type(gate_blockers) is list and gate_blockers:
             blockers.append(
                 f"{lane_label}: source adapter gate blockers must be empty when not required"
             )
@@ -7411,7 +7518,7 @@ def _source_adapter_gate_release_metadata_blockers(
         blockers.append(
             f"{lane_label}: source adapter gate ready must be true when required"
         )
-    if require_ready_state and isinstance(gate_blockers, list) and gate_blockers:
+    if require_ready_state and type(gate_blockers) is list and gate_blockers:
         blockers.append(
             f"{lane_label}: source adapter gate blockers must be empty when required"
         )
@@ -7431,7 +7538,7 @@ def _source_adapter_gate_release_metadata_blockers(
             )
         )
 
-    if not isinstance(audit_hashes, dict):
+    if type(audit_hashes) is not dict:
         blockers.append(
             f"{lane_label}: source adapter gate audit hashes must be an object when required"
         )
@@ -7469,16 +7576,16 @@ def _source_adapter_gate_release_metadata_blockers(
             f"{lane_label}: source adapter gate hash must match audit_hashes.{gate_field}"
         )
     source_record_hashes = _public_mapping_get_string_key(lane, "source_record_hashes")
-    if not isinstance(source_record_hashes, dict):
+    if type(source_record_hashes) is not dict:
         source_record_hashes = {}
     destination_binding = _public_mapping_get_string_key(lane, "destination_binding")
-    if not isinstance(destination_binding, dict):
+    if type(destination_binding) is not dict:
         destination_binding = {}
     route_summary = _public_mapping_get_string_key(lane, "route_allowlist")
-    if not isinstance(route_summary, dict):
+    if type(route_summary) is not dict:
         route_summary = {}
     route_canary = _public_mapping_get_string_key(route_summary, "route_canary")
-    if not isinstance(route_canary, dict):
+    if type(route_canary) is not dict:
         route_canary = {}
     role_fields: list[tuple[str, bytes | None]] = [
         (
@@ -7824,7 +7931,7 @@ def _release_checklist(
             blockers.append(f"{label} {_unexpected_record_field_detail(field)}")
 
     for lane_index, lane in enumerate(lanes):
-        if not isinstance(lane, dict):
+        if type(lane) is not dict:
             blocker = f"lane {lane_index}: lane summary must be an object"
             records_blockers.append(blocker)
             deployment_blockers.append(blocker)
@@ -7855,7 +7962,7 @@ def _release_checklist(
                 append_unresolved(f"{lane_label}: {item}")
 
         records = lane.get("records", {})
-        if not isinstance(records, dict):
+        if type(records) is not dict:
             records_blockers.append(f"{lane_label}: lane record summary is malformed")
             records = {}
         else:
@@ -7876,7 +7983,7 @@ def _release_checklist(
             )
 
         source_record_hashes = lane.get("source_record_hashes", {})
-        if not isinstance(source_record_hashes, dict):
+        if type(source_record_hashes) is not dict:
             records_blockers.append(
                 f"{lane_label}: source record hashes summary is malformed"
             )
@@ -7924,7 +8031,7 @@ def _release_checklist(
                 f"{lane_label}: source adapter deployment evidence is missing"
             )
         source_adapter_gate = lane.get("source_adapter_gate", {})
-        if not isinstance(source_adapter_gate, dict):
+        if type(source_adapter_gate) is not dict:
             deployment_blockers.append(
                 f"{lane_label}: source adapter gate summary is malformed"
             )
@@ -7970,7 +8077,7 @@ def _release_checklist(
                         )
         if "evm_live_metadata" in lane:
             evm_live_metadata = lane.get("evm_live_metadata")
-            if not isinstance(evm_live_metadata, dict):
+            if type(evm_live_metadata) is not dict:
                 deployment_blockers.append(
                     f"{lane_label}: EVM live metadata summary is malformed"
                 )
@@ -7986,7 +8093,7 @@ def _release_checklist(
                 f"{lane_label}: destination rollout evidence is missing"
             )
         destination_binding = lane.get("destination_binding", {})
-        if not isinstance(destination_binding, dict):
+        if type(destination_binding) is not dict:
             deployment_blockers.append(
                 f"{lane_label}: destination binding summary is malformed"
             )
@@ -8102,7 +8209,7 @@ def _release_checklist(
             )
 
         route_summary = lane.get("route_allowlist", {})
-        if not isinstance(route_summary, dict):
+        if type(route_summary) is not dict:
             route_blockers.append(f"{lane_label}: route allowlist summary is malformed")
             route_summary = {}
         else:
@@ -8192,7 +8299,7 @@ def _release_checklist(
             )
 
         canary = route_summary.get("route_canary", {})
-        if not isinstance(canary, dict):
+        if type(canary) is not dict:
             canary_blockers.append(f"{lane_label}: route canary summary is malformed")
             canary = {}
         canary_status = canary.get("status")
@@ -8249,7 +8356,7 @@ def _release_checklist(
                 ("destination_binding_hash", destination_hash),
                 ("route_allowlist_hash", route_hash),
             ]
-            if isinstance(source_adapter_gate, dict):
+            if type(source_adapter_gate) is dict:
                 governed_hash_roles.append(
                     (
                         "source_adapter_gate_hash",
@@ -8260,7 +8367,7 @@ def _release_checklist(
                     )
                 )
                 audit_hashes = source_adapter_gate.get("audit_hashes")
-                if isinstance(audit_hashes, dict):
+                if type(audit_hashes) is dict:
                     governed_hash_roles.extend(
                         (
                             f"source_adapter_gate.audit_hashes.{field}",
@@ -8585,7 +8692,7 @@ def _evm_live_metadata_summary(
 def _evidence_bundle_root_errors(records: Any) -> tuple[dict[str, Any], list[str]]:
     """Return a dict-shaped evidence root plus root-level validation blockers."""
 
-    if not isinstance(records, dict):
+    if type(records) is not dict:
         return {}, ["evidence bundle root must be an object"]
 
     errors: list[str] = []
@@ -8863,7 +8970,7 @@ def _public_release_checklist_errors(
 
     if type(require_ready) is not bool:
         raise ValueError("release_checklist require_ready must be a boolean")
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return ["all-lanes summary release_checklist must be an object"]
 
     errors: list[str] = []
@@ -8881,14 +8988,14 @@ def _public_release_checklist_errors(
     require_item_ready = require_ready or ready is True
 
     items = value.get("items")
-    if not isinstance(items, list):
+    if type(items) is not list:
         errors.append("all-lanes summary release_checklist items must be a list")
         return errors
 
     seen_ids: set[str] = set()
     for index, item in enumerate(items):
         item_label = f"all-lanes summary release_checklist items[{index}]"
-        if not isinstance(item, dict):
+        if type(item) is not dict:
             errors.append(f"{item_label} must be an object")
             continue
         for field in _public_unknown_fields(item, RELEASE_CHECKLIST_ITEM_FIELDS):
@@ -8945,7 +9052,7 @@ def _public_nested_lane_value_errors(value: Any, label: str) -> list[str]:
     """Return bounded public errors for unsafe copied lane nested values."""
 
     errors: list[str] = []
-    if isinstance(value, dict):
+    if type(value) is dict:
         for field, nested in value.items():
             if type(field) is not str:
                 errors.append(f"{label} contains non-string field name")
@@ -8958,7 +9065,7 @@ def _public_nested_lane_value_errors(value: Any, label: str) -> list[str]:
                 else:
                     nested_label = f"{label}.{field}"
             errors.extend(_public_nested_lane_value_errors(nested, nested_label))
-    elif isinstance(value, list):
+    elif type(value) is list:
         for index, nested in enumerate(value):
             errors.extend(_public_nested_lane_value_errors(nested, f"{label}[{index}]"))
     elif type(value) is str:
@@ -8979,7 +9086,7 @@ def _public_lane_object_field_errors(
 ) -> list[str]:
     """Return bounded public errors for copied lane object field drift."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return [f"{label} must be an object"]
     return [
         f"{label} {_unexpected_record_field_detail(field)}"
@@ -8994,7 +9101,7 @@ def _public_lane_missing_field_errors(
 ) -> list[str]:
     """Return bounded public errors for omitted copied lane object fields."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     present_fields = {field for field in value if type(field) is str}
     return [
@@ -9011,7 +9118,7 @@ def _public_lane_required_bytes32_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane hash values."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9031,7 +9138,7 @@ def _public_lane_source_record_template_hash_errors(
 ) -> list[str]:
     """Return errors for copied source-record hashes replaying templates."""
 
-    if not isinstance(value, dict) or type(domain) is not int:
+    if type(value) is not dict or type(domain) is not int:
         return []
     profile = LANE_PROFILES.get(domain)
     if profile is None:
@@ -9066,7 +9173,7 @@ def _public_lane_template_hash_errors(
 ) -> list[str]:
     """Return errors for copied lane hashes replaying source templates."""
 
-    if not isinstance(value, dict) or type(domain) is not int:
+    if type(value) is not dict or type(domain) is not int:
         return []
     profile = LANE_PROFILES.get(domain)
     if profile is None:
@@ -9098,7 +9205,7 @@ def _public_lane_route_canary_template_hash_errors(
 ) -> list[str]:
     """Return errors for copied route-canary hashes replaying templates."""
 
-    if not isinstance(value, dict) or type(domain) is not int:
+    if type(value) is not dict or type(domain) is not int:
         return []
     profile = LANE_PROFILES.get(domain)
     if profile is None:
@@ -9133,7 +9240,7 @@ def _public_lane_source_adapter_gate_template_hash_errors(
 ) -> list[str]:
     """Return errors for copied source-gate hashes replaying templates."""
 
-    if not isinstance(value, dict) or type(domain) is not int:
+    if type(value) is not dict or type(domain) is not int:
         return []
     (
         (_gate_field, audit_fields),
@@ -9156,7 +9263,7 @@ def _public_lane_source_adapter_gate_template_hash_errors(
         )
     )
     audit_hashes = _public_mapping_get_string_key(value, "audit_hashes")
-    if isinstance(audit_hashes, dict):
+    if type(audit_hashes) is dict:
         for field in audit_fields:
             errors.extend(
                 _source_adapter_gate_template_hash_blockers(
@@ -9176,7 +9283,7 @@ def _public_lane_optional_bytes32_errors(
 ) -> list[str]:
     """Return errors for copied optional ready-lane hashes when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9196,7 +9303,7 @@ def _public_lane_required_fixed_hex_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane fixed-width hex values."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field, byte_length, type_label in fields:
@@ -9218,7 +9325,7 @@ def _public_lane_destination_family_errors(
 ) -> list[str]:
     """Return errors for copied ready-lane destination-family field drift."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     domain = domain if type(domain) is int else None
     errors: list[str] = []
@@ -9453,7 +9560,7 @@ def _public_lane_destination_binding_recompute_errors(
     """Return errors when copied destination hashes drift from their key."""
 
     # Source-inventory marker: destination_binding_hash must recompute from destination_binding_key
-    if not isinstance(destination_binding, dict):
+    if type(destination_binding) is not dict:
         return []
     domain = lane.get("domain")
     profile = LANE_PROFILES.get(domain) if type(domain) is int else None
@@ -9540,7 +9647,7 @@ def _public_lane_matching_field_errors(
 ) -> list[str]:
     """Return errors when two copied fields in the same object drift."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     actual = _public_mapping_get_string_key(value, field)
     expected = _public_mapping_get_string_key(value, expected_field)
@@ -9562,7 +9669,7 @@ def _public_lane_matching_value_errors(
 ) -> list[str]:
     """Return errors when a copied field drifts from sibling lane evidence."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     actual = _public_mapping_get_string_key(value, field)
     if type(actual) is not str or type(expected_value) is not str:
@@ -9582,12 +9689,12 @@ def _public_lane_route_canary_hash_role_errors(
 ) -> list[str]:
     """Return errors for copied route-canary hash role reuse."""
 
-    if not isinstance(route_allowlist, dict) or not isinstance(route_canary, dict):
+    if type(route_allowlist) is not dict or type(route_canary) is not dict:
         return []
 
     fields: list[tuple[str, bytes | None]] = []
     source_hashes = _public_mapping_get_string_key(lane, "source_record_hashes")
-    if isinstance(source_hashes, dict):
+    if type(source_hashes) is dict:
         fields.extend(
             (
                 (
@@ -9602,7 +9709,7 @@ def _public_lane_route_canary_hash_role_errors(
         )
 
     source_adapter_gate = _public_mapping_get_string_key(lane, "source_adapter_gate")
-    if isinstance(source_adapter_gate, dict):
+    if type(source_adapter_gate) is dict:
         source_gate_hash_values: set[bytes] = set()
         gate_hash = _hex_bytes(
             _public_mapping_get_string_key(source_adapter_gate, "gate_hash"),
@@ -9623,7 +9730,7 @@ def _public_lane_route_canary_hash_role_errors(
         raw_domain = _public_mapping_get_string_key(lane, "domain")
         domain = raw_domain if type(raw_domain) is int else None
         if (
-            isinstance(audit_hashes, dict)
+            type(audit_hashes) is dict
             and domain in LANE_PROFILES
         ):
             (
@@ -9668,7 +9775,7 @@ def _public_lane_route_canary_hash_role_errors(
         )
     )
     destination_binding = _public_mapping_get_string_key(lane, "destination_binding")
-    if isinstance(destination_binding, dict):
+    if type(destination_binding) is dict:
         fields.append(
             (
                 "destination_binding_hash",
@@ -9746,7 +9853,7 @@ def _public_lane_route_allowlist_recompute_errors(
     """Return errors when copied route hashes drift from copied lane hashes."""
 
     # Source-inventory marker: route_allowlist_hash must recompute from source material, source adapter deployment, and destination binding hashes
-    if not isinstance(route_allowlist, dict):
+    if type(route_allowlist) is not dict:
         return []
     domain = _public_mapping_get_string_key(lane, "domain")
     profile = LANE_PROFILES.get(domain) if type(domain) is int else None
@@ -9754,8 +9861,8 @@ def _public_lane_route_allowlist_recompute_errors(
     destination_binding = _public_mapping_get_string_key(lane, "destination_binding")
     if (
         profile is None
-        or not isinstance(source_hashes, dict)
-        or not isinstance(destination_binding, dict)
+        or type(source_hashes) is not dict
+        or type(destination_binding) is not dict
     ):
         return []
     supplied_hash = _hex_bytes(
@@ -9790,7 +9897,7 @@ def _public_lane_optional_bool_errors(
 ) -> list[str]:
     """Return errors for copied optional booleans when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9814,7 +9921,7 @@ def _public_lane_optional_canonical_string_errors(
     if type(allow_empty) is not bool:
         raise ValueError("canonical string allow_empty must be a boolean")
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9835,7 +9942,7 @@ def _public_lane_optional_solana_pubkey_errors(
 ) -> list[str]:
     """Return errors for copied optional Solana pubkeys when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9856,7 +9963,7 @@ def _public_lane_optional_positive_int_errors(
 ) -> list[str]:
     """Return errors for copied optional positive integers when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9875,7 +9982,7 @@ def _public_lane_optional_nonnegative_int_errors(
 ) -> list[str]:
     """Return errors for copied optional non-negative integers when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9894,7 +10001,7 @@ def _public_lane_optional_u32_errors(
 ) -> list[str]:
     """Return errors for copied optional u32 integers when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9913,7 +10020,7 @@ def _public_lane_optional_int_errors(
 ) -> list[str]:
     """Return errors for copied optional integers when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9932,7 +10039,7 @@ def _public_lane_optional_positive_decimal_string_errors(
 ) -> list[str]:
     """Return errors for copied optional positive decimal strings when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9953,7 +10060,7 @@ def _public_lane_optional_tron_address_errors(
 ) -> list[str]:
     """Return errors for copied optional TRON addresses when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9975,7 +10082,7 @@ def _public_lane_optional_true_errors(
 ) -> list[str]:
     """Return errors for copied optional booleans that must be true when present."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -9994,7 +10101,7 @@ def _public_lane_optional_exact_string_errors(
 ) -> list[str]:
     """Return errors for copied optional strings with exact public values."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field, expected in expected_values.items():
@@ -10014,7 +10121,7 @@ def _public_lane_optional_lane_domain_errors(
 ) -> list[str]:
     """Return errors when an optional copied domain field drifts."""
 
-    if not isinstance(value, dict) or expected_domain is None:
+    if type(value) is not dict or expected_domain is None:
         return []
     raw = _public_mapping_get_string_key(value, field)
     if not _public_mapping_has_string_key(value, field) or raw is None:
@@ -10033,7 +10140,7 @@ def _public_lane_optional_int_constant_errors(
 ) -> list[str]:
     """Return errors when an optional copied integer constant drifts."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     raw = _public_mapping_get_string_key(value, field)
     if not _public_mapping_has_string_key(value, field) or raw is None:
@@ -10051,7 +10158,7 @@ def _public_lane_optional_decimal_constant_errors(
 ) -> list[str]:
     """Return errors when an optional copied decimal string drifts."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     raw = _public_mapping_get_string_key(value, field)
     if not _public_mapping_has_string_key(value, field) or _scalar_absent(raw):
@@ -10068,7 +10175,7 @@ def _public_lane_required_true_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane boolean flags."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -10087,7 +10194,7 @@ def _public_lane_required_bool_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane booleans."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -10099,7 +10206,7 @@ def _public_lane_required_bool_errors(
 def _public_lane_non_evm_live_metadata_errors(value: Any, label: str) -> list[str]:
     """Return errors when copied non-EVM lanes carry EVM live metadata."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     if _public_mapping_get_string_key(value, "required") is not False:
@@ -10124,7 +10231,7 @@ def _public_lane_required_exact_string_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane string constants."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field, expected in expected_values.items():
@@ -10143,7 +10250,7 @@ def _public_lane_required_canonical_string_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane canonical strings."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -10160,7 +10267,7 @@ def _public_lane_required_positive_int_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane positive integer scalars."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -10177,7 +10284,7 @@ def _public_lane_required_nonnegative_int_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane non-negative integers."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -10194,7 +10301,7 @@ def _public_lane_required_u32_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane u32 scalars."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -10211,7 +10318,7 @@ def _public_lane_required_positive_decimal_string_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane decimal string scalars."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -10233,7 +10340,7 @@ def _public_lane_required_lane_domain_errors(
 ) -> list[str]:
     """Return errors when copied route canary target domain drifts."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     raw = _public_mapping_get_string_key(value, field)
     if type(raw) is not int:
@@ -10252,7 +10359,7 @@ def _public_lane_required_int_constant_errors(
 ) -> list[str]:
     """Return errors when copied ready-lane integer constants drift."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     raw = _public_mapping_get_string_key(value, field)
     if type(raw) is not int:
@@ -10269,7 +10376,7 @@ def _public_lane_required_tron_address_errors(
 ) -> list[str]:
     """Return errors for required copied ready-lane TRON addresses."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     errors: list[str] = []
     for field in fields:
@@ -10291,7 +10398,7 @@ def _public_lane_tron_address_match_errors(
 ) -> list[str]:
     """Return errors when copied TRON signer address binding drifts."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     left = _hex_bytes(_public_mapping_get_string_key(value, left_field), byte_length=21)
     right = _hex_bytes(
@@ -10317,7 +10424,7 @@ def _public_lane_domain_duplicate_errors(lanes: list[Any]) -> list[str]:
     seen_domains: set[int] = set()
     errors: list[str] = []
     for lane in lanes:
-        if not isinstance(lane, dict):
+        if type(lane) is not dict:
             continue
         raw_domain = _public_mapping_get_string_key(lane, "domain")
         if type(raw_domain) is not int or raw_domain not in LANE_PROFILES:
@@ -10333,9 +10440,9 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
 
     if type(require_ready) is not bool:
         raise ValueError("lanes require_ready must be a boolean")
-    if not isinstance(value, list):
+    if type(value) is not list:
         return ["all-lanes summary lanes must be a list of objects"]
-    if not all(isinstance(lane, dict) for lane in value):
+    if not all(type(lane) is dict for lane in value):
         return [
             "all-lanes summary lanes must be a list of objects",
             *_public_lane_domain_duplicate_errors(value),
@@ -10382,7 +10489,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         lane_require_structure = domain in LANE_PROFILES
 
         records = lane.get("records")
-        if not isinstance(records, dict):
+        if type(records) is not dict:
             errors.append(f"{lane_label} records must be an object")
             record_flags: dict[str, Any] = {}
         else:
@@ -10411,7 +10518,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
         route_allowlist_require_ready = lane_require_ready or copied_route_record_present
         live_metadata_require_ready = lane_require_ready or copied_live_records_present
         copied_evm_live_metadata_present = (
-            isinstance(lane.get("evm_live_metadata"), dict)
+            type(lane.get("evm_live_metadata")) is dict
             and any(
                 type(lane["evm_live_metadata"].get(field)) is str
                 and lane["evm_live_metadata"].get(field)
@@ -10495,9 +10602,9 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 PUBLIC_LANE_SOURCE_ADAPTER_GATE_FIELDS,
             )
         )
-        if isinstance(source_adapter_gate, dict):
+        if type(source_adapter_gate) is dict:
             audit_hashes = source_adapter_gate.get("audit_hashes")
-            if not isinstance(audit_hashes, dict):
+            if type(audit_hashes) is not dict:
                 errors.append(
                     f"{lane_label}.source_adapter_gate.audit_hashes must be an object"
                 )
@@ -10898,7 +11005,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                     ("expected_route_allowlist_hash_matches",),
                 )
             )
-        if isinstance(route_allowlist, dict):
+        if type(route_allowlist) is dict:
             route_canary = route_allowlist.get("route_canary")
             route_canary_fields = PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN.get(
                 domain,
@@ -11096,7 +11203,7 @@ def _public_lanes_errors(value: Any, *, require_ready: bool) -> list[str]:
                 )
             )
             destination_binding = lane.get("destination_binding")
-            if isinstance(destination_binding, dict):
+            if type(destination_binding) is dict:
                 errors.extend(
                     _public_lane_matching_value_errors(
                         route_canary,
@@ -11566,7 +11673,7 @@ def _public_domain_list_errors(summary: dict[str, Any]) -> tuple[list[str], dict
             continue
         value = summary.get(field)
         contains_duplicate_domains = False
-        if isinstance(value, list):
+        if type(value) is list:
             seen_domains: set[int] = set()
             for domain in value:
                 if type(domain) is not int:
@@ -11575,7 +11682,7 @@ def _public_domain_list_errors(summary: dict[str, Any]) -> tuple[list[str], dict
                     contains_duplicate_domains = True
                     break
                 seen_domains.add(domain)
-        if not isinstance(value, list) or not all(type(domain) is int for domain in value):
+        if type(value) is not list or not all(type(domain) is int for domain in value):
             error = f"all-lanes summary {field} must be a list of integers"
             if contains_duplicate_domains:
                 errors.append(f"all-lanes summary {field} contains duplicate domains")
@@ -11626,7 +11733,7 @@ def _public_domain_list_errors(summary: dict[str, Any]) -> tuple[list[str], dict
 def _public_summary_payload(summary: Any) -> dict[str, Any]:
     """Return a fail-closed public all-lanes summary payload."""
 
-    if not isinstance(summary, dict):
+    if type(summary) is not dict:
         return {
             "production_ready": False,
             "blockers": ["all-lanes summary must be an object"],
@@ -11677,7 +11784,7 @@ def _public_summary_payload(summary: Any) -> dict[str, Any]:
                 blockers.extend(lane_errors)
                 root_errors["lanes"] = "all-lanes summary lanes are invalid"
     release_checklist = summary.get("release_checklist")
-    if "release_checklist" in summary and not isinstance(release_checklist, dict):
+    if "release_checklist" in summary and type(release_checklist) is not dict:
         root_errors["release_checklist"] = (
             "all-lanes summary release_checklist must be an object"
         )

@@ -14693,7 +14693,7 @@ function normalizeSccpCapabilitiesResponse(payload) {
       "sccp capabilities response.proof_manifest_path",
     ),
     burnRegistryBackend: requireNonEmptyString(
-      record.burn_registry_backend ?? record.legacy_burn_registry_backend,
+      record.burn_registry_backend,
       "sccp capabilities response.burn_registry_backend",
     ),
     proofSubmitPath: optionalString(

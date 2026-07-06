@@ -109,7 +109,7 @@ def _optional_live_bytes32_arg(
 
 
 def _decode_hash_text(value: Any, *, label: str) -> bytes:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise RuntimeError(f"{label} must be a string")
     if value != value.strip():
         raise RuntimeError(f"{label} must not contain whitespace")
@@ -262,7 +262,7 @@ def _read_api_key(args: argparse.Namespace) -> str | None:
 
 
 def _api_key_token(value: Any, *, label: str) -> str:
-    if not isinstance(value, str) or not value:
+    if type(value) is not str or not value:
         raise ValueError(f"{label} must contain a non-empty token")
     if not value.isascii():
         raise ValueError(f"{label} token must be ASCII")
@@ -361,7 +361,7 @@ def _account_from_response(decoded: dict[str, Any]) -> dict[str, Any]:
 
 def _positive_decimal(value: Any, *, label: str) -> str:
     if (
-        not isinstance(value, str)
+        type(value) is not str
         or not value.isascii()
         or not value.isdecimal()
         or (len(value) > 1 and value.startswith("0"))
@@ -374,7 +374,7 @@ def _positive_decimal(value: Any, *, label: str) -> str:
 
 def _exact_live_string(live: dict[str, Any], field: str, *, label: str) -> str:
     value = live.get(field)
-    if not isinstance(value, str) or not value or value != value.strip():
+    if type(value) is not str or not value or value != value.strip():
         raise ValueError(f"{label} must be an exact non-empty string") from None
     return value
 
@@ -400,7 +400,7 @@ def collect_live_evidence(
     )
     account = _account_from_response(decoded)
     account_address = account.get("address")
-    if not isinstance(account_address, str) or not account_address:
+    if type(account_address) is not str or not account_address:
         raise RuntimeError("TON accountStates account address must be present")
     try:
         normalized_account_address = evidence.normalize_ton_raw_address(
@@ -430,7 +430,7 @@ def collect_live_evidence(
         label="last_transaction_lt",
     )
     code_boc = account.get("code_boc")
-    if not isinstance(code_boc, str) or not code_boc or code_boc != code_boc.strip():
+    if type(code_boc) is not str or not code_boc or code_boc != code_boc.strip():
         raise RuntimeError("TON verifier account code_boc must be present")
     try:
         code_boc_bytes = evidence.parse_code_boc_base64(code_boc, label="code_boc")

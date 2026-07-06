@@ -51,6 +51,8 @@ SOLANA_BASE58_INDEX = {
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
     if not value.startswith("0x"):
@@ -73,6 +75,8 @@ def parse_hex_bytes(
     if type(nonzero) is not bool:
         raise ValueError("Solana destination fixed hex nonzero must be a boolean")
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -90,6 +94,8 @@ def parse_hex_bytes(
 def parse_program_bytes_hex(value: str, *, label: str) -> bytes:
     """Parse non-empty Solana program bytes from hex text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -111,6 +117,8 @@ def parse_program_bytes_hex(value: str, *, label: str) -> bytes:
 def parse_program_bytes_base64(value: str, *, label: str) -> bytes:
     """Parse non-empty Solana program bytes from base64 text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be base64") from None
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = value
@@ -168,6 +176,8 @@ def parse_program_bytes_file(value: str, *, label: str) -> bytes:
 def decode_solana_base58(value: str, *, label: str) -> bytes:
     """Decode canonical Solana base58 text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical base58")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = value
@@ -202,6 +212,8 @@ def normalize_solana_program_id(value: str, *, label: str) -> str:
 def parse_positive_u64(value: str, *, label: str) -> int:
     """Parse a positive unsigned 64-bit integer."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be a positive u64")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must be a positive u64")
     text = value
@@ -506,7 +518,7 @@ def solana_route_allowlist_hash(
 
 
 def _require_exact_string(value: str, *, label: str, expected: str | None = None) -> str:
-    if not isinstance(value, str) or value != value.strip() or not value:
+    if type(value) is not str or value != value.strip() or not value:
         raise ValueError(f"{label} must be a non-empty canonical string")
     if expected is not None and value != expected:
         raise ValueError(f"{label} must be {expected!r}")
@@ -1095,7 +1107,7 @@ def _validated_verifier_program_bytes_base64(
         )
     encoded = base64.b64encode(bytes(program_bytes)).decode("ascii")
     supplied = getattr(args, "verifier_program_bytes_base64_text", None)
-    if supplied is not None and supplied != encoded:
+    if supplied is not None and (type(supplied) is not str or supplied != encoded):
         raise ValueError("Solana verifier program byte metadata is inconsistent")
     args.verifier_program_bytes_base64_text = encoded
     return encoded
@@ -1304,10 +1316,12 @@ def _json_summary(
     }
     verifier_program_bytes_base64 = _validated_verifier_program_bytes_base64(args)
     summary["verifier_program_bytes_present"] = verifier_program_bytes_base64 is not None
-    if (
-        isinstance(verifier_program_bytes_base64, str)
-        and verifier_program_bytes_base64.strip()
-    ):
+    if verifier_program_bytes_base64 is not None:
+        if (
+            type(verifier_program_bytes_base64) is not str
+            or not verifier_program_bytes_base64.strip()
+        ):
+            raise ValueError("Solana verifier program byte metadata is inconsistent")
         summary["verifier_program_bytes_base64"] = verifier_program_bytes_base64
         summary["verifier_program_bytes_base64_sha256"] = hashlib.sha256(
             verifier_program_bytes_base64.encode("ascii")

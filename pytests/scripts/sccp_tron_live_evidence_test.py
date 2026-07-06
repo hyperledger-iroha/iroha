@@ -72,6 +72,31 @@ class HostileDecimalText(str):
         raise AssertionError("secret-token TRON live decimal text isdecimal ran")
 
 
+class HostileTronLiveString(str):
+    """String subclass that exact TRON live parsers must reject before hooks."""
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON live exact string was compared")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON live exact string was indexed")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON live exact string was iterated")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token TRON live exact string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token TRON live exact string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token TRON live exact string lower ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token TRON live exact string encoded")
+
+
 def transaction_info_field(default, override):
     return default if override is DEFAULT_TRANSACTION_INFO_FIELD else override
 
@@ -2475,6 +2500,104 @@ def test_tron_live_cli_parsers_reject_non_string_values_without_stringification(
             assert str(exc) == expected_message
         else:
             raise AssertionError("non-string TRON live parser value was accepted")
+
+
+def test_tron_live_exact_string_parsers_reject_string_subclasses_without_hooks():
+    module = load_live_module()
+    hostile = HostileTronLiveString("0x" + "11" * 32)
+    hostile_address = HostileTronLiveString("0x41" + "22" * 20)
+
+    cases = (
+        (
+            lambda: module._parse_exact_hex_blob(
+                hostile,
+                label="source-event log data",
+            ),
+            RuntimeError,
+            "source-event log data must be hex",
+        ),
+        (
+            lambda: module._parse_exact_hex32_blob(
+                hostile,
+                label="source-event log topic0",
+            ),
+            RuntimeError,
+            "source-event log topic0 must be hex",
+        ),
+        (
+            lambda: module._parse_tron_payload_hex(
+                hostile_address,
+                label="source bridge address",
+            ),
+            RuntimeError,
+            "source bridge address must be hex",
+        ),
+        (
+            lambda: module._parse_log_address20(
+                hostile,
+                label="source-event log address",
+            ),
+            RuntimeError,
+            "source-event log address must be hex",
+        ),
+        (
+            lambda: module._parse_transaction_address_payload(
+                hostile_address,
+                label="route-canary transaction owner_address",
+            ),
+            RuntimeError,
+            "route-canary transaction owner_address must be a TRON address",
+        ),
+        (
+            lambda: module._protobuf_string_field(14, hostile),
+            RuntimeError,
+            "protobuf string field value must be a string",
+        ),
+        (
+            lambda: module._tron_pro_api_key_token(
+                hostile,
+                label="TRON-PRO-API-KEY",
+            ),
+            ValueError,
+            "TRON-PRO-API-KEY must be text",
+        ),
+        (
+            lambda: module._exact_summary_string(
+                {"route_allowlist_hash": hostile},
+                "route_allowlist_hash",
+                label="route allowlist hash",
+            ),
+            ValueError,
+            "route allowlist hash must be an exact non-empty string",
+        ),
+        (
+            lambda: module._check_contract_metadata_address(
+                {"contract_address": hostile_address},
+                expected_payload=bytes.fromhex("41" + "22" * 20),
+                label="source bridge",
+            ),
+            RuntimeError,
+            "/wallet/getcontract did not return source bridge contract_address",
+        ),
+    )
+
+    for parser, exception_type, expected_message in cases:
+        try:
+            parser()
+        except exception_type as exc:
+            assert str(exc) == expected_message
+            assert "secret-token" not in str(exc)
+        else:
+            raise AssertionError("string-subclass TRON live parser value was accepted")
+
+    assert (
+        module._metadata_runtime_bytecode(
+            {"bytecode": hostile},
+            label="source bridge",
+        )
+        is None
+    )
+    assert module._unsupported_tron_field_detail(hostile) == "non-string field name"
 
 
 def test_tron_live_decimal_parsers_reject_string_subclasses_without_hooks():

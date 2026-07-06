@@ -2,7 +2,7 @@
 // Purpose: compile, sign, deploy, and evidence-check the TRON mainnet
 // contracts for the TAIRA XOR SCCP bridge without ever using end-user wallet
 // keys. Safe default: no transaction is broadcast unless the command includes
-// `--confirm-mainnet taira_tron_xor`.
+// `--confirm-network taira_tron_xor:mainnet --confirm-mainnet taira_tron_xor`.
 //
 // Prerequisites:
 // - Node.js 18+ for built-in fetch.
@@ -212,6 +212,10 @@ function repoPath(...segments) {
   return resolve(REPO_ROOT, ...segments);
 }
 
+function tronConfirmNetwork(profile) {
+  return `${ROUTE_ID}:${profile.key}`;
+}
+
 function usage() {
   return `Usage:
   node scripts/sccp_tron_taira_xor_deploy.mjs generate-deployer [--tron-network mainnet|nile|shasta] [--out ${DEFAULT_SECRET_OUT}] [--force true]
@@ -220,12 +224,12 @@ function usage() {
   node scripts/sccp_tron_taira_xor_deploy.mjs account-status [--tron-network mainnet|nile|shasta] [--secret ${DEFAULT_SECRET_OUT}] [--endpoint ${DEFAULT_TRON_ENDPOINT}] [--funding-mode aggregate|staged]
   node scripts/sccp_tron_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs compile-taira-contract [--out ${DEFAULT_TAIRA_CONTRACT_OUT}]
-  node scripts/sccp_tron_taira_xor_deploy.mjs deploy --verifier <verifier-key.json> [--tron-network mainnet|nile|shasta] [--secret ${DEFAULT_SECRET_OUT}] [--endpoint ${DEFAULT_TRON_ENDPOINT}] [--out ${DEFAULT_DEPLOYMENT_OUT}] [--funding-mode aggregate|staged] [--broadcast true (--confirm-mainnet ${CONFIRMATION_TEXT} | --confirm-testnet nile|shasta)]
+  node scripts/sccp_tron_taira_xor_deploy.mjs deploy --verifier <verifier-key.json> [--tron-network mainnet|nile|shasta] [--secret ${DEFAULT_SECRET_OUT}] [--endpoint ${DEFAULT_TRON_ENDPOINT}] [--out ${DEFAULT_DEPLOYMENT_OUT}] [--funding-mode aggregate|staged] [--broadcast true --confirm-network ${ROUTE_ID}:mainnet|${ROUTE_ID}:nile|${ROUTE_ID}:shasta [--confirm-mainnet ${CONFIRMATION_TEXT}]]
   node scripts/sccp_tron_taira_xor_deploy.mjs sign-transaction --secret ${DEFAULT_SECRET_OUT} --transaction <unsigned-artifact.json> [--out ${DEFAULT_SIGNED_TRANSACTION_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs sign-transaction --secret ${DEFAULT_SECRET_OUT} --transaction ${DEFAULT_DEPLOYMENT_OUT} --step <step-key> [--out ${DEFAULT_SIGNED_TRANSACTION_OUT}]
-  node scripts/sccp_tron_taira_xor_deploy.mjs broadcast --transaction <signed.json> [--tron-network mainnet|nile|shasta] [--endpoint ${DEFAULT_TRON_ENDPOINT}] (--confirm-mainnet ${CONFIRMATION_TEXT} | --confirm-testnet nile|shasta) [--out ${DEFAULT_BROADCAST_OUT}]
+  node scripts/sccp_tron_taira_xor_deploy.mjs broadcast --transaction <signed.json> [--tron-network mainnet|nile|shasta] [--endpoint ${DEFAULT_TRON_ENDPOINT}] --confirm-network ${ROUTE_ID}:mainnet|${ROUTE_ID}:nile|${ROUTE_ID}:shasta [--confirm-mainnet ${CONFIRMATION_TEXT}] [--out ${DEFAULT_BROADCAST_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs evidence --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--out ${DEFAULT_EVIDENCE_OUT}]
-  node scripts/sccp_tron_taira_xor_deploy.mjs route-manifest --settlement-asset-definition-id <asset-id> --verifier-code-hash <0x...> (--verifier-key-hash <0x...> | --verifier <verifier-key.json>) --vk-backend <backend> --vk-name <name> [--tron-network mainnet|nile|shasta] [--evidence ${DEFAULT_EVIDENCE_OUT}] [--taira-contract ${DEFAULT_TAIRA_CONTRACT_OUT}] [--live-evidence <sccp-tron-live-evidence.json>] [--expected-destination-binding-hash <0x...>] [--expected-destination-binding-key <key>] [--gas-limit 2000000] [--production-ready true --live-readback-checked true --confirm-mainnet ${CONFIRMATION_TEXT}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_tron_taira_xor_deploy.mjs route-manifest --settlement-asset-definition-id <asset-id> --verifier-code-hash <0x...> (--verifier-key-hash <0x...> | --verifier <verifier-key.json>) --vk-backend <backend> --vk-name <name> [--tron-network mainnet|nile|shasta] [--evidence ${DEFAULT_EVIDENCE_OUT}] [--taira-contract ${DEFAULT_TAIRA_CONTRACT_OUT}] [--live-evidence <sccp-tron-live-evidence.json>] [--expected-destination-binding-hash <0x...>] [--expected-destination-binding-key <key>] [--gas-limit 2000000] [--production-ready true --live-readback-checked true --confirm-network ${ROUTE_ID}:mainnet --confirm-mainnet ${CONFIRMATION_TEXT}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}]
   node scripts/sccp_tron_taira_xor_deploy.mjs self-test
 
@@ -1155,8 +1159,8 @@ const COMMAND_OPTION_ALLOWLISTS = Object.freeze({
     "out",
     "funding-mode",
     "broadcast",
+    "confirm-network",
     "confirm-mainnet",
-    "confirm-testnet",
     "artifacts-out",
     "fee-limit",
     "trigger-fee-limit",
@@ -1178,8 +1182,8 @@ const COMMAND_OPTION_ALLOWLISTS = Object.freeze({
     "transaction",
     "tron-network",
     "endpoint",
+    "confirm-network",
     "confirm-mainnet",
-    "confirm-testnet",
     "out",
     "api-key",
   ]),
@@ -1209,6 +1213,7 @@ const COMMAND_OPTION_ALLOWLISTS = Object.freeze({
     "gas-limit",
     "production-ready",
     "live-readback-checked",
+    "confirm-network",
     "confirm-mainnet",
     "out",
   ]),
@@ -1746,8 +1751,8 @@ async function buildDeploymentDoctorReport(options = {}, deps = {}) {
           "Compile TRON contracts and the TAIRA burn-record contract.",
           "If deployer_funding was skipped, run account-status immediately before broadcast deployment.",
           profile.key === "mainnet"
-            ? `Run deploy with --broadcast true --confirm-mainnet ${CONFIRMATION_TEXT} only after funding and verifier material are confirmed.`
-            : `Run deploy with --tron-network ${profile.key} --broadcast true --confirm-testnet ${profile.key} after funding and verifier material are confirmed.`,
+            ? `Run deploy with --broadcast true --confirm-network ${tronConfirmNetwork(profile)} --confirm-mainnet ${CONFIRMATION_TEXT} only after funding and verifier material are confirmed.`
+            : `Run deploy with --tron-network ${profile.key} --broadcast true --confirm-network ${tronConfirmNetwork(profile)} after funding and verifier material are confirmed.`,
         ]
       : [
           "Resolve every error-status check before broadcasting deployment transactions.",
@@ -2482,6 +2487,15 @@ async function estimateBudgetCommand(options) {
   );
 }
 
+function requireTronNetworkConfirmation(options, profile, action) {
+  const required = tronConfirmNetwork(profile);
+  if (options["confirm-network"] !== required) {
+    throw new Error(
+      `${action} targets TRON ${profile.key} and requires --confirm-network ${required}`,
+    );
+  }
+}
+
 function requireMainnetConfirmation(options, action) {
   if (options["confirm-mainnet"] !== CONFIRMATION_TEXT) {
     throw new Error(
@@ -2491,14 +2505,9 @@ function requireMainnetConfirmation(options, action) {
 }
 
 function requireBroadcastConfirmation(options, profile, action) {
+  requireTronNetworkConfirmation(options, profile, action);
   if (profile.key === "mainnet") {
     requireMainnetConfirmation(options, action);
-    return;
-  }
-  if (options["confirm-testnet"] !== profile.key) {
-    throw new Error(
-      `${action} targets TRON ${profile.key} testnet and requires --confirm-testnet ${profile.key}`,
-    );
   }
 }
 
@@ -2849,8 +2858,8 @@ async function deployCommand(options) {
       : [
           "Dry-run only: unsigned deploy transactions were created but no contracts were deployed.",
           profile.key === "mainnet"
-            ? `Re-run with --broadcast true --confirm-mainnet ${CONFIRMATION_TEXT} after funding the deployer.`
-            : `Re-run with --tron-network ${profile.key} --broadcast true --confirm-testnet ${profile.key} after funding the deployer.`,
+            ? `Re-run with --broadcast true --confirm-network ${tronConfirmNetwork(profile)} --confirm-mainnet ${CONFIRMATION_TEXT} after funding the deployer.`
+            : `Re-run with --tron-network ${profile.key} --broadcast true --confirm-network ${tronConfirmNetwork(profile)} after funding the deployer.`,
         ],
   };
   const out = await writeJson(outPath, plan);
@@ -3676,6 +3685,7 @@ async function buildTairaXorRouteManifestDraft(options = {}) {
     if (profile.key !== "mainnet") {
       throw new Error("production-ready route manifests require --tron-network mainnet");
     }
+    requireTronNetworkConfirmation(options, profile, "route-manifest production readiness");
     requireMainnetConfirmation(options, "route-manifest production readiness");
     if (!liveReadbackChecked) {
       throw new Error(
@@ -4566,7 +4576,7 @@ function buildTairaXorRouteConfigToml(manifest, options = {}) {
     `version = ${route.version}`,
     `route_id = ${tomlString(route.routeId, "route_id")}`,
     `asset_key = ${tomlString(route.assetKey, "asset_key")}`,
-    `tron_network = ${tomlString(route.tronNetwork, "tron_network")}`,
+    `network = ${tomlString(route.tronNetwork, "network")}`,
     `chain = ${tomlString(route.chain, "chain")}`,
     `chain_id_hex = ${tomlString(route.chainIdHex, "chain_id_hex")}`,
     `counterparty_domain = ${route.counterpartyDomain}`,
@@ -4576,8 +4586,8 @@ function buildTairaXorRouteConfigToml(manifest, options = {}) {
     `network_id_hex = ${tomlString(route.networkIdHex, "network_id_hex")}`,
     `taira_xor_token_address = ${tomlString(route.tairaXorTokenAddress, "taira_xor_token_address")}`,
     `taira_xor_bridge_address = ${tomlString(route.tairaXorBridgeAddress, "taira_xor_bridge_address")}`,
-    `sccp_tron_source_bridge_address = ${tomlString(route.sccpTronSourceBridgeAddress, "sccp_tron_source_bridge_address")}`,
-    `tron_verifier_address = ${tomlString(route.tronVerifierAddress, "tron_verifier_address")}`,
+    `source_bridge_address = ${tomlString(route.sccpTronSourceBridgeAddress, "source_bridge_address")}`,
+    `destination_verifier_address = ${tomlString(route.tronVerifierAddress, "destination_verifier_address")}`,
     `verifier_code_hash = ${tomlString(route.verifierCodeHash, "verifier_code_hash")}`,
     `verifier_key_hash = ${tomlString(route.verifierKeyHash, "verifier_key_hash")}`,
     `destination_binding_key = ${tomlString(route.destinationBindingKey, "destination_binding_key")}`,
@@ -4707,7 +4717,7 @@ async function routeManifestCommand(options) {
     settlementAssetDefinitionId: manifest.tairaXorBurnRecord.settlementAssetDefinitionId,
     nextStep: manifest.productionReady
       ? "Publish this manifest only after the TAIRA SCCP route activation evidence is governed on-chain."
-      : "For TAIRA/Nile testing, run route-config against this manifest and deploy the generated Torii config overlay; for production, run TRON readback/canary evidence, then re-run with --live-evidence plus --production-ready true --live-readback-checked true --confirm-mainnet taira_tron_xor.",
+      : "For TAIRA/Nile testing, run route-config against this manifest and deploy the generated Torii config overlay; for production, run TRON readback/canary evidence, then re-run with --live-evidence plus --production-ready true --live-readback-checked true --confirm-network taira_tron_xor:mainnet --confirm-mainnet taira_tron_xor.",
   }, null, 2));
 }
 

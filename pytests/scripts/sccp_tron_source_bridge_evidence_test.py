@@ -130,6 +130,43 @@ class HostileTomlString(str):
         raise AssertionError("secret-token TRON source TOML string was compared")
 
 
+class HostileTronSourceString(str):
+    """String subclass that TRON source parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token TRON source string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token TRON source string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON source string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token TRON source string was compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON source string was iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON source string was indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token TRON source string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token TRON source string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token TRON source string lower ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token TRON source string encode ran")
+
+
 class HostileTomlInt(int):
     def __new__(cls):
         return int.__new__(cls, 1)
@@ -1130,6 +1167,87 @@ def test_tron_source_bridge_direct_parsers_redact_parser_causes(tmp_path):
             assert exc.__suppress_context__ is True
         else:
             raise AssertionError("TRON source bridge parser leaked nested details")
+
+
+def test_tron_source_exact_string_parsers_reject_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    hostile_hex = HostileTronSourceString("0x" + "11" * 32)
+    hostile_runtime = HostileTronSourceString("0x" + TRON_SOURCE_RUNTIME_BYTECODE)
+    hostile_address = HostileTronSourceString(
+        "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+    )
+
+    parser_cases = (
+        (
+            lambda: module._strip_lower_0x_hex(hostile_hex, label="network id"),
+            module.argparse.ArgumentTypeError,
+            "network id must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_hex_bytes(
+                hostile_hex,
+                label="network id",
+                byte_length=32,
+            ),
+            module.argparse.ArgumentTypeError,
+            "network id must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_runtime_bytecode_hex(
+                hostile_runtime,
+                label="source bridge runtime bytecode",
+            ),
+            module.argparse.ArgumentTypeError,
+            "source bridge runtime bytecode must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module._require_unpadded_text(
+                hostile_address,
+                label="source bridge address",
+            ),
+            module.argparse.ArgumentTypeError,
+            "source bridge address must not be empty",
+        ),
+        (
+            lambda: module.parse_tron_address(
+                hostile_address,
+                label="source bridge address",
+            ),
+            module.argparse.ArgumentTypeError,
+            "source bridge address must not be empty",
+        ),
+    )
+    for parser, exception_type, expected_message in parser_cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TRON source parser accepted hostile string")
+
+    runtime_cases = (
+        (
+            "source bridge runtime bytecode",
+            "source bridge runtime bytecode metadata is inconsistent",
+        ),
+        (
+            "destination verifier runtime bytecode",
+            "destination verifier runtime bytecode metadata is inconsistent",
+        ),
+    )
+    for label, expected_message in runtime_cases:
+        try:
+            module._runtime_summary_text(hostile_runtime, label=label)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TRON source runtime summary accepted hostile string")
 
 
 def test_tron_source_bridge_direct_parsers_redact_helper_exit_parser_causes(
@@ -2203,6 +2321,31 @@ def test_full_toml_rendering_rejects_route_canary_transcript_hash_reuse():
             )
 
 
+def test_full_toml_rendering_rejects_route_canary_governed_transcript_hash_reuse():
+    module = load_evidence_module()
+
+    for attr_name, source_attr_name in (
+        ("route_canary_payload_hash", "route_allowlist_hash"),
+        ("route_canary_finality_height", "expected_source_verifier_material_hash"),
+        (
+            "route_canary_signature_sha256",
+            "expected_source_adapter_engine_deployment_hash",
+        ),
+    ):
+        args = sample_full_toml_args()
+        setattr(args, attr_name, getattr(args, source_attr_name))
+
+        try:
+            module.render_full_toml(args, bytes.fromhex(TRON_SOURCE_CONFIG_VECTOR))
+        except ValueError as exc:
+            assert "TRON route canary governed hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError(
+                "full TOML accepted reused TRON route canary governed hash "
+                f"{attr_name}"
+            )
+
+
 def test_route_canary_transaction_hash_requires_production_destination_lane():
     module = load_evidence_module()
 
@@ -2263,6 +2406,11 @@ def test_route_canary_transaction_hash_requires_canonical_binding_material():
             "TRON route canary governed hashes must be distinct",
         ),
         (
+            "route_canary_payload_hash",
+            bytes.fromhex(TRON_ROUTE_ALLOWLIST_HASH_VECTOR),
+            "TRON route canary governed hashes must be distinct",
+        ),
+        (
             "route_allowlist_hash",
             bytes.fromhex("dd" * 32),
             "route_allowlist_hash does not match canonical",
@@ -2274,7 +2422,7 @@ def test_route_canary_transaction_hash_requires_canonical_binding_material():
         ),
         (
             "destination_binding_hash",
-            bytes.fromhex("ee" * 32),
+            bytes.fromhex("e4" * 32),
             "destination_binding_hash does not match canonical destination binding",
         ),
         ("network_id", bytes(32), "network_id must not be zero"),

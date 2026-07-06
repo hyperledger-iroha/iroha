@@ -256,8 +256,8 @@ pub struct SccpCapabilities {
     pub message_job_path: String,
     /// SCCP proof-manifest discovery path.
     pub proof_manifest_path: String,
-    /// Registry backend label used by legacy burn proofs.
-    pub legacy_burn_registry_backend: String,
+    /// Registry backend label used by burn proof submissions.
+    pub burn_registry_backend: String,
     /// Optional Torii path for outbound proof registration.
     #[norito(default)]
     pub proof_submit_path: Option<String>,
@@ -27567,7 +27567,7 @@ mod tests {
             message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
             message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),
-            legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
+            burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
             proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
             message_submit_path: Some("/v1/bridge/messages".to_owned()),
             production_policy: iroha_sccp::sccp_production_policy_v1(),

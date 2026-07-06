@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "formal" / "check_sumeragi_formal_coverage.py"
+TEST_TLA_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def load_coverage_module():
@@ -1311,15 +1313,22 @@ def test_strict_shell_errors_require_bash_and_pipefail(
     valid = tmp_path / "valid.sh"
     missing_pipefail = tmp_path / "missing_pipefail.sh"
     wrong_shebang = tmp_path / "wrong_shebang.sh"
+    missing_second_line = tmp_path / "missing_second_line.sh"
     valid.write_text("#!/bin/bash\nset -euo pipefail\n", encoding="utf-8")
     missing_pipefail.write_text("#!/bin/bash\nset -eu\n", encoding="utf-8")
     wrong_shebang.write_text("#!/usr/bin/env bash\nset -euo pipefail\n", encoding="utf-8")
+    missing_second_line.write_text("#!/bin/bash\n", encoding="utf-8")
 
     assert module.strict_shell_errors((valid,)) == []
-    assert module.strict_shell_errors((missing_pipefail, wrong_shebang)) == [
-        f"formal shell entrypoint {missing_pipefail} must set -euo pipefail "
-        "immediately after the shebang",
-        f"formal shell entrypoint {wrong_shebang} must start with #!/bin/bash",
+    assert module.strict_shell_errors(
+        (missing_pipefail, wrong_shebang, missing_second_line)
+    ) == [
+        f"formal shell entrypoint {missing_pipefail}:2 must set -euo pipefail "
+        "immediately after the shebang, found set -eu",
+        f"formal shell entrypoint {wrong_shebang}:1 must start with #!/bin/bash, "
+        "found #!/usr/bin/env bash",
+        f"formal shell entrypoint {missing_second_line}:2 must set -euo pipefail "
+        "immediately after the shebang, found <missing>",
     ]
 
 
@@ -7800,6 +7809,48 @@ def test_runner_case_shape_errors_rejects_unindented_case_content(
     ]
 
 
+def test_runner_case_shape_errors_report_case_block_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    duplicate = tmp_path / "duplicate_case_blocks.sh"
+    missing_esac = tmp_path / "missing_esac.sh"
+    duplicate.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                'case "$mode" in',
+                "  frontier-fast)",
+                "    ;;",
+                "esac",
+                'case "$mode" in',
+                "  quorum-fast)",
+                "    ;;",
+                "esac",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_esac.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                'case "$mode" in',
+                "  frontier-fast)",
+                "    ;;",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.runner_case_shape_errors(duplicate, "TLC") == [
+        f"TLC runner {duplicate} at lines 2, 6 declares 2 mode case blocks"
+    ]
+    assert module.runner_case_shape_errors(missing_esac, "Apalache") == [
+        f"Apalache runner {missing_esac}:2 mode case block has no esac"
+    ]
+
+
 def test_bug_modes_filters_expected_failure_mutations() -> None:
     module = load_coverage_module()
 
@@ -7980,7 +8031,10 @@ def test_unexpected_failure_marker_check_rejects_baseline_modes() -> None:
         {"frontier-fast", "quorum-fast"},
         cases,
         "Apalache",
-    ) == ["frontier-fast: Apalache runner case 'frontier-fast' at line 10"]
+    ) == [
+        "frontier-fast: Apalache runner case 'frontier-fast' line 11 "
+        "sets unexpected expect_failure=1"
+    ]
 
 
 def test_sourced_modes_with_unexpected_failure_marker_errors_report_source_lines(
@@ -8018,7 +8072,7 @@ def test_sourced_modes_with_unexpected_failure_marker_errors_report_source_lines
     ) == [
         "README fast-mode table mode frontier-fast "
         f"at {readme}:41 maps to TLC runner case 'frontier-fast' "
-        "at line 10 with unexpected expect_failure=1"
+        "line 11 with unexpected expect_failure=1"
     ]
 
     assert module.sourced_modes_with_unexpected_failure_marker_errors(
@@ -8032,7 +8086,7 @@ def test_sourced_modes_with_unexpected_failure_marker_errors_report_source_lines
     ) == [
         "PR CI TLC command mode frontier-fast "
         f"at {fast_ci}:55 maps to TLC runner case 'frontier-fast' "
-        "at line 10 with unexpected expect_failure=1"
+        "line 11 with unexpected expect_failure=1"
     ]
 
     assert module.sourced_modes_with_unexpected_failure_marker_errors(
@@ -8050,7 +8104,7 @@ def test_sourced_modes_with_unexpected_failure_marker_errors_report_source_lines
     ) == [
         "scheduled/manual CI Apalache command mode frontier-fast "
         f"at {nightly}:71 maps to Apalache runner case 'frontier-fast' "
-        "at line 10 with unexpected expect_failure=1"
+        "line 11 with unexpected expect_failure=1"
     ]
 
 
@@ -8131,6 +8185,33 @@ def test_expected_failure_default_errors_rejects_global_downgrade(
         "expect_failure assignment: expect_failure = 0",
         f"Apalache runner {script}:2 must set top-level expect_failure "
         "default to 0",
+    ]
+
+
+def test_expected_failure_default_errors_rejects_duplicate_defaults_with_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "duplicate_expected_failure_default.sh"
+    script.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                "expect_failure=0",
+                "expect_failure=0",
+                'case "$mode" in',
+                "  frontier-bug-*)",
+                "    expect_failure=1",
+                "    ;;",
+                "esac",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.expected_failure_default_errors(script, "Apalache") == [
+        f"Apalache runner {script} at lines 2, 3 must declare exactly one "
+        "top-level expect_failure=0 default, found 2"
     ]
 
 
@@ -8224,7 +8305,7 @@ def test_tlc_constraint_default_errors_rejects_missing_or_duplicate_defaults(
         'tlc_constraint="" default, found 0'
     ]
     assert module.tlc_constraint_default_errors(duplicate) == [
-        f'TLC runner {duplicate} must declare exactly one top-level '
+        f'TLC runner {duplicate} at lines 2, 3 must declare exactly one top-level '
         'tlc_constraint="" default, found 2'
     ]
 
@@ -8254,7 +8335,7 @@ def test_expected_failure_assignment_errors_rejects_malformed_case_assignment(
         "frontier-bug-stale-owner: Apalache runner case 'frontier-bug-*' "
         "line 11 has malformed expect_failure assignment: expect_failure = 1",
         "frontier-bug-stale-owner: Apalache runner case 'frontier-bug-*' "
-        "at line 10 sets expect_failure=0 inside a mode case; keep the "
+        "line 12 sets expect_failure=0 inside a mode case; keep the "
         "default at top level",
     ]
 
@@ -8282,7 +8363,7 @@ def test_expected_failure_assignment_errors_rejects_duplicate_case_assignment(
         "TLC",
     ) == [
         "frontier-bug-stale-owner: TLC runner case 'frontier-bug-*' "
-        "at line 10 assigns expect_failure 2 times"
+        "at lines 11, 12 assigns expect_failure 2 times"
     ]
 
 
@@ -8358,6 +8439,33 @@ def test_apalache_typecheck_default_errors_rejects_global_downgrade(
     ]
 
 
+def test_apalache_typecheck_default_errors_rejects_duplicate_defaults_with_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    script = tmp_path / "duplicate_typecheck_default.sh"
+    script.write_text(
+        "\n".join(
+            [
+                "#!/bin/bash",
+                "typecheck_only=0",
+                "typecheck_only=0",
+                'case "$mode" in',
+                "  fast)",
+                "    typecheck_only=1",
+                "    ;;",
+                "esac",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.apalache_typecheck_default_errors(script) == [
+        f"Apalache runner {script} at lines 2, 3 must declare exactly one "
+        "top-level typecheck_only=0 default, found 2"
+    ]
+
+
 def test_apalache_typecheck_only_mode_errors_rejects_unlisted_modes() -> None:
     module = load_coverage_module()
     cases = {
@@ -8372,7 +8480,7 @@ def test_apalache_typecheck_only_mode_errors_rejects_unlisted_modes() -> None:
         cases,
         allowed_modes={"fast"},
     ) == [
-        "frontier-fast: Apalache runner case 'frontier-fast' at line 20 "
+        "frontier-fast: Apalache runner case 'frontier-fast' line 21 "
         "sets typecheck_only=1 outside APALACHE_TYPECHECK_ONLY_MODES"
     ]
 
@@ -8402,8 +8510,35 @@ def test_apalache_typecheck_only_mode_errors_rejects_malformed_case_assignment(
     ) == [
         "frontier-fast: Apalache runner case 'frontier-fast' line 21 "
         "has malformed typecheck_only assignment: typecheck_only = 1",
-        "frontier-fast: Apalache runner case 'frontier-fast' at line 20 "
+        "frontier-fast: Apalache runner case 'frontier-fast' line 22 "
         "sets typecheck_only=0 inside a mode case; keep the default at top level",
+    ]
+
+
+def test_apalache_typecheck_only_mode_errors_report_duplicate_assignment_lines(
+) -> None:
+    module = load_coverage_module()
+    cases = {
+        "frontier-fast": module.RunnerCase(
+            "frontier-fast",
+            "\n".join(
+                [
+                    "",
+                    "    typecheck_only=1",
+                    "    typecheck_only=1",
+                ]
+            ),
+            20,
+        ),
+    }
+
+    assert module.apalache_typecheck_only_mode_errors(
+        {"frontier-fast"},
+        cases,
+        allowed_modes=set(),
+    ) == [
+        "frontier-fast: Apalache runner case 'frontier-fast' at lines "
+        "21, 22 assigns typecheck_only 2 times"
     ]
 
 
@@ -14347,8 +14482,16 @@ def test_projected_commit_progress_contract_alignment_errors_rejects_duplicate_a
 def projected_commit_progress_spec_contract_text(
     module,
     *,
+    preamble_lines: list[str] | None = None,
     fairness_actions: tuple[str, ...] | None = None,
+    fairness_lines: list[str] | None = None,
     spec_lines: list[str] | None = None,
+    next_actions: tuple[str, ...] | None = None,
+    next_lines: list[str] | None = None,
+    init_lines: list[str] | None = None,
+    action_definition_overrides: dict[str, str] | None = None,
+    undefined_actions: tuple[str, ...] = (),
+    parameterized_actions: tuple[str, ...] = (),
 ) -> str:
     fairness_actions = (
         fairness_actions
@@ -14361,14 +14504,77 @@ def projected_commit_progress_spec_contract_text(
         "  /\\ [][Next]_vars",
         "  /\\ ProjectedCommitProgressFairness",
     ]
-    return "\n".join(
-        [
-            "ProjectedCommitProgressFairness ==",
-            *(f"  /\\ WF_vars({action})" for action in fairness_actions),
-            "",
-            *spec_lines,
-        ]
+    fairness_lines = fairness_lines or [
+        f"  /\\ WF_vars({action})" for action in fairness_actions
+    ]
+    next_actions = (
+        next_actions
+        if next_actions is not None
+        else module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
     )
+    next_lines = next_lines or next_operator_definition_lines("Next", next_actions)
+    defined_actions = tuple(dict.fromkeys((*fairness_actions, *next_actions)))
+    action_definitions = fairness_action_definition_lines(
+        defined_actions,
+        action_definition_overrides=action_definition_overrides,
+        undefined_actions=undefined_actions,
+        parameterized_actions=parameterized_actions,
+    )
+    init_lines = ["Init == TRUE"] if init_lines is None else init_lines
+    lines = [
+        *(preamble_lines or []),
+        "ProjectedCommitProgressFairness ==",
+        *fairness_lines,
+        "",
+        *spec_lines,
+        "",
+        *action_definitions,
+        "",
+        *next_lines,
+    ]
+    if init_lines:
+        lines.extend(["", *init_lines])
+    return "\n".join(lines)
+
+
+def next_operator_definition_lines(
+    next_operator: str,
+    next_actions: tuple[str, ...],
+) -> list[str]:
+    return [
+        f"{next_operator} ==",
+        *(f"  \\/ {action}" for action in next_actions),
+    ]
+
+
+def next_operator_from_closure(next_closure: str) -> str:
+    compact = "".join(next_closure.split())
+    assert compact.startswith("[][") and compact.endswith("]_vars")
+    return compact[3:-6]
+
+
+def fairness_action_definition_lines(
+    fairness_actions: tuple[str, ...],
+    *,
+    action_definition_overrides: dict[str, str] | None = None,
+    undefined_actions: tuple[str, ...] = (),
+    parameterized_actions: tuple[str, ...] = (),
+) -> list[str]:
+    overrides = action_definition_overrides or {}
+    undefined = set(undefined_actions)
+    parameterized = set(parameterized_actions)
+    lines: list[str] = []
+    for action in dict.fromkeys(fairness_actions):
+        if action in undefined or TEST_TLA_IDENTIFIER_RE.fullmatch(action) is None:
+            continue
+        if action in overrides:
+            lines.append(overrides[action])
+            continue
+        if action in parameterized:
+            lines.append(f"{action}(value) == TRUE")
+        else:
+            lines.append(f"{action} == UNCHANGED vars")
+    return lines
 
 
 def test_projected_commit_progress_spec_contract_errors_accepts_named_fairness(
@@ -14382,6 +14588,2415 @@ def test_projected_commit_progress_spec_contract_errors_accepts_named_fairness(
     )
 
     assert module.projected_commit_progress_spec_contract_errors(tla) == []
+
+
+def test_projected_commit_progress_spec_contract_errors_accepts_nested_next_aggregates(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateNestedNext.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ VotePathNext",
+                "  \\/ RbcPathNext",
+                "VotePathNext ==",
+                "  \\/ HonestPropose",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "RbcPathNext ==",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == []
+
+
+def test_projected_commit_progress_spec_contract_errors_accepts_wrapped_nested_next_aggregates(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateWrappedNestedNext.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedVotePathNext",
+                "  \\/ RbcPathNext",
+                "WrappedVotePathNext == VotePathNext",
+                "VotePathNext ==",
+                "  \\/ HonestPropose",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "RbcPathNext ==",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == []
+
+
+def test_projected_commit_progress_spec_contract_errors_accepts_same_name_imported_fair_action_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiSameNameFairActionAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiSameNameFairActionAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateSameNameFairActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiSameNameFairActionAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == []
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_guarded_single_reference_next_wrapper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateGuardedSingleReferenceNextWrapper.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedHonestPropose",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+                "WrappedHonestPropose == HonestPropose /\\ TRUE",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:31 defines projected commit progress transition operator "
+        "WrappedHonestPropose, but direct transition disjunct HonestPropose "
+        "/\\ TRUE is not a bare named action or aggregate reference; projected "
+        "commit progress transition disjuncts must stay bare named action or "
+        "aggregate references"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_wrapped_bad_nested_next_aggregate(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateWrappedBadNestedNext.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedVotePathNext",
+                "  \\/ RbcPathNext",
+                "WrappedVotePathNext == VotePathNext",
+                "VotePathNext ==",
+                "  \\/ HonestPropose",
+                "  \\/ TRUE",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "RbcPathNext ==",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:27 defines projected commit progress transition operator "
+        "VotePathNext, but direct transition disjunct TRUE does not resolve "
+        "to a named action-shaped operator; projected commit progress "
+        "transition disjuncts must resolve to named zero-arity action-shaped "
+        "operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_duplicate_wrapped_action_witnesses(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateDuplicateWrappedWitnessNext.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedVotePathNext",
+                "  \\/ VotePathNext",
+                "  \\/ RbcPathNext",
+                "WrappedVotePathNext == VotePathNext",
+                "VotePathNext ==",
+                "  \\/ HonestPropose",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "RbcPathNext ==",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next, but repeats reachable action witness(es) ByzantineCommitVote, "
+        "HonestCommitVote, HonestPropose, PrepareVote across direct "
+        "transition disjuncts; projected commit progress transition action "
+        "witness inventories must stay duplicate-free"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_duplicate_module_alias_action_witness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionWitnessAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionWitnessAliasTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateDuplicateModuleAliasWitnessNext.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionWitnessAliasTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!RbcChunk",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but repeats reachable action witness(es) RbcChunk across direct "
+        "transition disjuncts; projected commit progress transition action "
+        "witness inventories must stay duplicate-free"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_duplicate_direct_module_alias_action_witness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionDirectWitnessAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDirectWitnessAliasTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateDuplicateDirectModuleAliasWitnessNext.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDirectWitnessAliasTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!RbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but repeats reachable action witness(es) RbcChunk across direct "
+        "transition disjuncts; projected commit progress transition action "
+        "witness inventories must stay duplicate-free"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_duplicate_transitive_module_alias_action_witness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiTransitionWitnessInnerTarget.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionWitnessInnerTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiTransitionWitnessTransitiveAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionWitnessTransitiveAliasTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionWitnessInnerTarget",
+                "HiddenRbcChunk == Inner!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateDuplicateTransitiveModuleAliasWitnessNext.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionWitnessTransitiveAliasTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but repeats reachable action witness(es) RbcChunk across direct "
+        "transition disjuncts; projected commit progress transition action "
+        "witness inventories must stay duplicate-free"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_duplicate_action_witness(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasDuplicateWitnessTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasDuplicateWitnessTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == RbcChunk",
+                *[f"{action} == UNCHANGED vars" for action in fair_actions],
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasDuplicateWitness.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasDuplicateWitnessTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+            action_definition_overrides={
+                action: f"{action} == Interleaving!{action}"
+                for action in fair_actions
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:3 defines projected commit progress transition operator "
+        "Start, but repeats reachable action witness(es) RbcChunk across "
+        "direct transition disjuncts; projected commit progress transition "
+        "action witness inventories must stay duplicate-free"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_duplicate_disjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasDuplicateDisjunctTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasDuplicateDisjunctTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "  \\/ HonestPropose",
+                *(f"  \\/ {action}" for action in fair_actions),
+                *[f"{action} == UNCHANGED vars" for action in fair_actions],
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasDuplicateDisjunct.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasDuplicateDisjunctTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+            action_definition_overrides={
+                action: f"{action} == Interleaving!{action}"
+                for action in fair_actions
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:3 defines projected commit progress transition operator "
+        "Start, but repeats direct transition disjunct(s) HonestPropose; "
+        "projected commit progress transition disjunct inventories must stay "
+        "duplicate-free"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_temporal_disjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasTemporalDisjunctTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasTemporalDisjunctTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "  \\/ HonestPropose",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady /\\ <>committed",
+                "  \\/ RbcDeliver",
+                *[f"{action} == UNCHANGED vars" for action in fair_actions],
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasTemporalDisjunct.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasTemporalDisjunctTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+            action_definition_overrides={
+                action: f"{action} == Interleaving!{action}"
+                for action in fair_actions
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:3 defines projected commit progress transition operator "
+        "Start, but direct transition disjunct RbcReady /\\ <>committed "
+        "contains fairness or temporal syntax; projected commit progress "
+        "transition disjuncts must stay single-branch action predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_literal_disjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasLiteralDisjunctTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasLiteralDisjunctTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "  \\/ HonestPropose",
+                "  \\/ TRUE",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+                *[f"{action} == UNCHANGED vars" for action in fair_actions],
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasLiteralDisjunct.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasLiteralDisjunctTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+            action_definition_overrides={
+                action: f"{action} == Interleaving!{action}"
+                for action in fair_actions
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:3 defines projected commit progress transition operator "
+        "Start, but direct transition disjunct TRUE does not resolve to a "
+        "named action-shaped operator; projected commit progress transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_nested_disjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasNestedDisjunctTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasNestedDisjunctTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "  \\/ (HonestPropose \\/ TRUE)",
+                "  \\/ HonestPropose",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+                *[f"{action} == UNCHANGED vars" for action in fair_actions],
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasNestedDisjunct.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasNestedDisjunctTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+            action_definition_overrides={
+                action: f"{action} == Interleaving!{action}"
+                for action in fair_actions
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:3 defines projected commit progress transition operator "
+        "Start, but direct transition disjunct HonestPropose \\/ TRUE "
+        "contains nested disjunction alternatives; projected commit progress "
+        "transition disjuncts must stay single-branch action predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_mixed_witness_disjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasMixedWitnessDisjunctTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasMixedWitnessDisjunctTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "  \\/ HonestPropose /\\ PrepareVote",
+                "  \\/ HonestPropose",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+                *[f"{action} == UNCHANGED vars" for action in fair_actions],
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasMixedWitnessDisjunct.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasMixedWitnessDisjunctTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+            action_definition_overrides={
+                action: f"{action} == Interleaving!{action}"
+                for action in fair_actions
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:3 defines projected commit progress transition operator "
+        "Start, but direct transition disjunct HonestPropose /\\ PrepareVote "
+        "mixes multiple action witnesses HonestPropose, PrepareVote; guarded "
+        "transition disjuncts must not mix multiple action witnesses"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_guarded_disjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasGuardedDisjunctTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasGuardedDisjunctTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "  \\/ HonestPropose /\\ TRUE",
+                *(f"  \\/ {action}" for action in fair_actions),
+                *[f"{action} == UNCHANGED vars" for action in fair_actions],
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasGuardedDisjunct.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasGuardedDisjunctTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+            action_definition_overrides={
+                action: f"{action} == Interleaving!{action}"
+                for action in fair_actions
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:3 defines projected commit progress transition operator "
+        "Start, but direct transition disjunct HonestPropose /\\ TRUE is not "
+        "a bare named action or aggregate reference; projected commit "
+        "progress transition disjuncts must stay bare named action or "
+        "aggregate references"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_guarded_wrapper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasGuardedWrapperTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasGuardedWrapperTarget ----",
+                "VARIABLES vars",
+                "Start == HonestPropose /\\ TRUE",
+                "HonestPropose == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasGuardedWrapper.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasGuardedWrapperTarget",
+            ],
+            fairness_actions=("HonestPropose",),
+            next_actions=("HonestPropose",),
+            next_lines=["Next == Interleaving!Start"],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == Interleaving!HonestPropose",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(
+        tla,
+        expected_fairness_actions=("HonestPropose",),
+    ) == [
+        f"{target}:3 defines projected commit progress transition operator "
+        "Start, but direct transition disjunct HonestPropose /\\ TRUE is not "
+        "a bare named action or aggregate reference; projected commit "
+        "progress transition disjuncts must stay bare named action or "
+        "aggregate references"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_accepts_transition_alias_for_imported_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasFairActionTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasFairActionTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                *(f"  \\/ {action}" for action in fair_actions),
+                *[f"{action} == UNCHANGED vars" for action in fair_actions],
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasFairAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasFairActionTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+            action_definition_overrides={
+                action: f"{action} == Interleaving!{action}"
+                for action in fair_actions
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == []
+
+
+def test_progress_transition_direct_disjunct_errors_accepts_action_shaped_transition_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiActionShapedTransitionAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiActionShapedTransitionAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiActionShapedTransitionAlias.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiActionShapedTransitionAlias ----",
+                "VARIABLES vars",
+                "Interleaving == INSTANCE SumeragiActionShapedTransitionAliasTarget",
+                "Next == Interleaving!RbcReady",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        module.progress_transition_direct_disjunct_errors(
+            tla,
+            "Next",
+            "projected commit progress",
+        )
+        == []
+    )
+    assert module.transition_action_keys_from_operator(tla, "Next") == {
+        "Interleaving!RbcReady"
+    }
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_cyclic_transition_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Self == INSTANCE SumeragiTransitionAliasCycleTarget",
+                "Start == Self!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateTransitionAliasCycle.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasCycleTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition operator "
+        "Start, but transition alias resolution cycles at Start; projected "
+        "commit progress transition aliases must be acyclic and resolve to "
+        "inspectable transition operators",
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but [][Next]_vars cannot reach fair action(s) HonestPropose, "
+        "PrepareVote, HonestCommitVote, ByzantineCommitVote, RbcChunk, "
+        "RbcReady, RbcDeliver; projected commit progress fairness actions "
+        "must be reachable from the checked transition closure",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=["Next == Missing!Start"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next as Missing!Start without a named INSTANCE alias Missing; "
+        "projected commit progress transition aliases must resolve through "
+        "named local INSTANCE declarations",
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next, but [][Next]_vars cannot reach fair action(s) HonestPropose, "
+        "PrepareVote, HonestCommitVote, ByzantineCommitVote, RbcChunk, "
+        "RbcReady, RbcDeliver; projected commit progress fairness actions "
+        "must be reachable from the checked transition closure",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasMissingTarget.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasMissingTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        f"Next as Interleaving!Start, but target module {target} does not "
+        "exist; projected commit progress transition aliases must resolve "
+        "to local modules",
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but [][Next]_vars cannot reach fair action(s) HonestPropose, "
+        "PrepareVote, HonestCommitVote, ByzantineCommitVote, RbcChunk, "
+        "RbcReady, RbcDeliver; projected commit progress fairness actions "
+        "must be reachable from the checked transition closure",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasUndefinedTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        f"Next as Interleaving!Start, but target {target} does not define "
+        "Start; projected commit progress transition aliases must resolve "
+        "to defined zero-arity transition operators",
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but [][Next]_vars cannot reach fair action(s) HonestPropose, "
+        "PrepareVote, HonestCommitVote, ByzantineCommitVote, RbcChunk, "
+        "RbcReady, RbcDeliver; projected commit progress fairness actions "
+        "must be reachable from the checked transition closure",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasParameterizedTarget ----",
+                "VARIABLES vars",
+                "Start(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasParameterizedTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        f"Next as Interleaving!Start, but target {target}:3 has arity 1; "
+        "projected commit progress transition aliases must resolve to "
+        "defined zero-arity transition operators",
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but [][Next]_vars cannot reach fair action(s) HonestPropose, "
+        "PrepareVote, HonestCommitVote, ByzantineCommitVote, RbcChunk, "
+        "RbcReady, RbcDeliver; projected commit progress fairness actions "
+        "must be reachable from the checked transition closure",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transition_alias_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateTransitionAliasNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAliasNoninspectableTarget",
+            ],
+            next_lines=["Next == Interleaving!Start"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        f"Next as Interleaving!Start, but target {target}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "transition aliases must resolve to inspectable transition operators",
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but [][Next]_vars cannot reach fair action(s) HonestPropose, "
+        "PrepareVote, HonestCommitVote, ByzantineCommitVote, RbcChunk, "
+        "RbcReady, RbcDeliver; projected commit progress fairness actions "
+        "must be reachable from the checked transition closure",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_cyclic_transition_helper_wrapper(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateTransitionHelperCycle.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == WrappedRbcChunk",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:32 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but transition helper resolution cycles at "
+        "WrappedRbcChunk; projected commit progress transition helper "
+        "wrappers must be acyclic and resolve to inspectable transition "
+        "operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_gated_transition_helper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanTransitionHelperCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ WrappedRbcChunk",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:32 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but transition helper resolution cycles at "
+        "WrappedRbcChunk; projected commit progress transition helper "
+        "wrappers must be acyclic and resolve to inspectable transition "
+        "operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_transition_helper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityTransitionHelperCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE => WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == FALSE \\/ WrappedRbcChunk",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:32 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but transition helper resolution cycles at "
+        "WrappedRbcChunk; projected commit progress transition helper "
+        "wrappers must be acyclic and resolve to inspectable transition "
+        "operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_bare_identity_gated_transition_helper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBareIdentityTransitionHelperCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == FALSE \\/ WrappedRbcChunk",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:32 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but transition helper resolution cycles at "
+        "WrappedRbcChunk; projected commit progress transition helper "
+        "wrappers must be acyclic and resolve to inspectable transition "
+        "operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityAliasCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Self == INSTANCE SumeragiTransitionIdentityAliasCycleTarget",
+                "Start == Self!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityAliasCycleTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but transition helper resolution cycles at Start; projected "
+        "commit progress transition helper wrappers must be acyclic and "
+        "resolve to inspectable transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionHelperWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:32 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start without a named "
+        "INSTANCE alias Interleaving; projected commit progress transition "
+        "module-alias helper wrappers must resolve through named local "
+        "INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionHelperMissingTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionHelperMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionHelperMissingTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start, but target module "
+        f"{target} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionHelperUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionHelperUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionHelperUndefinedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start, but target "
+        f"{target} does not define Start; projected commit progress "
+        "transition module-alias helper wrappers must resolve to defined "
+        "zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionHelperParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperParameterizedTarget ----",
+                "VARIABLES vars",
+                "Start(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionHelperParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionHelperParameterizedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start, but target "
+        f"{target}:3 has arity 1; projected commit progress transition "
+        "module-alias helper wrappers must resolve to defined zero-arity "
+        "transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_helper_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionHelperNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionHelperNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionHelperNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionHelperNoninspectableTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start, but target "
+        f"{target}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:32 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start without a named "
+        "INSTANCE alias Interleaving; projected commit progress transition "
+        "identity-gated module-alias helper wrappers must resolve through "
+        "named local INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityHelperMissingTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityHelperMissingTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start, but target module "
+        f"{target} does not exist; projected commit progress transition "
+        "identity-gated module-alias helper wrappers must resolve to local "
+        "modules with defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityHelperUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityHelperUndefinedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start, but target "
+        f"{target} does not define Start; projected commit progress "
+        "transition identity-gated module-alias helper wrappers must resolve "
+        "to defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityHelperParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperParameterizedTarget ----",
+                "VARIABLES vars",
+                "Start(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityHelperParameterizedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start, but target "
+        f"{target}:3 has arity 1; projected commit progress transition "
+        "identity-gated module-alias helper wrappers must resolve to defined "
+        "zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_helper_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityHelperNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityHelperNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionHelperNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityHelperNoninspectableTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ WrappedRbcChunk",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "WrappedRbcChunk == TRUE /\\ Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress transition helper "
+        "WrappedRbcChunk, but aliases Interleaving!Start, but target "
+        f"{target}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition identity-gated module-alias "
+        "helper wrappers must resolve to inspectable transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_aggregate_module_alias_missing_target_without_crashing(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAggregateMissingTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAggregateModuleAliasMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionAggregateMissingTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Aggregate",
+                *(f"  \\/ {action}" for action in fair_actions),
+                "Aggregate == Interleaving!Start",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress transition helper "
+        "Aggregate, but aliases Interleaving!Start, but target module "
+        f"{target} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators",
+    ]
+
+
+def test_transition_reference_aggregate_targets_returns_empty_for_missing_module_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiTransitionAggregateMissingTargetUnit.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAggregateMissingTargetUnit ----",
+                "VARIABLES vars",
+                "Interleaving == INSTANCE SumeragiTransitionAggregateMissingTarget",
+                "Aggregate == Interleaving!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.transition_reference_aggregate_targets(tla, "Aggregate") == set()
+
+
+def test_projected_commit_progress_spec_contract_errors_accepts_module_alias_transition_disjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionDisjunctAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctAliasTarget ----",
+                "VARIABLES vars",
+                "Start == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunct.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctAliasTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == []
+
+
+def test_projected_commit_progress_spec_contract_errors_accepts_module_alias_transition_disjunct_for_imported_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionDisjunctFairActionAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctFairActionAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != "RbcReady"
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctFairAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctFairActionAliasTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!RbcReady",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == []
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionDisjunctAliasCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Self == INSTANCE SumeragiTransitionDisjunctAliasCycleTarget",
+                "Start == Self!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctAliasCycleTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but transition helper resolution cycles at Start; projected "
+        "commit progress transition helper wrappers must be acyclic and "
+        "resolve to inspectable transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct Interleaving!Start aliases "
+        "Interleaving!Start without a named INSTANCE alias Interleaving; "
+        "projected commit progress transition module-alias disjuncts must "
+        "resolve through named local INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionDisjunctMissingTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctMissingTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct Interleaving!Start aliases "
+        f"Interleaving!Start, but target module {target} does not exist; "
+        "projected commit progress transition module-alias disjuncts must "
+        "resolve to local modules with defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionDisjunctUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctUndefinedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct Interleaving!Start aliases "
+        f"Interleaving!Start, but target {target} does not define Start; "
+        "projected commit progress transition module-alias disjuncts must "
+        "resolve to defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionDisjunctParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctParameterizedTarget ----",
+                "VARIABLES vars",
+                "Start(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctParameterizedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct Interleaving!Start aliases "
+        f"Interleaving!Start, but target {target}:3 has arity 1; projected "
+        "commit progress transition module-alias disjuncts must resolve to "
+        "defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_transition_disjunct_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionDisjunctNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionDisjunctNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasTransitionDisjunctNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionDisjunctNoninspectableTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct Interleaving!Start aliases "
+        f"Interleaving!Start, but target {target}:3 is not an inspectable "
+        "single-expression definition; projected commit progress transition "
+        "module-alias disjuncts must resolve to inspectable transition "
+        "operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct TRUE /\\ Interleaving!Start "
+        "aliases Interleaving!Start without a named INSTANCE alias "
+        "Interleaving; projected commit progress transition module-alias "
+        "disjuncts must resolve through named local INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityDisjunctMissingTarget.tla"
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityDisjunctMissingTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct TRUE /\\ Interleaving!Start "
+        f"aliases Interleaving!Start, but target module {target} does not "
+        "exist; projected commit progress transition module-alias disjuncts "
+        "must resolve to local modules with defined zero-arity transition "
+        "operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityDisjunctUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityDisjunctUndefinedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct TRUE /\\ Interleaving!Start "
+        f"aliases Interleaving!Start, but target {target} does not define "
+        "Start; projected commit progress transition module-alias disjuncts "
+        "must resolve to defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityDisjunctParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctParameterizedTarget ----",
+                "VARIABLES vars",
+                "Start(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityDisjunctParameterizedTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct TRUE /\\ Interleaving!Start "
+        f"aliases Interleaving!Start, but target {target}:3 has arity 1; "
+        "projected commit progress transition module-alias disjuncts must "
+        "resolve to defined zero-arity transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityDisjunctNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Start ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityDisjunctNoninspectableTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct TRUE /\\ Interleaving!Start "
+        f"aliases Interleaving!Start, but target {target}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "transition module-alias disjuncts must resolve to inspectable "
+        "transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_identity_gated_module_alias_transition_disjunct_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionIdentityDisjunctAliasCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionIdentityDisjunctAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Self == INSTANCE SumeragiTransitionIdentityDisjunctAliasCycleTarget",
+                "Start == Self!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateIdentityModuleAliasTransitionDisjunctCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiTransitionIdentityDisjunctAliasCycleTarget",
+            ],
+            next_lines=[
+                "Next ==",
+                "  \\/ TRUE /\\ Interleaving!Start",
+                *(f"  \\/ {action}" for action in fair_actions),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress transition helper "
+        "Start, but transition helper resolution cycles at Start; projected "
+        "commit progress transition helper wrappers must be acyclic and "
+        "resolve to inspectable transition operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_duplicate_next_disjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    direct = tmp_path / "SumeragiByzantineCommitProjectionGateDuplicateNext.tla"
+    nested = tmp_path / "SumeragiByzantineCommitProjectionGateNestedDuplicateNext.tla"
+    direct.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                *next_operator_definition_lines("Next", fair_actions),
+                "  \\/ HonestPropose",
+            ],
+        ),
+        encoding="utf-8",
+    )
+    nested.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ VotePathNext",
+                "  \\/ RbcPathNext",
+                "VotePathNext ==",
+                "  \\/ HonestPropose",
+                "  \\/ HonestPropose",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "RbcPathNext ==",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    requirement = (
+        "projected commit progress transition disjunct inventories must stay "
+        "duplicate-free"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(direct) == [
+        f"{direct}:23 defines projected commit progress transition operator "
+        "Next, but repeats direct transition disjunct(s) HonestPropose; "
+        f"{requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(nested) == [
+        f"{nested}:26 defines projected commit progress transition operator "
+        "VotePathNext, but repeats direct transition disjunct(s) "
+        f"HonestPropose; {requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_bad_nested_next_aggregates(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    static = tmp_path / "SumeragiByzantineCommitProjectionGateNestedStaticNext.tla"
+    temporal = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateNestedTemporalNext.tla"
+    )
+    static.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ VotePathNext",
+                "  \\/ RbcPathNext",
+                "VotePathNext ==",
+                "  \\/ HonestPropose",
+                "  \\/ TRUE",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "RbcPathNext ==",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+            ],
+        ),
+        encoding="utf-8",
+    )
+    temporal.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ VotePathNext",
+                "  \\/ RbcPathNext",
+                "VotePathNext ==",
+                "  \\/ HonestPropose",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "RbcPathNext ==",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady /\\ <>committed",
+                "  \\/ RbcDeliver",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    resolve_requirement = (
+        "projected commit progress transition disjuncts must resolve to named "
+        "zero-arity action-shaped operators"
+    )
+    branch_requirement = (
+        "projected commit progress transition disjuncts must stay "
+        "single-branch action predicates"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(static) == [
+        f"{static}:26 defines projected commit progress transition operator "
+        "VotePathNext, but direct transition disjunct TRUE does not resolve "
+        f"to a named action-shaped operator; {resolve_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(temporal) == [
+        f"{temporal}:31 defines projected commit progress transition operator "
+        "RbcPathNext, but direct transition disjunct RbcReady /\\ "
+        f"<>committed contains fairness or temporal syntax; {branch_requirement}"
+    ]
 
 
 def test_projected_commit_progress_spec_contract_errors_rejects_duplicate_expected_action(
@@ -14432,7 +17047,7 @@ def test_projected_commit_progress_spec_contract_errors_rejects_raw_spec_fairnes
         "required direct conjunct(s) ProjectedCommitProgressFairness",
         f"{tla}:11 defines ProjectedCommitProgressSpec, but must compose "
         "ProjectedCommitProgressFairness instead of raw WF_vars fairness "
-        "clauses: HonestPropose, PrepareVote"
+        "clauses at lines 13, 14: HonestPropose, PrepareVote"
     ]
 
 
@@ -14458,7 +17073,7 @@ def test_projected_commit_progress_spec_contract_errors_rejects_compound_raw_spe
     assert module.projected_commit_progress_spec_contract_errors(tla) == [
         f"{tla}:11 defines ProjectedCommitProgressSpec, but must compose "
         "ProjectedCommitProgressFairness instead of raw WF_vars fairness "
-        "clauses: HonestPropose /\\ PrepareVote"
+        "clauses at line 14: HonestPropose /\\ PrepareVote"
     ]
 
 
@@ -14482,8 +17097,84 @@ def test_projected_commit_progress_spec_contract_errors_rejects_missing_next_clo
     errors = module.projected_commit_progress_spec_contract_errors(tla)
 
     assert errors == [
-        f"{tla}:11 defines ProjectedCommitProgressSpec, but must keep direct "
-        "[][Next]_vars transition closure"
+        f"{tla}:11 defines ProjectedCommitProgressSpec, but must keep exactly "
+        "one direct [][Next]_vars transition closure, found 0"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_hidden_or_duplicate_next_closure(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    hidden = tmp_path / "SumeragiByzantineCommitProjectionGateHiddenNext.tla"
+    duplicate = tmp_path / "SumeragiByzantineCommitProjectionGateDuplicateNext.tla"
+    hidden.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            spec_lines=[
+                "ProjectedCommitProgressSpec ==",
+                "  /\\ Init",
+                "  /\\ ([][Next]_vars \\/ TRUE)",
+                "  /\\ ProjectedCommitProgressFairness",
+            ],
+        ),
+        encoding="utf-8",
+    )
+    duplicate.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            spec_lines=[
+                "ProjectedCommitProgressSpec ==",
+                "  /\\ Init",
+                "  /\\ [][Next]_vars",
+                "  /\\ [][Next]_vars",
+                "  /\\ ProjectedCommitProgressFairness",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(hidden) == [
+        f"{hidden}:11 defines ProjectedCommitProgressSpec, but must keep "
+        "exactly one direct [][Next]_vars transition closure, found 0",
+        f"{hidden}:11 defines ProjectedCommitProgressSpec, but contains "
+        "unexpected direct progress-spec conjunct(s) [][Next]_vars \\/ TRUE; "
+        "projected commit progress specs must compose only Init, the direct "
+        "[][Next]_vars transition closure, and "
+        "ProjectedCommitProgressFairness",
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(duplicate) == [
+        f"{duplicate}:11 defines ProjectedCommitProgressSpec, but must keep "
+        "exactly one direct [][Next]_vars transition closure, found 2"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_extra_direct_spec_conjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateExtraSpec.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            spec_lines=[
+                "ProjectedCommitProgressSpec ==",
+                "  /\\ Init",
+                "  /\\ [][Next]_vars",
+                "  /\\ ([] HiddenProgress)",
+                "  /\\ TRUE",
+                "  /\\ ProjectedCommitProgressFairness",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:11 defines ProjectedCommitProgressSpec, but contains "
+        "unexpected direct progress-spec conjunct(s) [] HiddenProgress, TRUE; "
+        "projected commit progress specs must compose only Init, the direct "
+        "[][Next]_vars transition closure, and "
+        "ProjectedCommitProgressFairness"
     ]
 
 
@@ -14509,13 +17200,13 @@ def test_projected_commit_progress_spec_contract_errors_rejects_fairness_drift(
 
     assert errors == [
         f"{tla}:2 defines ProjectedCommitProgressFairness, but repeats "
-        "WF_vars action(s) RbcReady; each projected commit progress fairness "
-        "action must be counted once",
+        "WF_vars action(s) RbcReady at lines 7, 9; each projected commit "
+        "progress fairness action must be counted once",
         f"{tla}:2 defines ProjectedCommitProgressFairness, but is missing "
         "WF_vars action(s) RbcDeliver",
         f"{tla}:2 defines ProjectedCommitProgressFairness, but contains "
-        "unexpected WF_vars action(s) TimeoutTick; keep projected commit "
-        "progress fairness on the documented action contract",
+        "unexpected WF_vars action(s) TimeoutTick at line 8; keep projected "
+        "commit progress fairness on the documented action contract",
     ]
 
 
@@ -14537,9 +17228,6019 @@ def test_projected_commit_progress_spec_contract_errors_rejects_compound_fairnes
 
     assert module.projected_commit_progress_spec_contract_errors(tla) == [
         f"{tla}:2 defines ProjectedCommitProgressFairness, but contains "
-        "non-static WF_vars operand(s) HonestPropose /\\ PrepareVote; "
+        "non-static WF_vars operand(s) HonestPropose /\\ PrepareVote at line 9; "
         "projected commit progress fairness actions must be named zero-arity "
         "operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_non_direct_fairness_conjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            fairness_lines=[
+                f"  /\\ WF_vars({actions[0]})",
+                f"  /\\ (WF_vars({actions[1]}) /\\ WF_vars({actions[2]}))",
+                "  /\\ TRUE",
+                *(f"  /\\ WF_vars({action})" for action in actions[3:]),
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but contains "
+        "non-WF_vars direct fairness conjunct(s) WF_vars(PrepareVote) /\\ "
+        "WF_vars(HonestCommitVote), TRUE; projected commit progress fairness "
+        "aggregate must contain only direct WF_vars(Action) clauses"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_missing_or_parameterized_actions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing = tmp_path / "SumeragiByzantineCommitProjectionGateMissing.tla"
+    parameterized = tmp_path / "SumeragiByzantineCommitProjectionGateParameterized.tla"
+    missing.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            undefined_actions=("RbcReady",),
+        ),
+        encoding="utf-8",
+    )
+    parameterized.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            parameterized_actions=("RbcReady",),
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(missing) == [
+        f"{missing}:22 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct RbcReady does not resolve to a "
+        "named action-shaped operator; projected commit progress transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{missing}:2 defines ProjectedCommitProgressFairness, but references "
+        "undefined WF_vars action RbcReady at line 7; projected commit "
+        "progress fairness actions must be defined zero-arity operators"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(parameterized) == [
+        f"{parameterized}:23 defines projected commit progress transition "
+        "operator Next, but direct transition disjunct RbcReady does not "
+        "resolve to a named action-shaped operator; projected commit progress "
+        "transition disjuncts must resolve to named zero-arity action-shaped "
+        "operators",
+        f"{parameterized}:2 defines ProjectedCommitProgressFairness, but "
+        "references WF_vars action RbcReady at line 7 whose definition at "
+        "line 20 has arity 1; projected commit progress fairness actions "
+        "must be defined zero-arity operators"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_missing_or_parameterized_init(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    missing = tmp_path / "SumeragiByzantineCommitProjectionGateMissingInit.tla"
+    parameterized = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateParameterizedInit.tla"
+    )
+    missing.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            init_lines=[],
+        ),
+        encoding="utf-8",
+    )
+    parameterized.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            init_lines=["Init(value) == TRUE"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(missing) == [
+        f"{missing} does not define projected commit progress init operator Init"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(parameterized) == [
+        f"{parameterized}:32 defines projected commit progress init operator "
+        "Init with arity 1; projected commit progress init operators must be "
+        "zero-arity"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_or_temporal_init(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    action_init = tmp_path / "SumeragiByzantineCommitProjectionGateActionInit.tla"
+    temporal_init = tmp_path / "SumeragiByzantineCommitProjectionGateTemporalInit.tla"
+    action_init.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            init_lines=["Init == UNCHANGED vars"],
+        ),
+        encoding="utf-8",
+    )
+    temporal_init.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            init_lines=["Init == <>committed"],
+        ),
+        encoding="utf-8",
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(action_init) == [
+        f"{action_init}:32 defines projected commit progress init operator "
+        f"Init, but its body is not an initial-state predicate; {shape_requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(temporal_init) == [
+        f"{temporal_init}:32 defines projected commit progress init operator "
+        f"Init, but its body is not an initial-state predicate; {shape_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_local_action_init_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateLocalActionInitAlias.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["HiddenInit == UNCHANGED vars"],
+            init_lines=["Init == HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress init operator Init as "
+        f"HiddenInit, but target {tla}:1 is not an initial-state predicate; "
+        f"{shape_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_init_helper_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateActionInitHelper.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "GoodInit == ready = ready",
+                "HiddenInit == UNCHANGED vars",
+            ],
+            init_lines=["Init == GoodInit /\\ HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"helper HiddenInit at {tla}:2 is not an initial-state predicate; "
+        f"{shape_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitHelperModuleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperModuleAliasTarget ----",
+                "VARIABLES vars",
+                "HiddenInit == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelper.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperModuleAliasTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"module helper Interleaving!HiddenInit target {target}:3 is not an "
+        f"initial-state predicate; {shape_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["GoodInit == ready = ready"],
+            init_lines=["Init == GoodInit /\\ Missing!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress init operator Init, but "
+        "module helper Missing!HiddenInit has no named INSTANCE alias Missing; "
+        "projected commit progress init module-alias helpers must resolve "
+        "through named local INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitHelperMissingTarget.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperMissingTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        "module helper Interleaving!HiddenInit targets missing module "
+        f"{target}; projected commit progress init module-alias helpers must "
+        "resolve to local modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitHelperUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperUndefinedTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"module helper Interleaving!HiddenInit target {target} does not "
+        "define HiddenInit; projected commit progress init module-alias "
+        "helpers must resolve to defined zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitHelperParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperParameterizedTarget ----",
+                "VARIABLES vars",
+                "HiddenInit(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperParameterizedTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"module helper Interleaving!HiddenInit target {target}:3 has arity "
+        "1; projected commit progress init module-alias helpers must resolve "
+        "to defined zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_helper_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitHelperNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitHelperNoninspectableTarget ----",
+                "VARIABLES vars",
+                "HiddenInit ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitHelperNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitHelperNoninspectableTarget",
+                "GoodInit == ready = ready",
+            ],
+            init_lines=["Init == GoodInit /\\ Interleaving!HiddenInit"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:34 defines projected commit progress init operator Init, but "
+        f"module helper Interleaving!HiddenInit target {target}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "init module-alias helpers must resolve to inspectable initial-state "
+        "predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_bad_init_aliases(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasTarget ----",
+                "VARIABLES vars",
+                "Init == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing = tmp_path / "SumeragiByzantineCommitProjectionGateMissingInitAlias.tla"
+    action_target = (
+        tmp_path / "SumeragiByzantineCommitProjectionGateActionInitAlias.tla"
+    )
+    missing.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            init_lines=["Init == Missing!Init"],
+        ),
+        encoding="utf-8",
+    )
+    action_target.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiInitAliasTarget"],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(missing) == [
+        f"{missing}:32 defines projected commit progress init operator Init, "
+        "but aliases Missing!Init without a named INSTANCE alias Missing; "
+        "projected commit progress init aliases must resolve through named "
+        "local INSTANCE declarations"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(action_target) == [
+        f"{action_target}:33 defines projected commit progress init operator "
+        f"Init as Interleaving!Init, but target {target}:3 is not an "
+        f"initial-state predicate; {shape_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_alias_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitAliasMissingTarget.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitAliasMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiInitAliasMissingTarget"],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress init operator Init as "
+        f"Interleaving!Init, but target module {target} does not exist; "
+        "projected commit progress init aliases must resolve to local modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_alias_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitAliasUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitAliasUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiInitAliasUndefinedTarget"],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress init operator Init as "
+        f"Interleaving!Init, but target {target} does not define Init; "
+        "projected commit progress init aliases must resolve to defined "
+        "zero-arity initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_alias_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitAliasParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasParameterizedTarget ----",
+                "VARIABLES vars",
+                "Init(value) == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitAliasParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitAliasParameterizedTarget",
+            ],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress init operator Init as "
+        f"Interleaving!Init, but target {target}:3 has arity 1; projected "
+        "commit progress init aliases must resolve to defined zero-arity "
+        "initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_init_alias_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitAliasNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Init ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasInitAliasNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInitAliasNoninspectableTarget",
+            ],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:33 defines projected commit progress init operator Init as "
+        f"Interleaving!Init, but target {target}:3 is not an inspectable "
+        "single-expression definition; projected commit progress init aliases "
+        "must resolve to inspectable initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_transitive_action_init_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiInitAliasInnerTarget.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasInnerTarget ----",
+                "VARIABLES vars",
+                "Init == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiInitAliasTransitiveTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasTransitiveTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiInitAliasInnerTarget",
+                "Init == Inner!Init",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateTransitiveInitAlias.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiInitAliasTransitiveTarget"],
+            init_lines=["Init == Interleaving!Init"],
+        ),
+        encoding="utf-8",
+    )
+
+    shape_requirement = (
+        "projected commit progress init operators must be initial-state "
+        "predicates without next-state, UNCHANGED, ENABLED, WF_/SF_, [] or "
+        "<> temporal markers"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator Init as "
+        f"Inner!Init, but target {inner}:3 is not an initial-state predicate; "
+        f"{shape_requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_cyclic_init_alias(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInitAliasCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInitAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Self == INSTANCE SumeragiInitAliasCycleTarget",
+                "Start == Self!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateCyclicInitAlias.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiInitAliasCycleTarget"],
+            init_lines=["Init == Interleaving!Start"],
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{target}:4 defines projected commit progress init operator Start, "
+        "but init alias resolution cycles at Start; projected commit progress "
+        "init aliases must be acyclic and resolve to inspectable "
+        "initial-state predicates"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_non_action_shaped_actions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateActionShape.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            action_definition_overrides={
+                "RbcReady": "RbcReady == TRUE",
+                "RbcDeliver": "RbcDeliver == WF_vars(RbcReady) /\\ UNCHANGED vars",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct RbcReady does not resolve to a "
+        "named action-shaped operator; projected commit progress transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct RbcDeliver does not resolve to "
+        "a named action-shaped operator; projected commit progress transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 7 whose definition at line 20 is "
+        "not action-shaped; projected commit progress fairness actions must "
+        "mention next-state updates, UNCHANGED, or a module-instance action "
+        "alias",
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcDeliver at line 8 whose definition at line 21 "
+        "contains nested WF_vars clause(s) at line 21: RbcReady; projected "
+        "commit progress fairness action definitions must not contain "
+        "fairness clauses",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_temporal_action_syntax(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateTemporalActions.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            action_definition_overrides={
+                "RbcReady": "RbcReady == UNCHANGED vars /\\ <>committed",
+                "RbcDeliver": "RbcDeliver == UNCHANGED vars /\\ SF_vars(RbcReady)",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct RbcReady does not resolve to a "
+        "named action-shaped operator; projected commit progress transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct RbcDeliver does not resolve to "
+        "a named action-shaped operator; projected commit progress transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 7 whose definition at line 20 "
+        "contains fairness or temporal syntax; projected commit progress "
+        "fairness action definitions must not contain fairness or temporal "
+        "operators",
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcDeliver at line 8 whose definition at line 21 "
+        "contains fairness or temporal syntax; projected commit progress "
+        "fairness action definitions must not contain fairness or temporal "
+        "operators",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateComposedAction.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ RbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 2 whose definition at line 15 "
+        "directly composes fair action(s) RbcChunk; projected commit "
+        "progress fairness action definitions must not compose other fair "
+        "actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_hidden_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ RbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 2 whose definition at line 15 "
+        "hides fair action(s) RbcChunk inside boolean structure; projected "
+        "commit progress fairness action definitions must not hide other "
+        "fair actions in boolean structure"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_wrapped_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateWrappedComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through static helper wrapper(s); "
+        "projected commit progress fairness action helper wrappers must not "
+        "hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_wrapped_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanWrappedComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through static helper wrapper(s); "
+        "projected commit progress fairness action helper wrappers must not "
+        "hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_invalid_fairness_helper_references(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateInvalidFairnessHelperReferences.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ ParameterizedHelper /\\ OpaqueHelper",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper ParameterizedHelper at {tla}:1, but helper has "
+        "arity 1; projected commit progress fairness action helper "
+        "references must resolve to defined zero-arity helper definitions",
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper OpaqueHelper at {tla}:2, but helper is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "fairness action helper references must resolve to inspectable "
+        "helper definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_invalid_fairness_helper_reference(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanInvalidFairnessHelperReference.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == FALSE \\/ ParameterizedHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper ParameterizedHelper at {tla}:2, but helper has "
+        "arity 1; projected commit progress fairness action helper "
+        "references must resolve to defined zero-arity helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_fairness_helper_wrapper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairnessHelperWrapperCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == WrappedRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:1, but fairness helper "
+        "wrapper resolution cycles at WrappedRbcChunk; projected commit "
+        "progress fairness action helper wrappers must be acyclic and "
+        "resolve to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_fairness_helper_wrapper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandFairnessHelperWrapperCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == FALSE \\/ HiddenRbcChunk",
+                "HiddenRbcChunk == WrappedRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:1, but fairness helper "
+        "wrapper resolution cycles at WrappedRbcChunk; projected commit "
+        "progress fairness action helper wrappers must be acyclic and "
+        "resolve to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_helper_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateActionHelperComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through action helper(s); projected "
+        "commit progress fairness action helper actions must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_action_helper_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanActionHelperComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through action helper(s); projected "
+        "commit progress fairness action helper actions must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_fairness_action_helper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairnessActionHelperCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == WrappedRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:1, but fairness action "
+        "helper resolution cycles at WrappedRbcChunk; projected commit "
+        "progress fairness action helper actions must be acyclic and "
+        "resolve to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_fairness_action_helper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandFairnessActionHelperCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == WrappedRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:1, but fairness action "
+        "helper resolution cycles at WrappedRbcChunk; projected commit "
+        "progress fairness action helper actions must be acyclic and "
+        "resolve to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_wrapped_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandWrappedComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through static helper wrapper(s); "
+        "projected commit progress fairness action helper wrappers must not "
+        "hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_wrapped_boolean_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandWrappedBooleanComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through static helper wrapper(s); "
+        "projected commit progress fairness action helper wrappers must not "
+        "hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_action_helper_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandActionHelperComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == UNCHANGED vars /\\ RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through action helper(s); projected "
+        "commit progress fairness action helper actions must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_action_helper_boolean_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandActionHelperBooleanComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through action helper(s); projected "
+        "commit progress fairness action helper actions must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiHelperAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through helper alias(es); projected "
+        "commit progress fairness action helper aliases must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_boolean_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiHelperAliasBooleanTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasBooleanComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasBooleanTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through helper alias(es); projected "
+        "commit progress fairness action helper aliases must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_direct_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiHelperAliasDirectTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasDirectTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasDirectAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasDirectTarget",
+                "WrappedRbcChunk == Interleaving!RbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through helper alias(es); projected "
+        "commit progress fairness action helper aliases must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_transitive_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiHelperAliasInnerTarget.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasInnerTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiHelperAliasTransitiveTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasTransitiveTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiHelperAliasInnerTarget",
+                "HiddenRbcChunk == Inner!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasTransitiveAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasTransitiveTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through helper alias(es); projected "
+        "commit progress fairness action helper aliases must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanOperandHelperAliasComposedActionTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanOperandHelperAliasComposedActionTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanOperandHelperAliasComposedActionTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through helper alias(es); projected "
+        "commit progress fairness action helper aliases must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_boolean_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = (
+        tmp_path
+        / "SumeragiBooleanOperandHelperAliasBooleanComposedActionTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanOperandHelperAliasBooleanComposedActionTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasBooleanComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanOperandHelperAliasBooleanComposedActionTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through helper alias(es); projected "
+        "commit progress fairness action helper aliases must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_transitive_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiBooleanOperandHelperAliasInnerTarget.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanOperandHelperAliasInnerTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiBooleanOperandHelperAliasTransitiveTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanOperandHelperAliasTransitiveTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiBooleanOperandHelperAliasInnerTarget",
+                "HiddenRbcChunk == Inner!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasTransitiveAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanOperandHelperAliasTransitiveTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "reaches fair action(s) RbcChunk through helper alias(es); projected "
+        "commit progress fairness action helper aliases must not hide "
+        "composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_imported_invalid_helper_references(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiHelperAliasInvalidHelperReferencesTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasInvalidHelperReferencesTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == ParameterizedHelper /\\ OpaqueHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasInvalidHelperReferences.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasInvalidHelperReferencesTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper ParameterizedHelper at {target}:4, but helper has "
+        "arity 1; projected commit progress fairness action helper aliases "
+        "must resolve imported helper references to defined zero-arity helper "
+        "definitions",
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper OpaqueHelper at {target}:5, but helper is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "fairness action helper aliases must resolve imported helper "
+        "references to inspectable helper definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_imported_invalid_helper_references(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = (
+        tmp_path
+        / "SumeragiBooleanOperandHelperAliasInvalidHelperReferencesTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanOperandHelperAliasInvalidHelperReferencesTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == ParameterizedHelper /\\ OpaqueHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasInvalidHelperReferences.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanOperandHelperAliasInvalidHelperReferencesTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper ParameterizedHelper at {target}:4, but helper has "
+        "arity 1; projected commit progress fairness action helper aliases "
+        "must resolve imported helper references to defined zero-arity helper "
+        "definitions",
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper OpaqueHelper at {target}:5, but helper is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "fairness action helper aliases must resolve imported helper "
+        "references to inspectable helper definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionHelperAliasCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionHelperAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiByzantineCommitProjectionGateHelperAliasCycle",
+                "HiddenRbcChunk == Back!WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionHelperAliasCycleTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:2, but fairness helper "
+        "alias resolution cycles at WrappedRbcChunk; projected commit "
+        "progress fairness action helper aliases must be acyclic and "
+        "resolve to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionBooleanOperandHelperAliasCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionBooleanOperandHelperAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasCycle",
+                "HiddenRbcChunk == Back!WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionBooleanOperandHelperAliasCycleTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:2, but fairness helper "
+        "alias resolution cycles at WrappedRbcChunk; projected commit "
+        "progress fairness action helper aliases must be acyclic and "
+        "resolve to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["WrappedRbcChunk == Missing!HiddenRbcChunk"],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        f"reaches helper WrappedRbcChunk at {tla}:1 aliasing "
+        "Missing!HiddenRbcChunk without a named INSTANCE alias Missing; "
+        "projected commit progress fairness action helper aliases must "
+        "resolve through named local INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["WrappedRbcChunk == Missing!HiddenRbcChunk"],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        f"reaches helper WrappedRbcChunk at {tla}:1 aliasing "
+        "Missing!HiddenRbcChunk without a named INSTANCE alias Missing; "
+        "projected commit progress fairness action helper aliases must "
+        "resolve through named local INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = (
+        tmp_path / "SumeragiFairActionBooleanOperandHelperAliasMissingTarget.tla"
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionBooleanOperandHelperAliasMissingTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:2 aliasing "
+        "Interleaving!HiddenRbcChunk, but target module "
+        f"{target} does not exist; projected commit progress fairness action "
+        "helper aliases must resolve to local action modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = (
+        tmp_path / "SumeragiFairActionBooleanOperandHelperAliasUndefinedTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionBooleanOperandHelperAliasUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionBooleanOperandHelperAliasUndefinedTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:2 aliasing "
+        f"Interleaving!HiddenRbcChunk, but target {target} does not define "
+        "HiddenRbcChunk; projected commit progress fairness action helper "
+        "aliases must resolve to defined zero-arity actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = (
+        tmp_path
+        / "SumeragiFairActionBooleanOperandHelperAliasParameterizedTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionBooleanOperandHelperAliasParameterizedTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionBooleanOperandHelperAliasParameterizedTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:2 aliasing "
+        f"Interleaving!HiddenRbcChunk, but target {target}:3 has arity 1; "
+        "projected commit progress fairness action helper aliases must "
+        "resolve to defined zero-arity actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_boolean_operand_helper_alias_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = (
+        tmp_path
+        / "SumeragiFairActionBooleanOperandHelperAliasNoninspectableTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionBooleanOperandHelperAliasNoninspectableTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandHelperAliasNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionBooleanOperandHelperAliasNoninspectableTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper HiddenRbcChunk at {target}:3, but helper is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "fairness action helper aliases must resolve imported helper "
+        "references to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionHelperAliasMissingTarget.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionHelperAliasMissingTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:2 aliasing "
+        "Interleaving!HiddenRbcChunk, but target module "
+        f"{target} does not exist; projected commit progress fairness action "
+        "helper aliases must resolve to local action modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionHelperAliasUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionHelperAliasUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionHelperAliasUndefinedTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:2 aliasing "
+        f"Interleaving!HiddenRbcChunk, but target {target} does not define "
+        "HiddenRbcChunk; projected commit progress fairness action helper "
+        "aliases must resolve to defined zero-arity actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionHelperAliasParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionHelperAliasParameterizedTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionHelperAliasParameterizedTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper WrappedRbcChunk at {tla}:2 aliasing "
+        f"Interleaving!HiddenRbcChunk, but target {target}:3 has arity 1; "
+        "projected commit progress fairness action helper aliases must "
+        "resolve to defined zero-arity actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_helper_alias_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionHelperAliasNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionHelperAliasNoninspectableTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionHelperAliasNoninspectableTarget",
+                "WrappedRbcChunk == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ WrappedRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        f"reaches helper HiddenRbcChunk at {target}:3, but helper is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "fairness action helper aliases must resolve imported helper "
+        "references to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasConjunctTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through module-alias conjunct(s); "
+        "projected commit progress fairness action module-alias conjuncts "
+        "must not hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_boolean_helper_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasConjunctBooleanHelperTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctBooleanHelperTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == HelperRbcChunk",
+                "HelperRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctBooleanHelperAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctBooleanHelperTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through module-alias conjunct(s); "
+        "projected commit progress fairness action module-alias conjuncts "
+        "must not hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_transitive_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiModuleAliasConjunctLocalInnerTarget.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctLocalInnerTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasConjunctTransitiveTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctTransitiveTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiModuleAliasConjunctLocalInnerTarget",
+                "HiddenRbcChunk == Inner!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctTransitiveAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctTransitiveTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through module-alias conjunct(s); "
+        "projected commit progress fairness action module-alias conjuncts "
+        "must not hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_direct_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasConjunctDirectTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctDirectTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctDirectAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctDirectTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!RbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through module-alias conjunct(s); "
+        "projected commit progress fairness action module-alias conjuncts "
+        "must not hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasConjunctCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctCycleTarget ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiByzantineCommitProjectionGateModuleAliasConjunctCycle",
+                "HiddenRbcChunk == Back!Loop",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctCycleTarget",
+                "Loop == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "uses module-alias conjunct Interleaving!HiddenRbcChunk, but "
+        f"module-alias conjunct resolution cycles at {target}:4 "
+        "HiddenRbcChunk; projected commit progress fairness action "
+        "module-alias conjuncts must be acyclic and resolve to inspectable "
+        "action modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Missing!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 2 whose definition at line 15 "
+        "uses module-alias conjunct Missing!HiddenRbcChunk without a named "
+        "INSTANCE alias Missing; projected commit progress fairness action "
+        "module-alias conjuncts must resolve through named local INSTANCE "
+        "declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasConjunctMissingTarget.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctMissingTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!HiddenRbcChunk, but target "
+        f"module {target} does not exist; projected commit progress fairness "
+        "action module-alias conjuncts must resolve to local action modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasConjunctUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctUndefinedTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!HiddenRbcChunk, but target "
+        f"{target} does not define HiddenRbcChunk; projected commit progress "
+        "fairness action module-alias conjuncts must resolve to defined "
+        "zero-arity actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasConjunctParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctParameterizedTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctParameterizedTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!HiddenRbcChunk, but target "
+        f"{target}:3 has arity 1; projected commit progress fairness action "
+        "module-alias conjuncts must resolve to defined zero-arity actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_conjunct_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasConjunctNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctNoninspectableTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctNoninspectableTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars /\\ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias conjunct Interleaving!HiddenRbcChunk, but target "
+        f"{target}:3 is not an inspectable single-expression definition; "
+        "projected commit progress fairness action module-alias conjuncts "
+        "must resolve to inspectable action definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasBooleanTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanComposedAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through module-alias boolean "
+        "operand(s); projected commit progress fairness action module-alias "
+        "boolean operands must not hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_helper_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasBooleanHelperTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanHelperTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == HelperRbcChunk",
+                "HelperRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanHelperAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanHelperTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through module-alias boolean "
+        "operand(s); projected commit progress fairness action module-alias "
+        "boolean operands must not hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_transitive_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiModuleAliasBooleanLocalInnerTarget.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanLocalInnerTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasBooleanTransitiveTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanTransitiveTarget ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiModuleAliasBooleanLocalInnerTarget",
+                "HiddenRbcChunk == Inner!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanTransitiveAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanTransitiveTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through module-alias boolean "
+        "operand(s); projected commit progress fairness action module-alias "
+        "boolean operands must not hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_direct_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasBooleanDirectTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanDirectTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanDirectAction.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanDirectTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!RbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "reaches fair action(s) RbcChunk through module-alias boolean "
+        "operand(s); projected commit progress fairness action module-alias "
+        "boolean operands must not hide composed fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasBooleanCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanCycleTarget ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiByzantineCommitProjectionGateModuleAliasBooleanCycle",
+                "HiddenRbcChunk == Back!Loop",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanCycleTarget",
+                "Loop == Interleaving!HiddenRbcChunk",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:4 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 4 whose definition at line 17 "
+        "uses module-alias boolean operand Interleaving!HiddenRbcChunk, but "
+        f"module-alias boolean operand resolution cycles at {target}:4 "
+        "HiddenRbcChunk; projected commit progress fairness action "
+        "module-alias boolean operands must be acyclic and resolve to "
+        "inspectable action modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanWithoutInstance.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Missing!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:2 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 2 whose definition at line 15 "
+        "uses module-alias boolean operand Missing!HiddenRbcChunk without a "
+        "named INSTANCE alias Missing; projected commit progress fairness "
+        "action module-alias boolean operands must resolve through named "
+        "local INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasBooleanMissingTarget.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanMissingTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!HiddenRbcChunk, but "
+        f"target module {target} does not exist; projected commit progress "
+        "fairness action module-alias boolean operands must resolve to local "
+        "action modules"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasBooleanUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanUndefinedTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!HiddenRbcChunk, but "
+        f"target {target} does not define HiddenRbcChunk; projected commit "
+        "progress fairness action module-alias boolean operands must resolve "
+        "to defined zero-arity actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasBooleanParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanParameterizedTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanParameterizedTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!HiddenRbcChunk, but "
+        f"target {target}:3 has arity 1; projected commit progress fairness "
+        "action module-alias boolean operands must resolve to defined "
+        "zero-arity actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_module_alias_boolean_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiModuleAliasBooleanNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanNoninspectableTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanNoninspectableTarget",
+            ],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == UNCHANGED vars \\/ Interleaving!HiddenRbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "uses module-alias boolean operand Interleaving!HiddenRbcChunk, but "
+        f"target {target}:3 is not an inspectable single-expression "
+        "definition; projected commit progress fairness action module-alias "
+        "boolean operands must resolve to inspectable action definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateComposedActionAlias.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiComposedAliasTarget"],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 directly "
+        "composes fair action(s) RbcChunk; projected commit progress "
+        "fairness action aliases must not resolve to definitions that "
+        "compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_direct_other_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiDirectFairActionAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectFairActionAliasTarget ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateDirectFairActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiDirectFairActionAliasTarget"],
+            action_definition_overrides={
+                "HonestPropose": "HonestPropose == Interleaving!RbcChunk",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but repeats reachable action witness(es) RbcChunk across direct "
+        "transition disjuncts; projected commit progress transition action "
+        "witness inventories must stay duplicate-free",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action HonestPropose at line 3 whose definition at line 16 "
+        "aliases Interleaving!RbcChunk, which names fair action RbcChunk; "
+        "projected commit progress fairness action aliases must not resolve "
+        "directly to other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_alias_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionAliasCycleTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionAliasCycleTarget ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiByzantineCommitProjectionGateActionAliasCycle",
+                "RbcReady == Back!RbcReady",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateActionAliasCycle.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiFairActionAliasCycleTarget"],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:21 defines projected commit progress transition helper "
+        "RbcReady, but transition helper resolution cycles at RbcReady; "
+        "projected commit progress transition helper wrappers must be "
+        "acyclic and resolve to inspectable transition operators",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but fairness action alias resolution "
+        f"cycles at {target}:4 RbcReady; projected commit progress fairness "
+        "action aliases must be acyclic and resolve to inspectable "
+        "transition definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_hidden_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiBooleanComposedAliasTarget"],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 hides fair "
+        "action(s) RbcChunk inside boolean structure; projected commit "
+        "progress fairness action aliases must not resolve to definitions "
+        "that hide other fair actions in boolean structure"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_wrapped_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiWrappedComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiWrappedComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateWrappedComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiWrappedComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 reaches "
+        "fair action(s) RbcChunk through static helper wrapper(s); projected "
+        "commit progress fairness action aliases must not resolve through "
+        "helper wrappers that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_operand_wrapped_direct_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = (
+        tmp_path
+        / "SumeragiBooleanOperandWrappedDirectComposedAliasTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanOperandWrappedDirectComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars \\/ WrappedRbcChunk",
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandWrappedDirectComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanOperandWrappedDirectComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 reaches "
+        "fair action(s) RbcChunk through static helper wrapper(s); projected "
+        "commit progress fairness action aliases must not resolve through "
+        "helper wrappers that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_wrapped_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanWrappedComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanWrappedComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanWrappedComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanWrappedComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 reaches "
+        "fair action(s) RbcChunk through static helper wrapper(s); projected "
+        "commit progress fairness action aliases must not resolve through "
+        "helper wrappers that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_operand_wrapped_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanOperandWrappedComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanOperandWrappedComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars \\/ WrappedRbcChunk",
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandWrappedComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanOperandWrappedComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 reaches "
+        "fair action(s) RbcChunk through static helper wrapper(s); projected "
+        "commit progress fairness action aliases must not resolve through "
+        "helper wrappers that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_wrapper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiHelperWrapperCycleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperWrapperCycleAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == HiddenRbcChunk",
+                "HiddenRbcChunk == WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperWrapperCycleActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperWrapperCycleAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:3 reaches helper WrappedRbcChunk at {target}:4, but "
+        "fairness action alias helper wrapper resolution cycles at "
+        "WrappedRbcChunk; projected commit progress fairness action aliases "
+        "must resolve through acyclic helper wrappers"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_helper_wrapper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanHelperWrapperCycleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanHelperWrapperCycleAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == FALSE \\/ HiddenRbcChunk",
+                "HiddenRbcChunk == WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanHelperWrapperCycleActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanHelperWrapperCycleAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:3 reaches helper WrappedRbcChunk at {target}:4, but "
+        "fairness action alias helper wrapper resolution cycles at "
+        "WrappedRbcChunk; projected commit progress fairness action aliases "
+        "must resolve through acyclic helper wrappers"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_invalid_helper_references(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiInvalidHelperReferencesAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiInvalidHelperReferencesAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ ParameterizedHelper /\\ OpaqueHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateInvalidHelperReferencesActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiInvalidHelperReferencesAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:3 reaches helper ParameterizedHelper at {target}:4, but "
+        "helper has arity 1; projected commit progress fairness action "
+        "aliases must resolve helper references to defined zero-arity helper "
+        "definitions",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:3 reaches helper OpaqueHelper at {target}:5, but helper "
+        "is not an inspectable single-expression definition; projected "
+        "commit progress fairness action aliases must resolve helper "
+        "references to inspectable helper definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_invalid_helper_reference(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanInvalidHelperReferenceAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanInvalidHelperReferenceAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars \\/ WrappedRbcChunk",
+                "WrappedRbcChunk == FALSE \\/ ParameterizedHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanInvalidHelperReferenceActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanInvalidHelperReferenceAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:3 reaches helper ParameterizedHelper at {target}:5, but "
+        "helper has arity 1; projected commit progress fairness action "
+        "aliases must resolve helper references to defined zero-arity helper "
+        "definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_action_helper_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiActionHelperComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiActionHelperComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateActionHelperComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiActionHelperComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 reaches "
+        "fair action(s) RbcChunk through action helper(s); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "actions that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_action_helper_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanActionHelperComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanActionHelperComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanActionHelperComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanActionHelperComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 reaches "
+        "fair action(s) RbcChunk through action helper(s); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "actions that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_operand_action_helper_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanOperandActionHelperComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanOperandActionHelperComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars \\/ WrappedRbcChunk",
+                "WrappedRbcChunk == UNCHANGED vars /\\ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandActionHelperComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanOperandActionHelperComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 reaches "
+        "fair action(s) RbcChunk through action helper(s); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "actions that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_operand_action_helper_boolean_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = (
+        tmp_path
+        / "SumeragiBooleanOperandActionHelperBooleanComposedAliasTarget.tla"
+    )
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanOperandActionHelperBooleanComposedAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars \\/ WrappedRbcChunk",
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanOperandActionHelperBooleanComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanOperandActionHelperBooleanComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 reaches "
+        "fair action(s) RbcChunk through action helper(s); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "actions that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_action_helper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiActionHelperCycleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiActionHelperCycleAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateActionHelperCycleActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiActionHelperCycleAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:3 reaches helper WrappedRbcChunk at {target}:4, but "
+        "fairness action alias helper action resolution cycles at "
+        "WrappedRbcChunk; projected commit progress fairness action aliases "
+        "must resolve through acyclic helper actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_action_helper_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanActionHelperCycleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanActionHelperCycleAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == UNCHANGED vars /\\ HiddenRbcChunk",
+                "HiddenRbcChunk == FALSE \\/ WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanActionHelperCycleActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanActionHelperCycleAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:3 reaches helper WrappedRbcChunk at {target}:4, but "
+        "fairness action alias helper action resolution cycles at "
+        "WrappedRbcChunk; projected commit progress fairness action aliases "
+        "must resolve through acyclic helper actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiHelperAliasCycleLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasCycleLeaf ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiHelperAliasCycleAliasTarget",
+                "HiddenRbcChunk == Back!WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiHelperAliasCycleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasCycleAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiHelperAliasCycleLeaf",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateHelperAliasCycle.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasCycleAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 reaches helper WrappedRbcChunk at {target}:5, but "
+        "fairness action alias helper alias resolution cycles at "
+        "WrappedRbcChunk; projected commit progress fairness action aliases "
+        "must resolve through acyclic helper aliases"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_helper_alias_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiHelperAliasBooleanCycleLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanCycleLeaf ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiHelperAliasBooleanCycleAliasTarget",
+                "HiddenRbcChunk == FALSE \\/ BackReference",
+                "BackReference == Back!WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiHelperAliasBooleanCycleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanCycleAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiHelperAliasBooleanCycleLeaf",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasBooleanCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasBooleanCycleAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 reaches helper WrappedRbcChunk at {target}:5, but "
+        "fairness action alias helper alias resolution cycles at "
+        "WrappedRbcChunk; projected commit progress fairness action aliases "
+        "must resolve through acyclic helper aliases"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_resolution_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    undefined = tmp_path / "SumeragiHelperAliasUndefinedTarget.tla"
+    undefined.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasUndefinedTarget ----",
+                "VARIABLES vars",
+                "OtherAction == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    arity = tmp_path / "SumeragiHelperAliasArityTarget.tla"
+    arity.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasArityTarget ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk(peer) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_module = tmp_path / "SumeragiHelperAliasMissingTarget.tla"
+    target = tmp_path / "SumeragiHelperAliasResolutionAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasResolutionAliasTarget ----",
+                "VARIABLES vars",
+                "Absent == INSTANCE SumeragiHelperAliasMissingTarget",
+                "Undefined == INSTANCE SumeragiHelperAliasUndefinedTarget",
+                "Arity == INSTANCE SumeragiHelperAliasArityTarget",
+                "RbcReady == UNCHANGED vars /\\ MissingHelper /\\ AbsentHelper /\\ UndefinedHelper /\\ ArityHelper",
+                "MissingHelper == Missing!HiddenRbcChunk",
+                "AbsentHelper == Absent!HiddenRbcChunk",
+                "UndefinedHelper == Undefined!HiddenRbcChunk",
+                "ArityHelper == Arity!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasResolutionActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasResolutionAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 reaches helper MissingHelper at {target}:7 aliasing "
+        "Missing!HiddenRbcChunk without a named INSTANCE alias Missing; "
+        "projected commit progress fairness action aliases must resolve "
+        "helper aliases through named local INSTANCE declarations",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 reaches helper AbsentHelper at {target}:8 aliasing "
+        "Absent!HiddenRbcChunk, but target module "
+        f"{missing_module} does not exist; projected commit progress "
+        "fairness action aliases must resolve helper aliases to local action "
+        "modules",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 reaches helper UndefinedHelper at {target}:9 aliasing "
+        f"Undefined!HiddenRbcChunk, but target {undefined} does not define "
+        "HiddenRbcChunk; projected commit progress fairness action aliases "
+        "must resolve helper aliases to defined zero-arity actions",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 reaches helper ArityHelper at {target}:10 aliasing "
+        f"Arity!HiddenRbcChunk, but target {arity}:3 has arity 1; "
+        "projected commit progress fairness action aliases must resolve "
+        "helper aliases to defined zero-arity actions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_helper_alias_resolution_error(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiBooleanHelperAliasResolutionAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiBooleanHelperAliasResolutionAliasTarget ----",
+                "VARIABLES vars",
+                "RbcReady == UNCHANGED vars /\\ Wrapper",
+                "Wrapper == FALSE \\/ MissingHelper",
+                "MissingHelper == Missing!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateBooleanHelperAliasResolutionActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiBooleanHelperAliasResolutionAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:3 reaches helper MissingHelper at {target}:5 aliasing "
+        "Missing!HiddenRbcChunk without a named INSTANCE alias Missing; "
+        "projected commit progress fairness action aliases must resolve "
+        "helper aliases through named local INSTANCE declarations"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_imported_invalid_helper_references(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiAliasTargetHelperAliasInvalidHelperLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperAliasInvalidHelperLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == ParameterizedHelper /\\ OpaqueHelper",
+                "ParameterizedHelper(peer) == UNCHANGED vars",
+                "OpaqueHelper ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiAliasTargetHelperAliasInvalidHelperTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperAliasInvalidHelperTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiAliasTargetHelperAliasInvalidHelperLeaf",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetHelperAliasInvalidHelperReferences.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetHelperAliasInvalidHelperTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 reaches helper ParameterizedHelper at {leaf}:4, but "
+        "helper has arity 1; projected commit progress fairness action "
+        "aliases must resolve helper-alias helper references to defined "
+        "zero-arity helper definitions",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 reaches helper OpaqueHelper at {leaf}:5, but helper "
+        "is not an inspectable single-expression definition; projected "
+        "commit progress fairness action aliases must resolve helper-alias "
+        "helper references to inspectable helper definitions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiAliasTargetHelperAliasNoninspectableLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperAliasNoninspectableLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiAliasTargetHelperAliasNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTargetHelperAliasNoninspectableTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiAliasTargetHelperAliasNoninspectableLeaf",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateAliasTargetHelperAliasNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiAliasTargetHelperAliasNoninspectableTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 reaches helper HiddenRbcChunk at {leaf}:3, but helper "
+        "is not an inspectable single-expression definition; projected "
+        "commit progress fairness action aliases must resolve helper-alias "
+        "helper references to inspectable helper definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiHelperAliasLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiHelperAliasComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasComposedAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiHelperAliasLeaf",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through helper alias(es); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "aliases that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_boolean_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiHelperAliasBooleanLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiHelperAliasBooleanComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanComposedAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiHelperAliasBooleanLeaf",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasBooleanComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasBooleanComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through helper alias(es); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "aliases that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_direct_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiHelperAliasDirectLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasDirectLeaf ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiHelperAliasDirectAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasDirectAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiHelperAliasDirectLeaf",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasDirectActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasDirectAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through helper alias(es); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "aliases that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_helper_alias_direct_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiHelperAliasBooleanDirectLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanDirectLeaf ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiHelperAliasBooleanDirectAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanDirectAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiHelperAliasBooleanDirectLeaf",
+                "RbcReady == UNCHANGED vars \\/ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasBooleanDirectActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasBooleanDirectAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through helper alias(es); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "aliases that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_helper_alias_transitive_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiHelperAliasTransitiveInnerLeaf.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasTransitiveInnerLeaf ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    leaf = tmp_path / "SumeragiHelperAliasTransitiveLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasTransitiveLeaf ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiHelperAliasTransitiveInnerLeaf",
+                "HiddenRbcChunk == Inner!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiHelperAliasTransitiveAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasTransitiveAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiHelperAliasTransitiveLeaf",
+                "RbcReady == UNCHANGED vars /\\ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasTransitiveActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasTransitiveAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through helper alias(es); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "aliases that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_boolean_helper_alias_transitive_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiHelperAliasBooleanTransitiveInnerLeaf.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanTransitiveInnerLeaf ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    leaf = tmp_path / "SumeragiHelperAliasBooleanTransitiveLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanTransitiveLeaf ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiHelperAliasBooleanTransitiveInnerLeaf",
+                "HiddenRbcChunk == Inner!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiHelperAliasBooleanTransitiveAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiHelperAliasBooleanTransitiveAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiHelperAliasBooleanTransitiveLeaf",
+                "RbcReady == UNCHANGED vars \\/ WrappedRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateHelperAliasBooleanTransitiveActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiHelperAliasBooleanTransitiveAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through helper alias(es); projected commit "
+        "progress fairness action aliases must not resolve through helper "
+        "aliases that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasConjunctLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasConjunctComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctComposedAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasConjunctLeaf",
+                "RbcReady == UNCHANGED vars /\\ Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through module-alias conjunct(s); projected "
+        "commit progress fairness action aliases must not resolve through "
+        "module-alias conjuncts that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_direct_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasConjunctDirectLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctDirectLeaf ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasConjunctDirectAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctDirectAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasConjunctDirectLeaf",
+                "RbcReady == UNCHANGED vars /\\ Nested!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctDirectActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctDirectAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through module-alias conjunct(s); projected "
+        "commit progress fairness action aliases must not resolve through "
+        "module-alias conjuncts that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_boolean_helper_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasConjunctBooleanHelperLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctBooleanHelperLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == HelperRbcChunk",
+                "HelperRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasConjunctBooleanHelperAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctBooleanHelperAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasConjunctBooleanHelperLeaf",
+                "RbcReady == UNCHANGED vars /\\ Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctBooleanHelperActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctBooleanHelperAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through module-alias conjunct(s); projected "
+        "commit progress fairness action aliases must not resolve through "
+        "module-alias conjuncts that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_transitive_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiModuleAliasConjunctInnerLeaf.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctInnerLeaf ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    leaf = tmp_path / "SumeragiModuleAliasConjunctTransitiveLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctTransitiveLeaf ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiModuleAliasConjunctInnerLeaf",
+                "HiddenRbcChunk == Inner!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasConjunctTransitiveAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctTransitiveAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasConjunctTransitiveLeaf",
+                "RbcReady == UNCHANGED vars /\\ Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctTransitiveActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctTransitiveAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through module-alias conjunct(s); projected "
+        "commit progress fairness action aliases must not resolve through "
+        "module-alias conjuncts that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_resolution_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    undefined = tmp_path / "SumeragiUndefinedConjunctModule.tla"
+    undefined.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiUndefinedConjunctModule ----",
+                "VARIABLES vars",
+                "OtherAction == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    arity = tmp_path / "SumeragiArityConjunctModule.tla"
+    arity.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiArityConjunctModule ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk(peer) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_module = tmp_path / "SumeragiMissingConjunctModule.tla"
+    target = tmp_path / "SumeragiModuleAliasConjunctResolutionAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctResolutionAliasTarget ----",
+                "VARIABLES vars",
+                "AbsentConjunct == INSTANCE SumeragiMissingConjunctModule",
+                "UndefinedConjunct == INSTANCE SumeragiUndefinedConjunctModule",
+                "ArityConjunct == INSTANCE SumeragiArityConjunctModule",
+                "RbcReady == UNCHANGED vars /\\ MissingConjunct!HiddenRbcChunk /\\ AbsentConjunct!HiddenRbcChunk /\\ UndefinedConjunct!HiddenRbcChunk /\\ ArityConjunct!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctResolution.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctResolutionAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 uses module-alias conjunct "
+        "MissingConjunct!HiddenRbcChunk without a named INSTANCE alias "
+        "MissingConjunct; projected commit progress fairness action aliases "
+        "must resolve module-alias conjuncts through named local INSTANCE "
+        "declarations",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 uses module-alias conjunct "
+        "AbsentConjunct!HiddenRbcChunk, but target module "
+        f"{missing_module} does not exist; projected commit progress "
+        "fairness action aliases must resolve module-alias conjuncts to "
+        "local action modules",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 uses module-alias conjunct "
+        "UndefinedConjunct!HiddenRbcChunk, but target "
+        f"{undefined} does not define HiddenRbcChunk; projected commit "
+        "progress fairness action aliases must resolve module-alias "
+        "conjuncts to defined zero-arity actions",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 uses module-alias conjunct ArityConjunct!HiddenRbcChunk, "
+        f"but target {arity}:3 has arity 1; projected commit progress "
+        "fairness action aliases must resolve module-alias conjuncts to "
+        "defined zero-arity actions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasConjunctNoninspectableLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctNoninspectableLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasConjunctNoninspectableAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctNoninspectableAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasConjunctNoninspectableLeaf",
+                "RbcReady == UNCHANGED vars /\\ Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctNoninspectableAliasTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctNoninspectableAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 uses module-alias conjunct Nested!HiddenRbcChunk, but "
+        f"target {leaf}:3 is not an inspectable single-expression "
+        "definition; projected commit progress fairness action aliases must "
+        "resolve module-alias conjuncts to inspectable action definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_conjunct_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasConjunctCycleLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctCycleLeaf ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiModuleAliasConjunctCycleAliasTarget",
+                "HiddenRbcChunk == Back!WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasConjunctCycleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasConjunctCycleAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasConjunctCycleLeaf",
+                "RbcReady == UNCHANGED vars /\\ Nested!HiddenRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasConjunctCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasConjunctCycleAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 uses module-alias conjunct Nested!HiddenRbcChunk, but "
+        f"module-alias conjunct resolution cycles at {leaf}:4 "
+        "HiddenRbcChunk; projected commit progress fairness action aliases "
+        "must resolve through acyclic module-alias conjuncts"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_boolean_fair_action_composition(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasBooleanLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasBooleanComposedAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanComposedAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasBooleanLeaf",
+                "RbcReady == UNCHANGED vars \\/ Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanComposedActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanComposedAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through module-alias boolean operand(s); "
+        "projected commit progress fairness action aliases must not resolve "
+        "through module-alias boolean operands that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_boolean_direct_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasBooleanDirectLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanDirectLeaf ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasBooleanDirectAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanDirectAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasBooleanDirectLeaf",
+                "RbcReady == UNCHANGED vars \\/ Nested!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanDirectActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanDirectAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through module-alias boolean operand(s); "
+        "projected commit progress fairness action aliases must not resolve "
+        "through module-alias boolean operands that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_boolean_helper_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasBooleanHelperLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanHelperLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk == HelperRbcChunk",
+                "HelperRbcChunk == FALSE \\/ RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasBooleanHelperAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanHelperAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasBooleanHelperLeaf",
+                "RbcReady == UNCHANGED vars \\/ Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanHelperActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanHelperAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through module-alias boolean operand(s); "
+        "projected commit progress fairness action aliases must not resolve "
+        "through module-alias boolean operands that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_boolean_resolution_errors(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    undefined = tmp_path / "SumeragiUndefinedBooleanModule.tla"
+    undefined.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiUndefinedBooleanModule ----",
+                "VARIABLES vars",
+                "OtherAction == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    arity = tmp_path / "SumeragiArityBooleanModule.tla"
+    arity.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiArityBooleanModule ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk(peer) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    missing_module = tmp_path / "SumeragiMissingBooleanModule.tla"
+    target = tmp_path / "SumeragiModuleAliasBooleanResolutionAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanResolutionAliasTarget ----",
+                "VARIABLES vars",
+                "AbsentBoolean == INSTANCE SumeragiMissingBooleanModule",
+                "UndefinedBoolean == INSTANCE SumeragiUndefinedBooleanModule",
+                "ArityBoolean == INSTANCE SumeragiArityBooleanModule",
+                "RbcReady == UNCHANGED vars \\/ MissingBoolean!HiddenRbcChunk \\/ AbsentBoolean!HiddenRbcChunk \\/ UndefinedBoolean!HiddenRbcChunk \\/ ArityBoolean!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanResolution.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanResolutionAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 uses module-alias boolean operand "
+        "MissingBoolean!HiddenRbcChunk without a named INSTANCE alias "
+        "MissingBoolean; projected commit progress fairness action aliases "
+        "must resolve module-alias boolean operands through named local "
+        "INSTANCE declarations",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 uses module-alias boolean operand "
+        "AbsentBoolean!HiddenRbcChunk, but target module "
+        f"{missing_module} does not exist; projected commit progress "
+        "fairness action aliases must resolve module-alias boolean operands "
+        "to local action modules",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 uses module-alias boolean operand "
+        "UndefinedBoolean!HiddenRbcChunk, but target "
+        f"{undefined} does not define HiddenRbcChunk; projected commit "
+        "progress fairness action aliases must resolve module-alias boolean "
+        "operands to defined zero-arity actions",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:6 uses module-alias boolean operand "
+        "ArityBoolean!HiddenRbcChunk, "
+        f"but target {arity}:3 has arity 1; projected commit progress "
+        "fairness action aliases must resolve module-alias boolean operands "
+        "to defined zero-arity actions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_boolean_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasBooleanNoninspectableLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanNoninspectableLeaf ----",
+                "VARIABLES vars",
+                "HiddenRbcChunk ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasBooleanNoninspectableAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanNoninspectableAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasBooleanNoninspectableLeaf",
+                "RbcReady == UNCHANGED vars \\/ Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanNoninspectableAliasTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanNoninspectableAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 uses module-alias boolean operand Nested!HiddenRbcChunk, "
+        f"but target {leaf}:3 is not an inspectable single-expression "
+        "definition; projected commit progress fairness action aliases must "
+        "resolve module-alias boolean operands to inspectable action "
+        "definitions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_boolean_cycle(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    leaf = tmp_path / "SumeragiModuleAliasBooleanCycleLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanCycleLeaf ----",
+                "VARIABLES vars",
+                "Back == INSTANCE SumeragiModuleAliasBooleanCycleAliasTarget",
+                "HiddenRbcChunk == Back!WrappedRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasBooleanCycleAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanCycleAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasBooleanCycleLeaf",
+                "RbcReady == UNCHANGED vars \\/ Nested!HiddenRbcChunk",
+                "WrappedRbcChunk == Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanCycle.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanCycleAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Interleaving!RbcReady, but target "
+        f"{target}:4 uses module-alias boolean operand Nested!HiddenRbcChunk, "
+        f"but module-alias boolean operand resolution cycles at {leaf}:4 "
+        "HiddenRbcChunk; projected commit progress fairness action aliases "
+        "must resolve through acyclic module-alias boolean operands"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_alias_target_module_alias_boolean_transitive_fair_action(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    inner = tmp_path / "SumeragiModuleAliasBooleanInnerLeaf.tla"
+    inner.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanInnerLeaf ----",
+                "VARIABLES vars",
+                "RbcChunk == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    leaf = tmp_path / "SumeragiModuleAliasBooleanTransitiveLeaf.tla"
+    leaf.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanTransitiveLeaf ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiModuleAliasBooleanInnerLeaf",
+                "HiddenRbcChunk == Inner!RbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    target = tmp_path / "SumeragiModuleAliasBooleanTransitiveAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiModuleAliasBooleanTransitiveAliasTarget ----",
+                "VARIABLES vars",
+                "Nested == INSTANCE SumeragiModuleAliasBooleanTransitiveLeaf",
+                "RbcReady == UNCHANGED vars \\/ Nested!HiddenRbcChunk",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateModuleAliasBooleanTransitiveActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiModuleAliasBooleanTransitiveAliasTarget"
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:4 reaches "
+        "fair action(s) RbcChunk through module-alias boolean operand(s); "
+        "projected commit progress fairness action aliases must not resolve "
+        "through module-alias boolean operands that compose other fair actions"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_bad_action_aliases(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiAliasTarget ----",
+                "VARIABLES vars",
+                "RbcDeliver == TRUE",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateActionAliases.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiAliasTarget"],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Missing!RbcReady",
+                "RbcDeliver": "RbcDeliver == Interleaving!RbcDeliver",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:21 defines projected commit progress transition helper "
+        "RbcReady, but aliases Missing!RbcReady without a named INSTANCE "
+        "alias Missing; projected commit progress transition module-alias "
+        "helper wrappers must resolve through named local INSTANCE "
+        "declarations",
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct RbcDeliver does not resolve to "
+        "a named action-shaped operator; projected commit progress transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        "aliases Missing!RbcReady without a named INSTANCE alias Missing; "
+        "projected commit progress fairness action aliases must resolve "
+        "through named local INSTANCE declarations",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcDeliver at line 9 whose definition at line 22 "
+        f"aliases Interleaving!RbcDeliver, but target {target}:3 is not "
+        "action-shaped; projected commit progress fairness action aliases "
+        "must resolve to transition definitions that mention next-state "
+        "updates or UNCHANGED",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_alias_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionAliasMissingTarget.tla"
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairActionAliasMissingTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionAliasMissingTarget",
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:21 defines projected commit progress transition helper "
+        "RbcReady, but aliases Interleaving!RbcReady, but target module "
+        f"{target} does not exist; projected commit progress transition "
+        "module-alias helper wrappers must resolve to local modules with "
+        "defined zero-arity transition operators",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target module {target} does not "
+        "exist; projected commit progress fairness action aliases must "
+        "resolve to local action modules",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_alias_undefined_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionAliasUndefinedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionAliasUndefinedTarget ----",
+                "VARIABLES vars",
+                "Other == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairActionAliasUndefinedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionAliasUndefinedTarget",
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:21 defines projected commit progress transition helper "
+        "RbcReady, but aliases Interleaving!RbcReady, but target "
+        f"{target} does not define RbcReady; projected commit progress "
+        "transition module-alias helper wrappers must resolve to defined "
+        "zero-arity transition operators",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target} does not define "
+        "RbcReady; projected commit progress fairness action aliases must "
+        "resolve to defined zero-arity actions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_alias_parameterized_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionAliasParameterizedTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionAliasParameterizedTarget ----",
+                "VARIABLES vars",
+                "RbcReady(value) == UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairActionAliasParameterizedTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionAliasParameterizedTarget",
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:21 defines projected commit progress transition helper "
+        "RbcReady, but aliases Interleaving!RbcReady, but target "
+        f"{target}:3 has arity 1; projected commit progress transition "
+        "module-alias helper wrappers must resolve to defined zero-arity "
+        "transition operators",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 has arity 1; "
+        "projected commit progress fairness action aliases must resolve to "
+        "defined zero-arity actions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_action_alias_noninspectable_target(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiFairActionAliasNoninspectableTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFairActionAliasNoninspectableTarget ----",
+                "VARIABLES vars",
+                "RbcReady ==",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateFairActionAliasNoninspectableTarget.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=[
+                "Interleaving == INSTANCE SumeragiFairActionAliasNoninspectableTarget",
+            ],
+            action_definition_overrides={
+                "RbcReady": "RbcReady == Interleaving!RbcReady",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:21 defines projected commit progress transition helper "
+        "RbcReady, but aliases Interleaving!RbcReady, but target "
+        f"{target}:3 is not an inspectable single-expression definition; "
+        "projected commit progress transition module-alias helper wrappers "
+        "must resolve to inspectable transition operators",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcReady at line 8 whose definition at line 21 "
+        f"aliases Interleaving!RbcReady, but target {target}:3 is not an "
+        "inspectable single-expression definition; projected commit progress "
+        "fairness action aliases must resolve to inspectable actions",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_temporal_action_aliases(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTemporalAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTemporalAliasTarget ----",
+                "VARIABLES vars",
+                "RbcDeliver == UNCHANGED vars /\\ <>committed",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateTemporalActionAlias.tla"
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiTemporalAliasTarget"],
+            action_definition_overrides={
+                "RbcDeliver": "RbcDeliver == Interleaving!RbcDeliver",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct RbcDeliver does not resolve to "
+        "a named action-shaped operator; projected commit progress transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcDeliver at line 9 whose definition at line 22 "
+        f"aliases Interleaving!RbcDeliver, but target {target}:3 contains "
+        "fairness or temporal syntax; projected commit progress fairness "
+        "action aliases must resolve to transition definitions without "
+        "fairness or temporal operators",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_nested_fairness_action_aliases(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiNestedFairnessAliasTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiNestedFairnessAliasTarget ----",
+                "VARIABLES vars",
+                "RbcDeliver == WF_vars(RbcReady) /\\ UNCHANGED vars",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateNestedFairnessActionAlias.tla"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            preamble_lines=["Interleaving == INSTANCE SumeragiNestedFairnessAliasTarget"],
+            action_definition_overrides={
+                "RbcDeliver": "RbcDeliver == Interleaving!RbcDeliver",
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:24 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct RbcDeliver does not resolve to "
+        "a named action-shaped operator; projected commit progress transition "
+        "disjuncts must resolve to named zero-arity action-shaped operators",
+        f"{tla}:3 defines ProjectedCommitProgressFairness, but references "
+        "WF_vars action RbcDeliver at line 9 whose definition at line 22 "
+        f"aliases Interleaving!RbcDeliver, but target {target}:3 contains "
+        "nested WF_vars clause(s) at line 3: RbcReady; projected commit "
+        "progress fairness action aliases must resolve to action definitions "
+        "without fairness clauses",
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_unreachable_fair_actions(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGateUnreachableFairAction.tla"
+    next_actions = tuple(
+        action
+        for action in module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+        if action != "RbcReady"
+    )
+    tla.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_actions=next_actions,
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.projected_commit_progress_spec_contract_errors(tla) == [
+        f"{tla}:23 defines projected commit progress transition operator "
+        "Next, but [][Next]_vars cannot reach fair action(s) RbcReady; "
+        "projected commit progress fairness actions must be reachable from "
+        "the checked transition closure"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_static_next_disjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    literal = tmp_path / "SumeragiByzantineCommitProjectionGateLiteralNext.tla"
+    temporal = tmp_path / "SumeragiByzantineCommitProjectionGateTemporalNext.tla"
+    static_named = tmp_path / "SumeragiByzantineCommitProjectionGateStaticNext.tla"
+    literal.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                *next_operator_definition_lines("Next", fair_actions),
+                "  \\/ TRUE",
+            ],
+        ),
+        encoding="utf-8",
+    )
+    temporal.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                *next_operator_definition_lines("Next", fair_actions),
+                "  \\/ <>committed",
+            ],
+        ),
+        encoding="utf-8",
+    )
+    static_named.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                *next_operator_definition_lines("Next", fair_actions),
+                "  \\/ StaticBranch",
+                "StaticBranch == TRUE",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    requirement = (
+        "projected commit progress transition disjuncts must resolve to named "
+        "zero-arity action-shaped operators"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(literal) == [
+        f"{literal}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct TRUE does not resolve to a named "
+        f"action-shaped operator; {requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(temporal) == [
+        f"{temporal}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct <>committed contains fairness "
+        "or temporal syntax; projected commit progress transition disjuncts "
+        "must stay single-branch action predicates"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(static_named) == [
+        f"{static_named}:23 defines projected commit progress transition "
+        "operator Next, but direct transition disjunct StaticBranch does not "
+        f"resolve to a named action-shaped operator; {requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_compound_next_disjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    nested = tmp_path / "SumeragiByzantineCommitProjectionGateNestedBadNext.tla"
+    temporal = tmp_path / "SumeragiByzantineCommitProjectionGateTemporalBadNext.tla"
+    fairness = tmp_path / "SumeragiByzantineCommitProjectionGateFairBadNext.tla"
+    nested.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                *next_operator_definition_lines("Next", fair_actions),
+                "  \\/ (HonestPropose \\/ TRUE)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+    temporal.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                *next_operator_definition_lines("Next", fair_actions),
+                "  \\/ HonestPropose /\\ <>committed",
+            ],
+        ),
+        encoding="utf-8",
+    )
+    fairness.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                *next_operator_definition_lines("Next", fair_actions),
+                "  \\/ HonestPropose /\\ WF_vars(PrepareVote)",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    requirement = (
+        "projected commit progress transition disjuncts must stay "
+        "single-branch action predicates"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(nested) == [
+        f"{nested}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct HonestPropose \\/ TRUE contains "
+        f"nested disjunction alternatives; {requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(temporal) == [
+        f"{temporal}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct HonestPropose /\\ <>committed "
+        f"contains fairness or temporal syntax; {requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(fairness) == [
+        f"{fairness}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct HonestPropose /\\ "
+        f"WF_vars(PrepareVote) contains fairness or temporal syntax; {requirement}"
+    ]
+
+
+def test_projected_commit_progress_spec_contract_errors_rejects_conjunctive_next_disjuncts(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    fair_actions = module.SUMERAGI_PROJECTED_COMMIT_PROGRESS_FAIRNESS_ACTIONS
+    direct = tmp_path / "SumeragiByzantineCommitProjectionGateConjunctiveNext.tla"
+    nested = (
+        tmp_path
+        / "SumeragiByzantineCommitProjectionGateNestedConjunctiveNext.tla"
+    )
+    direct.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                *next_operator_definition_lines("Next", fair_actions),
+                "  \\/ HonestPropose /\\ TRUE",
+            ],
+        ),
+        encoding="utf-8",
+    )
+    nested.write_text(
+        projected_commit_progress_spec_contract_text(
+            module,
+            next_lines=[
+                "Next ==",
+                "  \\/ VotePathNext",
+                "  \\/ RbcPathNext",
+                "VotePathNext ==",
+                "  \\/ HonestPropose /\\ TRUE",
+                "  \\/ PrepareVote",
+                "  \\/ HonestCommitVote",
+                "  \\/ ByzantineCommitVote",
+                "RbcPathNext ==",
+                "  \\/ RbcChunk",
+                "  \\/ RbcReady",
+                "  \\/ RbcDeliver",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    requirement = (
+        "projected commit progress transition disjuncts must stay bare named "
+        "action or aggregate references"
+    )
+    assert module.projected_commit_progress_spec_contract_errors(direct) == [
+        f"{direct}:23 defines projected commit progress transition operator "
+        "Next, but direct transition disjunct HonestPropose /\\ TRUE is not "
+        f"a bare named action or aggregate reference; {requirement}"
+    ]
+    assert module.projected_commit_progress_spec_contract_errors(nested) == [
+        f"{nested}:26 defines projected commit progress transition operator "
+        "VotePathNext, but direct transition disjunct HonestPropose /\\ "
+        f"TRUE is not a bare named action or aggregate reference; {requirement}"
     ]
 
 
@@ -14550,6 +23251,11 @@ def commit_progress_spec_contract_text(
     next_closure: str,
     fairness_actions: tuple[str, ...],
     spec_lines: list[str] | None = None,
+    next_actions: tuple[str, ...] | None = None,
+    next_lines: list[str] | None = None,
+    init_lines: list[str] | None = None,
+    undefined_actions: tuple[str, ...] = (),
+    parameterized_actions: tuple[str, ...] = (),
 ) -> str:
     spec_lines = spec_lines or [
         f"{spec_operator} ==",
@@ -14557,14 +23263,30 @@ def commit_progress_spec_contract_text(
         f"  /\\ {next_closure}",
         f"  /\\ {fairness_operator}",
     ]
-    return "\n".join(
-        [
-            f"{fairness_operator} ==",
-            *(f"  /\\ WF_vars({action})" for action in fairness_actions),
-            "",
-            *spec_lines,
-        ]
+    next_actions = next_actions if next_actions is not None else fairness_actions
+    action_definitions = fairness_action_definition_lines(
+        tuple(dict.fromkeys((*fairness_actions, *next_actions))),
+        undefined_actions=undefined_actions,
+        parameterized_actions=parameterized_actions,
     )
+    next_lines = next_lines or next_operator_definition_lines(
+        next_operator_from_closure(next_closure),
+        next_actions,
+    )
+    init_lines = ["Init == TRUE"] if init_lines is None else init_lines
+    lines = [
+        f"{fairness_operator} ==",
+        *(f"  /\\ WF_vars({action})" for action in fairness_actions),
+        "",
+        *spec_lines,
+        "",
+        *action_definitions,
+        "",
+        *next_lines,
+    ]
+    if init_lines:
+        lines.extend(["", *init_lines])
+    return "\n".join(lines)
 
 
 def test_source_commit_progress_spec_contract_errors_accepts_named_fairness(
@@ -14642,7 +23364,8 @@ def test_source_commit_progress_spec_contract_errors_rejects_raw_spec_fairness(
         f"{tla}:10 defines {spec_operator}, but is missing required direct "
         f"conjunct(s) {fairness_operator}",
         f"{tla}:10 defines {spec_operator}, but must compose "
-        f"{fairness_operator} instead of raw WF_vars fairness clauses: "
+        f"{fairness_operator} instead of raw WF_vars fairness clauses at "
+        "lines 12, 13: "
         "HonestPropose, PrepareVote",
     ]
 
@@ -14680,8 +23403,8 @@ def test_source_commit_progress_spec_contract_errors_rejects_missing_next_closur
     )
 
     assert errors == [
-        f"{tla}:5 defines {spec_operator}, but must keep direct {next_closure} "
-        "transition closure"
+        f"{tla}:5 defines {spec_operator}, but must keep exactly one direct "
+        f"{next_closure} transition closure, found 0"
     ]
 
 
@@ -14707,6 +23430,7 @@ def test_source_commit_progress_spec_contract_errors_rejects_fairness_drift(
             fairness_operator=fairness_operator,
             next_closure=next_closure,
             fairness_actions=drifted_actions,
+            next_actions=fairness_actions,
         ),
         encoding="utf-8",
     )
@@ -14717,12 +23441,13 @@ def test_source_commit_progress_spec_contract_errors_rejects_fairness_drift(
 
     assert errors == [
         f"{tla}:2 defines {fairness_operator}, but repeats WF_vars action(s) "
-        f"RbcReady; each {root_kind} fairness action must be counted once",
+        f"RbcReady at lines 7, 9; each {root_kind} fairness action must be "
+        "counted once",
         f"{tla}:2 defines {fairness_operator}, but is missing WF_vars "
         "action(s) RbcDeliver",
         f"{tla}:2 defines {fairness_operator}, but contains unexpected "
-        f"WF_vars action(s) TimeoutTick; keep {root_kind} fairness on the "
-        "documented action contract",
+        f"WF_vars action(s) TimeoutTick at line 8; keep {root_kind} fairness "
+        "on the documented action contract",
     ]
 
 
@@ -14848,7 +23573,8 @@ def test_top_level_commit_spec_contract_errors_rejects_raw_spec_fairness(
         f"{tla}:12 defines {spec_operator}, but is missing required direct "
         f"conjunct(s) {fairness_operator}",
         f"{tla}:12 defines {spec_operator}, but must compose "
-        f"{fairness_operator} instead of raw WF_vars fairness clauses: "
+        f"{fairness_operator} instead of raw WF_vars fairness clauses at "
+        "lines 14, 15: "
         "HonestPropose, HonestCommitVote",
     ]
 
@@ -14875,6 +23601,7 @@ def test_top_level_commit_spec_contract_errors_rejects_fairness_drift(
             fairness_operator=fairness_operator,
             next_closure=next_closure,
             fairness_actions=drifted_actions,
+            next_actions=fairness_actions,
         ),
         encoding="utf-8",
     )
@@ -14885,12 +23612,141 @@ def test_top_level_commit_spec_contract_errors_rejects_fairness_drift(
 
     assert errors == [
         f"{tla}:2 defines {fairness_operator}, but repeats WF_vars action(s) "
-        f"RbcReadyGood; each {root_kind} fairness action must be counted once",
+        f"RbcReadyGood at lines 7, 9; each {root_kind} fairness action must "
+        "be counted once",
         f"{tla}:2 defines {fairness_operator}, but is missing WF_vars "
         "action(s) RbcDeliverGood",
         f"{tla}:2 defines {fairness_operator}, but contains unexpected "
-        f"WF_vars action(s) TimeoutTick; keep {root_kind} fairness on the "
-        "documented action contract",
+        f"WF_vars action(s) TimeoutTick at line 8; keep {root_kind} fairness "
+        "on the documented action contract",
+    ]
+
+
+def test_top_level_commit_spec_contract_errors_rejects_mixed_action_next_disjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    (
+        _module_path,
+        spec_operator,
+        fairness_operator,
+        next_closure,
+        fairness_actions,
+        root_kind,
+    ) = module.SUMERAGI_TOP_LEVEL_COMMIT_SPEC_CONTRACTS[0]
+    tla = tmp_path / "Sumeragi.tla"
+    tla.write_text(
+        commit_progress_spec_contract_text(
+            spec_operator=spec_operator,
+            fairness_operator=fairness_operator,
+            next_closure=next_closure,
+            fairness_actions=fairness_actions,
+            next_lines=[
+                *next_operator_definition_lines("Next", fairness_actions),
+                "  \\/ HonestPropose /\\ RbcInit",
+            ],
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module.top_level_commit_spec_contract_errors(
+        ((tla, spec_operator, fairness_operator, next_closure, fairness_actions, root_kind),)
+    )
+
+    assert errors == [
+        f"{tla}:25 defines {root_kind} transition operator Next, but "
+        "direct transition disjunct HonestPropose /\\ RbcInit mixes "
+        "multiple action witnesses HonestPropose, RbcInit; guarded "
+        "transition disjuncts must not mix multiple action witnesses"
+    ]
+
+
+def test_progress_finality_property_contract_errors_rejects_drift(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectCommitInterleavingGate.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "EventualDirectCommitFinalityStack == <>committed",
+                "",
+                "DirectCommitFinalityStack ==",
+                "  /\\ committed",
+                "  /\\ phase = \"Committed\"",
+                "  /\\ TRUE",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_finality_property_contract_errors(
+        (
+            (
+                tla,
+                "EventualDirectCommitFinalityStack",
+                "DirectCommitFinalityStack",
+                (
+                    "committed",
+                    'phase = "Committed"',
+                    'rbcState = "Delivered"',
+                ),
+                "direct commit interleaving progress finality",
+            ),
+        )
+    ) == [
+        f"{tla}:1 defines EventualDirectCommitFinalityStack, but must be "
+        "exactly <>DirectCommitFinalityStack; direct commit interleaving "
+        "progress finality properties must be direct <>FinalityStack "
+        "obligations",
+        f"{tla}:4 defines DirectCommitFinalityStack, but is missing finality "
+        'evidence conjunct(s) rbcState = "Delivered"; direct commit '
+        "interleaving progress finality stacks must retain "
+        "committed/finality evidence conjuncts",
+        f"{tla}:4 defines DirectCommitFinalityStack, but contains unexpected "
+        "finality evidence conjunct(s) TRUE; direct commit interleaving "
+        "progress finality stacks must stay on the documented finality "
+        "evidence conjunct contract",
+    ]
+
+
+def test_progress_finality_property_contract_errors_rejects_duplicate_stack_contract(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiByzantineCommitProjectionGate.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "EventualProjectedCommitFinalityStack == <>ProjectedCommitFinalityStack",
+                "",
+                "ProjectedCommitFinalityStack ==",
+                "  /\\ committed",
+                "  /\\ ProjectedFinalityCertificateStackPresent",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_finality_property_contract_errors(
+        (
+            (
+                tla,
+                "EventualProjectedCommitFinalityStack",
+                "ProjectedCommitFinalityStack",
+                (
+                    "committed",
+                    "ProjectedFinalityCertificateStackPresent",
+                    "committed",
+                ),
+                "projected commit progress finality",
+            ),
+        )
+    ) == [
+        "projected commit progress finality stack ProjectedCommitFinalityStack "
+        "conjunct contract repeats expected conjunct(s) committed; each "
+        "projected commit progress finality finality-stack obligation must be "
+        "counted once"
     ]
 
 
@@ -15545,7 +24401,7 @@ def test_referenced_files_rejects_missing_duplicate_and_dynamic_inputs() -> None
 
     assert files == [module.SPEC_DIR / "SumeragiFrontier_fast.cfg"]
     assert errors == [
-        "frontier-fast: runner case 'frontier-fast' at line 7 "
+        "frontier-fast: runner case 'frontier-fast' at lines 7, 8 "
         "assigns spec_file 2 times"
     ]
 
@@ -15560,7 +24416,7 @@ def test_referenced_files_rejects_missing_duplicate_and_dynamic_inputs() -> None
         [],
         [
             "frontier-fast: spec_file in runner case 'frontier-fast' "
-            "did not resolve statically: ${dynamic}.tla",
+            "line 7 did not resolve statically: ${dynamic}.tla",
             "frontier-fast: runner case 'frontier-fast' at line 7 "
             "assigns cfg_file 0 times",
         ],
@@ -15666,9 +24522,38 @@ def test_referenced_files_rejects_path_escape_inputs() -> None:
         [],
         [
             "frontier-fast: spec_file in runner case 'frontier-fast' "
-            "must reference a flat Sumeragi formal file: ../SumeragiFrontier.tla",
+            "line 7 must reference a flat Sumeragi formal file: "
+            "../SumeragiFrontier.tla",
             "frontier-fast: cfg_file in runner case 'frontier-fast' "
-            "must reference a flat Sumeragi formal file: nested/SumeragiFrontier_fast.cfg",
+            "line 8 must reference a flat Sumeragi formal file: "
+            "nested/SumeragiFrontier_fast.cfg",
+        ],
+    )
+
+
+def test_referenced_files_path_diagnostics_report_assignment_lines() -> None:
+    module = load_coverage_module()
+
+    assert module.referenced_files(
+        "frontier-fast",
+        module.RunnerCase(
+            "frontier-fast",
+            "\n".join(
+                [
+                    "",
+                    '    spec_file="$spec_dir/${dynamic}.tla"',
+                    '    cfg_file="$spec_dir/SumeragiFrontier.tla"',
+                ]
+            ),
+            41,
+        ),
+    ) == (
+        [],
+        [
+            "frontier-fast: spec_file in runner case 'frontier-fast' "
+            "line 42 did not resolve statically: ${dynamic}.tla",
+            "frontier-fast: cfg_file in runner case 'frontier-fast' "
+            "line 43 must reference a .cfg file: SumeragiFrontier.tla",
         ],
     )
 
@@ -15692,9 +24577,9 @@ def test_referenced_files_rejects_wrong_suffix_inputs() -> None:
         [],
         [
             "frontier-fast: spec_file in runner case 'frontier-fast' "
-            "must reference a .tla file: SumeragiFrontier.cfg",
+            "line 7 must reference a .tla file: SumeragiFrontier.cfg",
             "frontier-fast: cfg_file in runner case 'frontier-fast' "
-            "must reference a .cfg file: SumeragiFrontier.tla",
+            "line 8 must reference a .cfg file: SumeragiFrontier.tla",
         ],
     )
 
@@ -15726,7 +24611,7 @@ def test_tlc_module_files_rejects_missing_or_dynamic_module() -> None:
         [],
         [
             "frontier-fast: module in TLC runner case 'frontier-fast' "
-            "did not resolve statically: ${dynamic}"
+            "line 8 did not resolve statically: ${dynamic}"
         ],
     )
 
@@ -15737,7 +24622,52 @@ def test_tlc_module_files_rejects_missing_or_dynamic_module() -> None:
         [],
         [
             "frontier-fast: module in TLC runner case 'frontier-fast' "
-            "must be a TLA identifier: Bad-Module"
+            "line 8 must be a TLA identifier: Bad-Module"
+        ],
+    )
+
+
+def test_tlc_module_files_duplicate_diagnostics_report_assignment_lines(
+) -> None:
+    module = load_coverage_module()
+
+    assert module.tlc_module_files(
+        "frontier-fast",
+        module.RunnerCase(
+            "frontier-fast",
+            "\n".join(
+                [
+                    "",
+                    '    module="SumeragiFrontier"',
+                    '    module="SumeragiQuorumPolicy"',
+                ]
+            ),
+            41,
+        ),
+    ) == (
+        [],
+        [
+            "frontier-fast: TLC runner case 'frontier-fast' at lines 42, 43 "
+            "assigns module 2 times"
+        ],
+    )
+
+
+def test_tlc_module_files_path_diagnostics_report_assignment_lines() -> None:
+    module = load_coverage_module()
+
+    assert module.tlc_module_files(
+        "frontier-fast",
+        module.RunnerCase(
+            "frontier-fast",
+            "\n".join(["", '    module="${dynamic}"']),
+            31,
+        ),
+    ) == (
+        [],
+        [
+            "frontier-fast: module in TLC runner case 'frontier-fast' "
+            "line 32 did not resolve statically: ${dynamic}"
         ],
     )
 
@@ -15817,7 +24747,8 @@ def test_tlc_runner_constraint_errors_require_defined_operator(tmp_path: Path) -
         tla,
     ) == [
         f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
-        f"appends CONSTRAINT MissingConstraint, but {tla} does not define it"
+        f"line 8 appends CONSTRAINT MissingConstraint, but {tla} does not "
+        "define it"
     ]
 
 
@@ -15834,7 +24765,53 @@ def test_tlc_runner_constraint_errors_rejects_dynamic_constraint() -> None:
         module.SPEC_DIR / "Missing.tla",
     ) == [
         "certified-fetch-fast: tlc_constraint in TLC runner case "
-        "'certified-fetch-fast' does not name a static TLA operator: ${dynamic}"
+        "'certified-fetch-fast' line 8 does not name a static TLA operator: "
+        "${dynamic}"
+    ]
+
+
+def test_tlc_runner_constraint_errors_report_assignment_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "Model.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE Model ----",
+                "DefinedConstraint == checked = ready",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.tlc_runner_constraint_errors(
+        "certified-fetch-fast",
+        module.RunnerCase(
+            "certified-fetch-fast",
+            "\n".join(["", '    tlc_constraint="${dynamic}"']),
+            41,
+        ),
+        tla,
+    ) == [
+        "certified-fetch-fast: tlc_constraint in TLC runner case "
+        "'certified-fetch-fast' line 42 does not name a static TLA operator: "
+        "${dynamic}"
+    ]
+
+    assert module.tlc_runner_constraint_errors(
+        "certified-fetch-fast",
+        module.RunnerCase(
+            "certified-fetch-fast",
+            "\n".join(["", '    tlc_constraint="MissingConstraint"']),
+            51,
+        ),
+        tla,
+    ) == [
+        f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
+        f"line 52 appends CONSTRAINT MissingConstraint, but {tla} does not "
+        "define it"
     ]
 
 
@@ -15857,7 +24834,7 @@ def test_tlc_runner_constraint_errors_rejects_duplicate_assignments() -> None:
         module.SPEC_DIR / "Missing.tla",
     ) == [
         "certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
-        "at line 7 assigns tlc_constraint 2 times"
+        "at lines 8, 9 assigns tlc_constraint 2 times"
     ]
 
 
@@ -15959,7 +24936,8 @@ def test_tlc_runner_constraint_errors_rejects_trivial_constraints(
         tla,
     ) == [
         f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
-        f"appends CONSTRAINT DirectFalse, but {tla}:4 defines it as literal FALSE"
+        f"line 8 appends CONSTRAINT DirectFalse, but {tla}:4 defines it as "
+        "literal FALSE"
     ]
     assert module.tlc_runner_constraint_errors(
         "certified-fetch-fast",
@@ -15971,7 +24949,7 @@ def test_tlc_runner_constraint_errors_rejects_trivial_constraints(
         tla,
     ) == [
         f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
-        f"appends CONSTRAINT DirectType, but {tla}:5 aliases "
+        f"line 8 appends CONSTRAINT DirectType, but {tla}:5 aliases "
         "TypeInvariant directly"
     ]
     assert module.tlc_runner_constraint_errors(
@@ -15984,7 +24962,7 @@ def test_tlc_runner_constraint_errors_rejects_trivial_constraints(
         tla,
     ) == [
         f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
-        f"appends CONSTRAINT AliasFalse, but AliasFalse@{tla}:6 -> "
+        f"line 8 appends CONSTRAINT AliasFalse, but AliasFalse@{tla}:6 -> "
         f"DirectFalse@{tla}:4 resolves to literal FALSE"
     ]
 
@@ -16025,8 +25003,9 @@ def test_tlc_runner_constraint_errors_rejects_parameterized_constraint(
         tla,
     ) == [
         f"certified-fetch-fast: TLC runner case 'certified-fetch-fast' "
-        f"appends CONSTRAINT ParameterizedConstraint, but {tla}:3 defines it "
-        "with arity 1; TLC runner constraints must target zero-arity operators"
+        f"line 8 appends CONSTRAINT ParameterizedConstraint, but {tla}:3 "
+        "defines it with arity 1; TLC runner constraints must target "
+        "zero-arity operators"
     ]
 
 
@@ -16077,13 +25056,13 @@ def test_tlc_runner_constraint_contract_errors_rejects_drift() -> None:
         cases,
         constrained_prefixes=("bounded",),
     ) == [
-        "TLC runner case 'bounded-fast' must assign "
+        "TLC runner case 'bounded-fast' at line 10 must assign "
         'tlc_constraint="TlcSingletonOrEmpty" for documented '
         "singleton-or-empty state-space splitting",
-        "TLC runner case 'bounded-bug-*' assigns "
+        "TLC runner case 'bounded-bug-*' line 21 assigns "
         'tlc_constraint="OtherConstraint", expected "TlcSingletonOrEmpty" '
         "for documented singleton-or-empty state-space splitting",
-        "TLC runner case 'plain-fast' assigns undocumented "
+        "TLC runner case 'plain-fast' line 31 assigns undocumented "
         'tlc_constraint="TlcSingletonOrEmpty"; only documented '
         "singleton-or-empty families may narrow TLC state space",
     ]
@@ -16128,7 +25107,34 @@ def test_apalache_length_errors_require_non_negative_integer() -> None:
         module.RunnerCase("frontier-fast", "\n    apalache_length=wide\n", 7),
     ) == [
         "frontier-fast: apalache_length in runner case 'frontier-fast' "
-        "is not a non-negative integer: wide"
+        "line 8 is not a non-negative integer: wide"
+    ]
+    assert module.apalache_length_errors(
+        "frontier-fast",
+        module.RunnerCase(
+            "frontier-fast",
+            "\n".join(["", "    apalache_length=2", "    apalache_length=4"]),
+            17,
+        ),
+    ) == [
+        "frontier-fast: runner case 'frontier-fast' at lines 18, 19 "
+        "assigns apalache_length 2 times"
+    ]
+
+
+def test_apalache_length_errors_report_assignment_lines() -> None:
+    module = load_coverage_module()
+
+    assert module.apalache_length_errors(
+        "frontier-fast",
+        module.RunnerCase(
+            "frontier-fast",
+            "\n".join(["", "    apalache_length=wide"]),
+            41,
+        ),
+    ) == [
+        "frontier-fast: apalache_length in runner case 'frontier-fast' "
+        "line 42 is not a non-negative integer: wide"
     ]
 
 
@@ -26632,6 +35638,58 @@ def test_cfg_correctness_envelope_shape_errors_rejects_missing_type_invariant(
     ) == [
         f"frontier-fast: Apalache cfg {cfg}:5 references correctness envelope "
         f"FrontierCorrectnessEnvelope, but {tla}:9 does not compose TypeInvariant"
+    ]
+
+
+def test_runner_cfg_correctness_envelope_shape_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiFrontier.tla"
+    cfg = tmp_path / "SumeragiFrontier_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiFrontier ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "FrontierDecisionMatchesSpec == checked = ready",
+                "FrontierExactness ==",
+                "  /\\ FrontierDecisionMatchesSpec",
+                "FrontierCorrectnessEnvelope ==",
+                "  /\\ FrontierExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT FrontierExactness",
+                "INVARIANT FrontierCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = module.display_path(module.TLC_RUNNER)
+
+    assert module.runner_cfg_correctness_envelope_shape_errors(
+        "frontier-fast",
+        module.RunnerCase("frontier-fast", "", 71),
+        tla,
+        cfg,
+        module.TLC_RUNNER,
+        "TLC",
+    ) == [
+        f"TLC runner {runner} case 'frontier-fast' at line 71: "
+        f"frontier-fast: TLC cfg {cfg}:5 references correctness envelope "
+        f"FrontierCorrectnessEnvelope, but {tla}:9 does not compose "
+        "TypeInvariant"
     ]
 
 
@@ -40773,6 +49831,58 @@ def test_cfg_direct_exactness_shape_errors_rejects_direct_alias(
     ]
 
 
+def test_runner_cfg_direct_exactness_shape_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiDirectAlias.tla"
+    cfg = tmp_path / "SumeragiDirectAlias_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiDirectAlias ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "ModelPredicate == checked = ready",
+                "DirectAliasExactness == ModelPredicate",
+                "DirectAliasCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ DirectAliasExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT DirectAliasExactness",
+                "INVARIANT DirectAliasCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = module.display_path(module.APALACHE_RUNNER)
+
+    assert module.runner_cfg_direct_exactness_shape_errors(
+        "direct-alias-fast",
+        module.RunnerCase("direct-alias-fast", "", 83),
+        tla,
+        cfg,
+        module.APALACHE_RUNNER,
+        "Apalache",
+    ) == [
+        f"Apalache runner {runner} case 'direct-alias-fast' at line 83: "
+        f"direct-alias-fast: Apalache cfg {cfg}:4 references direct "
+        f"exactness check DirectAliasExactness at {tla}:6 aliases "
+        "ModelPredicate; inline concrete model predicates directly"
+    ]
+
+
 def test_cfg_direct_exactness_shape_errors_rejects_nested_exactness_conjunct(
     tmp_path: Path,
 ) -> None:
@@ -41103,6 +50213,61 @@ def test_cfg_direct_exactness_envelope_pairing_errors_rejects_unpaired_exactness
         f"unpaired-exactness-fast: Apalache cfg {cfg}:4 references direct "
         "exactness check UnpairedExactness, but no checked correctness envelope "
         "in that CFG composes it"
+    ]
+
+
+def test_runner_cfg_direct_exactness_envelope_pairing_errors_report_runner_case_lines(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    tla = tmp_path / "SumeragiUnpairedExactness.tla"
+    cfg = tmp_path / "SumeragiUnpairedExactness_fast.cfg"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiUnpairedExactness ----",
+                "Init == TRUE",
+                "Next == TRUE",
+                "TypeInvariant == TRUE",
+                "UnpairedExactness ==",
+                "  /\\ ModelPredicate",
+                "PairedExactness ==",
+                "  /\\ ModelPredicate",
+                "ModelPredicate == checked = ready",
+                "PairedCorrectnessEnvelope ==",
+                "  /\\ TypeInvariant",
+                "  /\\ PairedExactness",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cfg.write_text(
+        "\n".join(
+            [
+                "INIT Init",
+                "NEXT Next",
+                "INVARIANT TypeInvariant",
+                "INVARIANT UnpairedExactness",
+                "INVARIANT PairedCorrectnessEnvelope",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    runner = module.display_path(module.TLC_RUNNER)
+
+    assert module.runner_cfg_direct_exactness_envelope_pairing_errors(
+        "unpaired-exactness-fast",
+        module.RunnerCase("unpaired-exactness-fast", "", 97),
+        tla,
+        cfg,
+        module.TLC_RUNNER,
+        "TLC",
+    ) == [
+        f"TLC runner {runner} case 'unpaired-exactness-fast' at line 97: "
+        f"unpaired-exactness-fast: TLC cfg {cfg}:4 references direct "
+        "exactness check UnpairedExactness, but no checked correctness "
+        "envelope in that CFG composes it"
     ]
 
 

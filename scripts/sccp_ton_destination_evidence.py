@@ -1016,7 +1016,7 @@ def ton_route_canary_evidence_hash(
         label="verifier_code_hash",
         byte_length=32,
     )
-    if not isinstance(account_status, str):
+    if type(account_status) is not str:
         raise ValueError("account_status must be active")
     try:
         account_status = parse_account_status(
@@ -1047,6 +1047,21 @@ def ton_route_canary_evidence_hash(
     )
     if verifier_code_boc_root_hash != verifier_code_hash:
         raise ValueError("verifier_code_boc_root_hash must match verifier_code_hash")
+    _require_distinct_hash_roles(
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+            ("source_verifier_material_hash", source_verifier_material_hash),
+            (
+                "source_adapter_engine_deployment_hash",
+                source_adapter_engine_deployment_hash,
+            ),
+            ("verifier_code_hash", verifier_code_hash),
+            ("account_state_hash", account_state_hash),
+            ("last_transaction_hash", last_transaction_hash),
+        ),
+        label="TON route canary governed hashes",
+    )
 
     payload = bytearray()
     _push_u8(payload, 1)
@@ -1396,7 +1411,11 @@ def _require_code_boc_root_metadata(
     code_boc = getattr(args, "verifier_code_boc_bytes", None)
     if not isinstance(code_boc, (bytes, bytearray)):
         code_boc_base64 = getattr(args, "verifier_code_boc_base64_text", None)
-        if isinstance(code_boc_base64, str) and code_boc_base64.strip():
+        if code_boc_base64 is not None:
+            if type(code_boc_base64) is not str or not code_boc_base64.strip():
+                raise ValueError(
+                    f"--{output} has invalid verifier code BoC base64 evidence"
+                ) from None
             try:
                 code_boc = parse_code_boc_base64(
                     code_boc_base64,
@@ -1576,9 +1595,19 @@ def _json_summary(
         )
     account_status = getattr(args, "account_status", None)
     if account_status is not None:
+        try:
+            account_status = parse_account_status(
+                account_status,
+                label="account_status",
+            )
+        except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
+            raise ValueError("account_status must be active") from None
+        args.account_status = account_status
         summary["account_status"] = account_status
     code_boc_base64 = getattr(args, "verifier_code_boc_base64_text", None)
-    if isinstance(code_boc_base64, str) and code_boc_base64.strip():
+    if code_boc_base64 is not None:
+        if type(code_boc_base64) is not str or not code_boc_base64.strip():
+            raise ValueError("TON verifier code BoC base64 metadata is inconsistent")
         summary["code_boc_base64"] = code_boc_base64
         summary["code_boc_base64_sha256"] = hashlib.sha256(
             code_boc_base64.encode("ascii")

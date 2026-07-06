@@ -1536,7 +1536,7 @@ function attestationSignatureShapeBlockers(signature, label) {
       ]),
       label,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       signature,
       [
         ["signerFingerprint", "signer_fingerprint"],
@@ -2390,7 +2390,7 @@ async function sourceBuildTranscriptBlockers(record, label, pathName) {
       new Set(["path", "sha256", "hash"]),
       `${label} sourceBuildTranscript`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       sourceBuildTranscript,
       BSC_GROTH16_SOURCE_BUILD_TRANSCRIPT_ALIAS_GROUPS,
       `${label} sourceBuildTranscript`,
@@ -2601,12 +2601,11 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
       ]),
       label,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       manifest,
       materialManifestAliasGroups,
       label,
     ),
-    ...retiredAliasFieldBlockers(manifest, materialManifestAliasGroups, label),
   ];
 
   const artifacts = ownValue(manifest, "artifacts");
@@ -2635,7 +2634,7 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
       ]),
       `${label} artifacts`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       artifacts,
       [
         ["circuitSource", "circuit_source"],
@@ -2675,7 +2674,7 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
           new Set(["path", "sha256", "hash", "artifactHash", "artifact_hash"]),
           `${label} artifacts.${artifactLabel}`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           artifact,
           [["sha256", "hash", "artifactHash", "artifact_hash"]],
           `${label} artifacts.${artifactLabel}`,
@@ -2706,7 +2705,7 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
       ]),
       `${label} trustedSetup`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       trustedSetup,
       [
         ["localPowersOfTau", "local_powers_of_tau"],
@@ -2724,7 +2723,7 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
       new Set(["snarkjs", "snark_js", "circuitSource", "circuit_source"]),
       `${label} selfChecks`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       selfChecks,
       [
         ["snarkjs", "snark_js"],
@@ -2767,7 +2766,7 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
       ]),
       `${label} selfChecks.snarkjs`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       snarkjs,
       [
         ["snarkjsBinary", "snarkjs_binary"],
@@ -2813,7 +2812,7 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
       ]),
       `${label} selfChecks.circuitSource`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       circuitSource,
       [
         ["fullMessageCircuit", "full_message_circuit"],
@@ -2846,7 +2845,7 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
       ]),
       `${label} attestationTrustPolicy`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       trustPolicy,
       [
         ["signatureSchema", "signature_schema"],
@@ -2893,7 +2892,7 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
           ]),
           `${label} attestations.${attestationLabel}`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           reference,
           [
             ["sha256", "attestationHash", "attestation_hash"],
@@ -2916,7 +2915,7 @@ function materialManifestShapeBlockers(manifest, label = "material manifest") {
           ]),
           `${label} attestations.${attestationLabel}.signature`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           signature,
           [
             ["signerFingerprint", "signer_fingerprint"],
@@ -3116,6 +3115,13 @@ function retiredAliasFieldBlockers(record, groups, label) {
   return blockers;
 }
 
+function canonicalAliasFieldBlockers(record, groups, label) {
+  return [
+    ...aliasFieldBlockers(record, groups, label),
+    ...retiredAliasFieldBlockers(record, groups, label),
+  ];
+}
+
 const BSC_GROTH16_EVIDENCE_COMMON_ALIAS_GROUPS = Object.freeze([
   Object.freeze(["routeId", "route_id"]),
   Object.freeze(["assetKey", "asset_key"]),
@@ -3162,7 +3168,7 @@ function evidenceAliasGroups(expectedSchema, reportKey) {
     ],
     [BSC_GROTH16_CIRCUIT_SECURITY_AUDIT_EVIDENCE_SCHEMA]: [
       Object.freeze(["auditResult", "audit_result"]),
-      Object.freeze(["productionApproved", "production_approved", "approved"]),
+      Object.freeze(["approved", "productionApproved", "production_approved"]),
       Object.freeze(["auditorSignoffCount", "auditor_signoff_count"]),
       Object.freeze(["criticalFindings", "critical_findings"]),
       Object.freeze(["highFindings", "high_findings"]),
@@ -3364,7 +3370,11 @@ function attestationBodyUnknownFieldBlockers(record, expectedSchema, label) {
   const allowed = attestationBodyAllowedFields(expectedSchema);
   return [
     ...unknownFieldBlockers(record, allowed, label),
-    ...aliasFieldBlockers(record, attestationBodyAliasGroups(expectedSchema), label),
+    ...canonicalAliasFieldBlockers(
+      record,
+      attestationBodyAliasGroups(expectedSchema),
+      label,
+    ),
   ];
 }
 
@@ -3772,7 +3782,7 @@ function trustedSetupTranscriptShapeBlockers(record, label) {
       ]),
       label,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       record,
       [
         ["routeId", "route_id"],
@@ -3809,7 +3819,7 @@ function trustedSetupTranscriptShapeBlockers(record, label) {
       ]),
       `${label} phase1`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       phase1,
       [
         ["sourceUrl", "source_url"],
@@ -3832,7 +3842,7 @@ function trustedSetupTranscriptShapeBlockers(record, label) {
       new Set(["command", "completed", "result", "verifiedAt", "verified_at"]),
       `${label} snarkjsPowersOfTauVerify`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       snarkjsPowersOfTauVerify,
       [["verifiedAt", "verified_at"]],
       `${label} snarkjsPowersOfTauVerify`,
@@ -3862,7 +3872,7 @@ function trustedSetupTranscriptShapeBlockers(record, label) {
       ]),
       `${label} phase2`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       phase2,
       [
         ["initialZkeyPath", "initial_zkey_path"],
@@ -3941,7 +3951,7 @@ function reproducibleBuildTranscriptShapeBlockers(record, label) {
       ]),
       label,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       record,
       [
         ["routeId", "route_id"],
@@ -3977,7 +3987,7 @@ function reproducibleBuildTranscriptShapeBlockers(record, label) {
       new Set(["circom", "snarkjs", "circomDependencies", "circom_dependencies"]),
       `${label} toolchain`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       toolchain,
       [["circomDependencies", "circom_dependencies"]],
       `${label} toolchain`,
@@ -3997,7 +4007,7 @@ function reproducibleBuildTranscriptShapeBlockers(record, label) {
       ]),
       `${label} toolchain.circom`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       circom,
       [["binarySha256", "binary_sha256"]],
       `${label} toolchain.circom`,
@@ -4010,7 +4020,7 @@ function reproducibleBuildTranscriptShapeBlockers(record, label) {
       new Set(["package", "version", "binary", "binarySha256", "binary_sha256"]),
       `${label} toolchain.snarkjs`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       snarkjs,
       [["binarySha256", "binary_sha256"]],
       `${label} toolchain.snarkjs`,
@@ -4035,7 +4045,7 @@ function reproducibleBuildTranscriptShapeBlockers(record, label) {
       ]),
       `${label} circuit`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       circuit,
       [
         ["sha256", "hash"],
@@ -4070,7 +4080,7 @@ function reproducibleBuildTranscriptShapeBlockers(record, label) {
       ]),
       `${label} r1cs`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       r1cs,
       [
         ["sha256", "hash"],
@@ -4091,7 +4101,7 @@ function reproducibleBuildTranscriptShapeBlockers(record, label) {
       new Set(["path", "sha256", "hash"]),
       `${label} witnessWasm`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       witnessWasm,
       [["sha256", "hash"]],
       `${label} witnessWasm`,
@@ -4119,7 +4129,7 @@ function reproducibleBuildTranscriptShapeBlockers(record, label) {
       ]),
       `${label} zkey`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       zkey,
       [
         ["initialPath", "initial_path"],
@@ -4158,7 +4168,7 @@ function reproducibleBuildTranscriptShapeBlockers(record, label) {
       ]),
       `${label} verificationKey`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       verificationKey,
       [
         ["snarkjsPath", "snarkjs_path"],
@@ -4462,7 +4472,7 @@ function evidenceReportReference(record, key, label) {
       new Set(BSC_GROTH16_EVIDENCE_REPORT_FIELDS),
       `${label} report`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       report,
       BSC_GROTH16_EVIDENCE_REPORT_ALIAS_GROUPS,
       `${label} report`,
@@ -4749,7 +4759,7 @@ async function bscGroth16EvidenceReference({
         evidenceAllowedFields(expectedSchema, reportKey),
         `${label} evidence`,
       ),
-      ...aliasFieldBlockers(
+      ...canonicalAliasFieldBlockers(
         record,
         evidenceAliasGroups(expectedSchema, reportKey),
         `${label} evidence`,
@@ -7147,7 +7157,7 @@ function attestationRequestPackageShapeBlockers(
       ]),
       label,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       request,
       [
         ["routeId", "route_id"],
@@ -7186,7 +7196,7 @@ function attestationRequestPackageShapeBlockers(
       ]),
       `${label} manifest`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       manifest,
       [
         ["sha256", "hash"],
@@ -7223,7 +7233,7 @@ function attestationRequestPackageShapeBlockers(
       ]),
       `${label} artifacts`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       artifacts,
       [
         ["circuitSource", "circuit_source"],
@@ -7260,7 +7270,7 @@ function attestationRequestPackageShapeBlockers(
           new Set(["path", "sha256", "hash", "artifactHash", "artifact_hash"]),
           `${label} artifacts.${artifactLabel}`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           artifact,
           [["sha256", "hash", "artifactHash", "artifact_hash"]],
           `${label} artifacts.${artifactLabel}`,
@@ -7281,7 +7291,7 @@ function attestationRequestPackageShapeBlockers(
       ]),
       `${label} evidence`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       evidence,
       [
         ["semanticReview", "semantic_review"],
@@ -7302,7 +7312,7 @@ function attestationRequestPackageShapeBlockers(
           new Set(["path", "sha256", "hash", "schema", "report"]),
           `${label} evidence.${evidenceLabel}`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           reference,
           [["sha256", "hash"]],
           `${label} evidence.${evidenceLabel}`,
@@ -7315,7 +7325,7 @@ function attestationRequestPackageShapeBlockers(
           new Set(BSC_GROTH16_EVIDENCE_REPORT_FIELDS),
           `${label} evidence.${evidenceLabel}.report`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           report,
           BSC_GROTH16_EVIDENCE_REPORT_ALIAS_GROUPS,
           `${label} evidence.${evidenceLabel}.report`,
@@ -7336,7 +7346,7 @@ function attestationRequestPackageShapeBlockers(
       ]),
       `${label} evidenceValidation`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       evidenceValidation,
       [
         ["semanticReview", "semantic_review"],
@@ -7357,7 +7367,7 @@ function attestationRequestPackageShapeBlockers(
           new Set(["path", "sha256", "hash", "blockers"]),
           `${label} evidenceValidation.${evidenceLabel}`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           entry,
           [["sha256", "hash"]],
           `${label} evidenceValidation.${evidenceLabel}`,
@@ -7378,7 +7388,7 @@ function attestationRequestPackageShapeBlockers(
       ]),
       `${label} transcriptValidation`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       transcriptValidation,
       [
         ["trustedSetup", "trusted_setup"],
@@ -7399,7 +7409,7 @@ function attestationRequestPackageShapeBlockers(
           new Set(["path", "sha256", "hash", "blockers"]),
           `${label} transcriptValidation.${transcriptLabel}`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           entry,
           [["sha256", "hash"]],
           `${label} transcriptValidation.${transcriptLabel}`,
@@ -7438,7 +7448,7 @@ function attestationRequestPackageShapeBlockers(
           ]),
           `${label} ${spec.label} role`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           role,
           [
             ["signerRole", "signer_role"],
@@ -7477,7 +7487,7 @@ function attestationRequestPackageShapeBlockers(
           ]),
           `${label} ${spec.label} signatureTemplate`,
         ),
-        ...aliasFieldBlockers(
+        ...canonicalAliasFieldBlockers(
           signatureTemplate,
           [
             ["signerFingerprint", "signer_fingerprint"],
@@ -7509,7 +7519,7 @@ function attestationRequestPackageShapeBlockers(
       ]),
       `${label} signingInstructions`,
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       signingInstructions,
       [
         ["signatureSchema", "signature_schema"],
@@ -8804,7 +8814,7 @@ function handoffSummaryShapeBlockers({
   }
   return [
     ...unknownFieldBlockers(record, allowed, label),
-    ...aliasFieldBlockers(record, aliasGroups, label),
+    ...canonicalAliasFieldBlockers(record, aliasGroups, label),
   ];
 }
 
@@ -8831,7 +8841,7 @@ function handoffShapeBlockers(handoff) {
       ]),
       "BSC Groth16 attestation handoff",
     ),
-    ...aliasFieldBlockers(
+    ...canonicalAliasFieldBlockers(
       handoff,
       [
         ["routeId", "route_id"],

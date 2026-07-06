@@ -91,6 +91,52 @@ class HostileTomlString(str):
         raise AssertionError("secret-token Solana TOML string was compared")
 
 
+class HostileSolanaDestinationString(str):
+    """String subclass that Solana destination parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana destination string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana destination string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana destination string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana destination string was compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token Solana destination string was iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token Solana destination string was indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token Solana destination string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token Solana destination string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token Solana destination string lower ran")
+
+    def isascii(self):
+        raise AssertionError("secret-token Solana destination string isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token Solana destination string isdecimal ran")
+
+    def lstrip(self, *_args, **_kwargs):
+        raise AssertionError("secret-token Solana destination string lstrip ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token Solana destination string encode ran")
+
+
 class HostileTomlInt(int):
     def __new__(cls):
         return int.__new__(cls, 1)
@@ -426,6 +472,130 @@ def test_solana_destination_base64_parser_redacts_parser_causes(monkeypatch):
                     "Solana destination base64 "
                     f"{exception_type.__name__} decoder detail was accepted"
                 )
+
+
+def test_solana_destination_exact_string_parsers_reject_string_subclasses_without_hooks(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    hostile_hex = HostileSolanaDestinationString("0x" + "11" * 32)
+    hostile_program_hex = HostileSolanaDestinationString(
+        "0x" + SOLANA_VERIFIER_PROGRAM_BYTES.hex()
+    )
+    hostile_base64 = HostileSolanaDestinationString(
+        SOLANA_VERIFIER_PROGRAM_BYTES_BASE64
+    )
+    hostile_program_id = HostileSolanaDestinationString(SOLANA_VERIFIER_PROGRAM_ID)
+    hostile_decimal = HostileSolanaDestinationString("4321")
+    hostile_commitment = HostileSolanaDestinationString("finalized")
+
+    direct_cases = (
+        (
+            lambda: module._strip_lower_0x_hex(
+                hostile_hex,
+                label="verifier code hash",
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier code hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_hex_bytes(
+                hostile_hex,
+                label="verifier code hash",
+                byte_length=32,
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier code hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_program_bytes_hex(
+                hostile_program_hex,
+                label="verifier program bytes",
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier program bytes must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_program_bytes_base64(
+                hostile_base64,
+                label="verifier program bytes",
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier program bytes must be base64",
+        ),
+        (
+            lambda: module.decode_solana_base58(
+                hostile_program_id,
+                label="verifier_program_id",
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier_program_id must be canonical base58",
+        ),
+        (
+            lambda: module.parse_positive_u64(
+                hostile_decimal,
+                label="programdata slot",
+            ),
+            module.argparse.ArgumentTypeError,
+            "programdata slot must be a positive u64",
+        ),
+        (
+            lambda: module._require_exact_string(
+                hostile_commitment,
+                label="rpc_commitment",
+                expected="finalized",
+            ),
+            ValueError,
+            "rpc_commitment must be a non-empty canonical string",
+        ),
+    )
+    for parser, exception_type, expected_message in direct_cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "string-subclass Solana destination parser value was accepted"
+            )
+
+    byte_args = solana_toml_args(module)
+    module.apply_verifier_program_code_hash(byte_args)
+    byte_args.verifier_program_bytes_base64_text = hostile_base64
+    try:
+        module._validated_verifier_program_bytes_base64(byte_args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "Solana verifier program byte metadata is inconsistent"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("Solana destination accepted hostile verifier byte text")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            module,
+            "_validated_verifier_program_bytes_base64",
+            lambda _args: hostile_base64,
+        )
+        try:
+            module._json_summary(
+                solana_args(module),
+                bytes.fromhex(SOLANA_DESTINATION_BINDING_VECTOR),
+                True,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "Solana verifier program byte metadata is inconsistent"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "Solana destination summary accepted hostile verifier byte text"
+            )
 
 
 def test_solana_destination_file_parser_redacts_file_read_causes(tmp_path):

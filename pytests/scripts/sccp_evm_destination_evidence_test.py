@@ -16,26 +16,26 @@ BSC_TESTNET_DESTINATION_BINDING_VECTOR = (
 ETH_MAINNET_NETWORK_ID = "00" * 31 + "01"
 BSC_MAINNET_NETWORK_ID = "00" * 31 + "38"
 BSC_TESTNET_NETWORK_ID = "00" * 31 + "61"
-EVM_SOURCE_VERIFIER_MATERIAL_HASH = "aa" * 32
-EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH = "99" * 32
+EVM_SOURCE_VERIFIER_MATERIAL_HASH = "a3" * 32
+EVM_SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH = "a4" * 32
 ETH_ROUTE_ALLOWLIST_HASH_VECTOR = (
-    "3bf99a87cc501ee17858c86eaea872a7e4a75d60bfd01e872cdd5a843895ea6e"
+    "70393a8529a77d7ea4d703491e7e46e8048409c813b1b76e29dc84b4f8f046a5"
 )
 BSC_ROUTE_ALLOWLIST_HASH_VECTOR = (
-    "03492e28a9c71c56c7702eb438b5aff0df0f5e263a6173f3b950a7b45cc1bda6"
+    "12a1c57322a3043463281596a2c1440dec64749b7174170f5591ab5edbac53cb"
 )
 BSC_TESTNET_ROUTE_ALLOWLIST_HASH_VECTOR = (
-    "27573a75bd6d18056533bcf09049f155f2966553124219d0a464d1c9953cc4a7"
+    "f109c313901ae417a92e05aeda1bf1667fbe1208c11371c3f670089d93168b7e"
 )
 EVM_ROUTE_CANARY_EVIDENCE_HASH = "e1" * 32
 ETH_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "84b93b0050b6bc9696ba55d56a8c957171e6a4ebd2f242b683762d52d88db9d7"
+    "2bc20a644b634d541388b4da2a4e047d00bbdff697631e163e2d1d26199e86da"
 )
 BSC_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "66a7bdfe287e79a350688ca84699cde4df4c6cbf38926f0ac4f027c7a2c43744"
+    "0cfa5b47328c5b5eeff917af962a8f3fb8116113d9a5580b2fb51ffbcf5ae24b"
 )
 BSC_TESTNET_ROUTE_CANARY_TRANSACTION_HASH_VECTOR = (
-    "903b4afe339398216c02663eea270634494a1f12b166dc322d9d4d9c1c3e544b"
+    "81c2bbca59173210f135ed47de3790c332f03b182c843fa9843734a7bb61e477"
 )
 
 
@@ -111,6 +111,43 @@ class HostileTomlString(str):
 
     def __ne__(self, _other):
         raise AssertionError("secret-token EVM destination TOML string was compared")
+
+
+class HostileEvmDestinationString(str):
+    """String subclass that EVM destination parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token EVM destination string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token EVM destination string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM destination string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token EVM destination string was compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM destination string was iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM destination string was indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token EVM destination string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token EVM destination string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token EVM destination string lower ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token EVM destination string encode ran")
 
 
 class HostileTomlInt(int):
@@ -1227,6 +1264,25 @@ def test_evm_route_canary_transaction_hash_binds_target_domain():
         raise AssertionError("EVM route canary accepted route/destination hash role reuse")
 
     for field, source_field in (
+        ("payload_hash", "route_allowlist_hash"),
+        ("finality_height", "destination_binding_hash"),
+    ):
+        reused = dict(eth_common)
+        reused[field] = reused[source_field]
+        try:
+            module.evm_route_canary_transaction_evidence_hash(
+                target_domain=module.SCCP_DOMAIN_ETH,
+                **reused,
+            )
+        except ValueError as exc:
+            assert "EVM route canary governed hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError(
+                "EVM route canary accepted governed hash replay through "
+                f"{field}"
+            )
+
+    for field, source_field in (
         ("message_id", "transaction_hash"),
         ("payload_hash", "call_data_sha256"),
         ("commitment_root", "statement_hash"),
@@ -2064,6 +2120,7 @@ def test_evm_full_toml_rejects_route_canary_transcript_hash_reuse():
         ("route_canary_message_id", "route_canary_transaction_hash"),
         ("route_canary_payload_hash", "route_canary_call_data_sha256"),
         ("route_canary_commitment_root", "route_canary_statement_hash"),
+        ("route_canary_finality_height", "route_canary_transaction_hash"),
         ("route_canary_finality_block_hash", "route_canary_transaction_hash"),
     ):
         args = full_toml_args(eth)
@@ -2076,6 +2133,33 @@ def test_evm_full_toml_rejects_route_canary_transcript_hash_reuse():
         else:
             raise AssertionError(
                 "EVM destination TOML accepted reused route canary transcript "
+                f"hash {attr_name}"
+            )
+
+
+def test_evm_full_toml_rejects_route_canary_governed_transcript_hash_reuse():
+    module = load_evidence_module()
+    eth = evm_runtime_material(module, domain=1)
+
+    for attr_name, source_attr_name in (
+        ("route_canary_payload_hash", "route_allowlist_hash"),
+        ("route_canary_finality_height", "source_verifier_material_hash"),
+        (
+            "route_canary_finality_block_hash",
+            "source_adapter_engine_deployment_hash",
+        ),
+    ):
+        args = full_toml_args(eth)
+        args.route_canary_evidence_hash = None
+        setattr(args, attr_name, getattr(args, source_attr_name))
+
+        try:
+            module.render_toml(args, eth.destination_binding_hash)
+        except ValueError as exc:
+            assert "EVM route canary governed hashes must be distinct" in str(exc)
+        else:
+            raise AssertionError(
+                "EVM destination TOML accepted reused route canary governed "
                 f"hash {attr_name}"
             )
 
@@ -2413,6 +2497,108 @@ def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail():
             raise AssertionError(
                 "invalid copied EVM runtime bytecode evidence was accepted"
             )
+
+
+def test_evm_destination_exact_runtime_strings_reject_string_subclasses_without_hooks():
+    module = load_evidence_module()
+    material = evm_runtime_material(module, domain=1)
+    destination_binding_hash = material.destination_binding_hash
+    hostile_hex = HostileEvmDestinationString("0x" + "11" * 32)
+    hostile_runtime = HostileEvmDestinationString("0x6001")
+
+    direct_cases = (
+        (
+            lambda: module._strip_lower_0x_hex(
+                hostile_hex,
+                label="verifier key hash",
+            ),
+            "verifier key hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_hex_bytes(
+                hostile_hex,
+                label="verifier key hash",
+                byte_length=32,
+            ),
+            "verifier key hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_runtime_bytecode_hex(
+                hostile_runtime,
+                label="runtime bytecode",
+            ),
+            "runtime bytecode must be hex",
+        ),
+    )
+    for parser, expected_message in direct_cases:
+        try:
+            parser()
+        except module.argparse.ArgumentTypeError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("EVM destination parser accepted hostile text")
+
+    runtime_cases = (
+        (
+            SimpleNamespace(
+                bridge_runtime_bytecode_hex_text=hostile_runtime,
+                bridge_code_hash=bytes.fromhex("11" * 32),
+                verifier_runtime_bytecode_bytes=b"\x60\x01",
+                verifier_code_hash=module.runtime_bytecode_hash(b"\x60\x01"),
+            ),
+            "--toml has invalid bridge runtime bytecode evidence",
+        ),
+        (
+            SimpleNamespace(
+                bridge_runtime_bytecode_bytes=b"\x60\x02",
+                bridge_code_hash=module.runtime_bytecode_hash(b"\x60\x02"),
+                verifier_runtime_bytecode_hex_text=hostile_runtime,
+                verifier_code_hash=bytes.fromhex("22" * 32),
+            ),
+            "--toml has invalid verifier runtime bytecode evidence",
+        ),
+    )
+    for args, expected_message in runtime_cases:
+        try:
+            module._require_runtime_bytecode_evidence(args, output="toml")
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError("EVM destination TOML accepted hostile runtime text")
+
+    summary_cases = (
+        (
+            "bridge_runtime_bytecode_hex_text",
+            "bridge runtime bytecode metadata is inconsistent",
+        ),
+        (
+            "verifier_runtime_bytecode_hex_text",
+            "verifier runtime bytecode metadata is inconsistent",
+        ),
+    )
+    for field, expected_message in summary_cases:
+        args = full_toml_args(material)
+        args.bridge_runtime_bytecode_hex = None
+        args.verifier_runtime_bytecode_hex = None
+        args.bridge_runtime_bytecode_file = None
+        args.verifier_runtime_bytecode_file = None
+        setattr(args, field, hostile_runtime)
+        try:
+            module._json_summary(args, destination_binding_hash, True)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("EVM destination JSON accepted hostile runtime text")
 
 
 def test_evm_toml_runtime_bytecode_reparse_redacts_helper_failures(

@@ -642,6 +642,18 @@ test("published package root enforces SCCP route-canary role separation", () => 
       ),
     /Solana route canary governed hashes/u,
   );
+  const packageRootSolanaRouteCanaryVerifierCodeHashReuse = {
+    ...packageRootSolanaRouteCanaryEvidence,
+    routeAllowlistHash:
+      packageRootSolanaRouteCanaryEvidence.verifierCodeHash,
+  };
+  assert.throws(
+    () =>
+      rootExports.solanaSccpRouteCanaryEvidenceHash(
+        packageRootSolanaRouteCanaryVerifierCodeHashReuse,
+      ),
+    /Solana route canary governed hashes/u,
+  );
 
   const packageRootTonRouteCanaryEvidence = {
     routeAllowlistHash: `0x${"31".repeat(32)}`,
@@ -667,6 +679,29 @@ test("published package root enforces SCCP route-canary role separation", () => 
     () =>
       rootExports.tonSccpRouteCanaryEvidenceHash(
         packageRootTonRouteCanaryGovernedHashReuse,
+      ),
+    /TON route canary governed hashes/u,
+  );
+  const packageRootTonRouteCanaryVerifierCodeHashReuse = {
+    ...packageRootTonRouteCanaryEvidence,
+    routeAllowlistHash: packageRootTonRouteCanaryEvidence.verifierCodeHash,
+  };
+  assert.throws(
+    () =>
+      rootExports.tonSccpRouteCanaryEvidenceHash(
+        packageRootTonRouteCanaryVerifierCodeHashReuse,
+      ),
+    /TON route canary governed hashes/u,
+  );
+  const packageRootTonRouteCanaryLiveAccountHashReuse = {
+    ...packageRootTonRouteCanaryEvidence,
+    accountStateHash:
+      packageRootTonRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () =>
+      rootExports.tonSccpRouteCanaryEvidenceHash(
+        packageRootTonRouteCanaryLiveAccountHashReuse,
       ),
     /TON route canary governed hashes/u,
   );
@@ -713,6 +748,14 @@ test("published package root enforces SCCP route-canary role separation", () => 
       rootExports.tronSccpRouteCanaryEvidenceHash(
         packageRootTronRouteCanaryGovernedHashReuse,
       ),
+    /TRON route canary governed hashes/u,
+  );
+  assert.throws(
+    () =>
+      rootExports.tronSccpRouteCanaryEvidenceHash({
+        ...packageRootTronRouteCanaryEvidence,
+        payloadHash: packageRootTronRouteCanaryEvidence.routeAllowlistHash,
+      }),
     /TRON route canary governed hashes/u,
   );
 });

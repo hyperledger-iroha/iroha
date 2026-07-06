@@ -125,7 +125,7 @@ def _summary_hex_bytes(
     byte_length: int,
 ) -> bytes:
     value = record.get(field)
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise ValueError(f"{label} must be an exact hex string") from None
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
@@ -146,7 +146,7 @@ def _summary_address(record: dict[str, Any], field: str, *, label: str) -> bytes
 
 def _summary_exact_string(record: dict[str, Any], field: str, *, label: str) -> str:
     value = record.get(field)
-    if not isinstance(value, str) or not value or value != value.strip():
+    if type(value) is not str or not value or value != value.strip():
         raise ValueError(f"{label} must be an exact non-empty string") from None
     return value
 
@@ -172,7 +172,7 @@ def _summary_exact_positive_u64(
 
 def _summary_runtime_bytes(record: dict[str, Any], field: str, *, label: str) -> bytes:
     value = record.get(field)
-    if not isinstance(value, str) or not value.startswith("0x"):
+    if type(value) is not str or not value.startswith("0x"):
         raise ValueError(f"{label} must be exact 0x-prefixed hex") from None
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise ValueError(f"{label} must not contain whitespace") from None
@@ -429,7 +429,7 @@ def _json_rpc(
 
 
 def _rpc_hex_data(result: Any, *, method: str) -> bytes:
-    if not isinstance(result, str):
+    if type(result) is not str:
         raise RuntimeError(f"{method} returned non-string data")
     if result != result.strip():
         raise RuntimeError(f"{method} returned non-canonical hex data")
@@ -449,7 +449,7 @@ def _rpc_hex_data(result: Any, *, method: str) -> bytes:
 
 
 def _rpc_quantity(result: Any, *, method: str) -> int:
-    if not isinstance(result, str) or not result.startswith("0x"):
+    if type(result) is not str or not result.startswith("0x"):
         raise RuntimeError(f"{method} returned non-quantity data")
     if result != result.strip():
         raise RuntimeError(f"{method} returned non-canonical quantity")
@@ -467,7 +467,7 @@ def _parse_exact_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> by
     if type(nonzero) is not bool:
         raise ValueError("EVM live exact hex nonzero must be a boolean")
 
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise RuntimeError(f"{label} must be hex")
     if value != value.strip():
         raise RuntimeError(f"{label} must not contain surrounding whitespace")
@@ -1058,7 +1058,7 @@ def _route_canary_message_proof_event_summary(
     topics = log.get("topics")
     if not isinstance(topics, list) or not topics:
         return None
-    if not all(isinstance(topic, str) for topic in topics):
+    if not all(type(topic) is str for topic in topics):
         return None
     try:
         topic0 = _parse_exact_hex32_blob(
@@ -1690,7 +1690,7 @@ def _route_canary_receipt_block_summary(
     timeout: float,
 ) -> dict[str, Any]:
     receipt_block_number_text = receipt.get("blockNumber")
-    if not isinstance(receipt_block_number_text, str):
+    if type(receipt_block_number_text) is not str:
         raise RuntimeError("route-canary receipt blockNumber must be present")
     receipt_block_number = _rpc_quantity(
         receipt_block_number_text,
@@ -1836,7 +1836,7 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
         )
     route_hash = summary.get("route_allowlist_hash")
     if (
-        isinstance(route_hash, str)
+        type(route_hash) is str
         and destination.get("expected_destination_binding_hash_matches") is True
     ):
         args.extend(
@@ -2247,10 +2247,10 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
         and transaction.get("receipt_block_finalized") is True
         and transaction.get("transaction_block_matches") is True
         and type(transaction.get("block_number")) is int
-        and isinstance(transaction.get("block_hash"), str)
+        and type(transaction.get("block_hash")) is str
         and type(transaction.get("transaction_block_number")) is int
-        and isinstance(transaction.get("transaction_block_hash"), str)
-        and isinstance(transaction.get("block_receipts_root"), str)
+        and type(transaction.get("transaction_block_hash")) is str
+        and type(transaction.get("block_receipts_root")) is str
     )
 
 
@@ -2301,7 +2301,7 @@ def _full_toml_prerequisites(summary: dict[str, Any]) -> list[str]:
         missing.append("--expected-bridge-code-hash")
     if destination.get("expected_destination_binding_hash_matches") is not True:
         missing.append("--expected-destination-binding-hash")
-    if not isinstance(summary.get("route_allowlist_hash"), str):
+    if type(summary.get("route_allowlist_hash")) is not str:
         missing.append("--route-allowlist-hash")
     if not isinstance(summary.get("route_canary"), dict):
         missing.append("--route-canary-evidence-hash")

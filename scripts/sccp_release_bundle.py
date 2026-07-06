@@ -203,7 +203,7 @@ def _path_markdown_unsafe_character(path: str) -> str | None:
 
 def _native_evm_prover_duplicate_json_key_error(key: Any) -> str:
     label = "native EVM Groth16 prover bundle"
-    if not isinstance(key, str) or not key:
+    if type(key) is not str or not key:
         return f"{label} JSON contains malformed duplicate key"
     if _path_control_character(key) is not None:
         return f"{label} JSON contains duplicate key with control character"
@@ -248,9 +248,11 @@ def _path_percent_encoded_traversal(path: str) -> str | None:
 
 
 def _public_text_contains_sensitive_marker(
-    value: str,
+    value: object,
     markers: tuple[str, ...] = NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS,
 ) -> bool:
+    if type(value) is not str or not value:
+        return False
     normalized_value = _decoded_sensitive_public_marker_text(value)
     return any(marker in normalized_value for marker in markers)
 
@@ -586,7 +588,7 @@ def _native_evm_prover_payload_sources(
         payload = _load_json_without_duplicate_keys(source)
     except DuplicateJsonKeyError as exc:
         raise ValueError(_native_evm_prover_duplicate_json_key_error(exc.key)) from None
-    if not isinstance(payload, dict):
+    if type(payload) is not dict:
         raise ValueError("native EVM Groth16 prover bundle must be a JSON object")
     payload = _public_mapping_string_view(payload)
 
@@ -631,17 +633,24 @@ def _native_evm_prover_payload_sources(
         )
 
     native_sdk_artifacts = payload.get("native_sdk_artifacts")
-    if isinstance(native_sdk_artifacts, list):
+    if "native_sdk_artifacts" in payload:
+        if type(native_sdk_artifacts) is not list:
+            raise ValueError(
+                "native EVM Groth16 prover bundle native_sdk_artifacts must be a list"
+            )
         for index, artifact in enumerate(native_sdk_artifacts):
-            if not isinstance(artifact, dict):
-                continue
+            if type(artifact) is not dict:
+                raise ValueError(
+                    "native EVM Groth16 prover bundle "
+                    f"native_sdk_artifacts[{index}] must be an object"
+                )
             artifact = _public_mapping_string_view(artifact)
             if "implementation_artifact" not in artifact:
                 continue
             sdk = artifact.get("sdk")
             label = (
                 f"{sdk} implementation_artifact"
-                if isinstance(sdk, str) and sdk
+                if type(sdk) is str and sdk
                 else f"native_sdk_artifacts[{index}].implementation_artifact"
             )
             add_path(artifact["implementation_artifact"], label)
@@ -686,7 +695,8 @@ def _write_json(path: Path, payload: Any) -> None:
 
 
 def _markdown_string_list_items(value: Any, *, field_label: str) -> list[str]:
-    if not isinstance(value, list):
+    # Source-inventory marker: release-notes attachment blocker lists must reject subclasses
+    if type(value) is not list:
         return [f"- `<invalid {field_label}>`"]
     if not value:
         return []
@@ -1185,7 +1195,7 @@ def _source_adapter_gate_hash_key_for_domain_chain(
     key = verifier._source_adapter_gate_hash_key_for_domain_chain(domain, chain)
     if key is None:
         return None
-    if not isinstance(key, str):
+    if type(key) is not str:
         raise TypeError("source adapter gate hash key must be a string")
     return key
 
@@ -1199,7 +1209,7 @@ def _source_adapter_gate_hash_key_for_domain_chain_or_errors(
 
     try:
         key = _source_adapter_gate_hash_key_for_domain_chain(domain, chain)
-        if key is not None and not isinstance(key, str):
+        if key is not None and type(key) is not str:
             raise TypeError("source adapter gate hash key must be a string")
         return key, []
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -1270,7 +1280,7 @@ def _source_adapter_gate_template_audit_errors(
     domain: Any,
     audit_hashes: Any,
 ) -> list[str]:
-    if type(domain) is not int or not isinstance(audit_hashes, dict):
+    if type(domain) is not int or type(audit_hashes) is not dict:
         return []
     audit_hashes = _public_mapping_string_view(audit_hashes)
     (
@@ -1310,7 +1320,7 @@ def _source_record_template_hash_errors(
 ) -> list[str]:
     """Return errors for copied source-record hashes that replay templates."""
 
-    if type(domain) is not int or not isinstance(source_hashes, dict):
+    if type(domain) is not int or type(source_hashes) is not dict:
         return []
     source_hashes = _public_mapping_string_view(source_hashes)
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
@@ -1341,7 +1351,7 @@ def _source_record_hash_role_errors(
 ) -> list[str]:
     """Return errors for copied source-record hashes that reuse another role."""
 
-    if not isinstance(source_hashes, dict):
+    if type(source_hashes) is not dict:
         return []
     source_hashes = _public_mapping_string_view(source_hashes)
     # Source-inventory marker: source_adapter_engine_deployment_hash must not reuse source_verifier_material_hash
@@ -1367,7 +1377,7 @@ def _route_canary_template_hash_errors(
 ) -> list[str]:
     """Return errors for route-canary hashes replaying templates."""
 
-    if type(domain) is not int or not isinstance(row, dict):
+    if type(domain) is not int or type(row) is not dict:
         return []
     row = _public_mapping_string_view(row)
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
@@ -1397,7 +1407,7 @@ def _all_lanes_route_canary_template_hash_errors(
 ) -> list[str]:
     """Return errors for copied route-canary hashes replaying templates."""
 
-    if type(domain) is not int or not isinstance(route_canary, dict):
+    if type(domain) is not int or type(route_canary) is not dict:
         return []
     route_canary = _public_mapping_string_view(route_canary)
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
@@ -1430,7 +1440,7 @@ def _all_lanes_template_hash_errors(
 ) -> list[str]:
     """Return errors for copied all-lanes hashes replaying source templates."""
 
-    if type(domain) is not int or not isinstance(row, dict):
+    if type(domain) is not int or type(row) is not dict:
         return []
     row = _public_mapping_string_view(row)
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
@@ -1457,9 +1467,11 @@ def _source_adapter_gate_hash_role_fields(
     label: str,
     lane: dict[str, Any],
 ) -> tuple[tuple[str, Any], ...]:
+    if type(lane) is not dict:
+        return ()
     lane = _public_mapping_string_view(lane)
     source_gate = lane.get("source_adapter_gate")
-    if not isinstance(source_gate, dict):
+    if type(source_gate) is not dict:
         return ()
     source_gate = _public_mapping_string_view(source_gate)
 
@@ -1473,7 +1485,7 @@ def _source_adapter_gate_hash_role_fields(
         seen_hashes.add(gate_hash)
 
     audit_hashes = source_gate.get("audit_hashes")
-    if not isinstance(audit_hashes, dict):
+    if type(audit_hashes) is not dict:
         return tuple(fields)
 
     audit_label = f"{label}.source_adapter_gate audit_hashes"
@@ -1591,7 +1603,7 @@ def _source_adapter_gate_semantic_errors(
                     gate_hash,
                 )
             )
-            if isinstance(audit_hashes, dict):
+            if type(audit_hashes) is dict:
                 errors.extend(
                     _source_adapter_gate_template_audit_errors(
                         audit_label,
@@ -1613,7 +1625,7 @@ def _source_adapter_gate_semantic_errors(
                 f"{label}.source_adapter_gate ready must be true "
                 "when gate is not required"
             )
-        if isinstance(audit_hashes, dict) and audit_hashes:
+        if type(audit_hashes) is dict and audit_hashes:
             errors.append(
                 f"{label}.source_adapter_gate audit_hashes must be empty "
                 "when gate is not required"
@@ -1623,7 +1635,7 @@ def _source_adapter_gate_semantic_errors(
                 f"{label}.source_adapter_gate gate_hash must be empty "
                 "when gate is not required"
             )
-        if isinstance(blockers, list) and blockers:
+        if type(blockers) is list and blockers:
             errors.append(
                 f"{label}.source_adapter_gate blockers must be empty "
                 "when gate is not required"
@@ -1641,7 +1653,7 @@ def _source_adapter_gate_semantic_errors(
                 gate_hash,
             )
         )
-        if isinstance(audit_hashes, dict):
+        if type(audit_hashes) is dict:
             errors.extend(
                 _source_adapter_gate_template_audit_errors(
                     audit_label,
@@ -1663,7 +1675,7 @@ def _source_adapter_gate_semantic_errors(
             f"{label}.source_adapter_gate gate_hash must be a non-zero "
             "canonical bytes32 hex string when required"
         )
-    if isinstance(audit_hashes, dict):
+    if type(audit_hashes) is dict:
         semantic_audit_hashes: dict[str, Any] = {}
         audit_key_errors: list[str] = []
         for key, value in sorted(
@@ -1740,7 +1752,7 @@ def _source_adapter_gate_semantic_errors(
         )
         role_fields: list[tuple[str, Any]] = []
         source_hashes = lane.get("source_record_hashes")
-        if isinstance(source_hashes, dict):
+        if type(source_hashes) is dict:
             source_hashes = _public_mapping_string_view(source_hashes)
             role_fields.extend(
                 (
@@ -1752,7 +1764,7 @@ def _source_adapter_gate_semantic_errors(
                 )
             )
         destination_binding = lane.get("destination_binding")
-        if isinstance(destination_binding, dict):
+        if type(destination_binding) is dict:
             destination_binding = _public_mapping_string_view(destination_binding)
             role_fields.append(
                 (
@@ -1761,13 +1773,13 @@ def _source_adapter_gate_semantic_errors(
                 )
             )
         route_allowlist = lane.get("route_allowlist")
-        if isinstance(route_allowlist, dict):
+        if type(route_allowlist) is dict:
             route_allowlist = _public_mapping_string_view(route_allowlist)
             role_fields.append(
                 ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
             )
             route_canary = route_allowlist.get("route_canary")
-            if isinstance(route_canary, dict):
+            if type(route_canary) is dict:
                 route_canary = _public_mapping_string_view(route_canary)
                 role_fields.append(
                     (
@@ -1802,7 +1814,7 @@ def _source_adapter_gate_semantic_errors(
         errors.append(
             f"{label}.source_adapter_gate ready must be true when gate is required"
         )
-    if isinstance(blockers, list) and blockers:
+    if type(blockers) is list and blockers:
         errors.append(
             f"{label}.source_adapter_gate blockers must be empty "
             "when gate is required"
@@ -1847,7 +1859,7 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
                     gate_hash,
                 )
             )
-            if isinstance(audit_hashes, dict):
+            if type(audit_hashes) is dict:
                 errors.extend(
                     _source_adapter_gate_template_audit_errors(
                         f"{label} source_adapter_gate_audit_hashes",
@@ -1875,7 +1887,7 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
                 "bytes32 hex string when required"
             )
         semantic_audit_hashes: dict[str, Any] = {}
-        if isinstance(audit_hashes, dict):
+        if type(audit_hashes) is dict:
             audit_label = f"{label} source_adapter_gate_audit_hashes"
             audit_key_errors: list[str] = []
             for audit_key, audit_hash in sorted(
@@ -1972,7 +1984,7 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
                     gate_hash,
                 )
             )
-            if isinstance(audit_hashes, dict):
+            if type(audit_hashes) is dict:
                 errors.extend(
                     _source_adapter_gate_template_audit_errors(
                         f"{label} source_adapter_gate_audit_hashes",
@@ -1984,7 +1996,7 @@ def _cryptographic_evidence_source_adapter_gate_bundle_errors(
             errors.append(
                 f"{label} source_adapter_gate_hash must be empty when gate is not required"
             )
-        if audit_hashes:
+        if type(audit_hashes) is dict and audit_hashes:
             errors.append(
                 f"{label} source_adapter_gate_audit_hashes must be empty when gate is not required"
             )
@@ -2014,7 +2026,7 @@ def _cryptographic_evidence_source_adapter_gate_hash_role_errors(
     # Source-inventory marker: public source_adapter_gate top-level hash roles must be checked even when audit hashes are malformed
     gate_hash = payload.get("source_adapter_gate_hash")
     semantic_audit_hash_values: set[Any] = set()
-    if isinstance(audit_hashes, dict):
+    if type(audit_hashes) is dict:
         audit_label = f"{label} source_adapter_gate_audit_hashes"
         for audit_key, audit_hash in sorted(
             audit_hashes.items(),
@@ -2851,12 +2863,12 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
 ) -> list[str]:
     governed_hashes: dict[str, tuple[str, str]] = {}
     for index, lane in enumerate(lanes):
-        if not isinstance(lane, dict):
+        if type(lane) is not dict:
             continue
         lane = _public_mapping_string_view(lane)
         lane_label = f"{label}.lanes[{index}]"
         source_hashes = lane.get("source_record_hashes")
-        if isinstance(source_hashes, dict):
+        if type(source_hashes) is dict:
             source_hashes = _public_mapping_string_view(source_hashes)
             for field in (
                 "source_verifier_material_hash",
@@ -2867,7 +2879,7 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
                     assert isinstance(value, str)
                     governed_hashes.setdefault(value, (lane_label, field))
         destination_binding = lane.get("destination_binding")
-        if isinstance(destination_binding, dict):
+        if type(destination_binding) is dict:
             destination_binding = _public_mapping_string_view(destination_binding)
             value = destination_binding.get("destination_binding_hash")
             if _is_nonzero_bytes32_hex_text(value):
@@ -2877,14 +2889,14 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
                     (lane_label, "destination_binding_hash"),
                 )
         route_allowlist = lane.get("route_allowlist")
-        if isinstance(route_allowlist, dict):
+        if type(route_allowlist) is dict:
             route_allowlist = _public_mapping_string_view(route_allowlist)
             value = route_allowlist.get("route_allowlist_hash")
             if _is_nonzero_bytes32_hex_text(value):
                 assert isinstance(value, str)
                 governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
             route_canary = route_allowlist.get("route_canary")
-            if isinstance(route_canary, dict):
+            if type(route_canary) is dict:
                 route_canary = _public_mapping_string_view(route_canary)
                 canary_hash_fields = _all_lanes_route_canary_fields(
                     lane.get("domain")
@@ -2907,16 +2919,16 @@ def _all_lanes_route_canary_cross_lane_bundle_errors(
     errors: list[str] = []
     seen_canaries: dict[str, str] = {}
     for index, lane in enumerate(lanes):
-        if not isinstance(lane, dict):
+        if type(lane) is not dict:
             continue
         lane = _public_mapping_string_view(lane)
         lane_label = f"{label}.lanes[{index}]"
         route_allowlist = lane.get("route_allowlist")
-        if not isinstance(route_allowlist, dict):
+        if type(route_allowlist) is not dict:
             continue
         route_allowlist = _public_mapping_string_view(route_allowlist)
         route_canary = route_allowlist.get("route_canary")
-        if not isinstance(route_canary, dict):
+        if type(route_canary) is not dict:
             continue
         route_canary = _public_mapping_string_view(route_canary)
         canary_label = f"{lane_label}.route_allowlist.route_canary"
@@ -3013,7 +3025,7 @@ def _number_repeated_source_inventory_gate_diagnostics(
 
 
 def _checklist_item_id_error(item_id: Any, label: str) -> str | None:
-    if not isinstance(item_id, str) or not item_id:
+    if type(item_id) is not str or not item_id:
         return f"{label} id must be a non-empty string"
     if _path_control_character(item_id) is not None:
         return f"{label} id contains control character"
@@ -3488,7 +3500,7 @@ def _submission_surface_validation_blocker_list_errors(
     value: Any,
     label: str,
 ) -> list[str]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     errors: list[str] = []
     seen_blockers: set[str] = set()
@@ -3521,7 +3533,7 @@ def _submission_surface_helper_symbol_list_errors(
     value: Any,
     label: str,
 ) -> list[str]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     errors: list[str] = []
     for symbol in value:
@@ -3539,7 +3551,7 @@ def _require_report_mapping(
     label: str,
     errors: list[str],
 ) -> dict[str, Any]:
-    if isinstance(value, dict):
+    if type(value) is dict:
         return value
     errors.append(f"{label} must be an object")
     return {}
@@ -3573,7 +3585,7 @@ def _public_mapping_string_view(payload: dict[Any, Any]) -> dict[str, Any]:
 
 
 def _require_report_list(value: Any, label: str, errors: list[str]) -> list[Any]:
-    if isinstance(value, list):
+    if type(value) is list:
         return value
     errors.append(f"{label} must be a list")
     return []
@@ -3603,7 +3615,7 @@ def _string_list_field_errors(
 
     errors: list[str] = []
     value = _public_mapping_get_string_key(payload, field)
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [f"{label} {field} must be a list of non-empty strings"]
     if not allow_empty and not value:
         errors.append(f"{label} {field} must not be empty")
@@ -3757,7 +3769,7 @@ def _public_blocker_list_field_errors(
         raise ValueError("public blocker list allow_empty must be a boolean")
 
     value = _public_mapping_get_string_key(payload, field)
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [f"{label} {field} must be a list of non-empty strings"]
     errors: list[str] = []
     if not allow_empty and not value:
@@ -3807,8 +3819,9 @@ def _integer_list_field_errors(
     if type(allow_empty) is not bool:
         raise ValueError("integer list allow_empty must be a boolean")
 
+    # Source-inventory marker: public integer lists must reject list subclasses
     value = _public_mapping_get_string_key(payload, field)
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [f"{label} {field} must be a list of integers"]
     errors: list[str] = []
     if not allow_empty and not value:
@@ -3827,6 +3840,7 @@ def _integer_list_field_errors(
 def _launch_domain_list_bundle_errors(label: str, payload: dict[str, Any]) -> list[str]:
     """Return pre-render errors for copied launch-domain summary drift."""
 
+    # Source-inventory marker: copied launch-domain lists must reject non-integer domains
     # Source-inventory marker: supported_launch_domains must be the supported launch remote domains
     # Source-inventory marker: unsupported_launch_domains must be the diagnostic unsupported remote domains
     # Source-inventory marker: required_domains contains duplicate domains
@@ -3837,35 +3851,54 @@ def _launch_domain_list_bundle_errors(label: str, payload: dict[str, Any]) -> li
             "required_domains",
             _all_lanes_required_domains(),
             "must be the production remote domains",
+            False,
         ),
         (
             "supported_launch_domains",
             _all_lanes_supported_launch_domains(),
             "must be the supported launch remote domains",
+            False,
         ),
         (
             "unsupported_launch_domains",
             _all_lanes_unsupported_launch_domains(),
             "must be the diagnostic unsupported remote domains",
+            True,
         ),
     )
     errors: list[str] = []
     parsed: dict[str, list[int]] = {}
-    for field, expected, detail in expected_lists:
-        value = payload.get(field)
-        if isinstance(value, list):
-            seen_domains: set[int] = set()
-            for domain in value:
-                if type(domain) is not int:
-                    continue
-                if domain in seen_domains:
-                    errors.append(f"{label} {field} contains duplicate domains")
-                    break
-                seen_domains.add(domain)
-        if isinstance(value, list) and all(type(domain) is int for domain in value):
-            parsed[field] = value
-            if value != list(expected):
-                errors.append(f"{label} {field} {detail}")
+    for field, expected, detail, allow_empty in expected_lists:
+        value = _public_mapping_get_string_key(payload, field)
+        if type(value) is not list:
+            errors.append(f"{label} {field} must be a list of integers")
+            continue
+        if not allow_empty and not value:
+            errors.append(f"{label} {field} must not be empty")
+
+        seen_domains: set[int] = set()
+        has_duplicate_domain = False
+        has_invalid_domain_type = False
+        for domain in value:
+            if type(domain) is not int:
+                has_invalid_domain_type = True
+                continue
+            if domain in seen_domains:
+                has_duplicate_domain = True
+                continue
+            seen_domains.add(domain)
+
+        if has_invalid_domain_type:
+            errors.append(f"{label} {field} must be a list of integers")
+        if has_duplicate_domain:
+            errors.append(f"{label} {field} must not contain duplicate integers")
+            errors.append(f"{label} {field} contains duplicate domains")
+        if has_invalid_domain_type:
+            continue
+
+        parsed[field] = value
+        if value != list(expected):
+            errors.append(f"{label} {field} {detail}")
 
     supported = parsed.get("supported_launch_domains")
     unsupported = parsed.get("unsupported_launch_domains")
@@ -4467,7 +4500,7 @@ def _all_lanes_object(
     errors: list[str],
 ) -> dict[str, Any]:
     payload = _require_report_mapping(value, label, errors)
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return {}
     errors.extend(_unknown_public_field_errors(payload, label, allowed_fields))
     _require_report_fields(payload, label, tuple(required_fields), errors)
@@ -4492,7 +4525,7 @@ def _release_report_preflight_errors(report: Any, *, label: str) -> list[str]:
         )
     )
     blockers = payload.get("blockers")
-    if payload.get("production_ready") is True and isinstance(blockers, list) and blockers:
+    if payload.get("production_ready") is True and type(blockers) is list and blockers:
         errors.append(f"{label} blockers must be empty when production_ready is true")
     return errors
 
@@ -4507,7 +4540,7 @@ def _artifact_row_errors(row: Any, label: str) -> list[str]:
     _require_report_fields(artifact, label, ARTIFACT_FIELDS, errors)
     artifact = _public_mapping_string_view(artifact)
     artifact_path = artifact.get("path")
-    if not isinstance(artifact_path, str) or not artifact_path:
+    if type(artifact_path) is not str or not artifact_path:
         errors.append(f"{label} path must be a non-empty string")
     else:
         if artifact_path.strip() != artifact_path:
@@ -4561,7 +4594,7 @@ def _native_evm_artifact_summary_errors(row: Any, label: str) -> list[str]:
     _require_report_fields(artifact, label, ARTIFACT_FIELDS, errors)
     artifact = _public_mapping_string_view(artifact)
     artifact_path = artifact.get("path")
-    if not isinstance(artifact_path, str) or not artifact_path:
+    if type(artifact_path) is not str or not artifact_path:
         errors.append(f"{label} path must be a non-empty string")
     else:
         if artifact_path.strip() != artifact_path:
@@ -4613,12 +4646,12 @@ def _native_evm_artifact_hash_binding_errors(
 ) -> list[str]:
     artifact = _public_mapping_get_string_key(payload, artifact_field)
     expected_hash = _public_mapping_get_string_key(payload, hash_field)
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return []
     artifact_hash = _public_mapping_get_string_key(artifact, "sha256")
     if (
         _is_nonzero_canonical_sha256_text(artifact_hash)
-        and isinstance(expected_hash, str)
+        and type(expected_hash) is str
         and f"0x{artifact_hash}" != expected_hash
     ):
         return [f"{label} {artifact_field} sha256 must match {hash_field}"]
@@ -4645,9 +4678,9 @@ def _native_evm_summary_path_role_errors(
         ),
     ]
     sdk_artifacts = payload.get("sdk_artifacts")
-    if isinstance(sdk_artifacts, list):
+    if type(sdk_artifacts) is list:
         for index, row in enumerate(sdk_artifacts):
-            if isinstance(row, dict):
+            if type(row) is dict:
                 row = _public_mapping_string_view(row)
                 roles.append(
                     (
@@ -4659,10 +4692,10 @@ def _native_evm_summary_path_role_errors(
     errors: list[str] = []
     seen: dict[str, str] = {}
     for role, artifact in roles:
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         artifact_path = _public_mapping_get_string_key(artifact, "path")
-        if not isinstance(artifact_path, str) or not artifact_path:
+        if type(artifact_path) is not str or not artifact_path:
             continue
         path = PurePosixPath(artifact_path)
         if (
@@ -4688,7 +4721,7 @@ def _native_evm_summary_path_role_errors(
 
 
 def _canonical_copied_input_path_errors(value: Any, label: str) -> list[str]:
-    if not isinstance(value, str) or not value:
+    if type(value) is not str or not value:
         return [f"{label} item must be a non-empty string"]
     if value.strip() != value:
         return [f"{label} path must not contain surrounding whitespace"]
@@ -4723,7 +4756,7 @@ def _canonical_copied_input_path_errors(value: Any, label: str) -> list[str]:
 
 
 def _copied_input_layout_errors(label: str, index: int, value: Any) -> list[str]:
-    if not isinstance(value, str) or _canonical_copied_input_path_errors(value, label):
+    if type(value) is not str or _canonical_copied_input_path_errors(value, label):
         return []
     expected_prefix = f"{index:02d}-"
     path = PurePosixPath(value)
@@ -4753,7 +4786,7 @@ def _copied_input_provenance_bundle_errors(
     input_paths: list[str] = []
     inputs = payload.get("inputs")
     inputs_label = f"{label}.inputs"
-    if not isinstance(inputs, list) or not inputs:
+    if type(inputs) is not list or not inputs:
         errors.append(f"{inputs_label} must be a non-empty list of canonical paths")
     else:
         seen_inputs: set[str] = set()
@@ -4761,7 +4794,7 @@ def _copied_input_provenance_bundle_errors(
         for index, item in enumerate(inputs):
             errors.extend(_canonical_copied_input_path_errors(item, inputs_label))
             errors.extend(_copied_input_layout_errors(inputs_label, index, item))
-            if isinstance(item, str):
+            if type(item) is str:
                 if item in seen_inputs:
                     duplicate_input_count += 1
                     errors.append(
@@ -4775,16 +4808,16 @@ def _copied_input_provenance_bundle_errors(
     artifact_paths: list[str] = []
     input_artifacts = payload.get("input_artifacts")
     artifacts_label = f"{label}.input_artifacts"
-    if not isinstance(input_artifacts, list) or not input_artifacts:
+    if type(input_artifacts) is not list or not input_artifacts:
         errors.append(f"{artifacts_label} must be a non-empty list")
     else:
         seen_artifacts: set[str] = set()
         duplicate_artifact_count = 0
         for index, artifact in enumerate(input_artifacts):
-            if not isinstance(artifact, dict):
+            if type(artifact) is not dict:
                 continue
             artifact_path = _public_mapping_get_string_key(artifact, "path")
-            if not isinstance(artifact_path, str):
+            if type(artifact_path) is not str:
                 continue
             if _canonical_copied_input_path_errors(artifact_path, artifacts_label):
                 continue
@@ -4842,7 +4875,7 @@ def _release_checklist_bundle_errors(
             errors.append(item_id_error)
             item_label = item_base_label
         else:
-            assert isinstance(item_id, str)
+            assert type(item_id) is str
             item_label = f"{label}.items[{item_id!r}]"
             if item_id in seen_item_ids:
                 errors.append(f"{label} contains duplicate item id: {item_id}")
@@ -4862,7 +4895,7 @@ def _release_checklist_bundle_errors(
         )
         item_payload = _public_mapping_string_view(item_payload)
         title = item_payload.get("title")
-        if not isinstance(title, str) or not title or title.strip() != title:
+        if type(title) is not str or not title or title.strip() != title:
             errors.append(
                 f"{item_label} title must be a non-empty string "
                 "with no surrounding whitespace"
@@ -4881,7 +4914,7 @@ def _release_checklist_bundle_errors(
             )
         )
         blockers = item_payload.get("blockers")
-        if require_ready and isinstance(blockers, list) and blockers:
+        if require_ready and type(blockers) is list and blockers:
             errors.append(f"{item_label} blockers must be empty")
     return errors
 
@@ -4890,17 +4923,17 @@ def _corridor_evidence_artifact_duplicate_path_errors(
     evidence_artifacts: Any,
     label: str,
 ) -> list[str]:
-    if not isinstance(evidence_artifacts, dict):
+    if type(evidence_artifacts) is not dict:
         return []
     seen_paths: set[str] = set()
     duplicate_count = 0
     errors: list[str] = []
     for artifact in evidence_artifacts.values():
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         artifact_path = _public_mapping_get_string_key(artifact, "path")
         if (
-            not isinstance(artifact_path, str)
+            type(artifact_path) is not str
             or _canonical_copied_input_path_errors(artifact_path, label)
         ):
             continue
@@ -4990,7 +5023,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         if validation_status != "passed" and artifact is None:
             continue
         artifact_label = f"{label}.{artifact_field}"
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             errors.append(f"{artifact_label} must be an object")
             continue
         errors.extend(_native_evm_artifact_summary_errors(artifact, artifact_label))
@@ -5008,7 +5041,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
     required_audit_hashes = _native_evm_required_audit_hashes()
     semantic_audit_hashes: dict[str, Any] = {}
     if "audit_hashes" in payload:
-        if not isinstance(audit_hashes, dict):
+        if type(audit_hashes) is not dict:
             errors.append(f"{label}.audit_hashes must be a non-empty object")
         elif validation_status == "passed" and not audit_hashes:
             errors.append(f"{label}.audit_hashes must be a non-empty object")
@@ -5044,7 +5077,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                         f"{label}.audit_hashes.{key} must be a canonical "
                         "non-zero 32-byte hex value"
                     )
-    if validation_status == "passed" and isinstance(audit_hashes, dict):
+    if validation_status == "passed" and type(audit_hashes) is dict:
         for key in sorted(required_audit_hashes - semantic_audit_hashes.keys()):
             errors.append(f"{label}.audit_hashes missing field: {key}")
 
@@ -5056,14 +5089,14 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
     }
 
     parity_hash = semantic_audit_hashes.get("cross_sdk_fixture_parity")
-    if isinstance(payload.get("cross_sdk_fixture_parity_artifact"), dict):
+    if type(payload.get("cross_sdk_fixture_parity_artifact")) is dict:
         artifact_hash = _public_mapping_get_string_key(
             payload["cross_sdk_fixture_parity_artifact"],
             "sha256",
         )
         if (
             _is_nonzero_canonical_sha256_text(artifact_hash)
-            and isinstance(parity_hash, str)
+            and type(parity_hash) is str
             and f"0x{artifact_hash}" != parity_hash
         ):
             errors.append(
@@ -5071,14 +5104,14 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                 "audit_hashes.cross_sdk_fixture_parity"
             )
     self_test_hash = semantic_audit_hashes.get("native_prover_self_test")
-    if isinstance(payload.get("native_prover_self_test_artifact"), dict):
+    if type(payload.get("native_prover_self_test_artifact")) is dict:
         artifact_hash = _public_mapping_get_string_key(
             payload["native_prover_self_test_artifact"],
             "sha256",
         )
         if (
             _is_nonzero_canonical_sha256_text(artifact_hash)
-            and isinstance(self_test_hash, str)
+            and type(self_test_hash) is str
             and f"0x{artifact_hash}" != self_test_hash
         ):
             errors.append(
@@ -5104,13 +5137,13 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         validation_blockers = payload.get("validation_blockers")
         if (
             validation_status == "passed"
-            and isinstance(validation_blockers, list)
+            and type(validation_blockers) is list
             and validation_blockers
         ):
             errors.append(
                 f"{label} validation_blockers must be empty when validation_status is passed"
             )
-        if isinstance(validation_blockers, list) and validation_blockers:
+        if type(validation_blockers) is list and validation_blockers:
             errors.append(f"{label} validation_blockers must be empty")
 
     seen_sdks: set[str] = set()
@@ -5128,7 +5161,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
         for index, row in enumerate(sdk_rows):
             row_label = f"{sdk_artifacts_label}[{index}]"
             row_payload = _require_report_mapping(row, row_label, errors)
-            if not isinstance(row, dict):
+            if type(row) is not dict:
                 continue
             errors.extend(
                 _native_evm_unknown_field_errors(
@@ -5150,7 +5183,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
             if sdk_error is not None:
                 errors.append(sdk_error)
             else:
-                assert isinstance(sdk, str)
+                assert type(sdk) is str
                 semantic_sdk_order.append(sdk)
                 if sdk in seen_sdks:
                     sdk_name_errors.append(
@@ -5178,7 +5211,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                         f"{row_label} implementation must be {expected_implementation}"
                     )
             if "implementation" in row_payload and (
-                not isinstance(implementation, str)
+                type(implementation) is not str
                 or not implementation
                 or implementation.strip() != implementation
             ):
@@ -5196,7 +5229,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
             implementation_artifact = row_payload.get("implementation_artifact")
             if "implementation_artifact" in row_payload:
                 artifact_label = f"{row_label}.implementation_artifact"
-                if not isinstance(implementation_artifact, dict):
+                if type(implementation_artifact) is not dict:
                     errors.append(f"{artifact_label} must be an object")
                 else:
                     errors.extend(
@@ -5212,13 +5245,13 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
                     implementation_hash = row_payload.get("implementation_hash")
                     if (
                         _is_nonzero_canonical_sha256_text(artifact_hash)
-                        and isinstance(implementation_hash, str)
+                        and type(implementation_hash) is str
                         and f"0x{artifact_hash}" != implementation_hash
                     ):
                         errors.append(
                             f"{artifact_label} sha256 must match implementation_hash"
                         )
-            if isinstance(sdk, str):
+            if type(sdk) is str:
                 reserved_audit_hash_roles[
                     f"sdk_artifacts[{index}].implementation_hash"
                 ] = row_payload.get("implementation_hash")
@@ -5251,7 +5284,7 @@ def _native_evm_prover_summary_errors(summary: Any, label: str) -> list[str]:
             )
         seen_audit_hashes[value] = key
         for role, role_hash in reserved_audit_hash_roles.items():
-            if value == role_hash:
+            if _is_nonzero_bytes32_hex_text(role_hash) and value == role_hash:
                 errors.append(f"{label}.audit_hashes.{key} must not reuse {role}")
 
     errors.extend(_native_evm_summary_path_role_errors(label, payload))
@@ -5364,6 +5397,77 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
         | snapshot_route_canary_domains
         | {_sccp_domain_tron()}
     )
+    if domain == _sccp_domain_eth():
+        for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
+            value_for_field = payload.get(field)
+            if (
+                type(value_for_field) is str
+                and (
+                    not _is_canonical_decimal_text(value_for_field, positive=True)
+                    or int(value_for_field, 10)
+                    != _expected_evm_rpc_chain_id(
+                        _sccp_domain_eth(),
+                        payload.get("chain"),
+                    )
+                )
+            ):
+                errors.append(f"{label} {field} must be Ethereum mainnet chain id 1")
+        for field in ("evm_source_block_tag", "evm_destination_block_tag"):
+            value_for_field = payload.get(field)
+            if type(value_for_field) is str and value_for_field != "finalized":
+                errors.append(f"{label} {field} must be finalized for Ethereum mainnet")
+    elif domain == _sccp_domain_bsc():
+        bsc_has_evm_evidence = any(
+            type(payload.get(field)) is str and bool(payload.get(field))
+            for field in (
+                "source_verifier_material_hash",
+                "source_adapter_engine_deployment_hash",
+                "destination_binding_hash",
+                "route_allowlist_hash",
+                "route_canary_evidence_hash",
+            )
+        )
+        expected_chain_id = _expected_evm_rpc_chain_id(
+            _sccp_domain_bsc(),
+            payload.get("chain"),
+        )
+        expected_chain = (
+            "bsc-testnet" if payload.get("chain") == "bsc-testnet" else "bsc"
+        )
+        for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
+            value_for_field = payload.get(field)
+            if (
+                bsc_has_evm_evidence
+                and type(value_for_field) is str
+                and (
+                    not _is_canonical_decimal_text(value_for_field, positive=True)
+                    or int(value_for_field, 10) != expected_chain_id
+                )
+            ):
+                errors.append(
+                    f"{label} {field} must be BSC chain id "
+                    f"{expected_chain_id} for {expected_chain}"
+                )
+        for field in ("evm_source_block_tag", "evm_destination_block_tag"):
+            value_for_field = payload.get(field)
+            if (
+                bsc_has_evm_evidence
+                and type(value_for_field) is str
+                and not value_for_field
+            ):
+                errors.append(
+                    f"{label} {field} must be non-empty for BSC EVM evidence"
+                )
+    elif domain in known_route_canary_domains:
+        for field in (
+            "evm_source_rpc_chain_id",
+            "evm_source_block_tag",
+            "evm_destination_rpc_chain_id",
+            "evm_destination_block_tag",
+        ):
+            value_for_field = payload.get(field)
+            if type(value_for_field) is str and value_for_field:
+                errors.append(f"{label} {field} must be empty for non-EVM lanes")
     has_route_canary_evidence = _is_nonzero_bytes32_hex_text(
         payload.get("route_canary_evidence_hash")
     )
@@ -5532,7 +5636,12 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
                         f"{label} {field} must be {expected_label} for "
                         "message-proof route canary evidence"
                     )
-            elif value_for_field != expected:
+            elif (
+                type(value_for_field) is not int
+                or value_for_field < 0
+                or value_for_field > 0xFFFF_FFFF
+                or value_for_field != expected
+            ):
                 # Source-inventory marker: route-canary public scalar proof context must be exact for message-proof route canary evidence
                 errors.append(
                     f"{label} {field} must be {expected_label} for "
@@ -5843,7 +5952,7 @@ def _cryptographic_evidence_row_bundle_errors(row: Any, label: str) -> list[str]
     )
     audit_hashes = payload.get("source_adapter_gate_audit_hashes")
     if "source_adapter_gate_audit_hashes" in payload:
-        if not isinstance(audit_hashes, dict):
+        if type(audit_hashes) is not dict:
             errors.append(f"{label} source_adapter_gate_audit_hashes must be an object")
         else:
             audit_label = f"{label} source_adapter_gate_audit_hashes"
@@ -5923,7 +6032,7 @@ def _cryptographic_evidence_lane_binding_bundle_errors(
     crypto_label: str,
     lanes_label: str,
 ) -> list[str]:
-    if not isinstance(lanes, list):
+    if type(lanes) is not list:
         return []
 
     errors: list[str] = []
@@ -6059,7 +6168,7 @@ def _cryptographic_evidence_lane_binding_bundle_errors(
 
     missing = object()
     for index, row in enumerate(crypto_rows):
-        if not isinstance(row, dict):
+        if type(row) is not dict:
             continue
         row = _public_mapping_string_view(row)
         row_label = f"{crypto_label}[{index}]"
@@ -6068,7 +6177,7 @@ def _cryptographic_evidence_lane_binding_bundle_errors(
             if domain in seen_domains:
                 errors.append(f"{row_label} duplicates domain {domain}")
             seen_domains.add(domain)
-        if index >= len(lanes) or not isinstance(lanes[index], dict):
+        if index >= len(lanes) or type(lanes[index]) is not dict:
             errors.append(f"{row_label} has no embedded lane")
             continue
         lane = _public_mapping_string_view(lanes[index])
@@ -6097,7 +6206,7 @@ def _cryptographic_evidence_lane_binding_bundle_errors(
                 continue
             expected: Any = lane
             for segment in lane_path:
-                if not isinstance(expected, dict) or not _public_mapping_has_string_key(
+                if type(expected) is not dict or not _public_mapping_has_string_key(
                     expected,
                     segment,
                 ):
@@ -6163,7 +6272,7 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         )
     )
     helper_symbols = payload.get("sdk_helper_symbols")
-    if isinstance(helper_symbols, list) and all(
+    if type(helper_symbols) is list and all(
         _submission_surface_helper_symbol_error(
             item,
             f"{label} sdk_helper_symbols",
@@ -6177,7 +6286,7 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
             errors.append(f"{label} sdk_helpers must match sdk_helper_symbols")
 
     helper_sets = payload.get("sdk_helper_symbols_by_sdk")
-    if not isinstance(helper_sets, dict):
+    if type(helper_sets) is not dict:
         errors.append(f"{label} sdk_helper_symbols_by_sdk must be an object")
     else:
         known_sdks = _submission_surface_known_sdks()
@@ -6196,7 +6305,7 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
                 errors.append(f"{sdk_label} contains unknown SDK: {sdk}")
             semantic_helper_sets[sdk] = helpers
             row_label = f"{sdk_label}[{sdk}]"
-            if not isinstance(helpers, list) or not helpers:
+            if type(helpers) is not list or not helpers:
                 errors.append(f"{row_label} must be a list of non-empty strings")
                 continue
             if any(type(item) is not str or not item for item in helpers):
@@ -6224,8 +6333,8 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         )
         js_helpers = semantic_helper_sets.get("js-sdk")
         if (
-            isinstance(js_helpers, list)
-            and isinstance(helper_symbols, list)
+            type(js_helpers) is list
+            and type(helper_symbols) is list
             and all(type(helper) is str for helper in js_helpers)
             and all(type(helper) is str for helper in helper_symbols)
             and js_helpers != helper_symbols
@@ -6244,7 +6353,7 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         )
     )
     required_phases = payload.get("required_phases")
-    if isinstance(required_phases, list) and all(
+    if type(required_phases) is list and all(
         type(item) is str and item for item in required_phases
     ):
         semantic_phases: list[str] = []
@@ -6297,13 +6406,13 @@ def _submission_surface_row_bundle_errors(surface: Any, label: str) -> list[str]
         validation_blockers = payload.get("validation_blockers")
         if (
             validation_status_passed
-            and isinstance(validation_blockers, list)
+            and type(validation_blockers) is list
             and validation_blockers
         ):
             errors.append(
                 f"{label} validation_blockers must be empty when validation_status is passed"
             )
-        if isinstance(validation_blockers, list) and validation_blockers:
+        if type(validation_blockers) is list and validation_blockers:
             errors.append(f"{label} validation_blockers must be empty")
     return errors
 
@@ -6325,11 +6434,11 @@ def _submission_surface_binding_bundle_errors(
     expected_by_lanes = {
         surface["lanes"]: surface
         for surface in expected_surfaces
-        if isinstance(surface, dict) and type(surface.get("lanes")) is str
+        if type(surface) is dict and type(surface.get("lanes")) is str
     }
     seen_lanes: set[str] = set()
     for surface in surfaces:
-        if not isinstance(surface, dict):
+        if type(surface) is not dict:
             continue
         surface = _public_mapping_string_view(surface)
         lanes = surface.get("lanes")
@@ -6384,8 +6493,8 @@ def _submission_surface_binding_bundle_errors(
         required_phases = surface.get("required_phases")
         expected_required_phases = expected.get("required_phases")
         if (
-            isinstance(required_phases, list)
-            and isinstance(expected_required_phases, list)
+            type(required_phases) is list
+            and type(expected_required_phases) is list
             and all(type(phase) is str for phase in required_phases)
             and all(type(phase) is str for phase in expected_required_phases)
             and required_phases != expected_required_phases
@@ -6396,11 +6505,11 @@ def _submission_surface_binding_bundle_errors(
             )
         helper_sets = surface.get("sdk_helper_symbols_by_sdk")
         expected_helper_sets = expected.get("sdk_helper_symbols_by_sdk")
-        if isinstance(helper_sets, dict) and isinstance(expected_helper_sets, dict):
+        if type(helper_sets) is dict and type(expected_helper_sets) is dict:
             for sdk, expected_helpers in expected_helper_sets.items():
                 helpers = _public_mapping_get_string_key(helper_sets, sdk)
                 if (
-                    not isinstance(helpers, list)
+                    type(helpers) is not list
                     or any(type(helper) is not str for helper in helpers)
                     or any(type(helper) is not str for helper in expected_helpers)
                 ):
@@ -6432,7 +6541,7 @@ def _submission_surface_binding_bundle_errors(
             helper_symbols = surface.get("sdk_helper_symbols")
             expected_js_helpers = expected_helper_sets.get("js-sdk", ())
             if (
-                isinstance(helper_symbols, list)
+                type(helper_symbols) is list
                 and all(type(helper) is str for helper in helper_symbols)
                 and all(type(helper) is str for helper in expected_js_helpers)
             ):
@@ -6603,11 +6712,12 @@ def _bundled_artifact_integrity_errors(
 ) -> list[str]:
     if not label.startswith("bundled report."):
         return []
-    if not isinstance(artifact, dict):
+    # Source-inventory marker: bundle artifact integrity containers must reject subclasses.
+    if type(artifact) is not dict:
         return []
     artifact = _public_mapping_string_view(artifact)
     artifact_path = artifact.get("path")
-    if not isinstance(artifact_path, str) or not artifact_path:
+    if type(artifact_path) is not str or not artifact_path:
         return []
     if (
         artifact_path.strip() != artifact_path
@@ -6664,11 +6774,14 @@ def _release_report_artifact_integrity_bundle_errors(
 ) -> list[str]:
     if not label.startswith("bundled report"):
         return []
+    # Source-inventory marker: release report artifact integrity containers must reject subclasses.
+    if type(payload) is not dict:
+        return []
     payload = _public_mapping_string_view(payload)
     errors: list[str] = []
 
     input_artifacts = payload.get("input_artifacts")
-    if isinstance(input_artifacts, list):
+    if type(input_artifacts) is list:
         for index, artifact in enumerate(input_artifacts):
             errors.extend(
                 _bundled_artifact_integrity_errors(
@@ -6679,10 +6792,10 @@ def _release_report_artifact_integrity_bundle_errors(
             )
 
     corridor = payload.get("corridor")
-    if isinstance(corridor, dict):
+    if type(corridor) is dict:
         corridor = _public_mapping_string_view(corridor)
         phase_artifacts = corridor.get("evidence_artifacts")
-        if isinstance(phase_artifacts, dict):
+        if type(phase_artifacts) is dict:
             for phase, artifact in phase_artifacts.items():
                 phase_error = _corridor_phase_key_error(
                     phase,
@@ -6702,7 +6815,7 @@ def _release_report_artifact_integrity_bundle_errors(
                 )
 
     native_summary = payload.get("native_evm_prover_bundle")
-    if isinstance(native_summary, dict):
+    if type(native_summary) is dict:
         native_summary = _public_mapping_string_view(native_summary)
         for field in (
             "artifact",
@@ -6720,9 +6833,9 @@ def _release_report_artifact_integrity_bundle_errors(
                 )
             )
         sdk_artifacts = native_summary.get("sdk_artifacts")
-        if isinstance(sdk_artifacts, list):
+        if type(sdk_artifacts) is list:
             for index, row in enumerate(sdk_artifacts):
-                if not isinstance(row, dict):
+                if type(row) is not dict:
                     continue
                 row = _public_mapping_string_view(row)
                 errors.extend(
@@ -6745,7 +6858,8 @@ def _readiness_markdown_bundle_errors(
 ) -> list[str]:
     if not label.startswith("bundled report"):
         return []
-    if not isinstance(markdown, str):
+    # Source-inventory marker: readiness Markdown bundle text must reject subclasses.
+    if type(markdown) is not str:
         return [f"{label}.markdown must be UTF-8 text"]
     verifier = _verify_module()
     try:
@@ -6869,7 +6983,7 @@ def _all_lanes_nested_bundle_errors(
         or lane.get("production_ready") is True
     )
     records = lane.get("records")
-    record_flags = records if isinstance(records, dict) else {}
+    record_flags = records if type(records) is dict else {}
     copied_source_records_present = (
         record_flags.get("source_verifier_material") is True
         and record_flags.get("source_adapter_deployment") is True
@@ -6890,7 +7004,7 @@ def _all_lanes_nested_bundle_errors(
             return required_fields
         if record_present:
             return required_fields
-        if isinstance(value, dict) and value:
+        if type(value) is dict and value:
             return required_fields
         return frozenset()
 
@@ -6956,7 +7070,7 @@ def _all_lanes_nested_bundle_errors(
     audit_hashes = source_gate.get("audit_hashes")
     if "audit_hashes" in source_gate:
         audit_label = f"{label}.source_adapter_gate audit_hashes"
-        if not isinstance(audit_hashes, dict):
+        if type(audit_hashes) is not dict:
             errors.append(f"{audit_label} must be an object")
         else:
             audit_key_errors: list[str] = []
@@ -7007,7 +7121,7 @@ def _all_lanes_nested_bundle_errors(
                 source_gate.get("gate_hash"),
             )
         )
-        if isinstance(audit_hashes, dict):
+        if type(audit_hashes) is dict:
             errors.extend(
                 _source_adapter_gate_template_audit_errors(
                     f"{label}.source_adapter_gate audit_hashes",
@@ -7018,7 +7132,7 @@ def _all_lanes_nested_bundle_errors(
     if (
         enforce_governed_hash_semantics
         and source_gate.get("ready") is True
-        and isinstance(source_gate.get("blockers"), list)
+        and type(source_gate.get("blockers")) is list
         and source_gate.get("blockers")
     ):
         errors.append(f"{label}.source_adapter_gate blockers must be empty when ready")
@@ -7398,7 +7512,7 @@ def _all_lanes_nested_bundle_errors(
             (
                 _all_lanes_route_canary_fields(domain)
                 if enforce_governed_hash_semantics
-                or isinstance(route_canary_value, dict)
+                or type(route_canary_value) is dict
                 else frozenset()
             ),
             errors,
@@ -7590,30 +7704,6 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
     payload = _public_mapping_string_view(payload)
     if type(payload.get("production_ready")) is not bool:
         errors.append(f"{label} production_ready must be true or false")
-    errors.extend(
-        _integer_list_field_errors(
-            label,
-            payload,
-            "required_domains",
-            allow_empty=False,
-        )
-    )
-    errors.extend(
-        _integer_list_field_errors(
-            label,
-            payload,
-            "supported_launch_domains",
-            allow_empty=False,
-        )
-    )
-    errors.extend(
-        _integer_list_field_errors(
-            label,
-            payload,
-            "unsupported_launch_domains",
-            allow_empty=True,
-        )
-    )
     errors.extend(_launch_domain_list_bundle_errors(label, payload))
     errors.extend(
         _public_blocker_list_field_errors(
@@ -7626,7 +7716,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
     blockers = payload.get("blockers")
     if (
         payload.get("production_ready") is True
-        and isinstance(blockers, list)
+        and type(blockers) is list
         and blockers
     ):
         errors.append(f"{label} blockers must be empty when production_ready is true")
@@ -7636,7 +7726,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
         f"{label}.release_checklist",
         errors,
     )
-    if isinstance(payload.get("release_checklist"), dict):
+    if type(payload.get("release_checklist")) is dict:
         errors.extend(
             _release_checklist_bundle_errors(
                 checklist,
@@ -7649,7 +7739,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
     for index, lane in enumerate(lanes):
         lane_label = f"{label}.lanes[{index}]"
         lane_payload = _require_report_mapping(lane, lane_label, errors)
-        if not isinstance(lane, dict):
+        if type(lane) is not dict:
             continue
         errors.extend(
             _unknown_public_field_errors(
@@ -7685,7 +7775,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
         lane_blockers = lane_payload.get("blockers")
         if (
             lane_payload.get("production_ready") is True
-            and isinstance(lane_blockers, list)
+            and type(lane_blockers) is list
             and lane_blockers
         ):
             errors.append(
@@ -7697,7 +7787,7 @@ def _all_lanes_summary_bundle_errors(summary: Any, label: str) -> list[str]:
             f"{lane_label}.records",
             errors,
         )
-        if isinstance(lane_payload.get("records"), dict):
+        if type(lane_payload.get("records")) is dict:
             errors.extend(
                 _unknown_public_field_errors(
                     records,
@@ -7737,11 +7827,11 @@ def _all_lanes_summary_output_bundle_errors(
     errors = _all_lanes_summary_bundle_errors(summary, label)
     if errors:
         return errors
-    if not isinstance(summary, dict):
+    if type(summary) is not dict:
         return errors
     report = _public_mapping_string_view(report)
     report_evidence = report.get("evidence")
-    if not isinstance(report_evidence, dict):
+    if type(report_evidence) is not dict:
         errors.append(
             f"{label} cannot be compared: bundled report evidence is not an object"
         )
@@ -7757,9 +7847,9 @@ def _release_report_bundle_errors(
     bundle_dir: Path | None = None,
 ) -> list[str]:
     errors = _release_report_preflight_errors(report, label=label)
-    payload = report if isinstance(report, dict) else {}
-    if not isinstance(payload, dict):
+    if type(report) is not dict:
         return errors
+    payload = report
 
     errors.extend(
         _unknown_public_field_errors(payload, label, READINESS_REPORT_ROOT_FIELDS)
@@ -7779,7 +7869,7 @@ def _release_report_bundle_errors(
         f"{label}.release_checklist",
         errors,
     )
-    if isinstance(payload.get("release_checklist"), dict):
+    if type(payload.get("release_checklist")) is dict:
         checklist_errors = _release_checklist_bundle_errors(
             checklist,
             f"{label}.release_checklist",
@@ -7790,7 +7880,7 @@ def _release_report_bundle_errors(
         checklist_errors = []
 
     corridor = _require_report_mapping(payload.get("corridor"), f"{label}.corridor", errors)
-    if isinstance(payload.get("corridor"), dict):
+    if type(payload.get("corridor")) is dict:
         errors.extend(
             _unknown_public_field_errors(
                 corridor,
@@ -7826,7 +7916,7 @@ def _release_report_bundle_errors(
         corridor_blockers = corridor.get("blockers")
         if (
             corridor.get("production_ready") is True
-            and isinstance(corridor_blockers, list)
+            and type(corridor_blockers) is list
             and corridor_blockers
         ):
             errors.append(
@@ -8046,7 +8136,7 @@ def _release_report_bundle_errors(
                 inventory_payload,
                 "validation_blockers",
             )
-            if isinstance(validation_blockers, list) and validation_blockers:
+            if type(validation_blockers) is list and validation_blockers:
                 errors.append(f"{inventory_label} validation_blockers must be empty")
         errors.extend(
             _number_repeated_source_inventory_gate_diagnostics(
@@ -8061,7 +8151,7 @@ def _release_report_bundle_errors(
         f"{label}.evidence",
     )
     errors.extend(evidence_summary_errors)
-    if not evidence_summary_errors and isinstance(evidence_summary, dict):
+    if not evidence_summary_errors and type(evidence_summary) is dict:
         errors.extend(
             _copied_evidence_binding_bundle_errors(
                 evidence_summary,
@@ -8070,7 +8160,7 @@ def _release_report_bundle_errors(
                 label,
             )
         )
-    if isinstance(evidence_summary, dict):
+    if not evidence_summary_errors and type(evidence_summary) is dict:
         errors.extend(
             _cryptographic_evidence_lane_binding_bundle_errors(
                 crypto_rows,
@@ -8081,9 +8171,9 @@ def _release_report_bundle_errors(
         )
     if (
         not checklist_errors
-        and isinstance(checklist, dict)
+        and type(checklist) is dict
         and not evidence_summary_errors
-        and isinstance(evidence_summary, dict)
+        and type(evidence_summary) is dict
         and not native_summary_errors
     ):
         errors.extend(
@@ -8117,7 +8207,8 @@ def _release_notes_attachment_bundle_errors(
 ) -> list[str]:
     if not label.startswith("bundled report"):
         return []
-    if not isinstance(notes, str):
+    # Source-inventory marker: release-notes attachment bundle text must reject subclasses.
+    if type(notes) is not str:
         return [f"{label}.release_notes_attachment must be UTF-8 text"]
     verifier = _verify_module()
     try:
@@ -8140,7 +8231,7 @@ def _release_notes_attachment_bundle_errors(
 
 def _release_notes_artifact_path_is_safe(value: Any) -> bool:
     if (
-        not isinstance(value, str)
+        type(value) is not str
         or not value
         or value.strip() != value
         or not value.isascii()
@@ -8158,7 +8249,7 @@ def _release_notes_artifact_path_is_safe(value: Any) -> bool:
 
 
 def _release_notes_artifact_row_cells(artifact: Any) -> list[str]:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return [
             "`<invalid artifact>`",
             "`<invalid bytes>`",
@@ -8186,7 +8277,8 @@ def _release_notes_artifact_row_cells(artifact: Any) -> list[str]:
 
 
 def _release_notes_artifact_rows(artifacts: Any) -> list[list[str]]:
-    if not isinstance(artifacts, list):
+    # Source-inventory marker: release-notes attachment artifact containers must reject subclasses.
+    if type(artifacts) is not list:
         return [
             [
                 "`<invalid artifact>`",
@@ -8196,10 +8288,11 @@ def _release_notes_artifact_rows(artifacts: Any) -> list[list[str]]:
         ]
     rows: list[list[str]] = []
     for artifact in artifacts:
+        artifact_path = artifact.get("path") if type(artifact) is dict else None
         if (
-            isinstance(artifact, dict)
-            and artifact.get("path")
-            in {"manifest.json", "sccp-release-notes-attachment.md"}
+            type(artifact) is dict
+            and type(artifact_path) is str
+            and artifact_path in {"manifest.json", "sccp-release-notes-attachment.md"}
         ):
             continue
         rows.append(_release_notes_artifact_row_cells(artifact))
@@ -8210,6 +8303,8 @@ def _release_notes_attachment(
     report: dict[str, Any],
     artifacts: list[dict[str, Any]],
 ) -> str:
+    # Source-inventory marker: release-notes attachment report roots must reject subclasses.
+    report = report if type(report) is dict else {}
     status = "READY" if report.get("production_ready") is True else "NOT READY"
     lines = [
         "# SCCP Public Release Notes Attachment",
@@ -8251,11 +8346,12 @@ def _bundle_artifacts(output_dir: Path, paths: list[Path]) -> list[dict[str, Any
 def _release_bundle_manifest_errors(
     manifest: Any,
     output_dir: Path,
-    report: dict[str, Any],
-    summary: dict[str, Any],
+    report: Any,
+    summary: Any,
 ) -> list[str]:
     verifier = _verify_module()
-    if not isinstance(manifest, dict):
+    # Source-inventory marker: release manifest verifier containers must reject subclasses.
+    if type(manifest) is not dict:
         return ["manifest is not a JSON object"]
 
     errors: list[str] = []
@@ -8277,8 +8373,9 @@ def _release_bundle_manifest_errors(
     for key in sorted(verifier.MANIFEST_KEYS - _public_mapping_string_keys(manifest)):
         errors.append(f"manifest missing top-level field: {key}")
     manifest = _public_mapping_string_view(manifest)
-    report = _public_mapping_string_view(report)
-    summary = _public_mapping_string_view(summary)
+    # Source-inventory marker: release manifest validation readiness roots must reject subclasses.
+    report = _public_mapping_string_view(report) if type(report) is dict else {}
+    summary = _public_mapping_string_view(summary) if type(summary) is dict else {}
     if manifest.get("schema") != verifier.SCHEMA:
         errors.append(f"unexpected manifest schema: {manifest.get('schema')}")
     errors.extend(verifier._boolean_field_errors("manifest", manifest, "production_ready"))
@@ -8296,12 +8393,12 @@ def _release_bundle_manifest_errors(
     )
 
     artifacts = manifest.get("artifacts")
-    if not isinstance(artifacts, list) or not artifacts:
+    if type(artifacts) is not list or not artifacts:
         errors.append("manifest artifacts must be a non-empty list")
         artifacts = []
     manifest_artifacts = verifier._manifest_artifacts_by_path(artifacts, errors)
     for artifact in artifacts:
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             errors.append("manifest artifact entry is not an object")
             continue
         errors.extend(verifier._artifact_errors(output_dir, artifact))
@@ -8349,9 +8446,9 @@ def _release_bundle_manifest_errors(
     if manifest.get("blockers") != report.get("blockers"):
         errors.append("manifest blockers do not match readiness report blockers")
     release_checklist = report.get("release_checklist")
-    if isinstance(release_checklist, dict):
+    if type(release_checklist) is dict:
         release_checklist = _public_mapping_string_view(release_checklist)
-    if isinstance(release_checklist, dict) and manifest.get(
+    if type(release_checklist) is dict and manifest.get(
         "release_checklist_ready"
     ) != release_checklist.get("ready"):
         errors.append(
@@ -8359,14 +8456,14 @@ def _release_bundle_manifest_errors(
             "readiness report release_checklist"
         )
     corridor = report.get("corridor")
-    if isinstance(corridor, dict):
+    if type(corridor) is dict:
         corridor = _public_mapping_string_view(corridor)
-    if isinstance(corridor, dict) and manifest.get("corridor_ready") != corridor.get(
+    if type(corridor) is dict and manifest.get("corridor_ready") != corridor.get(
         "production_ready"
     ):
         errors.append("manifest corridor_ready does not match readiness report corridor")
     summary_native_bundle = report.get("native_evm_prover_bundle")
-    if not isinstance(summary_native_bundle, dict):
+    if type(summary_native_bundle) is not dict:
         summary_native_bundle = verifier._missing_native_evm_prover_bundle_status()
     summary_launch_checklist = verifier._active_launch_release_checklist(
         summary,
@@ -8378,7 +8475,7 @@ def _release_bundle_manifest_errors(
             "manifest production_ready does not match all-lanes summary active "
             f"{verifier.ACTIVE_LAUNCH_DISPLAY} launch readiness"
         )
-    if isinstance(summary.get("release_checklist"), dict) and manifest.get(
+    if type(summary.get("release_checklist")) is dict and manifest.get(
         "release_checklist_ready"
     ) != summary_launch_checklist.get("ready"):
         errors.append(
@@ -8389,6 +8486,8 @@ def _release_bundle_manifest_errors(
 
 
 def _manifest_report_value(report: dict[str, Any], field: str) -> Any:
+    if type(report) is not dict:
+        return None
     return _public_mapping_get_string_key(report, field)
 
 
@@ -8399,15 +8498,20 @@ def _manifest_report_nested_value(
 ) -> Any:
     """Return nested readiness value with malformed readiness-root suppression."""
 
+    if type(report) is not dict:
+        return None
     payload = _public_mapping_get_string_key(report, section)
-    if isinstance(payload, dict):
+    # Source-inventory marker: release manifest nested readiness roots must reject subclasses.
+    if type(payload) is dict:
         return _public_mapping_get_string_key(payload, field)
     return None
 
 
 def _manifest_report_blockers(report: dict[str, Any]) -> list[str]:
+    if type(report) is not dict:
+        return ["invalid blockers"]
     blockers = _public_mapping_get_string_key(report, "blockers")
-    if isinstance(blockers, list) and not _public_blocker_list_field_errors(
+    if type(blockers) is list and not _public_blocker_list_field_errors(
         "readiness report",
         {"blockers": blockers},
         "blockers",
@@ -8444,7 +8548,8 @@ def _release_bundle_manifest(
 
 def _strict_verifier_summary_errors(summary: Any) -> list[str]:
     label = "strict verifier summary"
-    if not isinstance(summary, dict):
+    # Source-inventory marker: strict verifier summary containers must reject subclasses
+    if type(summary) is not dict:
         return [f"{label} must be an object"]
 
     errors: list[str] = []
@@ -8461,13 +8566,13 @@ def _strict_verifier_summary_errors(summary: Any) -> list[str]:
     summary_errors = summary.get("errors")
     if (
         summary.get("verified") is True
-        and isinstance(summary_errors, list)
+        and type(summary_errors) is list
         and summary_errors
     ):
         errors.append(f"{label} errors must be empty when verified is true")
     if (
         summary.get("verified") is False
-        and isinstance(summary_errors, list)
+        and type(summary_errors) is list
         and not summary_errors
     ):
         errors.append(f"{label} errors must not be empty when verified is false")

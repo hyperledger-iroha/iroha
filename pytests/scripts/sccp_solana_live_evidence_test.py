@@ -82,6 +82,46 @@ class HostileDecimalText(str):
         raise AssertionError("secret-token Solana decimal text startswith ran")
 
 
+class HostileSolanaLiveString(str):
+    """String subclass that Solana live exact parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana live exact string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana live exact string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana live exact string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana live exact string was compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token Solana live exact string was iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token Solana live exact string was indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token Solana live exact string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token Solana live exact string startswith ran")
+
+    def isascii(self):
+        raise AssertionError("secret-token Solana live exact string isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token Solana live exact string isdecimal ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token Solana live exact string encode ran")
+
+
 def load_live_module():
     script_path = (
         Path(__file__).resolve().parents[2] / "scripts" / "sccp_solana_live_evidence.py"
@@ -1675,6 +1715,116 @@ def test_live_solana_decimal_parsers_reject_string_subclasses_without_hooks():
             raise AssertionError(
                 "Solana live expected ProgramData slot accepted hostile text"
             )
+
+
+def test_solana_live_exact_string_parsers_reject_string_subclasses_without_hooks():
+    module = load_live_module()
+    program_id = module._encode_solana_base58(bytes.fromhex("33" * 32))
+    programdata_address = module._encode_solana_base58(bytes.fromhex("11" * 32))
+    program_bytes = bytes.fromhex("7f454c460102030405")
+    code_hash = module.evidence.solana_verifier_program_code_hash(program_bytes)
+    hostile_program_id = HostileSolanaLiveString(program_id)
+    hostile_programdata_address = HostileSolanaLiveString(programdata_address)
+    hostile_hex = HostileSolanaLiveString("0x" + "11" * 32)
+    hostile_base64 = HostileSolanaLiveString(
+        base64.b64encode(program_bytes).decode("ascii")
+    )
+
+    direct_cases = (
+        (
+            lambda: module._exact_live_string(
+                {"verifier_program_id": hostile_program_id},
+                "verifier_program_id",
+                label="verifier_program_id",
+            ),
+            ValueError,
+            "verifier_program_id must be an exact non-empty string",
+        ),
+        (
+            lambda: module._live_base64_bytes(
+                {"programdata_metadata_base64": hostile_base64},
+                "programdata_metadata_base64",
+                label="Solana ProgramData metadata base64 metadata",
+            ),
+            ValueError,
+            "Solana ProgramData metadata base64 metadata must be present",
+        ),
+        (
+            lambda: module._account_data(
+                {"data": [hostile_base64, "base64"]},
+                label="Solana Program",
+            ),
+            RuntimeError,
+            "Solana Program account data must use base64 encoding",
+        ),
+    )
+    for parser, exception_type, expected_message in direct_cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("string-subclass Solana live parser value was accepted")
+
+    args = _live_args(module, code_hash=code_hash, programdata_address=programdata_address)
+    summary_cases = (
+        (
+            "verifier_program_id",
+            hostile_program_id,
+            "Solana live verifier program id metadata is invalid",
+        ),
+        (
+            "programdata_address",
+            hostile_programdata_address,
+            "Solana live ProgramData address metadata is invalid",
+        ),
+        (
+            "verifier_code_hash",
+            hostile_hex,
+            "Solana live verifier code hash metadata is invalid",
+        ),
+        (
+            "program_account_data_base64",
+            hostile_base64,
+            "Solana Program account data base64 metadata must be present",
+        ),
+        (
+            "programdata_metadata_blake2b256",
+            hostile_hex,
+            "programdata_metadata_blake2b256 must be an exact non-empty string",
+        ),
+        (
+            "programdata_metadata_base64",
+            hostile_base64,
+            "Solana ProgramData metadata base64 metadata must be present",
+        ),
+        (
+            "programdata_executable_base64",
+            hostile_base64,
+            "Solana ProgramData executable base64 metadata must be present",
+        ),
+    )
+    for field, hostile_value, expected_message in summary_cases:
+        live = _live_record(
+            module,
+            program_id=program_id,
+            programdata_address=programdata_address,
+            program_bytes=program_bytes,
+        )
+        live[field] = hostile_value
+        try:
+            module._summary(args, live)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+            assert exc.__suppress_context__ is True
+        else:
+            raise AssertionError(f"string-subclass Solana live {field} was accepted")
 
 
 def test_solana_live_cli_parsers_reject_non_string_values_without_stringification():

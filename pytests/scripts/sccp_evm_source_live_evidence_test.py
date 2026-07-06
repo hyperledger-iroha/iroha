@@ -121,6 +121,40 @@ class HostileSourceLiveDomainText(str):
         raise AssertionError("secret-token EVM source live domain was inspected")
 
 
+class HostileSourceLiveString(str):
+    """String subclass that source-live exact parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token EVM source live exact string compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token EVM source live exact string iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token EVM source live exact string indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token EVM source live exact string stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token EVM source live exact string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token EVM source live exact string lower ran")
+
+    def isascii(self):
+        raise AssertionError("secret-token EVM source live exact string isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token EVM source live exact string isdecimal ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token EVM source live exact string encoded")
+
+
 class OversizedResponse:
     def __enter__(self):
         return self
@@ -915,6 +949,62 @@ def test_evm_source_live_cli_parsers_reject_non_string_values_without_stringific
             assert "HostileSourceLiveParserValue" not in rendered
         else:
             raise AssertionError("hostile EVM source-live parser value was accepted")
+
+
+def test_evm_source_live_exact_string_parsers_reject_string_subclasses_without_hooks():
+    module = load_live_module()
+    evidence = module._load_evidence_module(module.SCCP_DOMAIN_ETH)
+    hostile_hex = HostileSourceLiveString("0x" + "11" * 32)
+    hostile_runtime = HostileSourceLiveString("0x6000")
+    hostile_quantity = HostileSourceLiveString("0xa")
+
+    cases = (
+        (
+            lambda: module._summary_hex_bytes(
+                {"component": hostile_hex},
+                "component",
+                label="component hash",
+                byte_length=32,
+            ),
+            ValueError,
+            "component hash must be an exact hex string",
+        ),
+        (
+            lambda: module._summary_runtime_bytes(
+                evidence,
+                {"runtime": hostile_runtime},
+                "runtime",
+                label="source bridge runtime bytecode",
+            ),
+            ValueError,
+            "source bridge runtime bytecode must be exact 0x-prefixed hex",
+        ),
+        (
+            lambda: module._rpc_quantity(hostile_quantity, method="eth_test"),
+            RuntimeError,
+            "eth_test returned non-quantity data",
+        ),
+        (
+            lambda: module._rpc_hex_data(
+                hostile_runtime,
+                method="eth_getCode source bridge",
+            ),
+            RuntimeError,
+            "eth_getCode source bridge returned non-string data",
+        ),
+    )
+
+    for parser, exception_type, expected_message in cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError(
+                "string-subclass EVM source-live parser value was accepted"
+            )
 
 
 def test_evm_source_live_receipt_ready_predicate_redacts_imported_address_parser_failures(

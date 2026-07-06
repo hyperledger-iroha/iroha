@@ -18,7 +18,7 @@ const DEFAULT_TON_FINALIZE_MESSAGE_VALUE_NANO = "100000000";
 const TAIRA_XOR_SETTLEMENT_ASSET_DEFINITION_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const DEFAULT_TAIRA_BURN_RECORD_VK_NAME = "taira_bsc_xor_burn_record_v1";
 const DEFAULT_TAIRA_ROUTE_MANIFEST_GAS_LIMIT = 2_000_000;
-const TON_TESTNET_LEGACY_NETWORK = "testnet";
+const TON_TESTNET_NETWORK = "testnet";
 const RETIRED_TON_ROUTE_MANIFEST_FIELDS = Object.freeze([
   "tron_network",
   "sccp_tron_source_bridge_address",
@@ -259,6 +259,7 @@ test("TON route manifest renders production-ready offline evidence", async () =>
   assert.equal(envelope.manifest.route_id, "taira_ton_xor");
   assert.equal(envelope.manifest.asset_key, "xor");
   assert.equal(envelope.manifest.counterparty_domain, 4);
+  assert.equal(envelope.manifest.network, TON_TESTNET_NETWORK);
   assert.equal(envelope.manifest.chain, "ton-testnet");
   assert.equal(envelope.manifest.chain_id_hex, TON_TESTNET_CHAIN_ID_HEX);
   assert.equal(envelope.manifest.network_id_hex, TON_TESTNET_CHAIN_ID_HEX);
@@ -353,25 +354,29 @@ test("TON publish-route-manifest writes a reviewable ISI artifact without submit
     "taira_ton_xor",
   );
   assert.equal(
-    artifact.instruction.UpsertSccpRouteManifest.manifest.tron_network,
-    TON_TESTNET_LEGACY_NETWORK,
+    artifact.instruction.UpsertSccpRouteManifest.manifest.network,
+    TON_TESTNET_NETWORK,
   );
   assert.equal(
     artifact.instruction.UpsertSccpRouteManifest.manifest
-      .sccp_tron_source_bridge_address,
+      .source_bridge_address,
     tonRaw(0x33),
   );
   assert.equal(
-    artifact.instruction.UpsertSccpRouteManifest.manifest.tron_verifier_address,
+    artifact.instruction.UpsertSccpRouteManifest.manifest.destination_verifier_address,
     tonRaw(0x44),
   );
   assert.equal(
-    artifact.instruction.UpsertSccpRouteManifest.manifest.source_bridge_address,
+    artifact.instruction.UpsertSccpRouteManifest.manifest.tron_network,
     undefined,
   );
   assert.equal(
     artifact.instruction.UpsertSccpRouteManifest.manifest
-      .destination_verifier_address,
+      .sccp_tron_source_bridge_address,
+    undefined,
+  );
+  assert.equal(
+    artifact.instruction.UpsertSccpRouteManifest.manifest.tron_verifier_address,
     undefined,
   );
 });
@@ -387,7 +392,7 @@ test("TON publish-route-manifest rejects retired TRON manifest aliases without e
       field: "tron_network",
       value: "secret-token-ton-retired-network",
       expected:
-        /TON route manifest must not use retired tron_network; use chain\./u,
+        /TON route manifest must not use retired tron_network; use network\./u,
     },
     {
       field: "sccp_tron_source_bridge_address",

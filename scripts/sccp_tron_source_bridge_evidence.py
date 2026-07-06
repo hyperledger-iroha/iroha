@@ -142,6 +142,10 @@ def _strip_0x(value: str) -> str:
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        ) from None
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
     if not value.startswith("0x"):
@@ -166,6 +170,10 @@ def parse_hex_bytes(
     if type(nonzero) is not bool:
         raise ValueError("TRON source bridge fixed hex nonzero must be a boolean")
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        ) from None
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -193,6 +201,10 @@ def _parse_runtime_bytecode_text(
             "TRON source bridge runtime bytecode allow_whitespace must be a boolean"
         )
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        ) from None
     if allow_whitespace:
         text = "".join(value.strip().split())
     else:
@@ -348,10 +360,37 @@ def _base58check_encode(payload: bytes) -> str:
 
 
 def _require_unpadded_text(value: str, *, label: str) -> str:
-    if not isinstance(value, str) or not value:
+    if type(value) is not str or not value:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain surrounding whitespace")
+    return value
+
+
+SOURCE_BRIDGE_RUNTIME_BYTECODE_METADATA_ERROR = (
+    "source bridge runtime bytecode metadata is inconsistent"
+)
+DESTINATION_VERIFIER_RUNTIME_BYTECODE_METADATA_ERROR = (
+    "destination verifier runtime bytecode metadata is inconsistent"
+)
+_RUNTIME_SUMMARY_METADATA_ERRORS = {
+    "source bridge runtime bytecode": SOURCE_BRIDGE_RUNTIME_BYTECODE_METADATA_ERROR,
+    "destination verifier runtime bytecode": (
+        DESTINATION_VERIFIER_RUNTIME_BYTECODE_METADATA_ERROR
+    ),
+}
+
+
+def _runtime_summary_text(value: object, *, label: str) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str or not value or value != value.strip():
+        raise ValueError(
+            _RUNTIME_SUMMARY_METADATA_ERRORS.get(
+                label,
+                f"{label} metadata is inconsistent",
+            )
+        )
     return value
 
 
@@ -1771,6 +1810,10 @@ def _route_canary_transaction_evidence_hash(
         (
             ("route_allowlist_hash", route_allowlist_hash),
             ("destination_binding_hash", destination_binding_hash),
+            *(
+                (field, values[field])
+                for field in _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS
+            ),
         ),
         label="TRON route canary governed hashes",
     )
@@ -2015,6 +2058,24 @@ def _route_canary_evidence_hash(
         raise ValueError(
             "route_allowlist_hash does not match canonical source, deployment, "
             "and destination evidence"
+        )
+    values = _route_canary_transaction_values(args)
+    if values is not None:
+        _require_distinct_hash_roles(
+            (
+                ("route_allowlist_hash", route_allowlist_hash),
+                ("destination_binding_hash", destination_binding_hash),
+                ("source_verifier_material_hash", source_verifier_material_hash),
+                (
+                    "source_adapter_engine_deployment_hash",
+                    source_adapter_engine_deployment_hash,
+                ),
+                *(
+                    (field, values[field])
+                    for field in _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS
+                ),
+            ),
+            label="TRON route canary governed hashes",
         )
     canary_hash = getattr(args, "route_canary_evidence_hash", None)
     derived_canary_hash = _route_canary_transaction_evidence_hash(
@@ -3250,7 +3311,11 @@ def main(argv: list[str] | None = None) -> int:
                 "source_bridge_runtime_bytecode_hex_text",
                 None,
             )
-            if isinstance(source_runtime_bytecode, str):
+            source_runtime_bytecode = _runtime_summary_text(
+                source_runtime_bytecode,
+                label="source bridge runtime bytecode",
+            )
+            if source_runtime_bytecode is not None:
                 summary["source_bridge_runtime_bytecode_hex"] = (
                     source_runtime_bytecode
                 )
@@ -3318,7 +3383,11 @@ def main(argv: list[str] | None = None) -> int:
                     "destination_verifier_runtime_bytecode_hex_text",
                     None,
                 )
-                if isinstance(destination_runtime_bytecode, str):
+                destination_runtime_bytecode = _runtime_summary_text(
+                    destination_runtime_bytecode,
+                    label="destination verifier runtime bytecode",
+                )
+                if destination_runtime_bytecode is not None:
                     summary["destination_verifier_runtime_bytecode_hex"] = (
                         destination_runtime_bytecode
                     )

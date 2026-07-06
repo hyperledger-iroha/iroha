@@ -30671,7 +30671,7 @@ fn zk_policy_put_sccp_route_manifests(
             .cmp(&right.version)
             .then_with(|| left.route_id.cmp(&right.route_id))
             .then_with(|| left.asset_key.cmp(&right.asset_key))
-            .then_with(|| left.tron_network.cmp(&right.tron_network))
+            .then_with(|| left.network.cmp(&right.network))
             .then_with(|| left.chain.cmp(&right.chain))
             .then_with(|| left.chain_id_hex.cmp(&right.chain_id_hex))
             .then_with(|| left.counterparty_domain.cmp(&right.counterparty_domain))
@@ -30687,11 +30687,11 @@ fn zk_policy_put_sccp_route_manifests(
                 left.taira_xor_bridge_address
                     .cmp(&right.taira_xor_bridge_address)
             })
+            .then_with(|| left.source_bridge_address.cmp(&right.source_bridge_address))
             .then_with(|| {
-                left.sccp_tron_source_bridge_address
-                    .cmp(&right.sccp_tron_source_bridge_address)
+                left.destination_verifier_address
+                    .cmp(&right.destination_verifier_address)
             })
-            .then_with(|| left.tron_verifier_address.cmp(&right.tron_verifier_address))
             .then_with(|| left.verifier_code_hash.cmp(&right.verifier_code_hash))
             .then_with(|| left.verifier_key_hash.cmp(&right.verifier_key_hash))
             .then_with(|| {
@@ -30783,7 +30783,7 @@ fn zk_policy_put_sccp_route_manifests(
         zk_policy_put_u8(hasher, "version", manifest.version);
         zk_policy_put_str(hasher, "route_id", &manifest.route_id);
         zk_policy_put_str(hasher, "asset_key", &manifest.asset_key);
-        zk_policy_put_str(hasher, "tron_network", &manifest.tron_network);
+        zk_policy_put_str(hasher, "network", &manifest.network);
         zk_policy_put_str(hasher, "chain", &manifest.chain);
         zk_policy_put_str(hasher, "chain_id_hex", &manifest.chain_id_hex);
         zk_policy_put_u32(hasher, "counterparty_domain", manifest.counterparty_domain);
@@ -30807,13 +30807,13 @@ fn zk_policy_put_sccp_route_manifests(
         );
         zk_policy_put_str(
             hasher,
-            "sccp_tron_source_bridge_address",
-            &manifest.sccp_tron_source_bridge_address,
+            "source_bridge_address",
+            &manifest.source_bridge_address,
         );
         zk_policy_put_str(
             hasher,
-            "tron_verifier_address",
-            &manifest.tron_verifier_address,
+            "destination_verifier_address",
+            &manifest.destination_verifier_address,
         );
         zk_policy_put_str(hasher, "verifier_code_hash", &manifest.verifier_code_hash);
         zk_policy_put_str(hasher, "verifier_key_hash", &manifest.verifier_key_hash);
@@ -43348,7 +43348,7 @@ mod tests {
             version: 1,
             route_id: route_id.to_owned(),
             asset_key: "xor".to_owned(),
-            tron_network: "nile".to_owned(),
+            network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
             explorer_url: None,
@@ -43363,8 +43363,8 @@ mod tests {
                 .to_owned(),
             taira_xor_token_address: "TT1DaQcqzoJEzEaHDU8nsmiKtiyhXHaSKD".to_owned(),
             taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
-            sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
-            tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
+            destination_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
             ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "11".repeat(32)),
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
@@ -82581,7 +82581,7 @@ mod tests {
             version: 1,
             route_id: "taira_tron_xor".to_owned(),
             asset_key: "xor".to_owned(),
-            tron_network: "nile".to_owned(),
+            network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
             explorer_url: None,
@@ -82595,8 +82595,8 @@ mod tests {
             network_id_hex: format!("0x{}", hex::encode([0x51; 32])),
             taira_xor_token_address: "TT1111111111111111111111111111111111".to_owned(),
             taira_xor_bridge_address: "TT2222222222222222222222222222222222".to_owned(),
-            sccp_tron_source_bridge_address: "TT3333333333333333333333333333333333".to_owned(),
-            tron_verifier_address: "TT4444444444444444444444444444444444".to_owned(),
+            source_bridge_address: "TT3333333333333333333333333333333333".to_owned(),
+            destination_verifier_address: "TT4444444444444444444444444444444444".to_owned(),
             ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", hex::encode([0x52; 32])),
             verifier_key_hash: format!("0x{}", hex::encode([0x53; 32])),
@@ -82726,7 +82726,7 @@ mod tests {
         );
 
         let mut route_manifest_changed = changed.clone();
-        route_manifest_changed.sccp_route_manifests[0].tron_verifier_address =
+        route_manifest_changed.sccp_route_manifests[0].destination_verifier_address =
             "TT5555555555555555555555555555555555".to_owned();
         assert_eq!(
             changed_hash,

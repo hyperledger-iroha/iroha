@@ -10963,6 +10963,10 @@ fn validate_bfv_full_bootstrap_evaluator_artifact_set_bytes_v1(
         full_bootstrap_artifact_label_for_role(role),
         role.max_bytes(),
         bytes,
+    )?;
+    validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+        full_bootstrap_artifact_label_for_role(role),
+        bytes,
     )
 }
 
@@ -12134,10 +12138,10 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_switch_key_registered_r
     key: &BfvFullBootstrapSampleExtractionSwitchKeyV1,
     sample: &BfvFullBootstrapRawExtractedSampleV1,
 ) -> Result<BfvCiphertext, BfvError> {
+    let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
     validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
-    let rns_chain = registered_bfv_rns_modulus_chain(params)?;
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
     let (mut c0, mut c1) =
         full_bootstrap_sample_extraction_switch_initial_ciphertext(params, sample);
@@ -12181,9 +12185,7 @@ pub(crate) fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_switch_ke
     validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
     validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
     validate_bfv_full_bootstrap_sample_switch_key_matches_sample(key, sample)?;
-    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        return Err(err);
-    }
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     let decomposition_chain =
         registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
@@ -12274,9 +12276,7 @@ pub(crate) fn bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_outp
     raw_sample_noise_bound: u128,
 ) -> Result<u128, BfvError> {
     validate_bfv_full_bootstrap_sample_extraction_switch_key_metadata_v1(params, key)?;
-    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        return Err(err);
-    }
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     validate_bfv_full_bootstrap_sample_extraction_switch_key_v1(params, key)?;
     bfv_full_bootstrap_sample_extraction_switch_key_bounded_noise_output_bound_from_raw_sample_bound_v1(
         params,
@@ -13550,11 +13550,40 @@ pub fn bfv_full_bootstrap_proof_public_input_schema_payload_digest_from_schema_v
 pub fn decode_bfv_full_bootstrap_proof_public_input_schema_bytes_v1(
     bytes: &[u8],
 ) -> Result<BfvFullBootstrapProofPublicInputSchemaV1, BfvError> {
-    decode_bfv_base_material_bytes_v1(
-        "BFV full-bootstrap proof public-input schema bytes",
-        bytes,
-        validate_bfv_full_bootstrap_proof_public_input_schema_v1,
-    )
+    let label = "BFV full-bootstrap proof public-input schema bytes";
+    if bytes.is_empty() {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be empty"
+        )));
+    }
+    if bytes.iter().all(|&byte| byte == 0) {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must not be all-zero"
+        )));
+    }
+    let schema = norito::decode_from_bytes::<BfvFullBootstrapProofPublicInputSchemaV1>(bytes)
+        .map_err(|err| {
+            if let Err(placeholder_err) =
+                validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+                    label, bytes,
+                )
+            {
+                return placeholder_err;
+            }
+            BfvError::InvalidParameters(format!(
+                "{label} must be Norito-encoded BFV material: {err}"
+            ))
+        })?;
+    validate_bfv_full_bootstrap_proof_public_input_schema_v1(&schema)?;
+    let canonical_bytes = norito::to_bytes(&schema).map_err(|err| {
+        BfvError::InvalidParameters(format!("{label} canonical encoding failed: {err}"))
+    })?;
+    if bytes != canonical_bytes {
+        return Err(BfvError::InvalidParameters(format!(
+            "{label} must use canonical v1 bytes"
+        )));
+    }
+    Ok(schema)
 }
 
 /// Return the digest for canonical BFV full-bootstrap proof public-input schema bytes.
@@ -16272,6 +16301,10 @@ fn validate_bfv_full_bootstrap_circuit_artifact_bundle_envelope_bytes_shape_v1(
         validate_full_bootstrap_artifact_envelope_bytes_shape_v1(
             full_bootstrap_artifact_label_for_role(role),
             role.max_bytes(),
+            bytes,
+        )?;
+        validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+            full_bootstrap_artifact_label_for_role(role),
             bytes,
         )?;
     }
@@ -33845,9 +33878,7 @@ pub(crate) fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_regi
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     let _decomposition_chain =
         registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
-    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        return Err(err);
-    }
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     let material = validate_bfv_full_bootstrap_execution_artifact_bundle_preflight_v1(
         params,
         bootstrap_key,
@@ -34242,8 +34273,8 @@ pub fn full_bootstrap_ciphertext_registered_rns_exact_v1(
     bootstrap_key: &BfvBootstrapKey,
     ciphertext: &BfvCiphertext,
 ) -> Result<BfvCiphertext, BfvError> {
-    validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
     let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
+    validate_bfv_full_bootstrap_execution_preflight_v1(params, bootstrap_key, ciphertext)?;
     Err(full_bootstrap_artifacts_required_error())
 }
 
@@ -34328,8 +34359,8 @@ pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
     bootstrap_key: &BfvBootstrapKey,
     input_bound: u128,
 ) -> Result<u128, BfvError> {
-    validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
     let _rns_chain = registered_bfv_rns_modulus_chain(params)?;
+    validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
     validate_exact_residual_bound_within_centered_capacity(
         params,
         input_bound,
@@ -34428,9 +34459,7 @@ pub fn full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_ex
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     let _decomposition_chain =
         registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
-    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        return Err(err);
-    }
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     Err(full_bootstrap_artifacts_required_error())
 }
 
@@ -34519,9 +34548,7 @@ pub fn bfv_full_bootstrap_bounded_noise_output_bound_v1(
     input_noise_bound: u128,
 ) -> Result<u128, BfvError> {
     validate_bfv_full_bootstrap_key_execution_metadata_preflight_v1(params, bootstrap_key)?;
-    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
-        return Err(err);
-    }
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
     let evaluator_chain = registered_bfv_rns_modulus_chain(params)?;
     let _decomposition_chain =
         registered_bfv_key_switch_decomposition_chain_for_evaluator(params, &evaluator_chain)?;
@@ -41632,6 +41659,10 @@ fn decode_full_bootstrap_artifact_payload(
             norito::decode_from_bytes::<BfvFullBootstrapCircuitArtifactPayloadV1>(bytes)
         {
             validate_bfv_full_bootstrap_artifact_profile_digest_preflight_v1(label, &artifact)?;
+        } else {
+            validate_bfv_full_bootstrap_bytes_not_placeholder_text_or_binary_decorated(
+                label, bytes,
+            )?;
         }
         return Err(BfvError::InvalidParameters(format!(
             "{label} digest does not match governed full-bootstrap material"
@@ -109570,7 +109601,7 @@ mod tests {
         .expect_err(
             "registered bounded full bootstrap must reject unregistered narrow parameters first",
         );
-        assert!(err.to_string().contains("not registered"));
+        assert!(err.to_string().contains("FullBootstrapV1"));
 
         let err = bfv_full_bootstrap_bounded_noise_output_bound_v1(
             &capacity_too_narrow_unregistered,
@@ -109580,7 +109611,7 @@ mod tests {
         .expect_err(
             "registered bounded full-bootstrap bound must reject unregistered narrow parameters first",
         );
-        assert!(err.to_string().contains("not registered"));
+        assert!(err.to_string().contains("FullBootstrapV1"));
 
         let err =
             add_ciphertexts_registered_rns_exact(&params, &dummy_ciphertext, &dummy_ciphertext)
@@ -109872,7 +109903,10 @@ mod tests {
             .expect_err(
                 "registered bounded full-bootstrap sample switch must reject unregistered parameters",
             );
-        assert!(err.to_string().contains("not registered"));
+        assert!(
+            err.to_string()
+                .contains("source_slot_count 0 does not match polynomial_degree 64")
+        );
 
         let err = apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
             &params,
@@ -109895,7 +109929,7 @@ mod tests {
             .expect_err(
                 "registered bounded full-bootstrap prefix must reject unregistered parameters",
             );
-        assert!(err.to_string().contains("not registered"));
+        assert!(err.to_string().contains("FullBootstrapV1"));
 
         let err = full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
             &params,
@@ -109920,7 +109954,7 @@ mod tests {
             .expect_err(
                 "registered bounded full-bootstrap artifact execution must reject unregistered parameters",
             );
-        assert!(err.to_string().contains("not registered"));
+        assert!(err.to_string().contains("FullBootstrapV1"));
 
         let err = full_bootstrap_ciphertext_registered_rns_exact_v1(
             &params,
@@ -109936,7 +109970,7 @@ mod tests {
             &dummy_ciphertext,
         )
         .expect_err("registered bounded direct full bootstrap must reject unregistered parameters");
-        assert!(err.to_string().contains("not registered"));
+        assert!(err.to_string().contains("FullBootstrapV1"));
 
         let err =
             bfv_full_bootstrap_output_residual_multiple_bound_v1(&params, &dummy_bootstrap_key, 0)
@@ -109953,7 +109987,7 @@ mod tests {
         .expect_err(
             "registered bounded direct full-bootstrap bound must reject unregistered parameters",
         );
-        assert!(err.to_string().contains("not registered"));
+        assert!(err.to_string().contains("FullBootstrapV1"));
     }
 
     fn sample_identifier_parameters() -> BfvParameters {

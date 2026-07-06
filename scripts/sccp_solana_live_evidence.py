@@ -353,7 +353,7 @@ def _account_data(account: dict[str, Any], *, label: str) -> bytes:
     if (
         not isinstance(data, list)
         or len(data) != 2
-        or not isinstance(data[0], str)
+        or type(data[0]) is not str
         or data[1] != "base64"
     ):
         raise RuntimeError(f"{label} account data must use base64 encoding")
@@ -529,7 +529,7 @@ def _live_positive_u64(live: dict[str, Any], field: str, *, label: str) -> int:
 
 def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes:
     value = live.get(field)
-    if not isinstance(value, str) or not value or value != value.strip():
+    if type(value) is not str or not value or value != value.strip():
         raise ValueError(f"{label} must be present") from None
     try:
         raw = base64.b64decode(value, validate=True)
@@ -542,7 +542,7 @@ def _live_base64_bytes(live: dict[str, Any], field: str, *, label: str) -> bytes
 
 def _exact_live_string(live: dict[str, Any], field: str, *, label: str) -> str:
     value = live.get(field)
-    if not isinstance(value, str) or not value or value != value.strip():
+    if type(value) is not str or not value or value != value.strip():
         raise ValueError(f"{label} must be an exact non-empty string") from None
     return value
 
@@ -591,7 +591,7 @@ def _validate_live_evidence(live: dict[str, Any]) -> tuple[dict[str, Any], bytes
 
     executable_base64 = live.get("programdata_executable_base64")
     if (
-        not isinstance(executable_base64, str)
+        type(executable_base64) is not str
         or not executable_base64
         or executable_base64 != executable_base64.strip()
     ):
