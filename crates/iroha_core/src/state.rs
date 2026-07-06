@@ -79731,7 +79731,31 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::with_telemetry(world, kura, query_handle, telemetry);
+        let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(5_u32),
+            vec![LaneConfig {
+                id: policy.target_lane,
+                dataspace_id: dsid,
+                alias: "axt-cache-hit".to_owned(),
+                description: None,
+                visibility: LaneVisibility::Public,
+                lane_type: None,
+                governance: None,
+                settlement: None,
+                storage: LaneStorageProfile::FullReplica,
+                proof_scheme: DaProofScheme::default(),
+                metadata: BTreeMap::new(),
+            }],
+        )
+        .expect("AXT cache-hit test lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        install_test_nexus_lane_catalog(&mut nexus, lane_catalog);
+        nexus.routing_policy.default_lane = policy.target_lane;
+        nexus.routing_policy.default_dataspace = dsid;
+        state
+            .set_nexus(nexus)
+            .expect("AXT cache-hit test Nexus catalog");
         let snapshot = state.view().axt_policy_snapshot();
 
         let expected = if snapshot.version != 0 {

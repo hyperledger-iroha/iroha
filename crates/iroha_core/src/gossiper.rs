@@ -6371,6 +6371,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             &dataspace_catalog,
             None,
         ));
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
 
         let now = Instant::now();
         let gossiper = TransactionGossiper {

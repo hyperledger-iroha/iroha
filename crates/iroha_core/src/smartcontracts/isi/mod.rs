@@ -1469,6 +1469,7 @@ mod tests {
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
+        state_transaction.nexus.enabled = false;
 
         let manifest_root = [0x42; 32];
         let envelope = sample_lane_relay_envelope(

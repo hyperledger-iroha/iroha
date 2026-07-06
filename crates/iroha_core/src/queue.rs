@@ -8716,6 +8716,25 @@ pub mod tests {
         accepted_tx_by(account_id, &key_pair, time_source)
     }
 
+    #[cfg(feature = "telemetry")]
+    fn accepted_tx_in_dataspace_by_someone(
+        dataspace_alias: &str,
+        time_source: &TimeSource,
+    ) -> AcceptedTransaction<'static> {
+        let (account_id, key_pair) = gen_account_in("wonderland");
+        let domain_name = unique_test_domain_name("dummy");
+        let instructions = vec![InstructionBox::from(Unregister::domain(
+            DomainId::try_new(&domain_name, dataspace_alias).unwrap(),
+        ))];
+        accepted_tx_with(
+            account_id,
+            &key_pair,
+            time_source,
+            instructions,
+            Metadata::default(),
+        )
+    }
+
     #[test]
     fn compute_tx_encoded_len_matches_payload() {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
@@ -8778,11 +8797,16 @@ pub mod tests {
     fn queue_plan_journal_replays_matching_plan_after_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
-        let state = State::new(
+        let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: LaneId::SINGLE,
@@ -11709,11 +11733,16 @@ pub mod tests {
 
     #[test]
     fn state_backed_queue_routes_allow_legacy_default_public_lane_dynamic_dataspace() {
-        let state = State::new(
+        let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let dynamic_dataspace = DataSpaceId::new(4_242);
         let queue = Queue::test_with_router(
@@ -11724,6 +11753,7 @@ pub mod tests {
                 dataspace: dynamic_dataspace,
             }),
         );
+        queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
         let tx = accepted_tx_by_someone(&time_source);
         let expected = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace));
 
@@ -11743,11 +11773,16 @@ pub mod tests {
 
     #[test]
     fn state_backed_queue_routes_allow_disabled_nexus_default_universal_lane() {
-        let state = State::new(
+        let mut state = State::new(
             world_with_test_domains(),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for default route test");
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
@@ -13145,6 +13180,10 @@ pub mod tests {
         queue
             .push(second_tx, state.view())
             .expect("second push should succeed");
+        *queue.nexus_limits.write() = QueueLimits {
+            fallback: scheduling,
+            per_lane: BTreeMap::from([(test_lane, scheduling)]),
+        };
 
         let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
         assert_eq!(
@@ -13622,13 +13661,13 @@ pub mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
 
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let first_tx = accepted_tx_by_someone(&time_source);
-        let lane_capacity = Queue::compute_teu_weight(&first_tx);
-        assert!(lane_capacity > 0, "expected positive TEU weight");
-
         let test_lane = LaneId::new(11);
         let test_dataspace = DataSpaceId::new(3);
+        let test_dataspace_alias = "dataspace3";
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let first_tx = accepted_tx_in_dataspace_by_someone(test_dataspace_alias, &time_source);
+        let lane_capacity = Queue::compute_teu_weight(&first_tx);
+        assert!(lane_capacity > 0, "expected positive TEU weight");
         let lane_metadata = LaneConfig {
             id: test_lane,
             dataspace_id: test_dataspace,
@@ -13641,7 +13680,7 @@ pub mod tests {
         };
         let dataspace_metadata = DataSpaceMetadata {
             id: test_dataspace,
-            alias: "dataspace3".to_string(),
+            alias: test_dataspace_alias.to_string(),
             description: None,
             fault_tolerance: 1,
         };
@@ -13654,12 +13693,33 @@ pub mod tests {
             .expect("valid dataspace catalog");
         telemetry.set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
 
-        let state = Arc::new(State::with_telemetry(
+        let mut state = State::with_telemetry(
             world_with_test_domains(),
             kura.clone(),
             query_handle.clone(),
             telemetry.clone(),
-        ));
+        );
+        let mut nexus = state.nexus_snapshot();
+        let state_lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(16).expect("nonzero lane count"),
+            vec![LaneConfig::default(), lane_metadata.clone()],
+        )
+        .expect("valid state lane catalog");
+        let state_dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            dataspace_metadata.clone(),
+        ])
+        .expect("valid state dataspace catalog");
+        nexus.enabled = true;
+        nexus.lane_catalog = state_lane_catalog;
+        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = state_dataspace_catalog;
+        nexus.routing_policy.default_lane = test_lane;
+        nexus.routing_policy.default_dataspace = test_dataspace;
+        state
+            .set_nexus(nexus)
+            .expect("apply telemetry test Nexus state");
+        let state = Arc::new(state);
 
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: test_lane,
@@ -13688,7 +13748,7 @@ pub mod tests {
         queue
             .push(first_tx, state.view())
             .expect("first push should succeed");
-        let second_tx = accepted_tx_by_someone(&time_source);
+        let second_tx = accepted_tx_in_dataspace_by_someone(test_dataspace_alias, &time_source);
         let second_hash = second_tx.as_ref().hash();
         queue
             .push(second_tx, state.view())
@@ -13730,9 +13790,12 @@ pub mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
 
+        let test_lane = LaneId::new(13);
+        let test_dataspace = DataSpaceId::new(9);
+        let test_dataspace_alias = "dataspace9";
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-        let first_tx = accepted_tx_by_someone(&time_source);
-        let second_tx = accepted_tx_by_someone(&time_source);
+        let first_tx = accepted_tx_in_dataspace_by_someone(test_dataspace_alias, &time_source);
+        let second_tx = accepted_tx_in_dataspace_by_someone(test_dataspace_alias, &time_source);
         let first_teu = Queue::compute_teu_weight(&first_tx);
         let second_teu = Queue::compute_teu_weight(&second_tx);
         let lane_capacity = first_teu.saturating_mul(10);
@@ -13740,9 +13803,6 @@ pub mod tests {
             lane_capacity > first_teu,
             "expected lane capacity to exceed TEU"
         );
-
-        let test_lane = LaneId::new(13);
-        let test_dataspace = DataSpaceId::new(9);
         let lane_metadata = LaneConfig {
             id: test_lane,
             dataspace_id: test_dataspace,
@@ -13755,7 +13815,7 @@ pub mod tests {
         };
         let dataspace_metadata = DataSpaceMetadata {
             id: test_dataspace,
-            alias: "dataspace9".to_string(),
+            alias: test_dataspace_alias.to_string(),
             description: None,
             fault_tolerance: 1,
         };
@@ -13768,12 +13828,33 @@ pub mod tests {
             .expect("valid dataspace catalog");
         telemetry.set_nexus_catalogs(&lane_catalog, &dataspace_catalog);
 
-        let state = Arc::new(State::with_telemetry(
+        let mut state = State::with_telemetry(
             world_with_test_domains(),
             kura.clone(),
             query_handle.clone(),
             telemetry.clone(),
-        ));
+        );
+        let mut nexus = state.nexus_snapshot();
+        let state_lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(16).expect("nonzero lane count"),
+            vec![LaneConfig::default(), lane_metadata.clone()],
+        )
+        .expect("valid state lane catalog");
+        let state_dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            dataspace_metadata.clone(),
+        ])
+        .expect("valid state dataspace catalog");
+        nexus.enabled = true;
+        nexus.lane_catalog = state_lane_catalog;
+        nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
+        nexus.dataspace_catalog = state_dataspace_catalog;
+        nexus.routing_policy.default_lane = test_lane;
+        nexus.routing_policy.default_dataspace = test_dataspace;
+        state
+            .set_nexus(nexus)
+            .expect("apply backlog test Nexus state");
+        let state = Arc::new(state);
 
         let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
             lane: test_lane,
@@ -13846,11 +13927,19 @@ pub mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let test_lane = LaneId::new(7);
         let test_dataspace = DataSpaceId::new(42);
+        install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
+        let mut nexus = state.nexus_snapshot();
+        nexus.routing_policy.default_lane = test_lane;
+        nexus.routing_policy.default_dataspace = test_dataspace;
+        state
+            .set_nexus(nexus)
+            .expect("apply routed TEU test Nexus state");
+        let state = Arc::new(state);
         let router = Arc::new(StaticRouter {
             lane: test_lane,
             dataspace: test_dataspace,
@@ -13865,7 +13954,8 @@ pub mod tests {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let domain_name = unique_test_domain_name("tagged");
-        let unregister = Unregister::domain(DomainId::try_new(&domain_name, "universal").unwrap());
+        let unregister =
+            Unregister::domain(DomainId::try_new(&domain_name, "test-dataspace-42").unwrap());
         let tx =
             TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, &time_source)
                 .with_instructions([unregister])
