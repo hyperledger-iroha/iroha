@@ -92,15 +92,6 @@ def committee(*, status: str = "verified", subject: str = SUBJECT_REFERENCE) -> 
 
 
 def operator_route(name: str) -> dict:
-    schemas = {
-        "healthz": "sorafs.moderation.quarantine.operator_service.status.v1",
-        "status": "sorafs.moderation.quarantine.operator_service.status.v1",
-        "operator_panel": "sorafs.moderation.quarantine.operator_panel.v1",
-        "bridge_plan": "sorafs.moderation.quarantine.bridge_plan.v1",
-        "juror_plan": "sorafs.moderation.quarantine.juror_plan.v1",
-        "juror_notifications": "sorafs.moderation.quarantine.juror_notifications.v1",
-        "commit_reveal_status": "sorafs.moderation.quarantine.commit_reveal_status.v1",
-    }
     route_path = MODULE.operator_route_paths(QUARANTINE_ID).get(name, f"/{name}")
     return {
         "name": name,
@@ -112,7 +103,7 @@ def operator_route(name: str) -> dict:
             name,
             "application/json",
         ),
-        "schema": schemas.get(name),
+        "schema": MODULE.REQUIRED_OPERATOR_SCHEMAS.get(name),
         "body_blake3_hex": DIGEST,
         "body_bytes": 128,
         "payload_bytes_included": False,
@@ -179,7 +170,7 @@ def notification_transport(*, accepted_count: int | None = None) -> dict:
         "status": "passed",
         "manifest_path": "juror-notifications.json",
         "workflow_digest_hex": DIGEST,
-        "manifest_body_blake3": DIGEST,
+        "manifest_body_blake3_hex": DIGEST,
         "webhook_url": "https://notifications.example/hook",
         "probe_count": len(probes),
         "accepted_count": len(probes) if accepted_count is None else accepted_count,
@@ -384,6 +375,23 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "end-to-end-workflow.json", end_to_end_workflow())
 
 
+RUNNER_BOUND_FIXTURES = (
+    ("committee", "committee.json", committee),
+)
+
+WORKFLOW_BOUND_FIXTURES = (
+    ("operator_workflow", "operator-workflow.json", operator_workflow),
+    ("notification_transport", "notification-transport.json", notification_transport),
+    ("commit_reveal_executor", "commit-reveal-executor.json", commit_reveal_executor),
+    ("transparency_publication", "transparency-publication.json", transparency_publication),
+    ("governance_dag", "governance-dag.json", governance_dag),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_dag", "governance-dag.json", governance_dag),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), *extra])
 
@@ -414,6 +422,143 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["required"]["runner"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in RUNNER_BOUND_FIXTURES)
+        == MODULE.RUNNER_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in WORKFLOW_BOUND_FIXTURES)
+        == MODULE.WORKFLOW_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    operator_routes = operator_workflow()["routes"]
+    assert tuple(route["name"] for route in operator_workflow()["routes"]) == (
+        MODULE.REQUIRED_OPERATOR_ROUTES
+    )
+    assert {
+        route["name"]: route["schema"]
+        for route in operator_routes
+        if route["schema"] is not None
+    } == MODULE.REQUIRED_OPERATOR_SCHEMAS
+    assert {
+        route["name"]: route["content_type"] for route in operator_routes
+    } == MODULE.REQUIRED_OPERATOR_CONTENT_TYPES
+    assert all(
+        probe["action"] in MODULE.ALLOWED_NOTIFICATION_ACTIONS
+        for probe in notification_transport()["probes"]
+    )
+    executor_artifacts = commit_reveal_executor()["artifacts"]
+    assert tuple(artifact["name"] for artifact in executor_artifacts) == (
+        MODULE.REQUIRED_EXECUTOR_ARTIFACTS
+    )
+    assert {
+        artifact["name"]: artifact["kind"] for artifact in executor_artifacts
+    } == MODULE.REQUIRED_EXECUTOR_ARTIFACT_KINDS
+    assert tuple(
+        probe["source_kind"] for probe in transparency_publication()["probes"]
+    ) == MODULE.REQUIRED_TRANSPARENCY_SOURCE_KINDS
+
+    governance = governance_dag()
+    assert tuple(producer["name"] for producer in governance["producers"]) == (
+        MODULE.REQUIRED_GOVERNANCE_PRODUCERS
+    )
+    assert governance["edge_count"] == MODULE.REQUIRED_GOVERNANCE_EDGE_COUNT
+    assert tuple(step["name"] for step in end_to_end_workflow()["steps"]) == (
+        MODULE.REQUIRED_E2E_STEPS
+    )
+
+
+def test_all_runner_bound_artifacts_reject_runner_binding_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in RUNNER_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["subject_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_runner_bindings"] == [
+            {
+                "manifest_id_hex": MANIFEST_ID,
+                "runner_hash_hex": DIGEST,
+                "subject_digest_hex": DIGEST,
+            }
+        ]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} manifest_id_hex, runner_hash_hex, and "
+            "subject_digest_hex must match a valid runner artifact"
+        ) in artifact["errors"]
+
+
+def test_all_workflow_bound_artifacts_reject_e2e_workflow_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in WORKFLOW_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["workflow_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_workflow_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} workflow_digest_hex must match a valid "
+            "end_to_end_workflow workflow_digest_hex"
+        ) in artifact["errors"]
+
+
+def test_all_policy_bound_artifacts_reject_runner_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must match a valid "
+            "runner policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -1424,6 +1569,12 @@ def test_notification_probe_identity_fields_are_required(tmp_path: Path) -> None
         "probes[0].action must be `submit_commit` or `submit_reveal`"
         in artifact["errors"]
     )
+    assert (
+        "probes[0].case_id must be a non-empty canonical string"
+        in artifact["errors"]
+    )
+    assert "probes[0].round_id must be a string" in artifact["errors"]
+    assert "probes[0].juror_id must be a string" in artifact["errors"]
 
 
 @pytest.mark.parametrize("legacy_action", ("commit", "reveal"))
@@ -1445,12 +1596,6 @@ def test_notification_probe_rejects_legacy_short_action_labels(
         "probes[0].action must be `submit_commit` or `submit_reveal`"
         in artifact["errors"]
     )
-    assert (
-        "probes[0].case_id must be a non-empty canonical string"
-        in artifact["errors"]
-    )
-    assert "probes[0].round_id must be a string" in artifact["errors"]
-    assert "probes[0].juror_id must be a string" in artifact["errors"]
 
 
 def test_notification_dedup_key_must_bind_delivery_id(tmp_path: Path) -> None:
@@ -1619,6 +1764,24 @@ def test_executor_artifacts_must_cover_required_bundle_files(tmp_path: Path) -> 
     assert artifact["valid"] is False
     assert "artifact_count must be at least 2" in artifact["errors"]
     assert "artifacts must include name `run.sh`" in artifact["errors"]
+
+
+def test_executor_service_name_must_match_reviewed_service(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal_executor()
+    payload["service_name"] = "sorafs-moderation-ballots-debug"
+    write_json(tmp_path / "commit-reveal-executor.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["commit_reveal_executor"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "service_name must be `sorafs-moderation-ballots-executor`"
+        in artifact["errors"]
+    )
 
 
 def test_executor_summary_digest_must_match_summary_body(tmp_path: Path) -> None:

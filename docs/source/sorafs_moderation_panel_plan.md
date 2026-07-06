@@ -36,6 +36,10 @@ artifacts must bind back to a case-bound sortition `roster_hash_hex`; and
 publication, settlement, transparency/reputation, metrics, end-to-end, and
 governance artifacts must bind back to a roster-bound commit/reveal
 `tally_digest_hex`.
+The aggregate production-readiness gate preserves the same chain by requiring
+`valid_roster_bindings`, `valid_tally_bindings`, `valid_e2e_runs`, and
+`valid_evidence_viewer_digest_sets` to remain backed by the case, roster, and
+tally metadata emitted by the lane checker.
 End-to-end panel artifacts also publish `policy_digest_hex`; governance
 approval artifacts must bind `policy_digest_hex` to that valid end-to-end
 policy digest, and the checker emits those valid panel policy digests as
@@ -251,6 +255,15 @@ and every tally-bound artifact shares a valid roster-bound commit/reveal
 `case_digest_hex`/`roster_hash_hex`/`tally_digest_hex` tuple. Sortition rosters
 that fail appeal-intake binding and commit/reveal runs that fail roster binding
 do not anchor downstream rollout evidence.
+The aggregate production-readiness gate also requires `valid_roster_bindings`,
+`valid_tally_bindings`, `valid_e2e_runs`, and
+`valid_evidence_viewer_digest_sets` to preserve those case, roster, and tally
+relationships before final promotion can report ready. It also rechecks the
+lane-proven bound artifacts before final promotion: case-bound artifact
+fingerprints must match `valid_case_digests`, roster-bound artifact fingerprints
+must match `valid_roster_bindings`, tally-bound artifact fingerprints must match
+`valid_tally_bindings`, and policy-bound governance approval fingerprints must
+match `valid_policy_digests`.
 Appeal-intake artifacts also bind `case_count` to the unique canonical
 `cases[].name` inventory, require `accepted_case_count` to match the
 `cases[].accepted` partition, require reviewed lowercase
@@ -335,7 +348,9 @@ legal-hold-receipt, transparency-report, and audit digest hashes, and full
 coverage for view/seek/pause, screenshot-attempt, download-attempt, and
 annotation event classes without including signed URLs, session tokens,
 watermark secrets, raw evidence, raw access logs, legal-hold receipt payloads,
-transparency report payloads, or response bodies. The commit/reveal canary also
+transparency report payloads, or response bodies. Evidence-viewer canaries also
+require explicit audit-log tamper rejection and watermark metadata mismatch
+rejection before promotion can report ready. The commit/reveal canary also
 requires commit digest
 recomputation, duplicate-commit rejection, mismatched-reveal rejection, late
 commit/reveal rejection, missed-quorum detection, no-show failover, juror

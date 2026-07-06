@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_orderbook_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4ffa6a4b81488bc02525ab7a2dc35ea11a38e09c3a8bde0baa445b968116054d
-source_last_modified: "2026-07-04T06:25:40.858280+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: "2026-07-04T06:25:40.858280+00:00"
+source_hash: 09c1cd160b9bcb3237efc34fc4fc4064b805d44e9cee4dc2d0d7c692be38f444
+source_last_modified: "2026-07-05T00:18:07.185755+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-05T00:18:07.185755+00:00
 ---
 
 # SoraFS XOR Orderbook & Streaming Settlement
@@ -93,7 +93,8 @@ streams, SDK release, observability, reconciliation, and governance approval
 evidence. It takes reviewed deployment facts, validates each generated artifact
 against the rollout gate, rejects duplicate `--artifact` ids for SDK release
 canaries, rejects SDK release canaries with fewer than one distinct artifact
-per reviewed SDK language, rejects duplicate or unknown closed-set
+per reviewed SDK language or artifact IDs outside the reviewed SDK language
+prefixes, rejects duplicate or unknown closed-set
 `--verified-claim`, `--route`, `--stream`, `--language`, `--metric`, and
 `--source` inputs before writing any canary JSON, rejects malformed or
 non-production `--accepted-order`,
@@ -507,7 +508,8 @@ bind `language_count` to the unique canonical `languages[].name` inventory,
 reject missing, inflated, duplicate, or unknown language evidence, and bind
 `artifact_count` to the unique canonical `artifacts[].id` inventory, rejecting
 duplicate artifact entries before promotion can report ready. They also require
-at least one distinct SDK release artifact per reviewed SDK language before
+artifact IDs to start with a reviewed SDK language prefix and at least one
+distinct SDK release artifact per reviewed SDK language before
 promotion can report ready. Orderbook payload-safety artifacts must explicitly
 set `raw_contract_state_included`, `divergence_detected`,
 `raw_snapshot_included`, `raw_receipts_included`, `response_bodies_included`,
@@ -519,12 +521,16 @@ require the reviewed orderbook metrics set, and reject duplicate or unknown
 metric labels before promotion can report ready. The summary exports the sorted
 reviewed `metrics` inventory plus `metric_count_values`, and the aggregate
 production-readiness gate requires those fields to match the observability
-artifact fingerprint before final promotion can report ready. Reconciliation artifacts also
-bind `peer_count` and `source_count` to the unique canonical `peers[].name` and
+artifact fingerprint before final promotion can report ready. Aggregate
+promotion also rechecks the lane-proven orderbook digest relationships:
+contract-bound artifact fingerprints must match `valid_contract_digests`, and
+policy-bound artifact fingerprints must match `valid_policy_digests` before
+final promotion can report ready. Reconciliation artifacts also bind
+`peer_count` and `source_count` to the unique canonical `peers[].name` and
 `sources[].name` inventories, require peer labels to use reviewed lowercase
-`orderbook-peer-*` labels without non-production markers, and reject duplicate peer
-entries plus duplicate or unknown source entries before promotion can report
-ready. The collection planner's
+`orderbook-peer-*` labels without non-production markers, and reject duplicate
+peer entries plus duplicate or unknown source entries before promotion can
+report ready. The collection planner's
 dry-run JSON also includes the checker-backed `evidence_contract` map so operators can inspect
 the exact required fields for each requested evidence kind before collecting or
 submitting live orderbook artifacts. Use the payload-free SFM-2 orderbook

@@ -690,9 +690,28 @@ private func normalizeTronRouteCanaryEvidence(
         "payloadHash": payloadHash,
         "statementHash": statementHash,
         "commitmentRoot": commitmentRoot,
+        "finalityHeight": finalityHeight,
         "finalityBlockHash": finalityBlockHash,
         "signatureSha256": signatureSha256,
     ])
+    try requireTronHashRolesDistinct(
+        field: "routeCanaryGovernedHashes",
+        [
+            ("routeAllowlistHash", routeAllowlistHash),
+            ("destinationBindingHash", destinationBindingHash),
+            ("sourceVerifierMaterialHash", sourceVerifierMaterialHash),
+            ("sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash),
+            ("transactionId", transactionId),
+            ("messageId", messageId),
+            ("callDataSha256", callDataSha256),
+            ("payloadHash", payloadHash),
+            ("statementHash", statementHash),
+            ("commitmentRoot", commitmentRoot),
+            ("finalityHeight", finalityHeight),
+            ("finalityBlockHash", finalityBlockHash),
+            ("signatureSha256", signatureSha256),
+        ]
+    )
     let networkId = try tronNonZeroBytesFromHex32(destinationBinding.networkId, field: "networkId")
 
     var out = Data()

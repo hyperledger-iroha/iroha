@@ -83,7 +83,7 @@ def default_gate_metadata(
             }
         )
         add_hex_list("valid_executor_summary_digests", "execution_summary_digest_hex")
-        add_hex_list("valid_notification_manifest_digests", "manifest_body_blake3")
+        add_hex_list("valid_notification_manifest_digests", "manifest_body_blake3_hex")
         add_hex_list("valid_workflow_digests", "workflow_digest_hex")
         add_policy()
     elif gate_name == "appeal_finance":
@@ -157,7 +157,7 @@ def default_gate_metadata(
         )
         metadata["valid_billing_cycles"] = [
             {
-                "cycle_id": "cycle-1",
+                "cycle_id": "billing-cycle-1",
                 "cycle_index": 1,
                 "deployment_id": deployment_id,
                 "environment": environment,
@@ -177,7 +177,7 @@ def default_gate_metadata(
         ]
         fingerprints.update(
             {
-                "cycle_id": "cycle-1",
+                "cycle_id": "billing-cycle-1",
                 "cycle_index": 1,
                 "policy_digest_hex": SHA256,
                 "reference_decision_id_hex": SHA256,
@@ -264,10 +264,12 @@ def default_gate_metadata(
     elif gate_name == "pdp":
         metadata["metric_count_values"] = [len(MODULE.PDP_REQUIRED_METRICS)]
         metadata["metrics"] = sorted(MODULE.PDP_REQUIRED_METRICS)
+        metadata["valid_repair_handoff_digests"] = [SHA256]
         fingerprints.update(
             {
                 "metric_count": len(MODULE.PDP_REQUIRED_METRICS),
                 "metrics": list(MODULE.PDP_REQUIRED_METRICS),
+                "repair_handoff_digest_hex": SHA256,
             }
         )
         add_policy()
@@ -299,10 +301,14 @@ def default_gate_metadata(
         add_hex_list("valid_revocation_list_digests", "revocation_list_digest_hex")
         add_hex_list("valid_root_digests", "root_digest_hex")
     elif gate_name == "por":
+        metadata["archive_backends"] = ["parquet"]
+        metadata["valid_governance_archive_handoff_digests"] = [SHA256]
         metadata["metric_count_values"] = [len(MODULE.POR_REQUIRED_METRICS)]
         metadata["metrics"] = sorted(MODULE.POR_REQUIRED_METRICS)
         fingerprints.update(
             {
+                "archive_backend": "parquet",
+                "governance_archive_handoff_digest_hex": SHA256,
                 "metric_count": len(MODULE.POR_REQUIRED_METRICS),
                 "metrics": list(MODULE.POR_REQUIRED_METRICS),
             }
@@ -326,6 +332,7 @@ def default_gate_metadata(
             "reputation_weight_policy_digest_hex",
         )
     elif gate_name == "reference_sdk_release":
+        metadata["signature_algorithms"] = ["ed25519"]
         add_hex_list("valid_archive_index_digests", "archive_index_digest_hex")
         add_hex_list("valid_ffi_contract_digests", "ffi_contract_digest_hex")
         add_hex_list("valid_header_digests", "header_digest_hex")
@@ -341,6 +348,7 @@ def default_gate_metadata(
             "release_manifest_digest_hex",
         )
         add_hex_list("valid_smoke_output_digests", "smoke_output_digest_hex")
+        fingerprints["signature_algorithm"] = "ed25519"
     elif gate_name == "repair":
         metadata["metric_count_values"] = [len(MODULE.REPAIR_REQUIRED_METRICS)]
         metadata["metrics"] = sorted(MODULE.REPAIR_REQUIRED_METRICS)
@@ -361,6 +369,7 @@ def default_gate_metadata(
         metadata["provider_count_values"] = [1]
         metadata["provider_ids"] = ["provider-a"]
         metadata["snapshot_id_hex"] = SNAPSHOT_ID
+        metadata["valid_reputation_weight_digests"] = [SHA256]
         metadata["valid_snapshot_bindings"] = [
             {"snapshot_id_hex": SNAPSHOT_ID, "merkle_root_hex": SHA256}
         ]
@@ -372,6 +381,7 @@ def default_gate_metadata(
                 "provider_count": 1,
                 "provider_id": "provider-a",
                 "snapshot_id_hex": SNAPSHOT_ID,
+                "weights_digest_hex": SHA256,
             }
         )
     elif gate_name == "reserve_rent":
@@ -390,7 +400,7 @@ def default_gate_metadata(
         ]
         metadata["valid_provider_bakes"] = [
             {
-                "bake_id": "bake-1",
+                "bake_id": "reserve-bake-001",
                 "completed_at_unix": generated_at_unix,
                 "deployment_id": deployment_id,
                 "environment": environment,
@@ -399,14 +409,14 @@ def default_gate_metadata(
                 "policy_digest_hex": SHA256,
                 "provider_count": 1,
                 "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-                "scheduled_lifecycle_canary_last_tick_unix": generated_at_unix - 30,
+                "scheduled_lifecycle_canary_last_tick_at_unix": generated_at_unix - 30,
                 "scheduled_lifecycle_canary_tick_count": 2,
                 "started_at_unix": generated_at_unix - 60,
             }
         ]
         fingerprints.update(
             {
-                "bake_id": "bake-1",
+                "bake_id": "reserve-bake-001",
                 "completed_at_unix": generated_at_unix,
                 "ledger_digest_hex": SHA256,
                 "matrix_digest_hex": SHA256,
@@ -414,13 +424,19 @@ def default_gate_metadata(
                 "metrics": list(MODULE.RESERVE_RENT_REQUIRED_METRICS),
                 "provider_count": 1,
                 "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-                "scheduled_lifecycle_canary_last_tick_unix": generated_at_unix - 30,
+                "scheduled_lifecycle_canary_last_tick_at_unix": generated_at_unix - 30,
                 "scheduled_lifecycle_canary_tick_count": 2,
                 "started_at_unix": generated_at_unix - 60,
             }
         )
     elif gate_name == "transparency":
         add_hex_list("valid_cycle_digests", "cycle_digest_hex")
+        metadata["valid_publication_bindings"] = [
+            {
+                "source_batch_digest_hex": SHA256,
+                "cycle_digest_hex": SHA256,
+            }
+        ]
         add_hex_list("valid_source_batch_digests", "source_batch_digest_hex")
 
     return metadata, fingerprints
@@ -554,6 +570,66 @@ def remove_fingerprint_metadata(
             fingerprint.pop(field_name, None)
 
 
+def append_required_artifact(
+    payload: dict,
+    kind_name: str,
+    *,
+    suffix: str,
+    sha256: str,
+    **fingerprint_metadata: object,
+) -> None:
+    row = payload["required"][kind_name]
+    artifact = copy.deepcopy(row["artifacts"][0])
+    artifact["path"] = f"{artifact['path'].removesuffix('.json')}-{suffix}.json"
+    artifact["sha256"] = sha256
+    artifact.setdefault("fingerprint", {}).update(fingerprint_metadata)
+    row["artifacts"].append(artifact)
+    row["artifact_count"] = len(row["artifacts"])
+
+    recognized_artifact = copy.deepcopy(artifact)
+    recognized_artifact["kind"] = kind_name
+    payload["recognized_artifacts"].append(recognized_artifact)
+    payload["recognized_artifact_count"] = len(payload["recognized_artifacts"])
+    payload["evidence_file_count"] = len(payload["recognized_artifacts"])
+
+
+def append_hedging_billing_cycle(
+    payload: dict,
+    *,
+    cycle_id: str,
+    cycle_index: int,
+    artifact_sha256: str,
+    policy_digest_hex: str = SHA256,
+    reference_decision_id_hex: str = SHA256,
+    statement_bundle_digest_hex: str = SHA256,
+    reconciliation_digest_hex: str = SHA256,
+) -> None:
+    cycle = copy.deepcopy(payload["valid_billing_cycles"][0])
+    cycle.update(
+        {
+            "cycle_id": cycle_id,
+            "cycle_index": cycle_index,
+            "policy_digest_hex": policy_digest_hex,
+            "reference_decision_id_hex": reference_decision_id_hex,
+            "statement_bundle_digest_hex": statement_bundle_digest_hex,
+            "reconciliation_digest_hex": reconciliation_digest_hex,
+        }
+    )
+    payload["valid_billing_cycles"].append(cycle)
+    append_required_artifact(
+        payload,
+        "billing_cycle",
+        suffix=cycle_id,
+        sha256=artifact_sha256,
+        cycle_id=cycle_id,
+        cycle_index=cycle_index,
+        policy_digest_hex=policy_digest_hex,
+        reference_decision_id_hex=reference_decision_id_hex,
+        statement_bundle_digest_hex=statement_bundle_digest_hex,
+        reconciliation_digest_hex=reconciliation_digest_hex,
+    )
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(
         [
@@ -568,6 +644,68 @@ def run_gate(root: Path, *extra: str) -> int:
             *extra,
         ]
     )
+
+
+def test_duplicate_required_gate_fails_before_validation(capsys) -> None:
+    assert (
+        MODULE.main(
+            [
+                "--require-gate",
+                "gateway_load",
+                "--require-gate",
+                "gateway_load",
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "duplicate required evidence kind" in captured.err
+    assert "gateway_load" not in captured.err
+
+
+def test_unknown_required_gate_fails_before_validation(capsys) -> None:
+    unknown_gate = "private-key-placeholder"
+
+    assert MODULE.main(["--require-gate", unknown_gate]) == 2
+
+    captured = capsys.readouterr()
+    assert "unknown required evidence kind" in captured.err
+    assert unknown_gate not in captured.err
+
+
+def test_malformed_required_gate_fails_before_validation(capsys) -> None:
+    malformed_gate = "gateway_load,"
+
+    assert MODULE.main(["--require-gate", malformed_gate]) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--require-kind entries must be non-empty canonical strings"
+        in captured.err
+    )
+    assert malformed_gate not in captured.err
+
+
+def test_malformed_integer_arguments_fail_before_validation(capsys) -> None:
+    cases = [
+        ("--now-unix", "private-key-01", "must be an integer"),
+        ("--now-unix", "0", "must be positive"),
+        (
+            "--max-summary-artifact-age-secs",
+            "private-key-02",
+            "must be an integer",
+        ),
+        ("--max-summary-artifact-age-secs", "-1", "must be non-negative"),
+    ]
+
+    for flag, value, diagnostic in cases:
+        assert MODULE.main([flag, value]) == 2
+
+        captured = capsys.readouterr()
+        assert diagnostic in captured.err
+        assert value not in captured.err
+        assert captured.out == ""
 
 
 def load_lane_fixture_module(gate_name: str):
@@ -784,6 +922,10 @@ def test_payload_free_summary_metadata_fields_have_validator_coverage() -> None:
             MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS
         )
     } == string_array_list_fields
+    assert {
+        field
+        for _gate_name, field in MODULE.PAYLOAD_FREE_SUMMARY_ALLOWED_STRING_LIST_VALUES
+    } <= (string_list_fields | string_array_list_fields)
     assert {
         field
         for _gate_name, field in MODULE.PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES
@@ -1076,6 +1218,544 @@ def test_response_file_arguments_pass(tmp_path: Path) -> None:
     )
 
     assert MODULE.main([f"@{args}"]) == 0
+
+
+def test_response_file_symlink_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target = tmp_path / "private-key-args"
+    target.write_text("--require-gate gateway_load\n", encoding="utf-8")
+    symlink = tmp_path / "aggregate.args"
+    symlink.symlink_to(target)
+
+    assert MODULE.main([f"@{symlink}"]) == 2
+
+    captured = capsys.readouterr()
+    assert "@ARGFILE must not be a symlink" in captured.err
+    assert "private-key-args" not in captured.err
+    assert "aggregate.args" not in captured.err
+    assert captured.out == ""
+
+
+def test_response_file_malformed_line_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = tmp_path / "aggregate.args"
+    args.write_text("--require-gate 'private-key-placeholder\n", encoding="utf-8")
+
+    assert MODULE.main([f"@{args}"]) == 2
+
+    captured = capsys.readouterr()
+    assert "@ARGFILE line 1:" in captured.err
+    assert "private-key-placeholder" not in captured.err
+    assert "aggregate.args" not in captured.err
+    assert captured.out == ""
+
+
+def test_summary_out_symlink_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_gate(tmp_path, "gateway_load")
+    target = tmp_path / "private-key-summary.json"
+    target.write_text("{}", encoding="utf-8")
+    summary = tmp_path / "summary.json"
+    summary.symlink_to(target)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "--summary-out" in captured.err
+    assert "must not be a symlink" in captured.err
+    assert "private-key-summary" not in captured.err
+    assert captured.out == ""
+
+
+def test_summary_out_parent_symlink_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_gate(tmp_path, "gateway_load")
+    target = tmp_path / "private-key-summary-parent"
+    target.mkdir()
+    parent = tmp_path / "summary-parent"
+    parent.symlink_to(target, target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(parent / "summary.json"),
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "--summary-out parent" in captured.err
+    assert "must not be a symlink" in captured.err
+    assert "private-key-summary-parent" not in captured.err
+    assert "SoraFS production readiness is blocked" not in captured.err
+    assert captured.out == ""
+
+
+def test_summary_out_directory_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_gate(tmp_path, "gateway_load")
+    summary = tmp_path / "summary-dir"
+    summary.mkdir()
+    (summary / "marker.txt").write_text("private-key-placeholder", encoding="utf-8")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "--summary-out" in captured.err
+    assert "must not be a directory" in captured.err
+    assert "private-key-placeholder" not in captured.err
+    assert "SoraFS production readiness is blocked" not in captured.err
+    assert captured.out == ""
+
+
+def test_summary_out_parent_file_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_gate(tmp_path, "gateway_load")
+    parent = tmp_path / "summary-parent"
+    parent.write_text("private-key-placeholder", encoding="utf-8")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(parent / "summary.json"),
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "--summary-out parent" in captured.err
+    assert "must be a directory when it exists" in captured.err
+    assert "private-key-placeholder" not in captured.err
+    assert "SoraFS production readiness is blocked" not in captured.err
+    assert captured.out == ""
+
+
+def test_summary_out_unsafe_path_fails_before_validation_without_leaking(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    write_gate(tmp_path, "gateway_load")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(tmp_path / "private%26%2395%3Bkey-summary.json"),
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert (
+        "SoraFS checker-rendered paths must not contain secret-looking"
+        in captured.err
+    )
+    assert "private%26%2395%3Bkey" not in captured.err
+    assert "private&#95;key" not in captured.err
+    assert "private_key" not in captured.err
+    assert "SoraFS production readiness is blocked" not in captured.err
+    assert captured.out == ""
+
+
+def test_summary_out_same_as_explicit_evidence_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    evidence = write_gate(tmp_path, "gateway_load")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(evidence),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(evidence),
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "--summary-out" in captured.err
+    assert "must not be the same path as --evidence" in captured.err
+    assert "SoraFS production readiness is blocked" not in captured.err
+    assert captured.out == ""
+
+
+def test_summary_out_discovered_from_evidence_dir_fails_before_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    summary = write_gate(tmp_path, "gateway_load")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert "evidence file conflicts with reserved output" in captured.err
+    assert "gateway_load.json" not in captured.err
+    assert "SoraFS production readiness is blocked" not in captured.err
+    assert captured.out == ""
+
+
+def test_evidence_dir_unsafe_path_fails_before_validation_without_leaking(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path / "bearer&#95;token_bundle"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert (
+        "SoraFS checker-rendered paths must not contain secret-looking"
+        in captured.err
+    )
+    assert "bearer&#95;token" not in captured.err
+    assert "bearer_token" not in captured.err
+    assert "SoraFS production readiness is blocked" not in captured.err
+    assert captured.out == ""
+
+
+def test_explicit_evidence_unsafe_path_fails_before_validation_without_leaking(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(tmp_path / "private%26%2395%3Bkey.json"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 2
+    )
+
+    captured = capsys.readouterr()
+    assert (
+        "SoraFS checker-rendered paths must not contain secret-looking"
+        in captured.err
+    )
+    assert "private%26%2395%3Bkey" not in captured.err
+    assert "private&#95;key" not in captured.err
+    assert "private_key" not in captured.err
+    assert "SoraFS production readiness is blocked" not in captured.err
+    assert captured.out == ""
+
+
+def test_explicit_evidence_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target = write_gate(tmp_path, "gateway_load")
+    symlink = tmp_path / "linked-summary.json"
+    symlink.symlink_to(target)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(symlink),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-summary" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["status"] == "blocked"
+
+
+def test_evidence_dir_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    write_gate(target_dir, "gateway_load")
+    symlink_dir = tmp_path / "linked-evidence"
+    symlink_dir.symlink_to(target_dir, target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(symlink_dir),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence directory must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-evidence" not in diagnostics
+    assert "target" not in diagnostics
+    assert payload["status"] == "blocked"
+
+
+def test_duplicate_explicit_evidence_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    evidence = write_gate(tmp_path, "gateway_load")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(evidence),
+                "--evidence",
+                str(evidence),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "duplicate explicit evidence file" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_explicit_and_directory_evidence_overlap_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    evidence = write_gate(tmp_path, "gateway_load")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--evidence",
+                str(evidence),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file provided by multiple evidence sources" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_overlapping_evidence_dirs_fail_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    write_gate(nested, "gateway_load")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--evidence-dir",
+                str(nested),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "duplicate evidence file" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert "nested" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
 
 
 def test_missing_required_gate_fails(tmp_path: Path) -> None:
@@ -2566,7 +3246,7 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "ai_prescreen",
             "valid_notification_manifest_digests",
             ("notification_transport",),
-            "manifest_body_blake3",
+            "manifest_body_blake3_hex",
         ),
         ("ai_prescreen", "valid_policy_digests", ("runner",), "policy_digest_hex"),
         (
@@ -2952,13 +3632,106 @@ def test_hex_binding_metadata_for_gate_passes(tmp_path: Path) -> None:
         runner_hash_hex=SHA256,
         subject_digest_hex=SHA256,
         workflow_digest_hex=SHA256,
-        manifest_body_blake3=SHA256,
+        manifest_body_blake3_hex=SHA256,
         execution_summary_digest_hex=SHA256,
         policy_digest_hex=SHA256,
     )
     write_json(tmp_path / "ai_prescreen.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "ai_prescreen") == 0
+
+
+def test_ai_prescreen_runner_bound_artifacts_must_match_runner_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("ai_prescreen")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="committee",
+        subject_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "ai_prescreen.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "ai_prescreen",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "ai_prescreen runner-bound artifact fingerprints must match "
+        "valid_runner_bindings"
+    ) in errors
+
+
+def test_ai_prescreen_workflow_bound_artifacts_must_match_workflow_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("ai_prescreen")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="notification_transport",
+        workflow_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "ai_prescreen.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "ai_prescreen",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "ai_prescreen workflow-bound artifact fingerprints must match "
+        "valid_workflow_digests"
+    ) in errors
+
+
+def test_ai_prescreen_policy_bound_artifacts_must_match_policy_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("ai_prescreen")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_dag",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "ai_prescreen.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "ai_prescreen",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "ai_prescreen policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
 
 
 def test_gateway_compliance_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
@@ -2968,6 +3741,68 @@ def test_gateway_compliance_policy_metadata_for_gate_passes(tmp_path: Path) -> N
     write_json(tmp_path / "gateway_compliance.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_compliance") == 0
+
+
+def test_gateway_compliance_bundle_bound_artifacts_must_match_bundle_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_compliance")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="controller_runtime",
+        bundle_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_compliance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_compliance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "gateway_compliance bundle-bound artifact fingerprints must match "
+        "valid_bundle_digests"
+    ) in errors
+
+
+def test_gateway_compliance_policy_bound_artifacts_must_match_policy_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_compliance")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_compliance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_compliance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "gateway_compliance policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
 
 
 def test_gateway_compliance_metrics_metadata_must_match_owner_kind_fingerprints(
@@ -3038,6 +3873,68 @@ def test_appeal_finance_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "appeal_finance") == 0
 
 
+def test_appeal_finance_config_bound_artifacts_must_match_pricing_config(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("appeal_finance")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="quote_api",
+        config_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "appeal_finance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "appeal_finance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "appeal_finance config-bound artifact fingerprints must match "
+        "valid_config_digests"
+    ) in errors
+
+
+def test_appeal_finance_policy_bound_artifacts_must_match_pricing_policy(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("appeal_finance")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "appeal_finance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "appeal_finance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "appeal_finance policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
+
+
 def test_appeal_finance_metrics_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
@@ -3106,6 +4003,99 @@ def test_gateway_load_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 0
 
 
+def test_gateway_load_suite_bound_artifacts_must_match_suite_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="staging_load",
+        suite_report_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "gateway_load suite-bound artifact fingerprints must match "
+        "valid_suite_report_digests"
+    ) in errors
+
+
+def test_gateway_load_staging_bound_artifacts_must_match_staging_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="telemetry_slo",
+        staging_report_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "gateway_load staging-bound artifact fingerprints must match "
+        "valid_staging_report_digests"
+    ) in errors
+
+
+def test_gateway_load_policy_bound_artifacts_must_match_policy_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "gateway_load policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
+
+
 def test_orderbook_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("orderbook")
     payload["valid_policy_digests"] = [SHA256]
@@ -3113,6 +4103,68 @@ def test_orderbook_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     write_json(tmp_path / "orderbook.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "orderbook") == 0
+
+
+def test_orderbook_contract_bound_artifacts_must_match_contract_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("orderbook")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="matcher_service",
+        contract_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "orderbook.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "orderbook",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "orderbook contract-bound artifact fingerprints must match "
+        "valid_contract_digests"
+    ) in errors
+
+
+def test_orderbook_policy_bound_artifacts_must_match_policy_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("orderbook")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "orderbook.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "orderbook",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "orderbook policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
 
 
 def test_orderbook_metrics_metadata_must_match_owner_kind_fingerprints(
@@ -3190,6 +4242,155 @@ def test_pdp_provider_roster_metadata_for_gate_passes(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "pdp") == 0
 
 
+def test_pdp_repair_handoff_metadata_must_match_governance_repair_fingerprint(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pdp")
+    remove_fingerprint_metadata(
+        payload,
+        "repair_handoff_digest_hex",
+        kind_name="governance_repair",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pdp.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pdp",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_repair_handoff_digests must match recognized artifact fingerprints"
+        in errors
+    )
+
+
+def test_pdp_repair_handoff_metadata_rejects_malformed_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pdp")
+    payload["valid_repair_handoff_digests"] = ["not-a-digest"]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pdp.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pdp",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_repair_handoff_digests[0] must be 64 lowercase hex characters"
+        in errors
+    )
+
+
+def test_pdp_proof_summary_bound_artifacts_must_match_proof_summary_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pdp")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="validator_replay",
+        proof_summary_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pdp.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pdp",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "pdp proof-summary-bound artifact fingerprints must match "
+        "valid_proof_summary_digests"
+    ) in errors
+
+
+def test_pdp_policy_bound_artifacts_must_match_policy_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pdp")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pdp.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pdp",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "pdp policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
+
+
+def test_pdp_provider_roster_bound_artifacts_must_match_roster_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pdp")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        provider_roster_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pdp.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pdp",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "pdp provider-roster-bound artifact fingerprints must match "
+        "valid_provider_roster_digests"
+    ) in errors
+
+
 def test_pdp_metrics_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
@@ -3256,6 +4457,184 @@ def test_por_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "por") == 0
 
 
+def test_por_archive_backend_metadata_for_gate_passes(tmp_path: Path) -> None:
+    payload = gate_summary("por")
+    write_json(tmp_path / "por.json", payload)
+
+    assert run_gate(tmp_path, "--require-gate", "por") == 0
+
+
+def test_por_seed_replay_bound_artifacts_must_match_randomness_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("por")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="scheduler_runtime",
+        seed_replay_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "por.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "por",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "por seed-replay-bound artifact fingerprints must match "
+        "valid_seed_replay_digests"
+    ) in errors
+
+
+def test_por_policy_bound_artifacts_must_match_randomness_policy(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("por")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "por.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "por",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "por policy-bound artifact fingerprints must match valid_policy_digests"
+        in errors
+    )
+
+
+def test_por_archive_backend_metadata_must_match_reporting_archive_fingerprint(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("por")
+    remove_fingerprint_metadata(
+        payload,
+        "archive_backend",
+        kind_name="reporting_archive",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "por.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "por",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "archive_backends must match recognized artifact fingerprints" in errors
+
+
+def test_por_governance_handoff_digest_metadata_must_match_reporting_archive_fingerprint(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("por")
+    remove_fingerprint_metadata(
+        payload,
+        "governance_archive_handoff_digest_hex",
+        kind_name="reporting_archive",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "por.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "por",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_governance_archive_handoff_digests must match recognized "
+        "artifact fingerprints"
+    ) in errors
+
+
+def test_por_governance_handoff_digest_metadata_rejects_malformed_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("por")
+    payload["valid_governance_archive_handoff_digests"] = ["not-a-digest"]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "por.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "por",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_governance_archive_handoff_digests[0] must be 64 lowercase "
+        "hex characters"
+    ) in errors
+
+
+def test_por_archive_backend_metadata_rejects_unknown_values(tmp_path: Path) -> None:
+    payload = gate_summary("por")
+    payload["archive_backends"] = ["object-store"]
+    add_fingerprint_metadata(
+        payload,
+        archive_backend="object-store",
+        kind_name="reporting_archive",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "por.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "por",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "archive_backends must not include unknown metadata values" in errors
+
+
 def test_pop_credentials_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("pop_credentials")
     payload["valid_juror_sync_bindings"] = [
@@ -3276,6 +4655,196 @@ def test_pop_credentials_policy_metadata_for_gate_passes(tmp_path: Path) -> None
     write_json(tmp_path / "pop_credentials.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "pop_credentials") == 0
+
+
+def test_pop_credentials_bound_fingerprint_field_inventories_match_lane_contract() -> None:
+    assert MODULE.POP_CREDENTIALS_ROOT_BOUND_FINGERPRINT_FIELDS == tuple(
+        (
+            kind_name,
+            (
+                "synced_root_digest_hex"
+                if kind_name == "juror_client"
+                else "root_digest_hex"
+            ),
+        )
+        for kind_name in MODULE.POP_CREDENTIALS_ROOT_BOUND_KINDS
+    )
+    assert MODULE.POP_CREDENTIALS_REVOCATION_BOUND_FINGERPRINT_FIELDS == tuple(
+        (
+            kind_name,
+            (
+                "synced_revocation_list_digest_hex"
+                if kind_name == "juror_client"
+                else "revocation_list_digest_hex"
+            ),
+        )
+        for kind_name in MODULE.POP_CREDENTIALS_REVOCATION_BOUND_KINDS
+    )
+    root_bound_kinds = {
+        kind
+        for kind, _field in MODULE.POP_CREDENTIALS_ROOT_BOUND_FINGERPRINT_FIELDS
+    }
+    assert root_bound_kinds == set(MODULE.POP_CREDENTIALS_ROOT_BOUND_KINDS)
+    assert {
+        kind
+        for kind, _field in MODULE.POP_CREDENTIALS_REVOCATION_BOUND_FINGERPRINT_FIELDS
+    } == set(MODULE.POP_CREDENTIALS_REVOCATION_BOUND_KINDS)
+
+
+def test_pop_credentials_juror_sync_root_must_match_valid_roots(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pop_credentials")
+    other_digest = "cd" * 32
+    payload["valid_juror_sync_bindings"][0]["synced_root_digest_hex"] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        kind_name="juror_client",
+        synced_root_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pop_credentials.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pop_credentials",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "valid_juror_sync_bindings roots must match valid_root_digests" in errors
+
+
+def test_pop_credentials_juror_sync_revocation_must_match_valid_revocations(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pop_credentials")
+    other_digest = "cd" * 32
+    payload["valid_juror_sync_bindings"][0][
+        "synced_revocation_list_digest_hex"
+    ] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        kind_name="juror_client",
+        synced_revocation_list_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pop_credentials.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pop_credentials",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_juror_sync_bindings revocations must match "
+        "valid_revocation_list_digests"
+    ) in errors
+
+
+def test_pop_credentials_root_bound_artifacts_must_match_valid_roots(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pop_credentials")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="verifier_service",
+        root_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pop_credentials.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pop_credentials",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "pop_credentials root-bound artifact fingerprints must match "
+        "valid_root_digests"
+    ) in errors
+
+
+def test_pop_credentials_revocation_bound_artifacts_must_match_valid_revocations(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pop_credentials")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="metrics_alerts",
+        revocation_list_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pop_credentials.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pop_credentials",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "pop_credentials revocation-bound artifact fingerprints must match "
+        "valid_revocation_list_digests"
+    ) in errors
+
+
+def test_pop_credentials_policy_bound_artifacts_must_match_verifier_policy(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("pop_credentials")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "pop_credentials.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "pop_credentials",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "pop_credentials policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
 
 
 def test_pop_credentials_metrics_metadata_must_match_owner_kind_fingerprints(
@@ -3344,6 +4913,130 @@ def test_repair_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     write_json(tmp_path / "repair.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "repair") == 0
+
+
+def test_repair_roster_bound_artifacts_must_match_auditor_roster(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("repair")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="auditor_api",
+        roster_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "repair.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "repair",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "repair roster-bound artifact fingerprints must match "
+        "valid_roster_digests"
+    ) in errors
+
+
+def test_repair_failure_bound_artifacts_must_match_failure_capture(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("repair")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="worker_lifecycle",
+        evidence_bundle_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "repair.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "repair",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "repair failure-bound artifact fingerprints must match "
+        "valid_failure_bundle_digests"
+    ) in errors
+
+
+def test_repair_handoff_bound_artifacts_must_match_governance_handoff(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("repair")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        handoff_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "repair.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "repair",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "repair handoff-bound artifact fingerprints must match "
+        "valid_handoff_digests"
+    ) in errors
+
+
+def test_repair_policy_bound_artifacts_must_match_handoff_policy(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("repair")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "repair.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "repair",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "repair policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
 
 
 def test_repair_metrics_metadata_must_match_owner_kind_fingerprints(
@@ -3433,6 +5126,391 @@ def test_reference_sdk_release_policy_metadata_for_gate_passes(
     assert run_gate(tmp_path, "--require-gate", "reference_sdk_release") == 0
 
 
+def test_reference_sdk_release_manifest_bound_artifacts_must_match_signed_manifest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="release_archive",
+        release_manifest_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reference_sdk_release manifest-bound artifact fingerprints must match "
+        "valid_release_manifest_digests"
+    ) in errors
+
+
+def test_reference_sdk_release_policy_bound_artifacts_must_match_signed_manifest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reference_sdk_release policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
+
+
+def test_reference_sdk_release_governance_key_fingerprint_must_match_signed_manifest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        public_key_fingerprint_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reference_sdk_release governance approval release-key fingerprints "
+        "must match valid_release_key_fingerprints"
+    ) in errors
+
+
+def test_reference_sdk_release_signature_algorithm_metadata_for_gate_passes(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert run_gate(tmp_path, "--require-gate", "reference_sdk_release") == 0
+
+
+def test_reference_sdk_release_signature_algorithm_must_match_signed_manifest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    remove_fingerprint_metadata(
+        payload,
+        "signature_algorithm",
+        kind_name="signed_manifest",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "signature_algorithms must match recognized artifact fingerprints" in errors
+
+
+def test_reference_sdk_release_signature_algorithm_rejects_unknown_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reference_sdk_release")
+    payload["signature_algorithms"] = ["rsa-sha256"]
+    add_fingerprint_metadata(
+        payload,
+        signature_algorithm="rsa-sha256",
+        kind_name="signed_manifest",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reference_sdk_release.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reference_sdk_release",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "signature_algorithms must not include unknown metadata values" in errors
+
+
+def test_closed_set_string_metadata_unknown_values_do_not_echo(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        (
+            "por",
+            "archive_backends",
+            "reporting_archive",
+            "archive_backend",
+            "private-key-placeholder",
+            "archive_backends must not include unknown metadata values",
+        ),
+        (
+            "reference_sdk_release",
+            "signature_algorithms",
+            "signed_manifest",
+            "signature_algorithm",
+            "private-key-placeholder",
+            "signature_algorithms must not include unknown metadata values",
+        ),
+    )
+
+    for gate_name, metadata_field, kind_name, fingerprint_field, raw_value, error in cases:
+        root = tmp_path / gate_name
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload[metadata_field] = [raw_value]
+        add_fingerprint_metadata(
+            payload,
+            kind_name=kind_name,
+            **{fingerprint_field: raw_value},
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert error in errors
+        assert raw_value not in result_text
+
+
+def test_transparency_publication_binding_metadata_for_gate_passes(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("transparency")
+    write_json(tmp_path / "transparency.json", payload)
+
+    assert run_gate(tmp_path, "--require-gate", "transparency") == 0
+
+
+def test_transparency_publication_binding_must_match_publication_fingerprint(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("transparency")
+    remove_fingerprint_metadata(
+        payload,
+        "source_batch_digest_hex",
+        "cycle_digest_hex",
+        kind_name="publication",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "transparency.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "transparency",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "valid_publication_bindings must match recognized artifact fingerprints" in errors
+
+
+def test_transparency_cycle_digest_must_match_publication_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("transparency")
+    other_digest = "cd" * 32
+    payload["valid_cycle_digests"] = [other_digest]
+    add_fingerprint_metadata(
+        payload,
+        cycle_digest_hex=other_digest,
+        kind_name="publication",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "transparency.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "transparency",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_cycle_digests must match valid_publication_bindings cycle digests"
+        in errors
+    )
+
+
+def test_transparency_publication_binding_source_must_match_source_entry(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("transparency")
+    other_digest = "cd" * 32
+    payload["valid_publication_bindings"] = [
+        {
+            "source_batch_digest_hex": other_digest,
+            "cycle_digest_hex": SHA256,
+        }
+    ]
+    add_fingerprint_metadata(
+        payload,
+        source_batch_digest_hex=other_digest,
+        cycle_digest_hex=SHA256,
+        kind_name="publication",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "transparency.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "transparency",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_publication_bindings source batches must match valid_source_batch_digests"
+        in errors
+    )
+
+
+def test_transparency_source_bound_artifacts_must_match_source_batch_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("transparency")
+    other_digest = "cd" * 32
+    payload["valid_publication_bindings"] = [
+        {
+            "source_batch_digest_hex": other_digest,
+            "cycle_digest_hex": SHA256,
+        }
+    ]
+    add_fingerprint_metadata(
+        payload,
+        source_batch_digest_hex=other_digest,
+        cycle_digest_hex=SHA256,
+        kind_name="publication",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "transparency.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "transparency",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "transparency source-bound artifact fingerprints must match "
+        "valid_source_batch_digests"
+    ) in errors
+
+
+def test_transparency_cycle_bound_artifacts_must_match_publication_cycle(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("transparency")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="privacy_aggregate",
+        cycle_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "transparency.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "transparency",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "transparency cycle-bound artifact fingerprints must match "
+        "valid_cycle_digests"
+    ) in errors
+
+
 def test_potr_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("potr")
     payload["valid_policy_digests"] = [SHA256]
@@ -3449,6 +5527,99 @@ def test_potr_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     write_json(tmp_path / "potr.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "potr") == 0
+
+
+def test_potr_receipt_summary_bound_artifacts_must_match_receipt_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("potr")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="receipt_validation",
+        receipt_summary_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "potr.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "potr",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "potr receipt-summary-bound artifact fingerprints must match "
+        "valid_receipt_summary_digests"
+    ) in errors
+
+
+def test_potr_pq_key_roster_bound_artifacts_must_match_governance_roster(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("potr")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="receipt_validation",
+        pq_key_roster_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "potr.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "potr",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "potr pq-key-roster-bound artifact fingerprints must match "
+        "valid_pq_key_roster_digests"
+    ) in errors
+
+
+def test_potr_reputation_weight_bound_artifacts_must_match_governance_policy(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("potr")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="reputation_integration",
+        reputation_weight_policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "potr.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "potr",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "potr reputation-weight-bound artifact fingerprints must match "
+        "valid_reputation_weight_policy_digests"
+    ) in errors
 
 
 def test_potr_metrics_metadata_must_match_owner_kind_fingerprints(
@@ -3682,6 +5853,15 @@ def test_hex_binding_metadata_must_match_owner_kind_fingerprints(
                 "ledger_digest_hex",
             ),
         ),
+        (
+            "transparency",
+            "valid_publication_bindings",
+            ("publication",),
+            (
+                "source_batch_digest_hex",
+                "cycle_digest_hex",
+            ),
+        ),
     ]
 
     for gate_name, metadata_field, owner_kinds, fingerprint_fields in cases:
@@ -3797,6 +5977,161 @@ def test_binding_metadata_entries_must_be_unique_and_sorted(
     assert SNAPSHOT_ID not in errors
 
 
+def test_reputation_snapshot_binding_must_match_scalar_snapshot_metadata(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    other_merkle_root = "ef" * 32
+    payload["valid_snapshot_bindings"][0]["merkle_root_hex"] = other_merkle_root
+    add_fingerprint_metadata(
+        payload,
+        kind_name="latest",
+        merkle_root_hex=other_merkle_root,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_snapshot_bindings must match snapshot_id_hex and merkle_root_hex"
+        in errors
+    )
+
+
+def test_reputation_snapshot_bound_artifacts_must_match_snapshot_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    other_merkle_root = "ef" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="provider",
+        merkle_root_hex=other_merkle_root,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reputation snapshot-bound artifact fingerprints must match "
+        "valid_snapshot_bindings"
+    ) in errors
+
+
+def test_reputation_weight_metadata_must_match_publish_latest_fingerprints(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    for kind_name in ("publish", "latest"):
+        remove_fingerprint_metadata(
+            payload,
+            "weights_digest_hex",
+            kind_name=kind_name,
+        )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "valid_reputation_weight_digests must match recognized artifact fingerprints" in errors
+    assert (
+        "reputation publish/latest artifact fingerprints must match "
+        "valid_reputation_weight_digests"
+    ) in errors
+
+
+def test_reputation_weight_metadata_rejects_malformed_values(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    bad_digest = "AB" * 32
+    payload["valid_reputation_weight_digests"] = [bad_digest]
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_reputation_weight_digests[0] must be 64 lowercase hex characters"
+        in errors
+    )
+    assert bad_digest not in errors
+
+
+def test_reputation_publish_latest_weight_artifacts_must_match_metadata(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reputation")
+    other_digest = "ef" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="latest",
+        weights_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reputation publish/latest artifact fingerprints must match "
+        "valid_reputation_weight_digests"
+    ) in errors
+    assert other_digest not in errors
+
+
 def test_reference_decision_id_metadata_entries_are_validated(
     tmp_path: Path,
 ) -> None:
@@ -3871,6 +6206,68 @@ def test_governance_dag_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "governance_dag") == 0
 
 
+def test_governance_dag_public_head_bound_artifacts_must_match_public_head(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("governance_dag")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="mirror_datastore",
+        public_head_cid_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "governance_dag.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "governance_dag",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "governance_dag public-head-bound artifact fingerprints must match "
+        "valid_public_head_cids"
+    ) in errors
+
+
+def test_governance_dag_policy_bound_artifacts_must_match_policy_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("governance_dag")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "governance_dag.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "governance_dag",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "governance_dag policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
+
+
 def test_hedging_billing_policy_metadata_for_gate_passes(tmp_path: Path) -> None:
     payload = gate_summary("hedging_billing")
     payload["valid_policy_digests"] = [SHA256]
@@ -3878,6 +6275,165 @@ def test_hedging_billing_policy_metadata_for_gate_passes(tmp_path: Path) -> None
     write_json(tmp_path / "hedging_billing.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "hedging_billing") == 0
+
+
+def test_hedging_cycle_bound_artifacts_must_match_billing_cycles(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("hedging_billing")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="statement_publication",
+        statement_bundle_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "hedging_billing.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "hedging_billing",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "hedging_billing cycle-bound artifact fingerprints must match "
+        "valid_cycle_bindings"
+    ) in errors
+
+
+def test_hedging_policy_bound_artifacts_must_match_billing_cycles(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("hedging_billing")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "hedging_billing.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "hedging_billing",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "hedging_billing policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
+
+
+def test_hedging_cycle_bindings_must_match_billing_cycles(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("hedging_billing")
+    other_digest = "cd" * 32
+    append_hedging_billing_cycle(
+        payload,
+        cycle_id="billing-cycle-2",
+        cycle_index=2,
+        artifact_sha256="ef" * 32,
+        statement_bundle_digest_hex=other_digest,
+        reconciliation_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "hedging_billing.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "hedging_billing",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_cycle_bindings must match valid_billing_cycles cycle tuples" in errors
+    )
+
+
+def test_hedging_policy_digests_must_match_billing_cycles(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("hedging_billing")
+    append_hedging_billing_cycle(
+        payload,
+        cycle_id="billing-cycle-2",
+        cycle_index=2,
+        artifact_sha256="ef" * 32,
+        policy_digest_hex="cd" * 32,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "hedging_billing.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "hedging_billing",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_policy_digests must match valid_billing_cycles policy digests"
+        in errors
+    )
+
+
+def test_hedging_billing_cycle_reference_must_match_reference_decision(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("hedging_billing")
+    other_digest = "cd" * 32
+    payload["valid_billing_cycles"][0]["reference_decision_id_hex"] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        kind_name="billing_cycle",
+        reference_decision_id_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "hedging_billing.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "hedging_billing",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_billing_cycles reference decisions must match "
+        "valid_reference_decision_ids"
+    ) in errors
 
 
 def test_hedging_billing_metrics_metadata_must_match_owner_kind_fingerprints(
@@ -4038,6 +6594,38 @@ def test_reputation_provider_metadata_must_match_recognized_artifact_fingerprint
     errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
     assert "provider_ids must match recognized artifact fingerprints" in errors
     assert "provider_count_values must match recognized artifact fingerprints" in errors
+
+
+def test_provider_ids_secret_like_metadata_does_not_echo(tmp_path: Path) -> None:
+    raw_provider_id = "provider-private-key-placeholder"
+    payload = gate_summary("reputation")
+    payload["provider_ids"] = [raw_provider_id]
+    add_fingerprint_metadata(
+        payload,
+        kind_name="provider",
+        provider_id=raw_provider_id,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result_text = summary.read_text(encoding="utf-8")
+    errors = "\n".join(json.loads(result_text)["errors"])
+    assert (
+        "provider_ids[0] must not contain non-production markers "
+        "['placeholder', 'private']"
+    ) in errors
+    assert raw_provider_id not in result_text
 
 
 def test_every_string_list_metadata_field_has_owner_kind_tether() -> None:
@@ -4521,6 +7109,38 @@ def test_object_list_metadata_for_gate_passes(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "appeal_finance") == 0
 
 
+def test_appeal_finance_multi_peer_run_config_must_match_valid_config(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("appeal_finance")
+    other_digest = "cd" * 32
+    payload["valid_multi_peer_runs"][0]["config_digest_hex"] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        kind_name="multi_peer_reconciliation",
+        config_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "appeal_finance.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "appeal_finance",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_multi_peer_runs config digests must match valid_config_digests"
+        in errors
+    )
+
+
 def test_object_list_metadata_must_match_required_artifact_count(
     tmp_path: Path,
 ) -> None:
@@ -4742,7 +7362,12 @@ def test_object_list_metadata_non_digest_details_must_match_fingerprints(
 ) -> None:
     cases = [
         ("appeal_finance", "valid_multi_peer_runs", "peer_count", 5),
-        ("hedging_billing", "valid_billing_cycles", "cycle_id", "cycle-2"),
+        (
+            "hedging_billing",
+            "valid_billing_cycles",
+            "cycle_id",
+            "billing-cycle-2",
+        ),
         ("moderation_panel", "valid_e2e_runs", "validator_count", 5),
         ("reserve_rent", "valid_provider_bakes", "provider_count", 2),
         (
@@ -4760,7 +7385,7 @@ def test_object_list_metadata_non_digest_details_must_match_fingerprints(
         (
             "reserve_rent",
             "valid_provider_bakes",
-            "scheduled_lifecycle_canary_last_tick_unix",
+            "scheduled_lifecycle_canary_last_tick_at_unix",
             GENERATED_AT - 1,
         ),
     ]
@@ -4791,6 +7416,90 @@ def test_object_list_metadata_non_digest_details_must_match_fingerprints(
             f"{metadata_field} entries must match recognized artifact fingerprints"
             in errors
         )
+
+
+def test_object_list_identity_labels_replay_lane_policies_without_echo(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (
+            "hedging_billing",
+            "valid_billing_cycles",
+            "billing_cycle",
+            "cycle_id",
+            "billing-cycle-prod-placeholder",
+            "valid_billing_cycles[0].cycle_id must not contain "
+            "non-production markers ['placeholder']",
+        ),
+        (
+            "hedging_billing",
+            "valid_billing_cycles",
+            "billing_cycle",
+            "cycle_id",
+            "cycle-prod-private-key",
+            "valid_billing_cycles[0].cycle_id must match canonical "
+            "lowercase `billing-cycle-*`",
+        ),
+        (
+            "reserve_rent",
+            "valid_provider_bakes",
+            "provider_bake",
+            "bake_id",
+            "reserve-bake-prod-placeholder",
+            "valid_provider_bakes[0].bake_id must not contain "
+            "non-production markers ['placeholder']",
+        ),
+        (
+            "reserve_rent",
+            "valid_provider_bakes",
+            "provider_bake",
+            "bake_id",
+            "bake-prod-private-key",
+            "valid_provider_bakes[0].bake_id must match canonical "
+            "lowercase `reserve-bake-*`",
+        ),
+    ]
+
+    for index, (
+        gate_name,
+        metadata_field,
+        kind_name,
+        key_field,
+        invalid_label,
+        expected_error,
+    ) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{key_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload[metadata_field][0][key_field] = invalid_label
+        add_fingerprint_metadata(
+            payload,
+            kind_name=kind_name,
+            **{key_field: invalid_label},
+        )
+        if gate_name == "reserve_rent":
+            add_fingerprint_metadata(
+                payload,
+                kind_name="governance_approval",
+                bake_id=invalid_label,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert expected_error in errors
+        assert invalid_label not in errors
 
 
 def test_object_list_metadata_entries_are_validated(tmp_path: Path) -> None:
@@ -4940,7 +7649,7 @@ def test_object_list_metadata_domain_identities_must_not_duplicate() -> None:
             "valid_billing_cycles",
             [
                 {
-                    "cycle_id": "cycle-1",
+                    "cycle_id": "billing-cycle-1",
                     "cycle_index": 1,
                     "deployment_id": DEPLOYMENT_ID,
                     "environment": ENVIRONMENT,
@@ -4952,7 +7661,7 @@ def test_object_list_metadata_domain_identities_must_not_duplicate() -> None:
                     "statement_count": 1,
                 },
                 {
-                    "cycle_id": "cycle-1",
+                    "cycle_id": "billing-cycle-1",
                     "cycle_index": 2,
                     "deployment_id": DEPLOYMENT_ID,
                     "environment": ENVIRONMENT,
@@ -5030,7 +7739,7 @@ def test_object_list_metadata_domain_identities_must_not_duplicate() -> None:
                     "policy_digest_hex": SHA256,
                     "provider_count": 3,
                     "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-                    "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 30,
+                    "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT - 30,
                     "scheduled_lifecycle_canary_tick_count": 2,
                     "started_at_unix": GENERATED_AT - 60,
                 },
@@ -5044,7 +7753,7 @@ def test_object_list_metadata_domain_identities_must_not_duplicate() -> None:
                     "policy_digest_hex": SHA256,
                     "provider_count": 4,
                     "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-                    "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT + 90,
+                    "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT + 90,
                     "scheduled_lifecycle_canary_tick_count": 2,
                     "started_at_unix": GENERATED_AT + 60,
                 },
@@ -5082,7 +7791,7 @@ def test_provider_bake_metadata_completed_at_must_not_precede_start(
             "completed_at_unix": GENERATED_AT - 1,
             "provider_count": 3,
             "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-            "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 30,
+            "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT - 30,
             "scheduled_lifecycle_canary_tick_count": 2,
         }
     ]
@@ -5117,7 +7826,7 @@ def test_provider_bake_scheduler_metadata_is_validated(tmp_path: Path) -> None:
         "scheduled_lifecycle_canary_defaulted_provider_count"
     ] = True
     payload["valid_provider_bakes"][0][
-        "scheduled_lifecycle_canary_last_tick_unix"
+        "scheduled_lifecycle_canary_last_tick_at_unix"
     ] = GENERATED_AT + 1
     summary = tmp_path / "summary.json"
     write_json(tmp_path / "reserve_rent.json", payload)
@@ -5144,7 +7853,279 @@ def test_provider_bake_scheduler_metadata_is_validated(tmp_path: Path) -> None:
     ) in errors
     assert (
         "valid_provider_bakes[0].completed_at_unix must be >= "
-        "scheduled_lifecycle_canary_last_tick_unix"
+        "scheduled_lifecycle_canary_last_tick_at_unix"
+    ) in errors
+
+
+def test_reserve_rent_matrix_policy_must_match_policy_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    other_digest = "cd" * 32
+    payload["valid_policy_matrix_bindings"][0]["policy_digest_hex"] = other_digest
+    payload["valid_policy_matrix_ledger_bindings"][0][
+        "policy_digest_hex"
+    ] = other_digest
+    payload["valid_provider_bakes"][0]["policy_digest_hex"] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        kind_name="quote_matrix",
+        policy_digest_hex=other_digest,
+    )
+    add_fingerprint_metadata(
+        payload,
+        kind_name="ledger_digest",
+        policy_digest_hex=other_digest,
+    )
+    add_fingerprint_metadata(
+        payload,
+        kind_name="provider_bake",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_policy_matrix_bindings policies must match valid_policy_digests"
+        in errors
+    )
+
+
+def test_reserve_rent_ledger_pair_must_match_matrix_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    other_digest = "cd" * 32
+    payload["valid_policy_matrix_ledger_bindings"][0][
+        "matrix_digest_hex"
+    ] = other_digest
+    payload["valid_provider_bakes"][0]["matrix_digest_hex"] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        kind_name="ledger_digest",
+        matrix_digest_hex=other_digest,
+    )
+    add_fingerprint_metadata(
+        payload,
+        kind_name="provider_bake",
+        matrix_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_policy_matrix_ledger_bindings matrix pairs must match "
+        "valid_policy_matrix_bindings"
+    ) in errors
+
+
+def test_reserve_rent_provider_bake_tuple_must_match_ledger_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    other_digest = "cd" * 32
+    payload["valid_provider_bakes"][0]["ledger_digest_hex"] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        kind_name="provider_bake",
+        ledger_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_provider_bakes ledger tuples must match "
+        "valid_policy_matrix_ledger_bindings"
+    ) in errors
+
+
+def test_reserve_rent_governance_approval_requires_bake_id_fingerprint(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    remove_fingerprint_metadata(
+        payload,
+        "bake_id",
+        kind_name="governance_approval",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reserve_rent governance approval bake_id fingerprints must match "
+        "valid_provider_bakes"
+    ) in errors
+
+
+def test_reserve_rent_governance_approval_bake_id_must_match_provider_bakes(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        bake_id="reserve-bake-002",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reserve_rent governance approval bake_id fingerprints must match "
+        "valid_provider_bakes"
+    ) in errors
+    assert "reserve-bake-002" not in errors
+
+
+def test_reserve_rent_policy_bound_artifacts_must_match_policy_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="quote_matrix",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reserve_rent policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
+
+
+def test_reserve_rent_matrix_bound_artifacts_must_match_matrix_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="lifecycle_service",
+        matrix_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reserve_rent matrix-bound artifact fingerprints must match "
+        "valid_policy_matrix_bindings"
+    ) in errors
+
+
+def test_reserve_rent_ledger_bound_artifacts_must_match_ledger_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("reserve_rent")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="lifecycle_service",
+        ledger_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reserve_rent.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reserve_rent",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "reserve_rent ledger-bound artifact fingerprints must match "
+        "valid_policy_matrix_ledger_bindings"
     ) in errors
 
 
@@ -5205,6 +8186,291 @@ def test_reserve_rent_metrics_metadata_must_cover_required_values(
 
     errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
     assert f"metrics must include metadata value `{missing}`" in errors
+
+
+def test_moderation_panel_roster_binding_case_must_match_case_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    other_digest = "cd" * 32
+    payload["valid_roster_bindings"] = [
+        {"case_digest_hex": other_digest, "roster_hash_hex": SHA256}
+    ]
+    payload["valid_tally_bindings"] = [
+        {
+            "case_digest_hex": other_digest,
+            "roster_hash_hex": SHA256,
+            "tally_digest_hex": SHA256,
+        }
+    ]
+    payload["valid_e2e_runs"][0]["case_digest_hex"] = other_digest
+    payload["valid_evidence_viewer_digest_sets"][0][
+        "case_digest_hex"
+    ] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        case_digest_hex=other_digest,
+        roster_hash_hex=SHA256,
+        kind_name="sortition_roster",
+    )
+    add_fingerprint_metadata(
+        payload,
+        case_digest_hex=other_digest,
+        roster_hash_hex=SHA256,
+        tally_digest_hex=SHA256,
+        kind_name="commit_reveal",
+    )
+    add_fingerprint_metadata(
+        payload,
+        case_digest_hex=other_digest,
+        roster_hash_hex=SHA256,
+        tally_digest_hex=SHA256,
+        kind_name="e2e_panel",
+    )
+    add_fingerprint_metadata(
+        payload,
+        case_digest_hex=other_digest,
+        roster_hash_hex=SHA256,
+        kind_name="evidence_viewer",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "valid_roster_bindings case digests must match valid_case_digests" in errors
+
+
+def test_moderation_panel_tally_binding_must_match_roster_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    other_digest = "cd" * 32
+    payload["valid_tally_bindings"] = [
+        {
+            "case_digest_hex": other_digest,
+            "roster_hash_hex": SHA256,
+            "tally_digest_hex": SHA256,
+        }
+    ]
+    add_fingerprint_metadata(
+        payload,
+        case_digest_hex=other_digest,
+        roster_hash_hex=SHA256,
+        tally_digest_hex=SHA256,
+        kind_name="commit_reveal",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "valid_tally_bindings roster pairs must match valid_roster_bindings" in errors
+
+
+def test_moderation_panel_e2e_run_must_match_tally_binding(tmp_path: Path) -> None:
+    payload = gate_summary("moderation_panel")
+    other_digest = "cd" * 32
+    payload["valid_e2e_runs"][0]["tally_digest_hex"] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        tally_digest_hex=other_digest,
+        kind_name="e2e_panel",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert "valid_e2e_runs tally bindings must match valid_tally_bindings" in errors
+
+
+def test_moderation_panel_evidence_viewer_must_match_roster_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    other_digest = "cd" * 32
+    payload["valid_evidence_viewer_digest_sets"][0][
+        "roster_hash_hex"
+    ] = other_digest
+    add_fingerprint_metadata(
+        payload,
+        roster_hash_hex=other_digest,
+        kind_name="evidence_viewer",
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "valid_evidence_viewer_digest_sets roster pairs must match valid_roster_bindings"
+        in errors
+    )
+
+
+def test_moderation_panel_case_bound_artifacts_must_match_case_digest(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="operator_workflow",
+        case_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "moderation_panel case-bound artifact fingerprints must match "
+        "valid_case_digests"
+    ) in errors
+
+
+def test_moderation_panel_roster_bound_artifacts_must_match_roster_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="juror_notifications",
+        roster_hash_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "moderation_panel roster-bound artifact fingerprints must match "
+        "valid_roster_bindings"
+    ) in errors
+
+
+def test_moderation_panel_tally_bound_artifacts_must_match_tally_binding(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="decision_publication",
+        tally_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "moderation_panel tally-bound artifact fingerprints must match "
+        "valid_tally_bindings"
+    ) in errors
+
+
+def test_moderation_panel_policy_bound_artifacts_must_match_e2e_policy(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("moderation_panel")
+    other_digest = "cd" * 32
+    add_fingerprint_metadata(
+        payload,
+        kind_name="governance_approval",
+        policy_digest_hex=other_digest,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "moderation_panel.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "moderation_panel",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert (
+        "moderation_panel policy-bound artifact fingerprints must match "
+        "valid_policy_digests"
+    ) in errors
 
 
 def test_deployment_context_metadata_for_gate_passes(tmp_path: Path) -> None:
@@ -5345,6 +8611,76 @@ def test_deployment_context_metadata_entries_are_validated(
     assert "runtime-only-key-material" not in errors
 
 
+def test_payload_free_deployment_context_rejects_nonproduction_without_echo(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (
+            "moderation_panel",
+            "moderation-panel-staging-a",
+            ENVIRONMENT,
+            "deployment_context.deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "moderation-panel-staging-a",
+        ),
+        (
+            "appeal_finance",
+            "appeal-finance-staging-a",
+            ENVIRONMENT,
+            "valid_multi_peer_runs[0].deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "appeal-finance-staging-a",
+        ),
+        (
+            "hedging_billing",
+            DEPLOYMENT_ID,
+            "dev",
+            "valid_billing_cycles[0].environment must be production",
+            "dev",
+        ),
+        (
+            "reserve_rent",
+            "reserve-notproductionready-a",
+            ENVIRONMENT,
+            "valid_provider_bakes[0].deployment_id must not contain "
+            "non-reviewed deployment markers ['notproductionready']",
+            "reserve-notproductionready-a",
+        ),
+    ]
+
+    for index, (
+        gate_name,
+        deployment_id,
+        environment,
+        expected_error,
+        raw_label,
+    ) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}"
+        root.mkdir()
+        payload = gate_summary(
+            gate_name,
+            deployment_id=deployment_id,
+            environment=environment,
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert expected_error in errors
+        assert raw_label not in errors
+
+
 def test_object_list_metadata_deployment_context_mismatch_fails(
     tmp_path: Path,
 ) -> None:
@@ -5354,9 +8690,10 @@ def test_object_list_metadata_deployment_context_mismatch_fails(
         {
             "deployment_id": DEPLOYMENT_ID,
             "environment": mismatched_environment,
-            "cycle_id": "cycle-a",
+            "cycle_id": "billing-cycle-a",
             "cycle_index": 1,
             "generated_at_unix": GENERATED_AT,
+            "policy_digest_hex": SHA256,
             "statement_count": 3,
             "reference_decision_id_hex": SHA256,
             "statement_bundle_digest_hex": SHA256,
@@ -5444,7 +8781,7 @@ def test_provider_bake_metadata_deployment_context_mismatch_fails(
             "completed_at_unix": GENERATED_AT,
             "provider_count": 3,
             "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-            "scheduled_lifecycle_canary_last_tick_unix": GENERATED_AT - 60,
+            "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT - 60,
             "scheduled_lifecycle_canary_tick_count": 2,
         }
     ]
@@ -6333,6 +9670,81 @@ def test_artifact_fingerprint_metadata_must_be_payload_free(tmp_path: Path) -> N
         ".fingerprint.optional must contain only payload-free canonical metadata"
         in "\n".join(result["errors"])
     )
+
+
+def test_aggregate_output_field_inventories_are_schema_closed() -> None:
+    field_sets = {
+        "PAYLOAD_FREE_ARTIFACT_FIELDS": MODULE.PAYLOAD_FREE_ARTIFACT_FIELDS,
+        "PAYLOAD_FREE_REQUIRED_ROW_FIELDS": MODULE.PAYLOAD_FREE_REQUIRED_ROW_FIELDS,
+        "AGGREGATE_REQUIRED_GATE_ROW_FIELDS": (
+            MODULE.AGGREGATE_REQUIRED_GATE_ROW_FIELDS
+        ),
+        "AGGREGATE_MISSING_GATE_ROW_FIELDS": (
+            MODULE.AGGREGATE_MISSING_GATE_ROW_FIELDS
+        ),
+        "AGGREGATE_SUMMARY_FIELDS": MODULE.AGGREGATE_SUMMARY_FIELDS,
+    }
+
+    assert MODULE.PAYLOAD_FREE_ARTIFACT_FIELDS == frozenset(
+        {
+            "kind",
+            "path",
+            "sha256",
+            "schema",
+            "status",
+            "fingerprint",
+            "valid",
+            "errors",
+        }
+    )
+    assert MODULE.PAYLOAD_FREE_REQUIRED_ROW_FIELDS == frozenset(
+        {"schema", "present", "valid", "artifact_count", "artifacts", "errors"}
+    )
+    assert MODULE.AGGREGATE_MISSING_GATE_ROW_FIELDS == frozenset(
+        {"schema", "present", "valid", "errors"}
+    )
+    assert MODULE.AGGREGATE_REQUIRED_GATE_ROW_FIELDS == frozenset(
+        {
+            "schema",
+            "present",
+            "valid",
+            "required_kind_count",
+            "expected_required_kind_count",
+            "evidence_file_count",
+            "recognized_artifact_count",
+            "artifact_count",
+            "thresholds",
+            "oldest_generated_at_unix",
+            "newest_generated_at_unix",
+            "deployment_id",
+            "environment",
+            "expected_required_kinds",
+            "errors",
+            "path",
+            "sha256",
+        }
+    )
+    assert MODULE.AGGREGATE_SUMMARY_FIELDS == frozenset(
+        {
+            "schema",
+            "status",
+            "required_gates",
+            "thresholds",
+            "summary_file_count",
+            "recognized_summary_count",
+            "deployment",
+            "required",
+            "errors",
+        }
+    )
+
+    assert (
+        MODULE.AGGREGATE_MISSING_GATE_ROW_FIELDS
+        < MODULE.AGGREGATE_REQUIRED_GATE_ROW_FIELDS
+    )
+    for fields in field_sets.values():
+        assert fields
+        assert all(MODULE.canonical_string(field) == field for field in fields)
 
 
 def test_aggregate_gate_row_output_shape_is_validated() -> None:

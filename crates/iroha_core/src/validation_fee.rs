@@ -2036,6 +2036,223 @@ mod tests {
     }
 
     #[test]
+    fn batch_entries_reject_underpayment_and_overpayment() {
+        let user = account(1);
+        let recipient_a = account(2);
+        let recipient_b = account(3);
+        let treasury = account(4);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+
+        for (observed, expected_error) in [
+            (
+                10,
+                ValidationFeeAdmissionError::WrongFeeAmount {
+                    expected_minor_units: 20,
+                    observed_minor_units: 10,
+                },
+            ),
+            (
+                30,
+                ValidationFeeAdmissionError::WrongFeeAmount {
+                    expected_minor_units: 20,
+                    observed_minor_units: 30,
+                },
+            ),
+        ] {
+            let tx = tx(
+                1,
+                vec![
+                    TransferAssetBatch::new(vec![
+                        TransferAssetBatchEntry::new(
+                            user.clone(),
+                            recipient_a.clone(),
+                            fee_asset.clone(),
+                            Numeric::new(1u64, 0),
+                        ),
+                        TransferAssetBatchEntry::new(
+                            user.clone(),
+                            recipient_b.clone(),
+                            fee_asset.clone(),
+                            Numeric::new(1u64, 0),
+                        ),
+                        TransferAssetBatchEntry::new(
+                            user.clone(),
+                            treasury.clone(),
+                            fee_asset.clone(),
+                            minor_units(observed),
+                        ),
+                    ])
+                    .into(),
+                ],
+                metadata_for_fee_batch_entry(&policy, 0, 2),
+            );
+
+            assert_eq!(enforce_policy(&tx, &policy), Err(expected_error));
+        }
+    }
+
+    #[test]
+    fn batch_fee_coordinate_pointing_at_principal_entry_is_rejected() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let tx = tx(
+            1,
+            vec![
+                TransferAssetBatch::new(vec![
+                    TransferAssetBatchEntry::new(
+                        user.clone(),
+                        recipient.clone(),
+                        fee_asset.clone(),
+                        Numeric::new(1u64, 0),
+                    ),
+                    TransferAssetBatchEntry::new(
+                        user,
+                        treasury.clone(),
+                        fee_asset,
+                        minor_units(10),
+                    ),
+                ])
+                .into(),
+            ],
+            metadata_for_fee_batch_entry(&policy, 0, 0),
+        );
+
+        assert_eq!(
+            enforce_policy(&tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeBeneficiary {
+                instruction_index: 0,
+                entry_index: Some(0),
+                expected_account_id: treasury.to_string(),
+                observed_account_id: recipient.to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn batch_fee_entry_rejects_wrong_treasury_asset_and_source() {
+        let user = account(1);
+        let recipient_a = account(2);
+        let recipient_b = account(3);
+        let treasury = account(4);
+        let wrong_treasury = account(5);
+        let sponsor = account(6);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let xor = asset_definition("xor");
+
+        let wrong_treasury_tx = tx(
+            1,
+            vec![
+                TransferAssetBatch::new(vec![
+                    TransferAssetBatchEntry::new(
+                        user.clone(),
+                        recipient_a.clone(),
+                        fee_asset.clone(),
+                        Numeric::new(1u64, 0),
+                    ),
+                    TransferAssetBatchEntry::new(
+                        user.clone(),
+                        recipient_b.clone(),
+                        fee_asset.clone(),
+                        Numeric::new(1u64, 0),
+                    ),
+                    TransferAssetBatchEntry::new(
+                        user.clone(),
+                        wrong_treasury.clone(),
+                        fee_asset.clone(),
+                        minor_units(20),
+                    ),
+                ])
+                .into(),
+            ],
+            metadata_for_fee_batch_entry(&policy, 0, 2),
+        );
+        assert_eq!(
+            enforce_policy(&wrong_treasury_tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeBeneficiary {
+                instruction_index: 0,
+                entry_index: Some(2),
+                expected_account_id: treasury.to_string(),
+                observed_account_id: wrong_treasury.to_string(),
+            })
+        );
+
+        let wrong_asset_tx = tx(
+            1,
+            vec![
+                TransferAssetBatch::new(vec![
+                    TransferAssetBatchEntry::new(
+                        user.clone(),
+                        recipient_a.clone(),
+                        fee_asset.clone(),
+                        Numeric::new(1u64, 0),
+                    ),
+                    TransferAssetBatchEntry::new(
+                        user.clone(),
+                        recipient_b.clone(),
+                        fee_asset.clone(),
+                        Numeric::new(1u64, 0),
+                    ),
+                    TransferAssetBatchEntry::new(
+                        user.clone(),
+                        treasury.clone(),
+                        xor,
+                        minor_units(20),
+                    ),
+                ])
+                .into(),
+            ],
+            metadata_for_fee_batch_entry(&policy, 0, 2),
+        );
+        assert_eq!(
+            enforce_policy(&wrong_asset_tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeAsset {
+                instruction_index: 0,
+                entry_index: Some(2),
+            })
+        );
+
+        let wrong_source_tx = tx(
+            1,
+            vec![
+                TransferAssetBatch::new(vec![
+                    TransferAssetBatchEntry::new(
+                        user.clone(),
+                        recipient_a,
+                        fee_asset.clone(),
+                        Numeric::new(1u64, 0),
+                    ),
+                    TransferAssetBatchEntry::new(
+                        user,
+                        recipient_b,
+                        fee_asset.clone(),
+                        Numeric::new(1u64, 0),
+                    ),
+                    TransferAssetBatchEntry::new(
+                        sponsor,
+                        treasury.clone(),
+                        fee_asset,
+                        minor_units(20),
+                    ),
+                ])
+                .into(),
+            ],
+            metadata_for_fee_batch_entry(&policy, 0, 2),
+        );
+        assert_eq!(
+            enforce_policy(&wrong_source_tx, &policy),
+            Err(ValidationFeeAdmissionError::WrongFeeSource {
+                instruction_index: 0,
+                entry_index: Some(2),
+            })
+        );
+    }
+
+    #[test]
     fn multisig_proposal_fee_asset_transfer_requires_context_fee() {
         let user = account(1);
         let recipient = account(2);
@@ -2189,6 +2406,84 @@ mod tests {
     }
 
     #[test]
+    fn multisig_proposal_context_fee_rejects_wrong_treasury_asset_and_source() {
+        let recipient = account(2);
+        let treasury = account(3);
+        let multisig = account(4);
+        let wrong_treasury = account(5);
+        let sponsor = account(6);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let xor = asset_definition("xor");
+
+        let wrong_treasury_tx = tx(
+            1,
+            vec![
+                MultisigPropose::new(
+                    multisig.clone(),
+                    vec![
+                        transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                        transfer(&multisig, &fee_asset, minor_units(10), &wrong_treasury),
+                    ],
+                    None,
+                )
+                .into(),
+            ],
+            metadata_for(&policy),
+        );
+        assert_eq!(
+            enforce_policy(&wrong_treasury_tx, &policy),
+            Err(ValidationFeeAdmissionError::MissingFee {
+                required_minor_units: 20,
+            })
+        );
+
+        let wrong_asset_tx = tx(
+            1,
+            vec![
+                MultisigPropose::new(
+                    multisig.clone(),
+                    vec![
+                        transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                        transfer(&multisig, &xor, minor_units(10), &treasury),
+                    ],
+                    None,
+                )
+                .into(),
+            ],
+            metadata_for(&policy),
+        );
+        assert_eq!(
+            enforce_policy(&wrong_asset_tx, &policy),
+            Err(ValidationFeeAdmissionError::MissingFee {
+                required_minor_units: 10,
+            })
+        );
+
+        let wrong_source_tx = tx(
+            1,
+            vec![
+                MultisigPropose::new(
+                    multisig.clone(),
+                    vec![
+                        transfer(&multisig, &fee_asset, Numeric::new(1u64, 0), &recipient),
+                        transfer(&sponsor, &fee_asset, minor_units(10), &treasury),
+                    ],
+                    None,
+                )
+                .into(),
+            ],
+            metadata_for(&policy),
+        );
+        assert_eq!(
+            enforce_policy(&wrong_source_tx, &policy),
+            Err(ValidationFeeAdmissionError::MissingFee {
+                required_minor_units: 20,
+            })
+        );
+    }
+
+    #[test]
     fn multisig_proposal_batch_entries_are_charged_per_entry() {
         let recipient_a = account(2);
         let recipient_b = account(3);
@@ -2221,5 +2516,63 @@ mod tests {
         let tx = tx(1, vec![proposal.into()], metadata_for(&policy));
 
         enforce_policy(&tx, &policy).expect("multisig batch aggregate fee validates");
+    }
+
+    #[test]
+    fn multisig_proposal_batch_entries_reject_underpayment_and_overpayment() {
+        let recipient_a = account(2);
+        let recipient_b = account(3);
+        let treasury = account(4);
+        let multisig = account(5);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+
+        for (observed, expected_error) in [
+            (
+                19,
+                ValidationFeeAdmissionError::WrongFeeAmount {
+                    expected_minor_units: 20,
+                    observed_minor_units: 19,
+                },
+            ),
+            (
+                21,
+                ValidationFeeAdmissionError::WrongFeeAmount {
+                    expected_minor_units: 20,
+                    observed_minor_units: 21,
+                },
+            ),
+        ] {
+            let proposal = MultisigPropose::new(
+                multisig.clone(),
+                vec![
+                    TransferAssetBatch::new(vec![
+                        TransferAssetBatchEntry::new(
+                            multisig.clone(),
+                            recipient_a.clone(),
+                            fee_asset.clone(),
+                            Numeric::new(1u64, 0),
+                        ),
+                        TransferAssetBatchEntry::new(
+                            multisig.clone(),
+                            recipient_b.clone(),
+                            fee_asset.clone(),
+                            Numeric::new(1u64, 0),
+                        ),
+                        TransferAssetBatchEntry::new(
+                            multisig.clone(),
+                            treasury.clone(),
+                            fee_asset.clone(),
+                            minor_units(observed),
+                        ),
+                    ])
+                    .into(),
+                ],
+                None,
+            );
+            let tx = tx(1, vec![proposal.into()], metadata_for(&policy));
+
+            assert_eq!(enforce_policy(&tx, &policy), Err(expected_error));
+        }
     }
 }

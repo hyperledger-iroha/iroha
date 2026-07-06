@@ -38,9 +38,11 @@
 --verified-claim offline_mode_disabled
 --verified-claim per_session_access_logged
 --verified-claim append_only_log_verified
+--verified-claim audit_log_tamper_rejected
 --verified-claim anomaly_events_recorded
 --verified-claim watermark_overlay_rendered
 --verified-claim watermark_metadata_hashed
+--verified-claim watermark_metadata_mismatch_rejected
 --verified-claim audit_digest_exported
 --verified-claim transparency_report_exported
 --verified-claim daily_digest_published

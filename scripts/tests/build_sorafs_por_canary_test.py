@@ -36,6 +36,7 @@ DIGEST = "a" * 64
 POLICY_DIGEST = "b" * 64
 VALIDATION_DIGEST = "c" * 64
 REPORT_DIGEST = "d" * 64
+HANDOFF_DIGEST = "e" * 64
 
 
 def canary_path(tmp_path: Path, kind: str) -> Path:
@@ -73,6 +74,7 @@ def args_for(kind: str, tmp_path: Path) -> list[str]:
     elif kind == "validator_replay":
         args.extend(["--validation-bundle-digest-hex", VALIDATION_DIGEST])
     elif kind == "reporting_archive":
+        args.extend(["--governance-archive-handoff-digest-hex", HANDOFF_DIGEST])
         args.extend(["--report-digest-hex", REPORT_DIGEST])
         args.extend(["--route-body-blake3-hex", DIGEST])
         for route in MODULE.REQUIRED_REPORTING_ROUTES:
@@ -160,6 +162,7 @@ def test_response_file_can_build_reporting_archive_canary(tmp_path: Path) -> Non
     payload = json.loads(canary_path(tmp_path, "reporting_archive").read_text("utf-8"))
     assert payload["manual_trigger_route_state"] == "retired"
     assert payload["archive_backend"] == "parquet"
+    assert payload["governance_archive_handoff_digest_hex"] == HANDOFF_DIGEST
     assert payload["routes"][0]["name"] == MODULE.REQUIRED_REPORTING_ROUTES[0]
 
 
@@ -416,6 +419,42 @@ def test_reporting_archive_requires_route_body_digest(
 
     captured = capsys.readouterr()
     assert "--route-body-blake3-hex must be exact lowercase 32-byte hex" in captured.err
+    assert not canary_path(tmp_path, "reporting_archive").exists()
+
+
+def test_reporting_archive_requires_governance_handoff_digest_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reporting_archive", tmp_path)
+    index = args.index("--governance-archive-handoff-digest-hex")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--governance-archive-handoff-digest-hex is required for reporting_archive"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "reporting_archive").exists()
+
+
+def test_reporting_archive_rejects_malformed_governance_handoff_digest_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("reporting_archive", tmp_path)
+    index = args.index("--governance-archive-handoff-digest-hex")
+    args[index + 1] = "not-a-digest"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--governance-archive-handoff-digest-hex must be exact lowercase 32-byte hex"
+        in captured.err
+    )
     assert not canary_path(tmp_path, "reporting_archive").exists()
 
 

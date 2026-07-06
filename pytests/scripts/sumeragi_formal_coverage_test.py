@@ -15431,6 +15431,92 @@ def test_progress_transition_direct_disjunct_errors_accepts_action_shaped_transi
     }
 
 
+def test_progress_transition_direct_disjunct_errors_rejects_transitive_transition_alias_without_instance(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasTargetWithoutInstance.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasTargetWithoutInstance ----",
+                "VARIABLES vars",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiTransitiveTransitionAliasWithoutInstance.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitiveTransitionAliasWithoutInstance ----",
+                "VARIABLES vars",
+                "Interleaving == INSTANCE SumeragiTransitionAliasTargetWithoutInstance",
+                "Next == Interleaving!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_transition_direct_disjunct_errors(
+        tla,
+        "Next",
+        "projected commit progress",
+    ) == [
+        f"{target}:3 defines projected commit progress transition operator "
+        "Start as Inner!HonestPropose without a named INSTANCE alias Inner; "
+        "projected commit progress transition aliases must resolve through "
+        "named local INSTANCE declarations"
+    ]
+
+
+def test_progress_transition_direct_disjunct_errors_rejects_transitive_transition_alias_missing_target_module(
+    tmp_path: Path,
+) -> None:
+    module = load_coverage_module()
+    target = tmp_path / "SumeragiTransitionAliasTargetMissingModule.tla"
+    missing = tmp_path / "SumeragiTransitionAliasMissingTarget.tla"
+    target.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitionAliasTargetMissingModule ----",
+                "VARIABLES vars",
+                "Inner == INSTANCE SumeragiTransitionAliasMissingTarget",
+                "Start == Inner!HonestPropose",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    tla = tmp_path / "SumeragiTransitiveTransitionAliasMissingTargetModule.tla"
+    tla.write_text(
+        "\n".join(
+            [
+                "---- MODULE SumeragiTransitiveTransitionAliasMissingTargetModule ----",
+                "VARIABLES vars",
+                "Interleaving == INSTANCE SumeragiTransitionAliasTargetMissingModule",
+                "Next == Interleaving!Start",
+                "====",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert module.progress_transition_direct_disjunct_errors(
+        tla,
+        "Next",
+        "projected commit progress",
+    ) == [
+        f"{target}:4 defines projected commit progress transition operator "
+        f"Start as Inner!HonestPropose, but target module {missing} does "
+        "not exist; projected commit progress transition aliases must "
+        "resolve to local modules"
+    ]
+
+
 def test_projected_commit_progress_spec_contract_errors_rejects_cyclic_transition_alias(
     tmp_path: Path,
 ) -> None:

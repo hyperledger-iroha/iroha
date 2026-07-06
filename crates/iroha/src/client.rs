@@ -4489,6 +4489,13 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
             norito::json::to_value(envelope).expect("serialize lane relay envelope to JSON")
         })
         .collect();
+    let lane_payload_ownerships: Vec<Value> = wire
+        .lane_payload_ownerships
+        .iter()
+        .map(|ownership| {
+            norito::json::to_value(ownership).expect("serialize lane payload ownership to JSON")
+        })
+        .collect();
     let lane_governance: Vec<Value> = wire
         .lane_governance
         .iter()
@@ -4778,6 +4785,10 @@ fn sumeragi_status_json_payload(wire: &SumeragiStatusWire) -> norito::json::Valu
     root.insert(
         "lane_relay_envelopes".into(),
         Value::Array(lane_relay_envelopes),
+    );
+    root.insert(
+        "lane_payload_ownerships".into(),
+        Value::Array(lane_payload_ownerships),
     );
     root.insert(
         "lane_governance_sealed_total".into(),
@@ -19193,13 +19204,13 @@ mod tests {
                 SumeragiBlockSyncRosterStatus, SumeragiConsensusMessageHandlingEntry,
                 SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason,
                 SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiKuraStoreStatus,
-                SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-                SumeragiMissingBlockFetchStatus, SumeragiPeerKeyPolicyStatus,
-                SumeragiPendingRbcStatus, SumeragiProposalGateStatus, SumeragiQcEntry,
-                SumeragiQcSnapshot, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
-                SumeragiRbcStoreStatus, SumeragiStatusWire, SumeragiV1StatusWire,
-                SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
-                SumeragiVoteValidationDropStatus,
+                SumeragiLanePayloadOwnership, SumeragiMembershipMismatchStatus,
+                SumeragiMembershipStatus, SumeragiMissingBlockFetchStatus,
+                SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcStatus, SumeragiProposalGateStatus,
+                SumeragiQcEntry, SumeragiQcSnapshot, SumeragiRbcMismatchEntry,
+                SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus, SumeragiStatusWire,
+                SumeragiV1StatusWire, SumeragiValidationRejectStatus,
+                SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropStatus,
             },
         },
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash},
@@ -19665,6 +19676,7 @@ mod tests {
             ],
             lane_settlement_commitments: vec![settlement],
             lane_relay_envelopes: vec![relay_envelope.clone()],
+            lane_payload_ownerships: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -23239,6 +23251,7 @@ mod tests {
             ],
             lane_settlement_commitments: vec![settlement],
             lane_relay_envelopes: vec![relay],
+            lane_payload_ownerships: Vec::new(),
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -23472,6 +23485,20 @@ mod tests {
             chunk_root_mismatch_total: 1,
             last_timestamp_ms: 1_724_000_000_123,
         };
+        let lane_payload_ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 12,
+            proposal_view: 5,
+            lane_id: LaneId::new(1),
+            dataspace_id: DataSpaceId::new(7),
+            lane_block_height: 3,
+            lane_block_view: 2,
+            subject_hash,
+            qc_mode_tag: relay_envelope
+                .lane_qc_mode_tag("iroha2-consensus::permissioned-sumeragi@v1"),
+            accepted_candidate_indices: vec![0, 2],
+            payload_ownership_hash: Hash::prehashed([0xBC; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0xBD; Hash::LENGTH]),
+        };
         let status = SumeragiStatusWire {
             canonical: SumeragiV1StatusWire::default(),
             mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_string(),
@@ -23681,6 +23708,7 @@ mod tests {
             ],
             lane_settlement_commitments: vec![settlement.clone()],
             lane_relay_envelopes: vec![relay_envelope.clone()],
+            lane_payload_ownerships: vec![lane_payload_ownership.clone()],
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: vec![iroha_data_model::block::consensus::SumeragiLaneGovernance {
@@ -24061,6 +24089,21 @@ mod tests {
         assert_eq!(
             settlement_entries[0], expected_settlement,
             "lane settlement commitment mismatch"
+        );
+        let ownership_entries = root
+            .get("lane_payload_ownerships")
+            .and_then(Value::as_array)
+            .expect("lane payload ownership entries array");
+        assert_eq!(
+            ownership_entries.len(),
+            1,
+            "lane payload ownership length mismatch"
+        );
+        let expected_ownership =
+            norito::json::to_value(&lane_payload_ownership).expect("serialize lane ownership");
+        assert_eq!(
+            ownership_entries[0], expected_ownership,
+            "lane payload ownership mismatch"
         );
 
         let highest_qc = root

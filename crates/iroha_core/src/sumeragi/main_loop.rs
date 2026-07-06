@@ -4603,7 +4603,15 @@ fn plan_missing_block_fetch_with_mode(
             MissingBlockFetchTargetKind::Topology,
         ),
     };
+    let count_targetless_strict_attempt = targets.is_empty()
+        && matches!(mode, MissingBlockFetchMode::StrictSigners)
+        && signer_fallback_attempts > 0
+        && !topology.as_ref().is_empty();
     if targets.is_empty() {
+        if count_targetless_strict_attempt && let Some(stats) = requests.get_mut(&block_hash) {
+            stats.attempts = stats.attempts.saturating_add(1);
+            stats.last_requested = now;
+        }
         MissingBlockFetchDecision::NoTargets
     } else {
         if let Some(stats) = requests.get_mut(&block_hash) {

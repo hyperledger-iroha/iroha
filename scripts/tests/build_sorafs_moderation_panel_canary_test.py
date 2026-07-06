@@ -338,6 +338,8 @@ def test_builds_payload_free_evidence_viewer_canary(tmp_path: Path) -> None:
     assert payload["export_targets"] == list(MODULE.REQUIRED_VIEWER_EXPORT_TARGETS)
     for claim in MODULE.TRUE_CLAIMS["evidence_viewer"]:
         assert payload[claim] is True
+    assert payload["audit_log_tamper_rejected"] is True
+    assert payload["watermark_metadata_mismatch_rejected"] is True
     for field in MODULE.FORCED_FALSE_FIELDS["evidence_viewer"]:
         assert payload[field] is False
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())

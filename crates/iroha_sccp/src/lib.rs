@@ -19255,15 +19255,6 @@ fn build_sccp_local_admission_submission_payload(
     {
         return None;
     }
-    let inner = build_sccp_message_transparent_inner_proof_internal(
-        bundle,
-        manifest,
-        Some(source_material),
-        source_deployment,
-    )?;
-    if &inner.public_inputs != public_inputs {
-        return None;
-    }
     let public_inputs_bytes = canonical_sccp_message_transparent_public_inputs_bytes(public_inputs);
     let bundle_bytes = canonical_nexus_sccp_message_bundle_bytes_checked_internal(
         bundle,
@@ -19271,6 +19262,15 @@ fn build_sccp_local_admission_submission_payload(
         source_deployment,
     )?;
     if !sccp_native_recursive_payload_bytes_are_packagable(&bundle_bytes) {
+        return None;
+    }
+    let inner = build_sccp_message_transparent_inner_proof_internal(
+        bundle,
+        manifest,
+        Some(source_material),
+        source_deployment,
+    )?;
+    if &inner.public_inputs != public_inputs {
         return None;
     }
     let source_adapter_engine_deployment_hash =
@@ -21194,6 +21194,54 @@ fn build_nexus_sccp_message_transparent_proof_internal(
     })
 }
 
+#[cfg(feature = "test-fixtures")]
+fn build_nexus_sccp_message_local_admission_transparent_proof_fixture(
+    bundle: &NexusSccpMessageProofV1,
+    source_material: &SccpSourceVerifierMaterialV1,
+    source_deployment: &SccpSourceAdapterEngineDeploymentV1,
+) -> Option<NexusSccpMessageTransparentProofV1> {
+    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    let public_inputs = sccp_message_transparent_public_inputs_internal_with_deployment(
+        bundle,
+        Some(source_material),
+        Some(source_deployment),
+    )?;
+    let proof_bytes = build_sccp_message_transparent_fastpq_proof_bytes_internal(
+        bundle,
+        &manifest,
+        Some(source_material),
+        Some(source_deployment),
+    )?;
+    let submission_package = build_sccp_local_admission_submission_package(
+        &manifest,
+        &proof_bytes,
+        &public_inputs,
+        bundle,
+        source_material,
+        Some(source_deployment),
+    )?;
+    Some(NexusSccpMessageTransparentProofV1 {
+        version: 1,
+        local_domain: manifest.local_domain,
+        counterparty_domain,
+        security_model: manifest.security_model,
+        anchor_governance: manifest.anchor_governance,
+        destination_binding: manifest.destination_binding.clone(),
+        proof_family: manifest.proof_family,
+        verifier_backend: manifest.verifier_backend,
+        message_backend: manifest.message_backend,
+        registry_backend: manifest.registry_backend,
+        manifest_seed: manifest.manifest_seed,
+        finality_model: manifest.finality_model,
+        verifier_target: manifest.verifier_target,
+        public_inputs,
+        proof_bytes,
+        submission_package,
+        bundle: bundle.clone(),
+    })
+}
+
 fn verify_sccp_message_transparent_inner_proof_bytes_internal(
     proof_bytes: &[u8],
     bundle: &NexusSccpMessageProofV1,
@@ -21557,7 +21605,9 @@ fn verify_sccp_evm_submission_package(
 pub fn verify_nexus_sccp_message_transparent_proof_structure(
     proof: &NexusSccpMessageTransparentProofV1,
 ) -> bool {
-    verify_nexus_sccp_message_transparent_proof_structure_internal(proof, false, false, None, None)
+    verify_nexus_sccp_message_transparent_proof_structure_internal(
+        proof, false, false, false, None, None,
+    )
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -21569,6 +21619,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_allow_unready(
         proof,
         allow_unready,
         allow_unready,
+        false,
         None,
         None,
     )
@@ -21580,6 +21631,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
 ) -> bool {
     verify_nexus_sccp_message_transparent_proof_structure_internal(
         proof,
+        false,
         false,
         false,
         Some(material),
@@ -21601,13 +21653,16 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
         proof,
         allow_unready,
         allow_unready,
+        false,
         Some(material),
         None,
     )
 }
 
-/// Verify structure with configured source material, allowing only the destination manifest gate
-/// to remain disabled while still requiring a production-ready source proof.
+/// Verify structure with configured source material and a test-gated destination manifest bypass.
+///
+/// Production local admission should use the deployment-bound helper below so disabled
+/// destination manifests are opened only by governed source-adapter deployment evidence.
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_allow_unready_manifest(
     proof: &NexusSccpMessageTransparentProofV1,
     material: &SccpSourceVerifierMaterialV1,
@@ -21615,6 +21670,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
     verify_nexus_sccp_message_transparent_proof_structure_internal(
         proof,
         true,
+        false,
         false,
         Some(material),
         None,
@@ -21630,12 +21686,13 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
         proof,
         false,
         false,
+        false,
         Some(material),
         Some(deployment),
     )
 }
 
-/// Verify deployment-bound transparent proof structure while optionally allowing disabled manifests.
+/// Verify deployment-bound transparent proof structure with test-gated diagnostic relaxations.
 #[cfg(any(test, feature = "test-fixtures"))]
 pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready(
     proof: &NexusSccpMessageTransparentProofV1,
@@ -21647,6 +21704,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
         proof,
         allow_unready,
         allow_unready,
+        false,
         Some(material),
         Some(deployment),
     )
@@ -21665,6 +21723,7 @@ pub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifie
         proof,
         true,
         false,
+        true,
         Some(material),
         Some(deployment),
     )
@@ -21674,6 +21733,7 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
     proof: &NexusSccpMessageTransparentProofV1,
     allow_unready_manifest: bool,
     allow_unready_source_proof: bool,
+    allow_configured_destination_manifest: bool,
     source_material: Option<&SccpSourceVerifierMaterialV1>,
     source_deployment: Option<&SccpSourceAdapterEngineDeploymentV1>,
 ) -> bool {
@@ -21727,8 +21787,7 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
     {
         return false;
     }
-    if !sccp_manifest_allows_transparent_proofs_internal(&manifest, allow_unready_manifest)
-        || proof.security_model != manifest.security_model
+    if proof.security_model != manifest.security_model
         || proof.anchor_governance != manifest.anchor_governance
         || proof.destination_binding != manifest.destination_binding
         || proof.message_backend != manifest.message_backend
@@ -21756,6 +21815,12 @@ fn verify_nexus_sccp_message_transparent_proof_structure_internal(
         source_material,
         source_deployment,
     );
+    let destination_manifest_is_allowed =
+        sccp_manifest_allows_transparent_proofs_internal(&manifest, allow_unready_manifest)
+            || (allow_configured_destination_manifest && local_admission_is_allowed);
+    if !destination_manifest_is_allowed {
+        return false;
+    }
     let proof_body_is_valid = if local_admission_is_allowed {
         verify_sccp_message_transparent_inner_proof_bytes_internal(
             &proof.proof_bytes,
@@ -44175,18 +44240,24 @@ pub mod tests {
             source_material,
             source_deployment,
         );
-        let artifact =
-            build_nexus_sccp_message_transparent_proof_with_source_verifier_material_and_deployment_allow_unready(
-                &bundle,
-                source_material,
-                source_deployment,
-                true,
-            )
-            .expect("build ETH local-admission transparent proof");
+        let artifact = build_nexus_sccp_message_local_admission_transparent_proof_fixture(
+            &bundle,
+            source_material,
+            source_deployment,
+        )
+        .expect("build ETH local-admission transparent proof");
         assert_eq!(artifact.public_inputs.target_domain, SCCP_DOMAIN_SORA);
         assert!(matches!(
             artifact.submission_package.platform_payload,
             SccpPlatformSubmissionPayloadV1::LocalAdmission(_)
+        ));
+        let manifest =
+            sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("ETH SCCP proof manifest");
+        assert!(verify_sccp_local_admission_submission_package_internal(
+            &manifest,
+            &artifact,
+            Some(source_material),
+            Some(source_deployment),
         ));
         assert!(
             verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_and_deployment_allow_unready_manifest(

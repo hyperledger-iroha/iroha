@@ -243,6 +243,20 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+PUBLIC_HEAD_BOUND_FIXTURES = (
+    ("mirror_datastore", "mirror-datastore.json", mirror_datastore),
+    ("operator_recovery", "operator-recovery.json", operator_recovery),
+    ("dashboard_api", "dashboard-api.json", dashboard_api),
+    ("observability", "observability.json", observability),
+    ("ipfs_ipns_e2e", "ipfs-ipns-e2e.json", ipfs_ipns_e2e),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -260,6 +274,10 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     assert payload["valid_checkpoint_digests"] == [DIGEST]
     assert payload["valid_public_head_cids"] == [DIGEST]
     assert payload["valid_policy_digests"] == [DIGEST]
+    assert (
+        payload["thresholds"]["min_payload_kinds"]
+        == MODULE.DEFAULT_MIN_PAYLOAD_KINDS
+    )
     assert payload["metrics"] == sorted(MODULE.REQUIRED_METRICS)
     assert payload["metric_count_values"] == [len(MODULE.REQUIRED_METRICS)]
     observability_artifact = payload["required"]["observability"]["artifacts"][0]
@@ -268,6 +286,24 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     )
     assert observability_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
+    )
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in PUBLIC_HEAD_BOUND_FIXTURES)
+        == MODULE.PUBLIC_HEAD_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert set(payload_kinds()) == MODULE.REQUIRED_PAYLOAD_KIND_SET
+    assert tuple(route["name"] for route in dashboard_api()["routes"]) == (
+        MODULE.REQUIRED_DASHBOARD_ROUTES
     )
 
 
@@ -382,6 +418,31 @@ def test_ipfs_e2e_public_head_binding_must_match_publisher(tmp_path: Path) -> No
     ]
 
 
+def test_all_public_head_bound_artifacts_reject_publisher_head_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in PUBLIC_HEAD_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["public_head_cid_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} public_head_cid_hex must match a valid "
+            "publisher_service public_head_cid_hex"
+        ) in artifact["errors"]
+
+
 def test_publisher_policy_digest_is_required(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = publisher_service()
@@ -435,6 +496,32 @@ def test_governance_approval_policy_digest_must_match_publisher(
         "governance_approval policy_digest_hex must match a valid "
         "publisher_service policy_digest_hex"
     ) in artifact["errors"]
+
+
+def test_all_policy_bound_artifacts_reject_publisher_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must match a valid "
+            "publisher_service policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_stale_publisher_head_does_not_anchor_bound_evidence(tmp_path: Path) -> None:

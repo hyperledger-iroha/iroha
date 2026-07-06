@@ -427,6 +427,27 @@ def test_builds_payload_free_observability_canary(tmp_path: Path) -> None:
     assert errors == []
 
 
+def test_builds_payload_free_enforcement_probe_routes_from_default_inventory(
+    tmp_path: Path,
+) -> None:
+    assert MODULE.main(args_for("enforcement_probe", tmp_path)) == 0
+
+    payload = json.loads((tmp_path / "enforcement_probe.json").read_text("utf-8"))
+
+    assert payload["schema"] == "sorafs.gateway_compliance.enforcement_probe_canary.v1"
+    assert payload["route_count"] == len(MODULE.DEFAULT_ENFORCEMENT_ROUTES)
+    assert payload["passed_route_count"] == len(MODULE.DEFAULT_ENFORCEMENT_ROUTES)
+    assert tuple(route["name"] for route in payload["routes"]) == (
+        MODULE.DEFAULT_ENFORCEMENT_ROUTES
+    )
+    assert {route["body_blake3_hex"] for route in payload["routes"]} == {DIGEST}
+    for claim in MODULE.FORBIDDEN_PAYLOAD_CLAIMS["enforcement_probe"]:
+        assert payload[claim] is False
+    kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
+    assert kind == "enforcement_probe"
+    assert errors == []
+
+
 def test_enforcement_probe_requires_route_body_digest(
     tmp_path: Path,
     capsys,

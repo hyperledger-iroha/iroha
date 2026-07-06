@@ -299,6 +299,23 @@ final class SccpSolanaProverTests: XCTestCase {
                 XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("routeCanaryGovernedHashes"))
             }
         }
+        for replay in [
+            try Self.sampleTronRouteCanaryEvidence(payloadHash: evidence.routeAllowlistHash),
+            try Self.sampleTronRouteCanaryEvidence(payloadHash: evidence.sourceVerifierMaterialHash),
+            try Self.sampleTronRouteCanaryEvidence(finalityHeight: evidence.sourceAdapterEngineDeploymentHash),
+        ] {
+            XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(replay)) { error in
+                XCTAssertEqual(error as? TronSccpProverError, .invalidPublicInputs("routeCanaryGovernedHashes"))
+            }
+        }
+        XCTAssertThrowsError(try tronSccpRouteCanaryEvidenceHash(
+            try Self.sampleTronRouteCanaryEvidence(finalityHeight: evidence.transactionId)
+        )) { error in
+            guard case let .invalidPublicInputs(field) = error as? TronSccpProverError else {
+                return XCTFail("expected TRON invalid-public-inputs error")
+            }
+            XCTAssertTrue(field.contains("finalityHeight") || field.contains("transactionId"))
+        }
     }
 
     func testRejectsLegacyTronRecoveryIdAliasesForUiTooling() throws {
@@ -15293,6 +15310,8 @@ final class SccpSolanaProverTests: XCTestCase {
         sourceAdapterEngineDeploymentHash: String =
             "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
         blockNumber: UInt64 = 234,
+        payloadHash: String = "0x" + String(repeating: "ab", count: 32),
+        finalityHeight: String = "0x" + String(repeating: "00", count: 31) + "7b",
         usedMessageProof: Bool = true,
         rawDataOwnerMatchesTransaction: Bool = true,
         signatureRecoveredAddress: String =
@@ -15324,9 +15343,9 @@ final class SccpSolanaProverTests: XCTestCase {
             messageId: "0x" + String(repeating: "dd", count: 32),
             callDataSha256:
                 "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
-            payloadHash: "0x" + String(repeating: "ab", count: 32),
+            payloadHash: payloadHash,
             commitmentRoot: "0x" + String(repeating: "ee", count: 32),
-            finalityHeight: "0x" + String(repeating: "00", count: 31) + "7b",
+            finalityHeight: finalityHeight,
             finalityBlockHash: "0x" + String(repeating: "cd", count: 32),
             statementHash: "0x" + String(repeating: "f1", count: 32),
             usedMessageProof: usedMessageProof,

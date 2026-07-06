@@ -23,8 +23,12 @@ use iroha_data_model::{
     ChainId,
     block::{
         BlockHeader,
-        consensus::{SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiStatusWire},
+        consensus::{
+            SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiLanePayloadOwnership,
+            SumeragiStatusWire,
+        },
     },
+    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use iroha_primitives::time::TimeSource;
@@ -326,6 +330,20 @@ async fn sumeragi_status_endpoint_shape() {
 #[tokio::test]
 async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
     let _guard = status_test_guard();
+    let ownership = SumeragiLanePayloadOwnership {
+        proposal_height: 12,
+        proposal_view: 3,
+        lane_id: LaneId::new(7),
+        dataspace_id: DataSpaceId::new(42),
+        lane_block_height: 2,
+        lane_block_view: 1,
+        subject_hash: Hash::prehashed([0x41; Hash::LENGTH]),
+        qc_mode_tag: "test-lane-qc-mode".to_string(),
+        accepted_candidate_indices: vec![0, 2],
+        payload_ownership_hash: Hash::prehashed([0x42; Hash::LENGTH]),
+        rbc_instance_hash: Hash::prehashed([0x43; Hash::LENGTH]),
+    };
+    iroha_core::sumeragi::status::set_lane_payload_ownerships(vec![ownership.clone()]);
     let app = build_status_router();
 
     let json_resp = app
@@ -472,6 +490,56 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
             Some(first_wire.block_height)
         );
     }
+
+    let json_ownerships = json_root
+        .get("lane_payload_ownerships")
+        .and_then(norito::json::Value::as_array)
+        .expect("lane_payload_ownerships array");
+    assert_eq!(
+        json_ownerships.len(),
+        norito_wire.lane_payload_ownerships.len()
+    );
+    let first_wire = norito_wire
+        .lane_payload_ownerships
+        .first()
+        .expect("seeded lane payload ownership in Norito payload");
+    let first_json = json_ownerships
+        .first()
+        .and_then(norito::json::Value::as_object)
+        .expect("first lane payload ownership JSON object");
+    assert_eq!(first_wire, &ownership);
+    assert_eq!(
+        first_json
+            .get("lane_id")
+            .and_then(norito::json::Value::as_u64),
+        Some(u64::from(ownership.lane_id.as_u32()))
+    );
+    assert_eq!(
+        first_json
+            .get("dataspace_id")
+            .and_then(norito::json::Value::as_u64),
+        Some(ownership.dataspace_id.as_u64())
+    );
+    assert_eq!(
+        first_json
+            .get("lane_block_height")
+            .and_then(norito::json::Value::as_u64),
+        Some(ownership.lane_block_height)
+    );
+    assert_eq!(
+        first_json
+            .get("qc_mode_tag")
+            .and_then(norito::json::Value::as_str),
+        Some(ownership.qc_mode_tag.as_str())
+    );
+    assert_eq!(
+        first_json
+            .get("accepted_candidate_indices")
+            .and_then(norito::json::Value::as_array)
+            .map(Vec::len),
+        Some(ownership.accepted_candidate_indices.len())
+    );
+    iroha_core::sumeragi::status::set_lane_payload_ownerships(Vec::new());
 }
 
 #[allow(clippy::await_holding_lock)]

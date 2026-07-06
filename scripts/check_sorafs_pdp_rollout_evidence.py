@@ -281,6 +281,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "governance_dag_challenge_published",
         "governance_dag_verdict_published",
         "repair_handoff_verified",
+        "repair_handoff_digest_hex",
         "archive_retention_bound",
         "slash_policy_bound",
         "operator_export_verified",
@@ -367,6 +368,7 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "proof_summary_digest_hex",
     "policy_digest_hex",
     "provider_roster_digest_hex",
+    "repair_handoff_digest_hex",
     "metric_count",
     "metrics",
 )
@@ -578,6 +580,7 @@ def validate_governance_repair(payload: dict[str, Any], errors: list[str]) -> No
     require_bool_true(payload, "governance_dag_challenge_published", errors)
     require_bool_true(payload, "governance_dag_verdict_published", errors)
     require_bool_true(payload, "repair_handoff_verified", errors)
+    require_hex(payload, "repair_handoff_digest_hex", HEX64_LEN, errors)
     require_bool_true(payload, "archive_retention_bound", errors)
     require_bool_true(payload, "slash_policy_bound", errors)
     require_bool_true(payload, "operator_export_verified", errors)
@@ -675,6 +678,7 @@ def build_summary(
     valid_proof_summary_digests: set[str] = set()
     valid_policy_digests: set[str] = set()
     valid_provider_roster_digests: set[str] = set()
+    valid_repair_handoff_digests: set[str] = set()
     valid_proof_summary_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_provider_roster_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
@@ -712,21 +716,24 @@ def build_summary(
             record_observed_evidence_value(metric_counts, payload.get("metric_count"))
             metric_names.update(hashable_evidence_values(payload.get("metrics")))
         if evidence_artifact_is_valid(artifact):
-            digest = evidence_artifact_fingerprint(artifact).get("proof_summary_digest_hex")
+            fingerprint = evidence_artifact_fingerprint(artifact)
+            if kind_name == "governance_repair":
+                repair_handoff_digest = fingerprint.get("repair_handoff_digest_hex")
+                if isinstance(repair_handoff_digest, str):
+                    valid_repair_handoff_digests.add(
+                        repair_handoff_digest.lower()
+                    )
+            digest = fingerprint.get("proof_summary_digest_hex")
             if kind_name == "proof_generation" and isinstance(digest, str):
                 valid_proof_summary_digests.add(digest.lower())
             elif kind_name in PROOF_SUMMARY_BOUND_KINDS:
                 valid_proof_summary_bound_artifacts.append((kind_name, artifact))
-            policy_digest = evidence_artifact_fingerprint(artifact).get(
-                "policy_digest_hex"
-            )
+            policy_digest = fingerprint.get("policy_digest_hex")
             if kind_name == "proof_generation" and isinstance(policy_digest, str):
                 valid_policy_digests.add(policy_digest.lower())
             elif kind_name in POLICY_BOUND_KINDS:
                 valid_policy_bound_artifacts.append((kind_name, artifact))
-            provider_roster_digest = evidence_artifact_fingerprint(artifact).get(
-                "provider_roster_digest_hex"
-            )
+            provider_roster_digest = fingerprint.get("provider_roster_digest_hex")
             if kind_name == "proof_generation" and isinstance(
                 provider_roster_digest, str
             ):
@@ -812,6 +819,7 @@ def build_summary(
         "valid_proof_summary_digests": sorted(valid_proof_summary_digests),
         "valid_policy_digests": sorted(valid_policy_digests),
         "valid_provider_roster_digests": sorted(valid_provider_roster_digests),
+        "valid_repair_handoff_digests": sorted(valid_repair_handoff_digests),
         "metrics": sorted(metric_names),
         "metric_count_values": sorted(metric_counts),
         "required": required,

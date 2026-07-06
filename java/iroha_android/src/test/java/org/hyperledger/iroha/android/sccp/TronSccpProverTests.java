@@ -124,6 +124,29 @@ public final class TronSccpProverTests {
                 sampleTronRouteCanaryEvidenceWithGovernedHashes(
                     null, null, null, evidence.sourceVerifierMaterialHash())),
         "TRON route canary governed hashes");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithTranscriptHashes(
+                    evidence.routeAllowlistHash(), null)),
+        "TRON route canary governed hashes");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithTranscriptHashes(
+                    evidence.sourceVerifierMaterialHash(), null)),
+        "TRON route canary governed hashes");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithTranscriptHashes(
+                    null, evidence.sourceAdapterEngineDeploymentHash())),
+        "TRON route canary governed hashes");
+    assertThrows(
+        () ->
+            TronSccpProver.routeCanaryEvidenceHash(
+                sampleTronRouteCanaryEvidenceWithTranscriptHashes(null, evidence.transactionId())),
+        "TRON route canary transcript hashes");
   }
 
   private static void derivesGroth16PublicSignalWords() {
@@ -1909,6 +1932,45 @@ public final class TronSccpProverTests {
         routeCanaryEvidenceHash == null
             ? "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56"
             : routeCanaryEvidenceHash);
+  }
+
+  private static TronSccpProver.RouteCanaryEvidenceInput
+      sampleTronRouteCanaryEvidenceWithTranscriptHashes(
+          final String payloadHash, final String finalityHeight) {
+    final SourceSccpProofs.TronDestinationBinding binding =
+        sampleDestinationBinding(samplePublicInputs());
+    return new TronSccpProver.RouteCanaryEvidenceInput(
+        "0xfea8effb3cddfa458ea79a5a9af6f2d2c33a460b3a66d9305963908c2a3ea67a",
+        binding.hash,
+        null,
+        "0x68c20262e44676bd5f3c4ec428f063373147a1ca14c5885648a9c651b3bcd8d8",
+        "0x94dbe28a2fb16e043b83639b6dea8ec62f53679599ef1dd220fd13c71c7bdcb8",
+        binding.networkId,
+        binding.verifierAddress,
+        binding.verifierCodeHash,
+        binding.verifierKeyHash,
+        TronSccpProver.DOMAIN_SORA,
+        TronSccpProver.DOMAIN_TRON,
+        "0x" + repeat("fa", 32),
+        "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        "234",
+        "567000",
+        0,
+        "0x" + repeat("dd", 32),
+        "0xf96dfb36d47a61e7e80df4f19e00b78c12f9a3f3c542e8dac06a7422e1d5f951",
+        payloadHash == null ? "0x" + repeat("ab", 32) : payloadHash,
+        "0x" + repeat("ee", 32),
+        finalityHeight == null ? "0x" + repeat("00", 31) + "7b" : finalityHeight,
+        "0x" + repeat("cd", 32),
+        "0x" + repeat("f1", 32),
+        1,
+        TronSccpProver.DOMAIN_SORA,
+        true,
+        true,
+        "0x" + repeat("c4", 32),
+        "0x417e5f4552091a69125d5dfcb7b8c2659029395bdf",
+        true,
+        "0xe0a96ff7e8f523599fd60fffe8bb3b9fda9519126b7ba00c89c922b323b64e56");
   }
 
   private static TronSccpProver.RouteCanaryEvidenceInput sampleTronRouteCanaryEvidenceWithGovernedHashes(

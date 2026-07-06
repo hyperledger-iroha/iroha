@@ -4,11 +4,12 @@ direction: rtl
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8049ff5a495f3884b43a6272e916e3c4a3e55c57f9040d034ccf40c3aec91dae
-source_last_modified: "2026-07-03T15:40:43.271371+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-03T15:40:43.271371+00:00
+source_hash: c3d99feea9a14f5edb9ce0e3652f0c97993073cabc6873315209cf8e76e1c166
+source_last_modified: 2026-07-04T23:59:16.031188+00:00
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-04T23:59:16.031188+00:00
 ---
+
 # Transparency Dashboards & Enforcement Receipts
 
 ## Current Status
@@ -52,7 +53,12 @@ proof-token issuance, and explorer canary artifacts before a rollout can claim
 ready status. The gate now also rejects mixed transparency bundles: publication
 evidence must bind to a valid source-entry `source_batch_digest_hex`, while
 privacy aggregate, proof-token issuance, and explorer evidence must bind to a
-source-bound publication `cycle_digest_hex` from the same rollout bundle.
+source-bound publication `cycle_digest_hex` from the same rollout bundle. It
+also emits `valid_publication_bindings` so aggregate promotion can prove every
+ready cycle digest came from a source-bound publication. Aggregate promotion
+also rechecks source-bound artifact fingerprints against
+`valid_source_batch_digests` and cycle-bound artifact fingerprints against
+`valid_cycle_digests` before final promotion can report ready.
 The local appeal-finance
 report, weekly rollup, and
 settlement receipt dashboards also bound their returned Governance DAG source
@@ -323,6 +329,11 @@ moderation ledger publication service described by the original plan.
   privacy aggregate, proof-token issuance, and explorer evidence must match a
   source-bound publication `cycle_digest_hex`; publication cycles that fail
   source-entry binding do not anchor downstream rollout evidence. The checker
+  emits `valid_publication_bindings` so aggregate promotion can prove every
+  ready cycle digest came from a source-bound publication. Aggregate promotion
+  also rechecks source-bound artifact fingerprints against
+  `valid_source_batch_digests` and cycle-bound artifact fingerprints against
+  `valid_cycle_digests` before final promotion can report ready. The checker
   exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`,
   so dry-run collection plans and downstream automation can inspect the exact
   evidence contract before live collection. It supports shell-style `@ARGFILE`

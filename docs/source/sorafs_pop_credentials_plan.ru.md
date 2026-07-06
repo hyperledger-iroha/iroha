@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_pop_credentials_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b60cf12226ca331e3d78c34a6f2dd0b121d3d13666c7abc7e94358e2e770032a
-source_last_modified: "2026-07-04T06:37:53.797365+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-04T06:37:53.797365+00:00
+source_hash: 3eb77b0182688b04843693ea978a27b67df61f56ec471375f6f48068de91be8f
+source_last_modified: "2026-07-04T23:07:05.429426+00:00"
+translation_last_reviewed: 2026-07-05
+source_mtime: "2026-07-04T23:07:05.429426+00:00"
 ---
 
 # Proof-of-Personhood Credential Pipeline
@@ -51,7 +51,16 @@ root/revocation sync tuple as `valid_juror_sync_bindings`, and valid
 moderation-integration artifacts publish `pop_snapshot_digest_hex` values as
 `valid_pop_snapshot_digests`; the aggregate production-readiness gate accepts
 both only as payload-free metadata tethered to recognized artifact
-fingerprints. Issuer-bundle artifacts also bind `credential_count` to the unique
+fingerprints. The aggregate production-readiness gate also rechecks the
+juror-client sync tuple before final promotion: synced roots in
+`valid_juror_sync_bindings` must appear in `valid_root_digests`, and synced
+revocation lists must appear in `valid_revocation_list_digests`.
+Aggregate promotion also rechecks the lane-proven PoP digest relationships:
+root-bound artifact fingerprints must match `valid_root_digests`,
+revocation-bound artifact fingerprints must match
+`valid_revocation_list_digests`, and policy-bound artifact fingerprints must
+match `valid_policy_digests` before final promotion can report ready.
+Issuer-bundle artifacts also bind `credential_count` to the unique
 canonical `credentials[].name` inventory, require reviewed lowercase
 `pop-credential-*` labels without non-production markers, and reject duplicate
 credential entries before promotion can report ready. Revocation-registry artifacts also bind `revoked_nonce_count` to the unique canonical `revoked_nonce_refs[].name` inventory, require reviewed `pop-revoked-nonce-*` labels without non-production markers, keep raw revoked nonce payloads excluded, and reject duplicate revoked-nonce refs before promotion can report ready. Enrollment-portal artifacts also bind
@@ -261,7 +270,9 @@ reference validator is shipped only for local/CI payload validation.
   before local evidence can be generated.
   Production promotion remains blocked unless the summary status is `ready`
   and includes a production privacy-preserving proof backend rather than the
-  local transcript-digest policy foundation.
+  local transcript-digest policy foundation. The aggregate production-readiness
+  gate also rechecks `valid_juror_sync_bindings` against `valid_root_digests`
+  and `valid_revocation_list_digests` before final promotion can report ready.
 - Publish operator and juror docs only after the service CLI/API and verifier
   paths exist.
 

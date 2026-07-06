@@ -31702,9 +31702,10 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   action-shaped targets.
   Progress transition aliases must resolve through named local INSTANCE declarations,
   so imported `Next` wrappers cannot rely on implicit or misspelled module
-  aliases.
+  aliases, including onward aliases inside imported transition targets.
   Progress transition aliases must resolve to local modules, so imported
-  `Next` wrappers cannot point at missing modules.
+  `Next` wrappers cannot point at missing modules, including onward aliases
+  inside imported transition targets.
   Progress transition aliases must resolve to defined zero-arity transition operators,
   so imported `Next` wrappers cannot point at undefined or parameterized
   transition operators.

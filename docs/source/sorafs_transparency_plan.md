@@ -46,7 +46,12 @@ proof-token issuance, and explorer canary artifacts before a rollout can claim
 ready status. The gate now also rejects mixed transparency bundles: publication
 evidence must bind to a valid source-entry `source_batch_digest_hex`, while
 privacy aggregate, proof-token issuance, and explorer evidence must bind to a
-source-bound publication `cycle_digest_hex` from the same rollout bundle.
+source-bound publication `cycle_digest_hex` from the same rollout bundle. It
+also emits `valid_publication_bindings` so aggregate promotion can prove every
+ready cycle digest came from a source-bound publication. Aggregate promotion
+also rechecks source-bound artifact fingerprints against
+`valid_source_batch_digests` and cycle-bound artifact fingerprints against
+`valid_cycle_digests` before final promotion can report ready.
 The local appeal-finance
 report, weekly rollup, and
 settlement receipt dashboards also bound their returned Governance DAG source
@@ -317,6 +322,11 @@ moderation ledger publication service described by the original plan.
   privacy aggregate, proof-token issuance, and explorer evidence must match a
   source-bound publication `cycle_digest_hex`; publication cycles that fail
   source-entry binding do not anchor downstream rollout evidence. The checker
+  emits `valid_publication_bindings` so aggregate promotion can prove every
+  ready cycle digest came from a source-bound publication. Aggregate promotion
+  also rechecks source-bound artifact fingerprints against
+  `valid_source_batch_digests` and cycle-bound artifact fingerprints against
+  `valid_cycle_digests` before final promotion can report ready. The checker
   exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`,
   so dry-run collection plans and downstream automation can inspect the exact
   evidence contract before live collection. It supports shell-style `@ARGFILE`

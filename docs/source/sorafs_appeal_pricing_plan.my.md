@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_appeal_pricing_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d088283fc5cb19151486cee5f99262d5bf0043d78e90656690945956139370fc
-source_last_modified: "2026-07-04T05:59:37.535950+00:00"
-translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-04T05:59:37.535950+00:00
+source_hash: 6ae8774928fcc0bc9f51b211be3acf8491944c45b0e5f1f5ecc8f3d10c9fb57a
+source_last_modified: 2026-07-04T23:34:52.288080+00:00
+translation_last_reviewed: 2026-07-05
+source_mtime: 2026-07-04T23:34:52.288080+00:00
 ---
 
 # Moderation Appeal Pricing Engine
@@ -55,7 +55,12 @@ artifact in the same bundle. Pricing-config artifacts also carry
 `valid_policy_digests`, and governance approval evidence must bind its
 `policy_digest_hex` to one of those valid pricing-config policy digests.
 Config- and policy-digest mismatches are recorded on the offending artifact in
-the JSON summary before required-kind validity is reported. Pricing-config
+the JSON summary before required-kind validity is reported. The aggregate
+production-readiness gate rechecks those lane-proven relationships before final
+promotion: config-bound artifact fingerprints must match `valid_config_digests`,
+policy-bound artifact fingerprints must match `valid_policy_digests`, and
+multi-peer reconciliation run config digests must stay inside
+`valid_config_digests`. Pricing-config
 `config_version` values must use a canonical lowercase
 `appeal-finance-config-name-vN` label without non-production markers, so
 generic non-prefixed version labels, `latest`, `dev`, placeholder, or
@@ -540,7 +545,11 @@ settlement lag are integer-unit evidence under configured thresholds, hosted das
 fresh, quote/deposit/settlement/submitter/worker/Governance DAG/dashboard/
 reconciliation/governance artifacts carry a `config_digest_hex` matching a
 valid pricing-config artifact in the same bundle, config-bound mismatches are
-attached to the offending artifact in the emitted summary, pricing-config
+attached to the offending artifact in the emitted summary, and aggregate promotion
+rechecks config-bound artifact fingerprints against `valid_config_digests`,
+policy-bound governance approval fingerprints against `valid_policy_digests`,
+and every `valid_multi_peer_runs.config_digest_hex` value against
+`valid_config_digests`. Pricing-config
 artifacts publish valid staged `policy_digest_hex` values and bind
 `class_count` to the reviewed canonical `classes` inventory, governance approval
 evidence carries a matching `policy_digest_hex`, quote API artifacts bind

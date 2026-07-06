@@ -1,3 +1,5 @@
+# Reviewed lane summaries are runtime evidence artifacts; do not commit
+# bearer tokens, signing keys, raw payloads, or other runtime-only secrets here.
 --out-dir artifacts/sorafs/production-readiness
 --ai-prescreen-summary artifacts/sorafs/ai-prescreen/summary.json
 --appeal-finance-summary artifacts/sorafs/appeal-finance/summary.json

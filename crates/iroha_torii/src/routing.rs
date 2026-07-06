@@ -58772,8 +58772,13 @@ fn sumeragi_v1_pending_finality(snap: &sumeragi::StatusSnapshot) -> Option<HashO
     let settled = snap
         .qc_deferred_resolved_total
         .saturating_add(snap.qc_deferred_expired_total);
-    (snap.qc_deferred_missing_payload_total > settled)
-        .then(|| snap.commit_qc.block_hash.or(snap.commit_quorum.block_hash))
+    if snap.qc_deferred_missing_payload_total <= settled {
+        return None;
+    }
+    let quorum_complete = snap.commit_quorum.signatures_required > 0
+        && snap.commit_quorum.signatures_counted >= snap.commit_quorum.signatures_required;
+    (quorum_complete && snap.commit_quorum.height > snap.commit_qc.height)
+        .then_some(snap.commit_quorum.block_hash)
         .flatten()
 }
 
@@ -58801,12 +58806,15 @@ fn sumeragi_v1_quorum_policy(
 }
 
 fn sumeragi_v1_payload_status(snap: &sumeragi::StatusSnapshot) -> &'static str {
-    if sumeragi_v1_pending_finality(snap).is_some() {
-        "waiting_for_local_payload"
-    } else if matches!(
-        snap.da_gate.reason,
-        sumeragi::status::DaGateReasonSnapshot::MissingLocalData
-    ) {
+    let settled = snap
+        .qc_deferred_resolved_total
+        .saturating_add(snap.qc_deferred_expired_total);
+    if snap.qc_deferred_missing_payload_total > settled
+        || matches!(
+            snap.da_gate.reason,
+            sumeragi::status::DaGateReasonSnapshot::MissingLocalData
+        )
+    {
         "missing_local_payload"
     } else {
         "available"
@@ -59884,6 +59892,42 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             })
             .collect(),
     );
+    let lane_payload_ownerships = Value::Array(
+        snap.lane_payload_ownerships
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("proposal_height", entry.proposal_height),
+                    json_entry("proposal_view", entry.proposal_view),
+                    json_entry("lane_id", Value::from(u64::from(entry.lane_id.as_u32()))),
+                    json_entry("dataspace_id", Value::from(entry.dataspace_id.as_u64())),
+                    json_entry("lane_block_height", entry.lane_block_height),
+                    json_entry("lane_block_view", entry.lane_block_view),
+                    json_entry("subject_hash", hash_with_prefix(entry.subject_hash)),
+                    json_entry("qc_mode_tag", entry.qc_mode_tag.clone()),
+                    json_entry(
+                        "accepted_candidate_indices",
+                        Value::Array(
+                            entry
+                                .accepted_candidate_indices
+                                .iter()
+                                .copied()
+                                .map(Value::from)
+                                .collect(),
+                        ),
+                    ),
+                    json_entry(
+                        "payload_ownership_hash",
+                        hash_with_prefix(entry.payload_ownership_hash),
+                    ),
+                    json_entry(
+                        "rbc_instance_hash",
+                        hash_with_prefix(entry.rbc_instance_hash),
+                    ),
+                ])
+            })
+            .collect(),
+    );
     let dataspace_commitments = Value::Array(
         snap.dataspace_commitments
             .iter()
@@ -60490,6 +60534,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("lane_commitments", lane_commitments),
         json_entry("lane_settlement_commitments", lane_settlement_commitments),
         json_entry("lane_relay_envelopes", lane_relay_envelopes),
+        json_entry("lane_payload_ownerships", lane_payload_ownerships),
         json_entry("dataspace_commitments", dataspace_commitments),
         json_entry("lane_governance", lane_governance),
         json_entry(
@@ -60701,7 +60746,7 @@ mod status_tests {
         block::consensus::{
             LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
             LaneVolatilityClass, NativeAmxAttestationBodyV1, NativeAmxAttestationQcV1,
-            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt,
+            NativeAmxLegRecord, NativeAmxPhase, NativeAmxReceipt, SumeragiLanePayloadOwnership,
         },
         consensus::{
             VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome, ValidatorElectionParameters,
@@ -60972,16 +61017,17 @@ mod status_tests {
         assert_eq!(canonical.get("view").and_then(Value::as_u64), Some(3));
         assert_eq!(
             canonical.get("phase").and_then(Value::as_str),
-            Some("pending_finality")
+            Some("prepare")
         );
         assert_eq!(
             canonical.get("payload_status").and_then(Value::as_str),
-            Some("waiting_for_local_payload")
+            Some("missing_local_payload")
         );
-        let expected_block_hash = format!("{block_hash}");
-        assert_eq!(
-            canonical.get("pending_finality").and_then(Value::as_str),
-            Some(expected_block_hash.as_str())
+        assert!(
+            canonical
+                .get("pending_finality")
+                .and_then(Value::as_str)
+                .is_none()
         );
         let quorum = canonical
             .get("quorum_policy")
@@ -60992,6 +61038,57 @@ mod status_tests {
             Some("permissioned_count")
         );
         assert_eq!(quorum.get("validators").and_then(Value::as_u64), Some(4));
+    }
+
+    #[test]
+    fn status_snapshot_json_uses_next_height_commit_quorum_for_missing_payload_pending_finality() {
+        let committed_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAD; Hash::LENGTH]));
+        let quorum_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAE; Hash::LENGTH]));
+        let snap = sumeragi::StatusSnapshot {
+            membership_height: 13,
+            membership_view: 5,
+            highest_qc_height: 12,
+            highest_qc_view: 4,
+            qc_deferred_missing_payload_total: 2,
+            qc_deferred_resolved_total: 1,
+            commit_qc: sumeragi::status::QcSnapshot {
+                height: 12,
+                view: 4,
+                block_hash: Some(committed_hash),
+                validator_set_len: 4,
+                ..Default::default()
+            },
+            commit_quorum: sumeragi::status::CommitQuorumSnapshot {
+                height: 13,
+                view: 5,
+                block_hash: Some(quorum_hash),
+                signatures_counted: 3,
+                signatures_required: 3,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let canonical = payload
+            .get("canonical")
+            .and_then(Value::as_object)
+            .expect("canonical v1 status");
+        assert_eq!(
+            canonical.get("phase").and_then(Value::as_str),
+            Some("pending_finality")
+        );
+        assert_eq!(
+            canonical.get("payload_status").and_then(Value::as_str),
+            Some("missing_local_payload")
+        );
+        let expected_block_hash = format!("{quorum_hash}");
+        assert_eq!(
+            canonical.get("pending_finality").and_then(Value::as_str),
+            Some(expected_block_hash.as_str())
+        );
     }
 
     #[test]
@@ -61245,6 +61342,19 @@ mod status_tests {
                     .expect("envelope");
                 vec![envelope]
             },
+            lane_payload_ownerships: vec![SumeragiLanePayloadOwnership {
+                proposal_height: 2,
+                proposal_view: 1,
+                lane_id: LaneId::new(1),
+                dataspace_id: DataSpaceId::new(2),
+                lane_block_height: 1,
+                lane_block_view: 0,
+                subject_hash: Hash::prehashed([0x12; Hash::LENGTH]),
+                qc_mode_tag: "test-lane-qc-mode".to_string(),
+                accepted_candidate_indices: vec![0],
+                payload_ownership_hash: Hash::prehashed([0x13; Hash::LENGTH]),
+                rbc_instance_hash: Hash::prehashed([0x14; Hash::LENGTH]),
+            }],
             ..Default::default()
         };
         let stripped = snapshot.strip_lane_details();
@@ -61255,6 +61365,7 @@ mod status_tests {
         assert!(stripped.lane_commitments.is_empty());
         assert!(stripped.lane_settlement_commitments.is_empty());
         assert!(stripped.lane_relay_envelopes.is_empty());
+        assert!(stripped.lane_payload_ownerships.is_empty());
         assert_eq!(stripped.lane_governance_sealed_total, 0);
         assert!(stripped.lane_governance_sealed_aliases.is_empty());
         assert_eq!(stripped.pipeline_execution.detached_merged_total, 4);
@@ -62037,6 +62148,76 @@ mod status_tests {
                 .and_then(Value::as_u64)
                 .expect("qc height"),
             commit_qc.height
+        );
+    }
+
+    #[test]
+    fn status_snapshot_json_serializes_lane_payload_ownerships() {
+        let ownership = SumeragiLanePayloadOwnership {
+            proposal_height: 12,
+            proposal_view: 3,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(42),
+            lane_block_height: 2,
+            lane_block_view: 1,
+            subject_hash: Hash::prehashed([0x51; Hash::LENGTH]),
+            qc_mode_tag: "test-lane-qc-mode".to_string(),
+            accepted_candidate_indices: vec![0, 2],
+            payload_ownership_hash: Hash::prehashed([0x52; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0x53; Hash::LENGTH]),
+        };
+        let snap = sumeragi::StatusSnapshot {
+            lane_payload_ownerships: vec![ownership.clone()],
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let entries = payload
+            .get("lane_payload_ownerships")
+            .and_then(Value::as_array)
+            .expect("lane payload ownership array");
+        assert_eq!(entries.len(), 1);
+        let entry = entries[0].as_object().expect("lane ownership object");
+        assert_eq!(
+            entry.get("proposal_height").and_then(Value::as_u64),
+            Some(ownership.proposal_height)
+        );
+        assert_eq!(
+            entry.get("proposal_view").and_then(Value::as_u64),
+            Some(ownership.proposal_view)
+        );
+        assert_eq!(entry.get("lane_id").and_then(Value::as_u64), Some(7));
+        assert_eq!(entry.get("dataspace_id").and_then(Value::as_u64), Some(42));
+        assert_eq!(
+            entry.get("lane_block_height").and_then(Value::as_u64),
+            Some(ownership.lane_block_height)
+        );
+        assert_eq!(
+            entry.get("lane_block_view").and_then(Value::as_u64),
+            Some(ownership.lane_block_view)
+        );
+        assert_eq!(
+            entry.get("subject_hash").and_then(Value::as_str),
+            Some(hash_with_prefix(ownership.subject_hash).as_str())
+        );
+        assert_eq!(
+            entry.get("qc_mode_tag").and_then(Value::as_str),
+            Some(ownership.qc_mode_tag.as_str())
+        );
+        assert_eq!(
+            entry
+                .get("accepted_candidate_indices")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            entry.get("payload_ownership_hash").and_then(Value::as_str),
+            Some(hash_with_prefix(ownership.payload_ownership_hash).as_str())
+        );
+        assert_eq!(
+            entry.get("rbc_instance_hash").and_then(Value::as_str),
+            Some(hash_with_prefix(ownership.rbc_instance_hash).as_str())
         );
     }
 
@@ -63224,6 +63405,7 @@ pub async fn handle_v1_sumeragi_status(
                 .collect(),
             lane_settlement_commitments: snap.lane_settlement_commitments.clone(),
             lane_relay_envelopes: snap.lane_relay_envelopes.clone(),
+            lane_payload_ownerships: snap.lane_payload_ownerships.clone(),
             lane_governance_sealed_total: snap.lane_governance_sealed_total,
             lane_governance_sealed_aliases: snap.lane_governance_sealed_aliases.clone(),
             lane_governance: snap

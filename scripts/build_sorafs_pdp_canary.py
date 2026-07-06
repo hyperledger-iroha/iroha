@@ -336,6 +336,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "governance_dag_challenge_published": True,
                 "governance_dag_verdict_published": True,
                 "repair_handoff_verified": True,
+                "repair_handoff_digest_hex": args.repair_handoff_digest_hex,
                 "archive_retention_bound": True,
                 "slash_policy_bound": True,
                 "operator_export_verified": True,
@@ -475,11 +476,19 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         require_kind_options(
             args,
             errors,
-            (("--archive-summary-digest-hex", args.archive_summary_digest_hex),),
+            (
+                ("--archive-summary-digest-hex", args.archive_summary_digest_hex),
+                ("--repair-handoff-digest-hex", args.repair_handoff_digest_hex),
+            ),
         )
         validate_hex64(
             args.archive_summary_digest_hex,
             option="--archive-summary-digest-hex",
+            errors=errors,
+        )
+        validate_hex64(
+            args.repair_handoff_digest_hex,
+            option="--repair-handoff-digest-hex",
             errors=errors,
         )
     elif args.kind == "observability":
@@ -596,6 +605,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--proof-summary-digest-hex")
     parser.add_argument("--validation-bundle-digest-hex")
     parser.add_argument("--archive-summary-digest-hex")
+    parser.add_argument("--repair-handoff-digest-hex")
     parser.add_argument("--policy-digest-hex")
     parser.add_argument("--provider-roster-digest-hex")
     parser.add_argument("--provider", action="append", default=[])

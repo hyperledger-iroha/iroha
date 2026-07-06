@@ -188,6 +188,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     + (
         "snapshot_id_hex",
         "merkle_root_hex",
+        "weights_digest_hex",
         "provider_count",
         "providers",
     ),
@@ -195,6 +196,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     + (
         "snapshot_id_hex",
         "merkle_root_hex",
+        "weights_digest_hex",
         "provider_count",
         "providers",
     ),
@@ -300,12 +302,12 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "schema",
     "snapshot_id_hex",
     "merkle_root_hex",
+    "weights_digest_hex",
     "generated_at_unix",
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
     "provider_count",
-    "provider_id",
     "metric_count",
     "metrics",
 )
@@ -463,7 +465,7 @@ def validate_snapshot_summary(
     now_unix: int,
     max_snapshot_age_secs: int,
     context: str,
-) -> tuple[str, str, int]:
+) -> tuple[str, str, str, int]:
     require_status_in(
         payload,
         ("accepted", "published", "ready", "ok"),
@@ -473,6 +475,13 @@ def validate_snapshot_summary(
     )
     snapshot_id = require_hex(payload, "snapshot_id_hex", HEX32_LEN, errors)
     merkle_root = require_hex(payload, "merkle_root_hex", HEX64_LEN, errors)
+    weights_digest = require_hex(payload, "weights_digest_hex", HEX64_LEN, errors)
+    if (
+        weights_digest
+        and isinstance(payload.get("weights_digest_hex"), str)
+        and payload["weights_digest_hex"] != weights_digest
+    ):
+        errors.append("weights_digest_hex must be 64 lowercase hex characters")
     provider_count = require_minimum_int(payload, "provider_count", 1, errors)
     validate_provider_inventory(payload, errors)
     require_recent_timestamp(
@@ -483,7 +492,7 @@ def validate_snapshot_summary(
         max_age_secs=max_snapshot_age_secs,
         path=f"{context}.generated_at_unix",
     )
-    return snapshot_id, merkle_root, provider_count
+    return snapshot_id, merkle_root, weights_digest, provider_count
 
 
 def validate_provider_inventory(payload: dict[str, Any], errors: list[str]) -> None:
@@ -542,7 +551,7 @@ def validate_publish_or_latest(
     *,
     now_unix: int,
     max_snapshot_age_secs: int,
-) -> tuple[str, str, int]:
+) -> tuple[str, str, str, int]:
     return validate_snapshot_summary(
         evidence.payload,
         errors,
@@ -844,6 +853,7 @@ def validate_evidence_set(
     recognized: list[dict[str, Any]] = []
     snapshot_values: dict[str, str] = {}
     valid_snapshot_bindings: set[tuple[str, str]] = set()
+    valid_reputation_weight_digests: set[str] = set()
     snapshot_bound_artifacts: list[dict[str, Any]] = []
     provider_ids: set[str] = set()
     provider_proof_ids: set[str] = set()
@@ -866,12 +876,18 @@ def validate_evidence_set(
         )
         snapshot_id = ""
         merkle_root = ""
+        weights_digest = ""
         provider_count = 0
         provider_id = ""
         validate_common_rollout_context(payload, errors)
 
         if evidence.kind in SNAPSHOT_ANCHOR_KINDS:
-            snapshot_id, merkle_root, provider_count = validate_publish_or_latest(
+            (
+                snapshot_id,
+                merkle_root,
+                weights_digest,
+                provider_count,
+            ) = validate_publish_or_latest(
                 evidence,
                 errors,
                 now_unix=now_unix,
@@ -918,12 +934,23 @@ def validate_evidence_set(
             record_kind,
             errors,
         )
+        record_consistent_evidence_value(
+            snapshot_values,
+            "weights_digest_hex",
+            weights_digest,
+            record_kind,
+            errors,
+        )
         record_observed_evidence_value(provider_counts, provider_count)
 
         fingerprint_values = {
             "snapshot_id_hex": snapshot_id,
             "merkle_root_hex": merkle_root,
         }
+        if weights_digest != "":
+            fingerprint_values["weights_digest_hex"] = weights_digest
+            if not errors:
+                valid_reputation_weight_digests.add(weights_digest)
         if provider_count > 0:
             fingerprint_values["provider_count"] = provider_count
         if provider_id != "":
@@ -1059,6 +1086,7 @@ def validate_evidence_set(
             }
             for snapshot_id, merkle_root in sorted(valid_snapshot_bindings)
         ],
+        "valid_reputation_weight_digests": sorted(valid_reputation_weight_digests),
         "evidence_file_count": count_evidence_files(files),
         "recognized_artifact_count": count_recognized_evidence_artifacts(recognized),
         "recognized_artifacts": recognized,

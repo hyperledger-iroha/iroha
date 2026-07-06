@@ -309,6 +309,27 @@ def write_complete_evidence(root: Path) -> None:
     write_json(root / "governance-approval.json", governance_approval())
 
 
+BUNDLE_BOUND_FIXTURES = (
+    ("controller_runtime", "controller-runtime.json", controller_runtime),
+    ("moderation_toggle", "moderation-toggle.json", moderation_toggle),
+    ("gateway_reload", "gateway-reload.json", gateway_reload),
+    ("enforcement_probe", "enforcement-probe.json", enforcement_probe),
+    ("honey_audit", "honey-audit.json", honey_audit),
+    ("appeal_override", "appeal-override.json", appeal_override),
+    (
+        "transparency_publication",
+        "transparency-publication.json",
+        transparency_publication,
+    ),
+    ("observability", "observability.json", observability),
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "governance-approval.json", governance_approval),
+)
+
+
 def run_gate(root: Path, *extra: str) -> int:
     return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW_UNIX), *extra])
 
@@ -373,6 +394,23 @@ def test_complete_rollout_evidence_passes(tmp_path: Path) -> None:
     )
     assert observability_artifact["fingerprint"]["metrics"] == list(
         MODULE.REQUIRED_METRICS
+    )
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in BUNDLE_BOUND_FIXTURES)
+        == MODULE.BUNDLE_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _file_name, _factory in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    assert tuple(route["name"] for route in enforcement_probe()["routes"]) == (
+        MODULE.REQUIRED_ENFORCEMENT_ROUTES
     )
 
 
@@ -673,6 +711,31 @@ def test_controller_runtime_bundle_binding_must_match_feed_promotion(tmp_path: P
     ]
 
 
+def test_all_bundle_bound_artifacts_reject_feed_bundle_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in BUNDLE_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["bundle_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} bundle_digest_hex must match a valid "
+            "feed_promotion bundle_digest_hex"
+        ) in artifact["errors"]
+
+
 def test_feed_promotion_policy_digest_is_required(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = feed_promotion()
@@ -710,6 +773,32 @@ def test_governance_approval_policy_digest_must_match_feed_promotion(
         "governance_approval policy_digest_hex must match a valid "
         "feed_promotion policy_digest_hex"
     ) in artifact["errors"]
+
+
+def test_all_policy_bound_artifacts_reject_feed_promotion_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, file_name, factory in POLICY_BOUND_FIXTURES:
+        case_dir = tmp_path / kind_name
+        case_dir.mkdir()
+        write_complete_evidence(case_dir)
+        payload = factory()
+        payload["policy_digest_hex"] = DIGEST_2
+        write_json(case_dir / file_name, payload)
+        summary = case_dir / "summary.json"
+
+        assert run_gate(case_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [POLICY_DIGEST]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must match a valid "
+            "feed_promotion policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_moderation_toggle_requires_approved_toggle_count_equality(

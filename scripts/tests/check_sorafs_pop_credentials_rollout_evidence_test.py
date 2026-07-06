@@ -223,6 +223,27 @@ def write_complete_evidence(tmp_path: Path) -> Path:
     return evidence_dir
 
 
+ROOT_BOUND_FIXTURES = (
+    ("juror_client", "synced_root_digest_hex"),
+    ("verifier_service", "root_digest_hex"),
+    ("moderation_integration", "root_digest_hex"),
+    ("metrics_alerts", "root_digest_hex"),
+    ("governance_approval", "root_digest_hex"),
+)
+
+REVOCATION_BOUND_FIXTURES = (
+    ("juror_client", "synced_revocation_list_digest_hex"),
+    ("verifier_service", "revocation_list_digest_hex"),
+    ("moderation_integration", "revocation_list_digest_hex"),
+    ("metrics_alerts", "revocation_list_digest_hex"),
+    ("governance_approval", "revocation_list_digest_hex"),
+)
+
+POLICY_BOUND_FIXTURES = (
+    ("governance_approval", "policy_digest_hex"),
+)
+
+
 def write_args_file(path: Path, evidence_dir: Path, summary: Path) -> Path:
     path.write_text(
         "\n".join(
@@ -250,6 +271,10 @@ def validation_options() -> object:
         max_service_lag_secs=MODULE.DEFAULT_MAX_SERVICE_LAG_SECS,
         max_verify_latency_ms=MODULE.DEFAULT_MAX_VERIFY_LATENCY_MS,
     )
+
+
+def run_gate(root: Path, *extra: str) -> int:
+    return MODULE.main(["--evidence-dir", str(root), "--now-unix", str(NOW), *extra])
 
 
 def test_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
@@ -298,6 +323,32 @@ def test_complete_evidence_is_ready(tmp_path: Path, capsys) -> None:
     assert payload["required"]["issuer_bundle"]["artifacts"][0]["fingerprint"][
         "deployment_id"
     ] == DEPLOYMENT_ID
+
+
+def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
+    assert (
+        tuple(kind_name for kind_name, _digest_field in ROOT_BOUND_FIXTURES)
+        == MODULE.ROOT_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _digest_field in REVOCATION_BOUND_FIXTURES)
+        == MODULE.REVOCATION_BOUND_KINDS
+    )
+    assert (
+        tuple(kind_name for kind_name, _digest_field in POLICY_BOUND_FIXTURES)
+        == MODULE.POLICY_BOUND_KINDS
+    )
+
+
+def test_fixture_inventories_cover_checker_required_sets() -> None:
+    payloads = complete_payloads()
+    assert tuple(
+        route["name"] for route in payloads["enrollment_portal"]["routes"]
+    ) == MODULE.REQUIRED_ENROLLMENT_ROUTES
+    assert tuple(
+        route["name"] for route in payloads["verifier_service"]["routes"]
+    ) == MODULE.REQUIRED_VERIFIER_ROUTES
+    assert tuple(payloads["metrics_alerts"]["metrics"]) == MODULE.REQUIRED_METRICS
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -1396,6 +1447,84 @@ def test_governance_policy_digest_must_match_verifier_service(
         "governance_approval policy_digest_hex must match a valid "
         "verifier_service policy_digest_hex"
     ]
+
+
+def test_all_root_bound_artifacts_reject_published_root_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, digest_field in ROOT_BOUND_FIXTURES:
+        case_root = tmp_path / kind_name
+        case_root.mkdir()
+        evidence_dir = write_complete_evidence(case_root)
+        payload = complete_payloads()[kind_name]
+        payload[digest_field] = HEX_2
+        write_json(evidence_dir / f"{kind_name}.json", payload)
+        summary = case_root / "summary.json"
+
+        assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_root_digests"] == [HEX]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} root binding must match a valid "
+            "issuer_bundle/commitment_root root_digest_hex"
+        ) in artifact["errors"]
+
+
+def test_all_revocation_bound_artifacts_reject_registry_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, digest_field in REVOCATION_BOUND_FIXTURES:
+        case_root = tmp_path / kind_name
+        case_root.mkdir()
+        evidence_dir = write_complete_evidence(case_root)
+        payload = complete_payloads()[kind_name]
+        payload[digest_field] = HEX
+        write_json(evidence_dir / f"{kind_name}.json", payload)
+        summary = case_root / "summary.json"
+
+        assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_revocation_list_digests"] == [HEX_2]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} revocation binding must match a valid "
+            "issuer_bundle/revocation_registry revocation_list_digest_hex"
+        ) in artifact["errors"]
+
+
+def test_all_policy_bound_artifacts_reject_verifier_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    for kind_name, digest_field in POLICY_BOUND_FIXTURES:
+        case_root = tmp_path / kind_name
+        case_root.mkdir()
+        evidence_dir = write_complete_evidence(case_root)
+        payload = complete_payloads()[kind_name]
+        payload[digest_field] = HEX_2
+        write_json(evidence_dir / f"{kind_name}.json", payload)
+        summary = case_root / "summary.json"
+
+        assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        required = result["required"][kind_name]
+        artifact = required["artifacts"][0]
+        assert result["valid_policy_digests"] == [HEX]
+        assert required["valid"] is False
+        assert artifact["valid"] is False
+        assert (
+            f"{kind_name} policy_digest_hex must match a valid "
+            "verifier_service policy_digest_hex"
+        ) in artifact["errors"]
 
 
 def test_policy_bound_subset_requires_verifier_service_anchor(tmp_path: Path) -> None:

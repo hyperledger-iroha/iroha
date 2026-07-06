@@ -4,12 +4,12 @@ direction: ltr
 source: docs/source/sorafs_gateway_load_tests.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4888b8a63ddf992f4a52d72ea253efc61c836f2651d58cfd0b84da74b3d353c4
-source_last_modified: "2026-07-04T05:54:23.764215+00:00"
-translation_last_reviewed: 2026-07-03
+source_hash: 445b7826aa0c572d208cdffbdf94d16c10c5dd53e460334a078a8739d7098bda
+source_last_modified: "2026-07-04T22:32:05.290792+00:00"
+translation_last_reviewed: 2026-07-05
 title: SoraFS Gateway Load Testing Plan
 summary: Deterministic load harness and follow-up tasks for the SF-5a trustless delivery profile.
-source_mtime: 2026-07-04T05:54:23.764215+00:00
+source_mtime: 2026-07-04T22:32:05.290792+00:00
 ---
 
 # SoraFS Gateway Load Testing Plan
@@ -172,7 +172,11 @@ duplicate or unknown metric labels before promotion can report ready. The
 summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the telemetry/SLO artifact fingerprint before final
-promotion can report ready.
+promotion can report ready. Aggregate promotion also rechecks the lane-proven
+digest relationships: suite-bound artifact fingerprints must match
+`valid_suite_report_digests`, staging-bound artifact fingerprints must match
+`valid_staging_report_digests`, and policy-bound artifact fingerprints must
+match `valid_policy_digests`.
 
 ## Failure Injection Coverage
 

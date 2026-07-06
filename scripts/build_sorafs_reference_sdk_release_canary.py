@@ -254,6 +254,7 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "governance_source": "governed_release",
                 "release_manifest_digest_hex": args.release_manifest_digest_hex,
                 "policy_digest_hex": args.policy_digest_hex,
+                "public_key_fingerprint_hex": args.public_key_fingerprint_hex,
             }
         )
     return payload
@@ -278,7 +279,18 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             errors=errors,
         )
         validate_signature_algorithm(args.signature_algorithm, errors=errors)
-    elif args.kind in RELEASE_MANIFEST_BOUND_KINDS:
+    if args.kind == "governance_approval":
+        require_kind_options(
+            args,
+            errors,
+            (("--public-key-fingerprint-hex", args.public_key_fingerprint_hex),),
+        )
+        validate_hex64(
+            args.public_key_fingerprint_hex,
+            option="--public-key-fingerprint-hex",
+            errors=errors,
+        )
+    if args.kind in RELEASE_MANIFEST_BOUND_KINDS:
         validate_hex64(
             args.release_manifest_digest_hex,
             option="--release-manifest-digest-hex",

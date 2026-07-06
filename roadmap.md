@@ -261,7 +261,9 @@ hashes before Rust or Python canonical hashes, full-TOML rendering, or lane
 readiness can pass. TRON route-canary evidence now also rejects replay between
 governed route/source/deployment hashes and transaction transcript hashes
 before Rust, Python, JavaScript SDK, package-dist, or package-root canonical
-hashes are emitted. Checked source-adapter statement/context encoding now also rejects
+hashes are emitted. Swift, Kotlin/JVM, and Java Android TRON route-canary
+helpers now mirror that boundary and include finality height in transcript
+distinctness before mobile canonical bytes are emitted. Checked source-adapter statement/context encoding now also rejects
 zero transcript/evidence hashes, role-hash replays, transcript/evidence
 aliasing, and source-envelope header drift before FastPQ batch construction.
 Kotlin/JVM and Java Android EVM/TRON proof-request helpers now mirror the
@@ -6937,9 +6939,13 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `scripts/check_sorafs_reputation_rollout_evidence.py` now gates deployed
   SFM-3 rollout evidence: publish/latest/provider/event/proof replay artifacts,
   integer-unit metrics freshness/ingest lag, SSE/WebSocket transport delivery,
-  and routing/incentive consumption must all reference the same fresh
-  publish/latest `snapshot_id_hex`/`merkle_root_hex` tuple and stay payload-free
-  before the summary reports `ready`, rejecting raw
+	  and routing/incentive consumption must all reference the same fresh
+	  publish/latest `snapshot_id_hex`/`merkle_root_hex` tuple and stay payload-free
+		  before the summary reports `ready`; the aggregate production-readiness gate
+		  also requires `valid_snapshot_bindings` to match that top-level
+		  `snapshot_id_hex`/`merkle_root_hex` pair and rechecks snapshot-bound artifact
+		  fingerprints against `valid_snapshot_bindings` before final promotion,
+		  rejecting raw
   snapshot/proof/provider records, request/response bodies, bearer tokens,
   signed transactions, private keys, and other payload-bearing fields. Metrics
   and transport artifacts must explicitly set
@@ -7101,24 +7107,32 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   command steps before dry-run output or live collection.
   The repository-wide rollout-gate static contract now also requires every
   SoraFS rollout/release checker and collection runner to keep checked-in
-  operator argfile examples; every tool must use the shared bounded response
+  operator argfile examples, and requires every rollout/release plus aggregate
+  production-readiness checker and runner to use the shared bounded response
   file expander and shared shell-like response-line parser for reviewed
-  `@ARGFILE` inputs, and malformed scalar, bytearray, mapping, non-string,
+  `@ARGFILE` inputs, with aggregate production-readiness checker and runner
+  entrypoints retaining direct symlink-leaf and malformed-line negative tests,
+  and malformed scalar, bytearray, mapping, non-string,
   empty, padded, or control-character argument tokens fail closed before
-  character-wise expansion, checker and collection-runner threshold, timeout, limit,
-  and deterministic-clock arguments must use shared argparse integer parsers for
-  positive and non-negative operator-supplied values; those parsers now require
+  character-wise expansion, rollout plus aggregate checker and
+  collection-runner threshold, timeout, limit, and deterministic-clock
+  arguments must use shared argparse integer parsers for positive and
+  non-negative operator-supplied values; those parsers now require
   canonical ASCII decimal spellings and reject plus signs, whitespace,
   leading-zero, underscore, non-ASCII digit, and negative-zero coercions, with
   static coverage that pins the current runner positive/non-negative option
-  classes, and collection runners that expose narrowed `--require-kind` gates
-  must use the shared required-kind parser with their checker's `KIND_BY_NAME`
-  and default set, while scalar/bytearray/mapping raw values, non-string
-  entries, padded/control-character kind names, malformed allowed-kind
-  registries, and malformed default required-kind sets fail closed before
-  character-wise parsing, trim-normalized entries, or unchecked defaults can
-  satisfy a narrowed gate, collection runners must derive `required_kinds`
-  inside `parse_args` before validation or dry-run plan construction, and the
+  classes and self-checks integer-parser inventories against source usage, and
+  collection runners that expose narrowed `--require-kind` gates plus the
+  aggregate production-readiness runner's narrowed `--require-gate` gate
+  selection must use the shared required-kind parser with the checker's
+  `KIND_BY_NAME` or aggregate `GATE_BY_NAME` and default set, while
+  scalar/bytearray/mapping raw values, non-string entries,
+  padded/control-character kind names, malformed allowed-kind registries, and
+  malformed default required-kind sets fail closed before character-wise
+  parsing, trim-normalized entries, or unchecked defaults can satisfy a narrowed
+  gate, collection runners must derive `required_kinds` and the aggregate
+  runner must derive `required_gates` inside `parse_args` before validation or
+  dry-run plan construction, and the
   shared contract now builds each checked-in runner example's dry-run plan and
   verifies the emitted `evidence_contract` schemas and payload-field lists
   match the checker constants for the selected required kinds, while
@@ -7137,7 +7151,29 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   every rendered dry-run step
   artifact must match an output argument in the command that produces it, with
   every dry-run collection-plan schema and verifier summary schema pinned to
-  the imported checker constants, every dry-run `evidence_contract` schema
+  the imported checker constants, and the rollout contract now also pins
+  appeal finance, orderbook, PoR, repair, transparency, gateway-load,
+  PoP credentials, moderation-panel, and reserve-rent fixture inventories
+  against each checker's exported required route, metric, status, class,
+  cache-state, payload-kind, probe, and lifecycle sets, and every SoraFS
+  rollout/release checker test now names its checker-exported required,
+  allowed, and bound-kind constants, while the static rollout contract now
+  scans every checker and checked-in canary builder for exported inventory
+  constants so checker or builder drift cannot hide behind hard-coded fixture
+  literals, and it now renders every checked-in rollout/release collection
+  runner plus the aggregate production-readiness runner to verify exported
+  plan-field, threshold-field, external-evidence, and deployment-context
+  inventories against the emitted dry-run JSON, while local helper tests import
+  and enforce the shared sensitive-key, rollout environment/review-label, and
+  path-template field inventories, and the aggregate production-readiness
+  checker is now part of the exported-inventory scan so PoP root/revocation
+  bound fingerprint maps and schema-closed aggregate output field contracts
+  cannot drift from local tests, and the static contract now imports every
+  checker evidence-kind registry plus residual builder/checker inventory
+  constants so schema maps, default required kinds, required-field tables,
+  evidence-viewer digest fields, enforcement-route defaults, payload-kind
+  thresholds, manual-trigger state, and hedging fixture status/name inventories
+  cannot drift from local tests; every dry-run `evidence_contract` schema
   must be a canonical SoraFS v1 identifier, every dry-run plan must use only
   reviewed top-level keys, any dry-run `deployment_context` must match the
   parsed deployment id, normalized environment, and reviewed marker, and rendered
@@ -7261,10 +7297,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   Every checked-in SoraFS canary builder must also use the shared
   bounded `@ARGFILE` parser path and shared strict positive/non-negative integer
   parsers for numeric CLI options, every checked-in SoraFS canary builder test
-  must retain response-file coverage, and every checked-in SoraFS canary builder
-  test must exercise both symlink and directory `--out` targets through the
-  builder `main(...)` path so parser and path-adversarial coverage cannot
-  regress; rollout checkers now also reject duplicate
+  must retain response-file coverage, and the static rollout contract now
+  requires every checked-in SoraFS canary builder test to exercise both symlink
+  and directory `--out` targets through the builder `main(...)` path so parser
+  and path-adversarial coverage cannot regress; rollout checkers now also reject duplicate
   metric rows in externally collected observability, telemetry/SLO, dashboard,
   metrics/alert, and metrics evidence before coverage can report ready, require
   `metric_count` to be present and bound to the unique canonical `metrics`
@@ -7281,24 +7317,28 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   non-symlink directories before scans and explicit plus directory-discovered
   JSON evidence candidates must exist as inspectable regular non-symlink files
   before they can enter the parse list or reserved-output conflict preflight;
-  every collection runner must keep
-  a collection-named reviewed argfile example, and every runner example must
-  parse through its own runner parser when loaded as the reviewed `@ARGFILE`
-  plus `--dry-run`; runner
-  `main` functions must convert argparse `SystemExit` failures into numeric
-  exit codes for tests and operator wrappers, runner examples must include a
-  `--dry-run` review command, runner collection-plan validation must reject
+  every per-lane, release, and aggregate production-readiness collection runner
+  must keep a collection-named reviewed argfile example, and every runner
+  example must parse through its own runner parser when loaded as the reviewed
+  `@ARGFILE` plus `--dry-run`; every per-lane, release, and aggregate runner
+  `main` function must convert argparse `SystemExit` failures into numeric
+  exit codes for tests and operator wrappers, and caught argument parser
+  `ValueError` diagnostics must route through the shared sanitized runner
+  exception reporter, runner examples must include a `--dry-run` review
+  command, runner collection-plan validation must reject
   non-object renderings, command-plan drift, and strict JSON rendering failures
-  through shared preflight before dry-run output or execution, runner dry-run
+  through shared preflight before dry-run output or execution, with aggregate
+  production-readiness using the shared aggregate plan validator, runner dry-run
   plan rendering must reject non-object plan shapes before writing stdout and
   sanitize caught JSON render exceptions before returning plan diagnostics,
-  every runner must preflight its
-  verifier as a non-symlink file under symlink-free parent chains and preflight
-  summary/output targets plus runner input files/directories through shared
-  helpers before emitting dry-run plans, including precise missing file versus
-  directory diagnostics, existing non-symlink input files and directories under
-  symlink-free parent chains, existing file and directory ancestors for output
-  paths, symlink output directories, and symlink-free output parent chains for
+  every per-lane, release, and aggregate production-readiness runner must
+  preflight its verifier as a non-symlink file under symlink-free parent chains
+  and preflight summary/output targets plus runner input files/directories
+  through shared helpers before emitting dry-run plans, including precise
+  missing file versus directory diagnostics, existing non-symlink input files
+  and directories under symlink-free parent chains, existing file and directory
+  ancestors for output paths, symlink output directories, and symlink-free
+  output parent chains for
   both missing and pre-existing output targets, summary-output and
   output-directory identity collisions, duplicate or aliased input paths across
   all runner input flags, local directory inputs, malformed input path
@@ -7317,7 +7357,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   collected diagnostics while rewriting reviewed deployment context through
   descriptor no-follow opens, complete byte-write loops, descriptor fsync, and
   output parent-directory fsync after a fresh parent-chain check;
-  every runner must execute
+  every per-lane, release, and aggregate production-readiness runner must execute
   plans through the shared command-plan runner so malformed scalar or mapping
   command plans, malformed step labels, non-Path step artifacts, empty command
   lists, empty or non-canonical command executables, embedded-NUL or
@@ -7335,38 +7375,69 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   expected-artifact inspection failures surface as structured errors
   instead of tracebacks, with subprocess launch exception text routed through
   the shared diagnostic sanitizer before stderr output so raw multi-line OS
-  messages cannot leak through command-plan execution; every checker
-  must preflight and write its optional summary output through the
-  shared helper before/after evidence validation so output-parent creation and
-  summary-write failures, summary-output target/parent inspection failures,
-  summary-output symlinks plus symlinked or non-directory parent chains, and
-  summary/evidence identity collisions surface as structured errors instead of
-  tracebacks, checker summaries must be JSON objects before rendering and
-  summary text must be a string before optional output writes, and checker
-  summary render exceptions must be sanitized before entering collected
-  diagnostics, malformed
+  messages cannot leak through command-plan execution; every rollout/release
+  checker plus the aggregate production-readiness checker must preflight and
+  write its optional summary output through the shared helper before/after
+  evidence validation so output-parent creation and summary-write failures,
+  summary-output target/parent inspection failures, summary-output symlinks
+  plus symlinked or non-directory parent chains, and summary/evidence identity
+  collisions surface as structured errors instead of tracebacks, with the
+  aggregate production-readiness checker retaining direct entrypoint negatives
+  for existing-directory and symlinked `--summary-out` leaves, symlinked or
+  non-directory `--summary-out` parent chains, unsafe summary-output path
+  components, and explicit evidence/output identity collisions, checker
+  summaries must be JSON objects before rendering and summary text must be a
+  string before optional output writes, and checker summary render exceptions
+  must be sanitized before entering collected diagnostics, malformed
   preflight diagnostic containers, existing diagnostic text, and labels fail
   closed before filesystem inspection, and checker stderr error emitters reject
   malformed diagnostic containers before printing partial headings or
   character-split errors,
   checker stderr notices reject malformed or multi-line messages before partial
-  operator output, checker evidence input preflight rejects malformed
+  operator output, rollout/release plus aggregate checker evidence input
+  preflight rejects malformed
   `--evidence`/`--evidence-dir` containers, non-Path `--evidence-dir` entries,
   and non-Path/non-spec `--evidence` entries before they can satisfy the
-  evidence-source requirement or trigger summary-output inspection,
+  evidence-source requirement or trigger summary-output inspection, with direct
+  aggregate checker negatives for unsafe rendered `--evidence-dir` and
+  explicit `--evidence` path components, and direct reputation checker coverage
+  for unsafe rendered or empty `KIND=PATH` evidence specs before load-time kind
+  parsing plus unknown kind-prefixed specs and malformed spec parser exceptions
+  rendered into failed summaries without echoing supplied kind text or raw
+  exception text, and untyped explicit evidence with no inferred kind reporting
+  path-free failed-summary diagnostics, while stdout-mode unknown-schema,
+  no-inferred-kind, schema-mismatch, and conflicting explicit-kind load errors
+  remain schema/kind/path-free, stdout-mode required-provider diagnostics
+  remain provider-id-free, and invalid provider/proof plus verify evidence
+  provider IDs, hedging billing-cycle IDs, reserve-rent bake IDs, and PoR
+  archive backend labels plus reference SDK signature algorithms are omitted
+  from fingerprints and stdout summaries after canonical ID or closed-set
+  validation, while aggregate production-readiness `provider_ids`,
+  `valid_billing_cycles[].cycle_id`, and `valid_provider_bakes[].bake_id`
+  metadata now replay the SFM-3/SFM-5/SFM-6 canonical label and
+  non-production marker policies before final promotion can accept
+  fingerprint-consistent forged summaries,
   including explicit evidence, evidence discovered through
   `--evidence-dir`, and reputation's
   kind-prefixed explicit evidence syntax, and the hedging fixture-manifest checker
   must use the same shared summary-output preflight before manifest reads,
-  every checker must reject empty, duplicate, or unknown
-  narrowed `--require-kind` entries through direct shared-parser calls before
-  evidence validation, every checker must use shared evidence-file discovery
+  every rollout/release checker must reject empty, duplicate, or unknown
+  narrowed `--require-kind` entries, and the aggregate production-readiness
+  checker must reject duplicate, unknown, or malformed narrowed
+  `--require-gate` entries, through direct shared-parser calls before evidence
+  validation, every rollout/release checker plus the aggregate
+  production-readiness checker must use shared evidence-file discovery
   that rejects reserved output-path reuse, duplicate explicit evidence paths,
   overlapping `--evidence-dir` scans, files provided by both `--evidence`
   and `--evidence-dir`, malformed explicit-evidence identity sets, explicit
   identity sets derived from uninspected or already-rejected evidence paths,
   and explicit membership checks that try to resolve uninspected candidate
-  files,
+  files, with direct aggregate checker negatives proving explicit evidence-file
+  and evidence-directory symlinks plus summary-output files rediscovered through
+  evidence-directory scans failing before validation, and duplicate explicit
+  evidence and explicit/directory evidence overlaps plus overlapping
+  evidence-directory scans become blocked summaries without leaking symlink,
+  target, directory, or evidence file path text,
   while
   malformed scalar or mapping evidence/reserved-output path collections or
   symlinked, malformed, or duplicate reserved-output entries
@@ -7436,7 +7507,13 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   fingerprint field tuples must contain only canonical, non-empty, duplicate-free
   string field names and reject scalar or bytearray field containers before
   iteration, so padded, control-character, byte-wise, or repeated fields cannot
-  drift summary shape,
+  drift summary shape, and the static rollout-gate contract now rejects
+  ambiguous base fingerprint field names unless they are reviewed deployment,
+  schema, metric, count, or timestamp fields or advertise typed digest/hash/root,
+  id, hex, timestamp, or count suffixes; AI notification transport now uses
+  `manifest_body_blake3_hex`, reserve/rent scheduler canaries now use
+  `scheduled_lifecycle_canary_last_tick_at_unix`, and the Rust CLI notification
+  canary emits the same typed manifest digest key,
   and the shared sensitive-field scanner rejects malformed diagnostic sinks,
   starting path labels, evidence labels, mapping/scalar sensitive-key
   containers, and padded/control-character sensitive-key names before payload
@@ -7576,6 +7653,16 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   release gates, including governance approvals, AI pre-screen governance-DAG
   evidence, and reserve-rent policy/matrix anchors, so accepted decisions and
   policy-bound artifacts prove the same `policy_digest_hex` contract,
+  policy-bound fixture tables and all-bound adversarial mismatch loops now
+  cover appeal-finance, orderbook, PoR, governance-DAG, hedging/billing,
+  gateway-load, and gateway-compliance rollout evidence, with the static
+  rollout contract pinning each table to its checker-exported
+  `POLICY_BOUND_KINDS` set,
+  moderation-panel, PoP credential, PoTR, repair, and transparency rollout
+  evidence now also pin each bound-fixture table to an exported lane checker
+  kind set, and aggregate readiness imports the PoTR PQ/reputation,
+  moderation-panel policy, repair handoff, and reserve-rent matrix bound-kind
+  tuples from their lane checkers instead of duplicating them,
   route and probe HTTP status validation now uses a shared 2xx-status helper
   with canonical field/path label guards across every rollout gate that checks
   deployed endpoints,
@@ -8007,8 +8094,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `provider-*` provider names whose unique inventory matches `provider_count`,
   provider proof inputs where applicable, reviewed reputation metric names whose
   unique inventory matches `metric_count`, unique provider proof sibling hashes,
-  and non-negative integer snapshot-age/ingest-lag threshold facts before
-  writing; metrics and transport canaries explicitly emit
+  non-negative integer snapshot-age/ingest-lag threshold facts, and a governed
+  `weights_digest_hex` for publish/latest snapshot anchors before writing;
+  metrics and transport canaries explicitly emit
   `response_bodies_included: false`, consumption canaries explicitly emit
   `raw_provider_records_included: false`, and duplicate or unknown metric inputs fail before any canary JSON is
   written. The SFM-3 rollout
@@ -8021,7 +8109,14 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   readiness can report ready. Transport canaries also
   require reviewed `reputation-sse-event-*` and
   `reputation-websocket-event-*` labels without non-production markers matching
-  `sse_event_count` and `websocket_event_count` before writing.
+  `sse_event_count` and `websocket_event_count` before writing. Aggregate
+  promotion now also requires `valid_reputation_weight_digests` to match
+  publish/latest artifact fingerprints and rechecks every publish/latest
+  artifact against that metadata before final readiness can report ready. The
+  lane checker also has direct adversarial coverage that forges every
+  snapshot-bound reputation artifact kind against the publish/latest
+  `snapshot_id_hex`/`merkle_root_hex` binding before final readiness can report
+  ready.
   Remaining SFM-3 rollout work is deploying the ingest/publisher service and
   capturing live run evidence that passes this gate, not the scoring, proof,
   local Torii API, cache validators, SSE/WebSocket push, SDK convenience
@@ -8178,14 +8273,22 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   governance/repair, observability, and governed-approval artifacts before PDP
   promotion, and requires replay/governance/observability/approval artifacts to
   bind back to a valid proof-generation `proof_summary_digest_hex` in the same
-  evidence bundle, requires governance approval `policy_digest_hex` to match a
+  evidence bundle. The lane checker also has direct adversarial coverage that
+  forges `proof_summary_digest_hex` on every proof-summary-bound downstream
+  kind, so validator replay, governance/repair, observability, and governance
+  approval evidence all fail against mismatched proof-generation summaries
+  before promotion. It requires governance approval `policy_digest_hex` to match a
   valid proof-generation `policy_digest_hex`, publishes valid PDP policy
   digests as `valid_policy_digests`, requires governance approval
   `provider_roster_digest_hex` to match a valid proof-generation
   `provider_roster_digest_hex`, publishes valid governed provider-roster
   digests as `valid_provider_roster_digests`, with binding failures marked on the
   offending artifact through the shared scalar binding error recorder before
-  required-kind summary validity is reported. Proof-generation artifacts now
+  required-kind summary validity is reported. The lane checker also has direct
+  adversarial coverage for every policy-bound and provider-roster-bound PDP
+  artifact kind, so governance approval evidence fails against detached
+  proof-generation policy or provider-roster digests before promotion.
+  Proof-generation artifacts now
   also bind `provider_count`, `challenge_count`, and `proof_count` to the unique
   canonical `providers[].name`, `challenges[].name`, and `proofs[].name`
   inventories, rejecting duplicate provider, challenge, or proof rows before
@@ -8203,11 +8306,20 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   timings cannot pass rollout thresholds. The PDP gate now also has
   missing-field regressions proving `response_bodies_included`, raw
   challenge/proof/export/report flags, and `critical_alerts_firing` must be
-  explicitly encoded as `false`. PDP summaries also export the reviewed observability `metrics`
-  inventory plus `metric_count_values`, and the aggregate production-readiness
-  gate tethers both fields to observability artifact fingerprints before final
-  promotion can report ready. The PDP collection planner now
-  emits the
+  explicitly encoded as `false`. PDP summaries also export the reviewed
+  observability `metrics` inventory plus `metric_count_values`, and the
+  aggregate production-readiness gate tethers both fields to observability
+  artifact fingerprints before final promotion can report ready. Governance/
+  repair artifacts now also fingerprint `repair_handoff_digest_hex`, PDP
+  summaries export `valid_repair_handoff_digests`, and the aggregate
+  production-readiness gate tethers those values to governance/repair artifact
+  fingerprints before final promotion can report ready. The aggregate
+  production-readiness gate now also rechecks proof-summary-bound,
+  policy-bound, and provider-roster-bound artifact fingerprints against
+  `valid_proof_summary_digests`, `valid_policy_digests`, and
+  `valid_provider_roster_digests`, plus repair-handoff metadata against
+  `valid_repair_handoff_digests`, before final promotion can report ready. The
+  PDP collection planner now emits the
   checker-backed `evidence_contract` map for the selected required kinds during
   dry-run review, and validates the schema-closed collection-plan envelope plus
   canonical nested required-kind, threshold, external-evidence, checker-backed
@@ -8224,12 +8336,14 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  reviewed provider/challenge/proof inventories whose unique names match their
 	  scalar counts while rejecting duplicate or non-production provider,
 	  challenge, or proof names, explicit `--route-body-blake3-hex` evidence for
-	  provider routes, and latency thresholds before writing, validates every generated
+	  provider routes, `--repair-handoff-digest-hex` evidence for governance/
+	  repair handoff, and latency thresholds before writing, validates every generated
   artifact through the PDP rollout checker, and ships provider-transport and
   proof-generation response-file examples. PDP
   remains fail-closed in embedded Torii proof streaming until
   provider transport, live signature/inclusion verification, regenerated
-  negative fixture artifacts, governance archival, repair handoff, and deployed
+  negative fixture artifacts, governance archival, repair handoff carrying
+  `repair_handoff_digest_hex`, and deployed
   evidence that passes the gate land. The rollout-gate static contract now pins
   Torii's early `BAD_REQUEST` rejection and OpenAPI reserved wording for
   `proof_kind=pdp`, and keeps unshipped `sorafs pdp ...` operator commands
@@ -8356,7 +8470,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   and requires the aggregate production-readiness gate to tether each one to
   its owning release evidence kind before reporting ready, and requires
   governance approval `policy_digest_hex` to bind back to that signed-manifest
-  policy before SF-11 promotion can report ready; the
+  policy plus `public_key_fingerprint_hex` to bind back to that signed-manifest
+  release key before SF-11 promotion can report ready; the
   matching collection planner accepts reviewed
   release evidence paths, supports
   `@ARGFILE`, forwards age, release-target, downstream-package, and
@@ -8371,8 +8486,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `scripts/build_sorafs_reference_sdk_release_canary.py`, a fail-closed
 	  payload-free release evidence builder for release archives, signed manifests,
 	  downstream bindings, cookbook smoke, FFI/header contract, and governance
-	  approval artifacts, with signed-manifest and governance policy-digest inputs
-	  plus closed release-target and downstream-package inventory validation that
+	  approval artifacts, with signed-manifest policy-digest inputs, governance
+	  policy-digest and `--public-key-fingerprint-hex` inputs, and closed
+	  release-target and downstream-package inventory validation that
 	  rejects missing, duplicate, or unknown operator names before writing, along
 	  with response-file examples for release-archive and signed-manifest
 		  generation. The SF-11 plan
@@ -8384,8 +8500,20 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `package_count` to match the unique canonical inventory lengths before
 	  publication evidence can pass. Signed-manifest evidence and the
 	  payload-free canary builder now also reject unsupported
-	  `signature_algorithm`/`--signature-algorithm` values outside `ed25519` and
-	  `rsa-sha256` before those manifests can anchor release promotion. Remaining SF-11
+	  `signature_algorithm`/`--signature-algorithm` values outside the governed
+	  Ed25519 release algorithm (`ed25519`), including legacy RSA labels, before
+	  those manifests can anchor release promotion, and the release summary now
+	  exports `signature_algorithms` so the aggregate production-readiness gate
+	  can tether that reviewed value to the signed-manifest artifact fingerprint
+	  before final promotion, and aggregate promotion now also rechecks
+	  manifest-bound and policy-bound artifact fingerprints against
+	  `valid_release_manifest_digests` and `valid_policy_digests` plus governance
+	  approval release-key fingerprints against `valid_release_key_fingerprints`.
+	  The lane checker also has direct adversarial coverage that forges every
+	  manifest-bound, policy-bound, and release-key-bound SF-11 artifact kind
+	  against those signed-manifest anchors before release promotion can report
+	  ready.
+	  Remaining SF-11
 	  work is per-target published archives, signed release manifests, downstream
   SDK package publication, and live operator smoke evidence that passes this
   gate, rather than local admission renewal/revocation, signing, governance
@@ -8422,6 +8550,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   scheduler panels plus alert fixtures. The SF-9 rollout evidence gate now
   validates payload-free randomness, scheduler runtime, validator replay,
   reporting/archive handoff, exact SQL/Parquet archive-backend selection,
+  governance archive handoff digest evidence,
   exact manual-trigger retired route-state, scheduler-runtime and
   reporting/archive `route_count` binding to the unique canonical
   `routes[].name` inventories with duplicate or unknown route rejection,
@@ -8458,12 +8587,23 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  input, reviewed randomness provider/challenge inventories, and closed runtime/reporting
 	  route plus metric inventories through the same checker before rollout review,
 	  with duplicate or malformed challenge inputs, duplicate or unknown route/metric
-	  inputs, and missing `--route-body-blake3-hex` evidence rejected before
+	  inputs, missing `--route-body-blake3-hex` evidence, and missing or malformed
+	  `--governance-archive-handoff-digest-hex` evidence rejected before
 	  canary writes. Remaining SF-9
   work is live drand/VRF/auditor run evidence that passes this gate and
-  governance archive handoff evidence with the deployment-specific
-  SQL/Parquet `archive_backend` recorded in reporting/archive artifacts, not
-  the local Torii runtime, status/export/report endpoints,
+  any operator-required governance archive handoff carried as
+  `governance_archive_handoff_digest_hex` beside the deployment-specific
+  SQL/Parquet `archive_backend` in reporting/archive artifacts, with the
+  aggregate production-readiness `archive_backends` and
+  `valid_governance_archive_handoff_digests` metadata tethered to those
+  reporting/archive fingerprints before final promotion can pass. Aggregate
+  promotion also rechecks seed-replay-bound and policy-bound artifact
+  fingerprints against `valid_seed_replay_digests` and `valid_policy_digests`,
+  and the lane checker has direct adversarial coverage that forges
+  `seed_replay_digest_hex` on every seed-replay-bound downstream kind, so
+  scheduler, validator, reporting/archive, observability, and governance
+  evidence all fail against mismatched randomness before promotion. Remaining
+  SF-9 work is not the local Torii runtime, status/export/report endpoints,
   bounded ingestion readback, explicit manual-trigger retirement route,
   reference PoR validator command, or local scheduler observability. The
   rollout-gate static contract now also pins live external drand/VRF/auditor
@@ -8526,7 +8666,16 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   promotion policy metadata to recognized governance artifacts, exports the
   reviewed observability `metrics` inventory plus `metric_count_values`, and
   requires the aggregate gate to tether both metric fields to observability
-  artifact fingerprints before final promotion can report ready.
+  artifact fingerprints before final promotion can report ready. The aggregate
+  production-readiness gate now also rechecks receipt-summary-bound,
+  PQ-key-roster-bound, and reputation-weight-bound artifact fingerprints against
+  `valid_receipt_summary_digests`, `valid_pq_key_roster_digests`, and
+  `valid_reputation_weight_policy_digests` before final promotion can report
+  ready. The lane checker also has direct adversarial coverage that forges the
+  receipt summary digest on every receipt-summary-bound downstream kind, plus
+  PQ key-roster and reputation-weight policy digests on their bound artifacts,
+  so validation, proof-stream, reputation, observability, and governance
+  evidence all fail against detached probe/governance anchors before promotion.
   Remaining SF-14 work is live multi-provider receipt evidence,
   governed provider ML-DSA key distribution, reputation weighting evidence, and
   governance approval that passes this gate with receipt-validation artifacts
@@ -8567,10 +8716,18 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   gate: `scripts/check_sorafs_gateway_load_rollout_evidence.py` validates
   payload-free signed local conformance, live staging load, telemetry/SLO,
   transport-scope, and governance approval artifacts. The gate binds live
-  staging evidence back to the signed local conformance digest, requires
-  telemetry and governance artifacts to reference the staged load report,
-  requires governance approval `policy_digest_hex` to match a valid
-  staging-load `policy_digest_hex`, requires local conformance `scenario_count`
+	  staging evidence back to the signed local conformance digest, requires
+	  telemetry and governance artifacts to reference the staged load report,
+	  requires governance approval `policy_digest_hex` to match a valid
+	  staging-load `policy_digest_hex`, and the aggregate production-readiness
+	  gate now rechecks suite-bound, staging-bound, and policy-bound artifact
+	  fingerprints against `valid_suite_report_digests`,
+	  `valid_staging_report_digests`, and `valid_policy_digests` before final
+	  promotion. The lane checker also has direct adversarial coverage that
+	  forges the staging report digest on every staging-bound downstream kind, so
+	  telemetry/SLO, transport-scope, and governance artifacts all fail against a
+	  mismatched staged-load report before final promotion. The gate requires
+	  local conformance `scenario_count`
   to match the unique canonical scenario inventory, rejects duplicate or
   unknown scenario entries before required-kind validity is reported, requires
   local-conformance `cargo_command` evidence to match a reviewed gateway
@@ -8946,11 +9103,19 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   and ships response-file examples for the end-to-end workflow anchor, juror
   notification transport, and commit/reveal executor canaries. Valid
   notification-transport artifacts now publish their reviewed
-  `manifest_body_blake3` values as `valid_notification_manifest_digests`, and
+  `manifest_body_blake3_hex` values as `valid_notification_manifest_digests`, and
   valid commit/reveal executor artifacts publish their top-level
   `execution_summary_digest_hex` values as `valid_executor_summary_digests`;
   the final SoraFS aggregate gate accepts both metadata fields only when they
-  match recognized artifact fingerprints. Juror notification transport
+  match recognized artifact fingerprints. The final gate also rechecks SFM-4a
+  runner-bound, workflow-bound, and policy-bound recognized artifact
+  fingerprints against `valid_runner_bindings`, `valid_workflow_digests`, and
+  `valid_policy_digests`, so forged aggregate summaries cannot swap committee
+  subjects or detached workflow/policy digests while preserving valid anchors.
+  The lane checker also has direct adversarial coverage that forges every
+  runner-bound, workflow-bound, and policy-bound SFM-4a artifact kind against
+  those anchors before promotion can report ready.
+  Juror notification transport
   artifacts now bind `probe_count` and `accepted_count` to the unique canonical
   `probes[].delivery_id` inventory, require reviewed
   `ai-prescreen-notification-delivery-*` labels without non-production markers,
@@ -8977,10 +9142,12 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   inventory must cover both `executor.env` and `run.sh` and now binds each
   reviewed artifact name to its exact archive-relative path and expected kind
   (`executor.env`/`env`, `run.sh`/`script`) so swapped-path or mislabeled
-  executor bundle evidence cannot pass. Executor evidence now also validates
-  bundle metadata bytes/digests, service interval seconds, artifact byte counts,
-  execution-summary byte counts, and requires commit/reveal/tally action counts
-  to sum to `action_count` before readiness can report. Governance DAG artifacts also bind
+  executor bundle evidence cannot pass, and executor evidence must use the
+  reviewed `sorafs-moderation-ballots-executor` service identity. Executor
+  evidence now also validates bundle metadata bytes/digests, service interval
+  seconds, artifact byte counts, execution-summary byte counts, and requires
+  commit/reveal/tally action counts to sum to `action_count` before readiness
+  can report. Governance DAG artifacts also bind
   `producer_count` to the unique canonical `producers[].name` inventory and
   `edge_count` to reviewed `edges[].name` rows and the required governance
   producer inventory while requiring edge coverage for every required
@@ -9058,11 +9225,18 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   secrets, or response bodies. The gate also requires controller,
   moderation-toggle, reload, enforcement, honey-audit, appeal, transparency,
   observability, and governance evidence to bind back to the valid
-  feed-promotion `bundle_digest_hex` in the
-  same evidence bundle, requires governance approval `policy_digest_hex` to
-  match a valid feed-promotion `policy_digest_hex`, and bundle/policy
-  mismatches mark the offending artifact invalid through the shared scalar
-  binding error recorder before required-kind validity is reported. The
+  feed-promotion `bundle_digest_hex` in the same evidence bundle, requires
+  governance approval `policy_digest_hex` to match a valid feed-promotion
+  `policy_digest_hex`, and bundle/policy mismatches mark the offending artifact
+  invalid through the shared scalar binding error recorder before required-kind
+  validity is reported. The aggregate production-readiness gate now also
+  rechecks bundle-bound and policy-bound artifact fingerprints against
+  `valid_bundle_digests` and `valid_policy_digests` before final promotion. The
+  lane checker now also has direct adversarial coverage that forges the
+  `bundle_digest_hex` on every bundle-bound downstream kind, so controller,
+  moderation-toggle, reload, enforcement, honey-audit, appeal, transparency,
+  observability, and governance artifacts must all fail on their own artifact
+  rows when they drift from the promoted feed bundle. The
   feed-promotion artifact now binds `gateway_ack_count` and
   `denylist_entry_count` to the unique canonical `gateways[].name` and
   `denylist_entries[].name` inventories, requires reviewed
@@ -9308,7 +9482,17 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `cycle_digest_hex` from the same rollout bundle; publication cycles that
   fail source-entry binding do not anchor downstream rollout evidence, and
   source-batch/cycle binding failures are recorded through the shared scalar
-  binding error recorder. The transparency checker now exports those required
+  binding error recorder. The transparency checker now exports
+  `valid_publication_bindings`, and the aggregate production-readiness gate
+  requires those source-batch/cycle binding tuples to match publication
+  fingerprints while requiring every ready cycle digest to come from a
+  source-bound publication, and now rechecks source-bound and cycle-bound
+  artifact fingerprints against `valid_source_batch_digests` and
+  `valid_cycle_digests`. The lane checker also has direct adversarial
+  coverage that forges publication `source_batch_digest_hex` and every
+  cycle-bound downstream `cycle_digest_hex`, so publication, privacy aggregate,
+  proof-token issuance, and explorer evidence fail against detached source or
+  publication anchors before promotion. The checker also exports those required
   top-level evidence payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
   collection harness includes the checker-backed `evidence_contract` map in
   dry-run output so operators can review the exact SFM-4c artifact contract
@@ -9460,7 +9644,11 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   reconciliation, and governance approval evidence, requires matcher,
   settlement, API, stream, SDK, observability, reconciliation, and governance
   approval artifacts to carry a `contract_digest_hex` matching a valid
-  contract-surface artifact in the same rollout bundle, requires
+  contract-surface artifact in the same rollout bundle. The lane checker also
+  has direct adversarial coverage that forges `contract_digest_hex` on every
+  contract-bound downstream kind, so matcher, settlement, API, stream, SDK,
+  observability, reconciliation, and governance evidence all fail against a
+  mismatched contract surface before promotion. It requires
   contract-surface artifacts to carry `policy_digest_hex`, publishes valid
   contract-surface policies as `valid_policy_digests`, requires governance
   approval `policy_digest_hex` to match one of those valid policy digests, and
@@ -9498,7 +9686,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   observability metric rows, exports the reviewed `metrics` inventory plus
   `metric_count_values`, and requires aggregate production-readiness to tether
   both fields to observability artifact fingerprints before final promotion can
-  report ready, and marks
+  report ready. The aggregate production-readiness gate now also rechecks
+  contract-bound and policy-bound artifact fingerprints against
+  `valid_contract_digests` and `valid_policy_digests` before final promotion
+  can report ready, and the rollout checker marks
   contract-digest and policy-digest mismatches on the offending artifact through
   the shared scalar binding error recorder before required-kind summary validity
   is reported. The
@@ -9529,7 +9720,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   cross-lane generic families, derives `language_count` from
   reviewed SDK language coverage, validates generated artifacts through the orderbook checker
   contract, rejects duplicate SDK release artifact ids, rejects SDK release
-  canaries with fewer than one distinct artifact per reviewed SDK language,
+  canaries with fewer than one distinct artifact per reviewed SDK language or
+  artifact ids outside reviewed SDK language prefixes,
   ships contract, API, and
   reconciliation response-file examples, and writes atomically without following
   output symlinks. The
@@ -9573,13 +9765,13 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   commitment-root, revocation-registry, enrollment-portal, juror-client,
   verifier-service, moderation-integration, metrics/alert, and
   governance-approval artifacts, rejects raw credentials/proofs/identities and
-	  stale registry publications, requires `iroha_config` governance binding,
-	  requires reviewed `deployment_id`/`environment` context on every artifact,
-	  requires issuer-bundle `issuer_id` to use a canonical lowercase `pop-issuer-*`
-	  label without non-production markers,
-	  requires the issuer bundle, published commitment root, revocation registry,
-	  juror sync, verifier service, moderation integration, metrics, and governance
-	  approval to agree on the active root/revocation-list digests, marks root and
+  stale registry publications, requires `iroha_config` governance binding,
+  requires reviewed `deployment_id`/`environment` context on every artifact,
+  requires issuer-bundle `issuer_id` to use a canonical lowercase `pop-issuer-*`
+  label without non-production markers,
+  requires the issuer bundle, published commitment root, revocation registry,
+  juror sync, verifier service, moderation integration, metrics, and governance
+  approval to agree on the active root/revocation-list digests, marks root and
   revocation disagreements on the offending artifacts through the shared
   scalar binding error recorder, requires verifier-service artifacts to carry
   `policy_digest_hex`, publishes valid verifier policy digests as
@@ -9587,8 +9779,17 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   tuples as `valid_juror_sync_bindings`, publishes moderation
   `pop_snapshot_digest_hex` values as `valid_pop_snapshot_digests`, requires the
   aggregate production-readiness gate to tether both new metadata surfaces to
-  recognized artifact fingerprints, requires governance approval
-	  `policy_digest_hex` to match one of those valid verifier policies, binds
+  recognized artifact fingerprints and recheck `valid_juror_sync_bindings`
+  roots/revocations against `valid_root_digests` and
+  `valid_revocation_list_digests`, requires aggregate promotion to recheck
+  root-bound, revocation-bound, and policy-bound artifact fingerprints against
+  `valid_root_digests`, `valid_revocation_list_digests`, and
+  `valid_policy_digests`. The lane checker also has direct adversarial coverage
+  that forges every root-bound, revocation-bound, and policy-bound downstream
+  digest, so juror sync, verifier, moderation, metrics, and governance evidence
+  all fail against detached root, registry, or verifier-policy anchors before
+  promotion. It requires governance approval
+  `policy_digest_hex` to match one of those valid verifier policies, binds
 	  issuer-bundle `credential_count` to the unique canonical `credentials[].name`
 	  inventory with reviewed lowercase `pop-credential-*` labels without
 	  non-production markers, binds revocation-registry `revoked_nonce_count` to
@@ -9733,11 +9934,19 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  regressions proving those payload-safety fields and
 	  `critical_alerts_firing` must be explicitly encoded as `false`, requires reviewed
 	  `deployment_id`/`environment` context on every artifact, requires
-	  quote/deposit/settlement/
-	  submitter/worker/Governance DAG/dashboard/reconciliation/governance artifacts
+		  quote/deposit/settlement/
+		  submitter/worker/Governance DAG/dashboard/reconciliation/governance artifacts
   to bind back to a valid pricing-config `config_digest_hex` in the same
-  evidence bundle, requires governance approval `policy_digest_hex` to match a
-  valid pricing-config `policy_digest_hex`, publishes valid staged pricing
+  evidence bundle. The lane checker also has direct adversarial coverage that
+  forges `config_digest_hex` on every config-bound downstream kind, so quote,
+  deposit, settlement, submitter, worker, Governance DAG, dashboard,
+  reconciliation, and governance evidence all fail against a mismatched pricing
+  config before promotion. It requires aggregate `valid_multi_peer_runs.config_digest_hex`
+  values to appear in `valid_config_digests`, and aggregate promotion now
+  rechecks config-bound and policy-bound artifact fingerprints against
+  `valid_config_digests` and `valid_policy_digests`, requires governance approval
+  `policy_digest_hex` to match a valid pricing-config `policy_digest_hex`,
+  publishes valid staged pricing
   policies as `valid_policy_digests`, records config- and policy-digest
   mismatches on the offending artifact through the shared scalar binding error
   recorder before required-kind summary validity is reported, binds
@@ -9877,7 +10086,12 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `policy_digest_hex`, valid e2e panel policy digests are published as
   `valid_policy_digests`, and governance approval `policy_digest_hex` must
   match one of those valid panel policy digests before the gate can report
-  ready. End-to-end panel artifacts also bind `peer_count` and
+  ready. The lane checker also has direct adversarial coverage that forges every
+  case-bound, roster-bound, tally-bound, and policy-bound downstream digest or
+  tuple, so sortition, evidence viewer, workflow, notification, voting,
+  publication, settlement, transparency/reputation, metrics, end-to-end, and
+  governance evidence all fail against detached case, roster, tally, or policy
+  anchors before promotion. End-to-end panel artifacts also bind `peer_count` and
   `validator_count` to the unique canonical `peers[].name` and
   `validators[].name` inventories and reject duplicate peer or validator
   entries before promotion can report ready, and require reviewed lowercase
@@ -9991,9 +10205,10 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   transparency-ledger export coverage, daily digest publication, payload-free
   digest hashes for the session manifest, watermark metadata, access log,
   legal-hold receipt, transparency report, and audit digest, and rejection of
-  signed URLs, session tokens, watermark secrets, raw evidence, raw access
-  logs, legal-hold receipt payloads, transparency report payloads, and response
-  bodies. The new payload-free `evidence_viewer` canary builder now turns
+  audit-log tampering, watermark metadata mismatch, signed URLs, session tokens,
+  watermark secrets, raw evidence, raw access logs, legal-hold receipt payloads,
+  transparency report payloads, and response bodies. The new payload-free
+  `evidence_viewer` canary builder now turns
   reviewed deployment facts into checker-validated digest-only canary JSON,
   requires every positive viewer-control claim explicitly, forces raw
   evidence/session-token/signed-URL/watermark-secret/body flags to `false`, emits
@@ -10001,14 +10216,22 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   fields from the reviewed inventories before prevalidation, rejects unknown or
   duplicate scalar coverage with direct duplicate/unknown verified-claim, role,
   security-control, access-event-kind, and export-target regressions before
-  writing, rejects overlong URL TTLs, invalid digest casing, and unsafe output
+  writing, requires explicit audit-log tamper and watermark metadata mismatch
+  rejection, rejects overlong URL TTLs, invalid digest casing, and unsafe output
   targets before writing, and writes the artifact atomically for staged review.
   The rollout-gate static
-  contract now publishes `valid_evidence_viewer_digest_sets` from valid
-  `evidence_viewer` artifacts and makes the final aggregate production
-  readiness gate tether those digest sets to recognized artifact fingerprints
-  before reporting ready. The local SoraFS node now ships payload-free,
-  quarantine-scoped evidence-viewer session manifests and append-only
+	  contract now publishes `valid_evidence_viewer_digest_sets` from valid
+	  `evidence_viewer` artifacts and makes the final aggregate production
+	  readiness gate tether those digest sets to recognized artifact fingerprints
+	  before reporting ready. The aggregate gate now also requires
+		  `valid_roster_bindings`, `valid_tally_bindings`, `valid_e2e_runs`, and
+		  `valid_evidence_viewer_digest_sets` to preserve the case, roster, and tally
+		  chain proven by the moderation-panel lane checker before final promotion can
+		  report ready, and rechecks case-bound, roster-bound, tally-bound, and
+		  policy-bound artifact fingerprints against `valid_case_digests`,
+		  `valid_roster_bindings`, `valid_tally_bindings`, and
+		  `valid_policy_digests`. The local SoraFS node now ships payload-free,
+	  quarantine-scoped evidence-viewer session manifests and append-only
   access-event checkpoints, with Torii operator endpoints that reject raw
   evidence, signed URLs, session tokens, response bodies, raw access-log
   payloads, and watermark secrets. It now also derives payload-free daily
@@ -10125,8 +10348,18 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   `valid_policy_digests`, requires governance approval `policy_digest_hex` to
   match one of those valid cycle policies, marks reference-price, cycle-tuple,
   and policy-digest binding failures on the offending artifact through shared
-  binding error recorders before required-kind summary validity is reported,
-  binds statement-publication `route_count` to the unique canonical
+  binding error recorders before required-kind summary validity is reported, and
+	  the aggregate production-readiness gate now derives the expected cycle tuple
+	  and policy digest sets from `valid_billing_cycles` so `valid_cycle_bindings`,
+	  `valid_policy_digests`, and billing-cycle `reference_decision_id_hex` values
+	  cannot drift from the complete staged-cycle metadata, and now rechecks
+	  cycle-bound and policy-bound artifact fingerprints against
+	  `valid_cycle_bindings` and `valid_policy_digests` before final promotion.
+	  The lane checker also has direct adversarial coverage that forges the cycle
+	  tuple on every cycle-bound downstream kind so statement-publication,
+	  reconciliation, metrics/alert, and governance evidence all fail against a
+	  mismatched billing-cycle tuple before final promotion. It also binds
+	  statement-publication `route_count` to the unique canonical
   `routes[].name` inventory, requires every statement-publication route
   response to carry a `body_blake3_hex` digest, and binds
   `acknowledgement_probe_count` to reviewed duplicate-free
@@ -10137,8 +10370,9 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   using reviewed `billing-line-item-*` labels without non-production markers,
   and native-bridge release `artifact_count` to the unique canonical
   `artifacts[].id` inventory using reviewed `hedging-native-artifact-*` labels
-  without non-production markers, requires at least two distinct reviewed
-  native bridge release artifacts, requires reference-price artifacts to
+  without non-production markers, requires native artifact ids to start with
+  reviewed Swift/JNI family prefixes and cover both families, requires
+  reference-price artifacts to
   explicitly set `degraded` to `false`, requires native-bridge release artifacts
   to explicitly set `debug_artifacts` to `false`, and now has consolidated
   missing-field regressions proving payload-byte, response-body,
@@ -10175,7 +10409,7 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   flags to `false`, rejects ungoverned hedge-execution enablement and malformed,
   non-production, or duplicate native-bridge release artifact ids before
   writing, rejects native-bridge release canaries with fewer than two distinct
-  artifact ids, emits
+  artifact ids or without both reviewed Swift/JNI native bridge families, emits
   `metric_count` from the canonical metrics inventory, requires
   reviewed `--feed` labels whose unique inventory matches `--feed-count`,
   reviewed `--cycle-id` labels to match the gate's `billing-cycle-*` production shape,
@@ -10337,6 +10571,8 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   non-mutation, and account-state reconciliation, and governance artifacts must
   prove source-entry publication, downstream compliance application, consumer
   coverage, handoff verification, and non-reserve entry preservation, with
+  governance approval `bake_id` values matched to valid provider-bake artifacts
+  before promotion can report `ready`, and
   `downstream_compliance_consumer_count` bound to the unique canonical
   `downstream_compliance_consumers[].name` inventory using reviewed
   `reserve-compliance-consumer-*` labels without non-production markers before
@@ -10372,20 +10608,32 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  cycle labels restricted to reviewed lowercase `reserve-rent-cycle-*`,
 	  `reserve-top-up-cycle-*`, and `reserve-appeal-cycle-*` production shapes,
 	  provider-bake cycle duplicate rejection, shared digest bindings, forced
+	  governance-approval `--bake-id` evidence for the accepted provider bake,
 	  raw-payload omission flags, integer lag/latency thresholds,
   checker-backed prevalidation, atomic symlink-safe writes, and policy/provider
-  bake example argfiles. Valid provider-bake rows now require reviewed
+  bake/governance example argfiles. Valid provider-bake rows now require reviewed
   lowercase `reserve-bake-*` ids without non-production markers, require
   reviewed lowercase `provider-*` provider inventory labels without
   non-production markers, require reviewed lowercase `reserve-rent-cycle-*`,
   `reserve-top-up-cycle-*`, and `reserve-appeal-cycle-*` cycle labels without
   non-production markers, and carry the accepted
   `policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple plus
-  `scheduled_lifecycle_canary_last_tick_unix`,
-  `scheduled_lifecycle_canary_tick_count`, and
-  `scheduled_lifecycle_canary_defaulted_provider_count` inside
-  `valid_provider_bakes`, and the aggregate production gate validates those
-  fields as payload-free metadata before promotion, but SFM-6 still needs
+  `scheduled_lifecycle_canary_last_tick_at_unix`,
+	  `scheduled_lifecycle_canary_tick_count`, and
+	  `scheduled_lifecycle_canary_defaulted_provider_count` inside
+		  `valid_provider_bakes`, and the aggregate production gate validates those
+		  fields as payload-free metadata while preserving the policy -> matrix ->
+		  ledger -> provider-bake chain between `valid_policy_digests`,
+		  `valid_policy_matrix_bindings`, `valid_policy_matrix_ledger_bindings`, and
+		  `valid_provider_bakes` before promotion, and now rechecks policy-bound,
+		  matrix-bound, and ledger-bound artifact fingerprints against
+		  `valid_policy_digests`, `valid_policy_matrix_bindings`, and
+		  `valid_policy_matrix_ledger_bindings`, and governance approval
+		  bake-id fingerprints against `valid_provider_bakes`. The lane checker
+		  also has direct adversarial coverage that forges every policy-bound,
+		  matrix-bound, and ledger-bound SFM-6 artifact kind against those policy,
+		  quote-matrix, and ledger anchors before reserve-rent promotion can report
+		  ready, but SFM-6 still needs
   live chain custody submission and automatic finality polling for signed movement intents,
   live account mutation for local credit-line state, broader downstream
   compliance application of governance source entries, and live provider bake
@@ -10427,10 +10675,16 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   valid publisher-service `policy_digest_hex`, marks public-head and policy
   binding failures on the offending artifact through the shared scalar binding
   error recorder before required-kind summary validity is reported, publishes
-  valid operator-recovery `checkpoint_digest_hex` values as
-  `valid_checkpoint_digests`, and the aggregate production-readiness gate
-  validates those checkpoint digests as payload-free lowercase-hex metadata
-  tethered to recognized artifact fingerprints before promotion. The SF-12 gate
+	  valid operator-recovery `checkpoint_digest_hex` values as
+	  `valid_checkpoint_digests`, and the aggregate production-readiness gate
+	  validates those checkpoint digests as payload-free lowercase-hex metadata
+	  tethered to recognized artifact fingerprints and rechecks public-head-bound
+	  and policy-bound artifact fingerprints against `valid_public_head_cids` and
+	  `valid_policy_digests` before promotion. The lane checker also has direct
+	  adversarial coverage that forges `public_head_cid_hex` on every
+	  public-head-bound downstream kind, so mirror datastore, operator recovery,
+	  dashboard, observability, IPFS/IPNS, and governance artifacts all fail
+	  against a mismatched publisher head before promotion. The SF-12 gate
   now also has missing-field regressions proving payload-byte, raw
   head/CAR/block/checkpoint, mirror-drift, response-body, and
   `critical_alerts_firing` flags must be explicitly encoded as `false`, and the
@@ -10521,8 +10775,17 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   handoff-target, or metric labels cannot expand the reviewed evidence surface,
   exports the reviewed observability `metrics` inventory plus
   `metric_count_values` for aggregate production-readiness tethering, and
+  requires aggregate promotion to recheck roster-bound, failure-bound,
+  handoff-bound, and policy-bound artifact fingerprints against
+  `valid_roster_digests`, `valid_failure_bundle_digests`,
+  `valid_handoff_digests`, and `valid_policy_digests`, and
   reports those failures before required-kind summary validity is reported. The
-  repair gate now also has missing-field regressions proving raw
+  lane checker also has direct adversarial coverage that forges each roster,
+  failure-bundle, handoff, and policy digest on every bound downstream kind, so
+  signed auditor API, worker, event stream, governance handoff, and governance
+  approval evidence all fail against detached roster/capture/handoff anchors
+  before promotion. The repair gate now also has missing-field regressions
+  proving raw
   roster/evidence/repair-payload/ledger flags, `response_bodies_included`, and
   `critical_alerts_firing` must be explicitly encoded as `false`. The
   matching collection planner accepts reviewed staged evidence
@@ -10617,7 +10880,16 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
 	  in final release-review output,
 	  malformed
 	  sensitive-field path diagnostics sanitized before aggregate errors are
-	  written, explicit final `--deployment-id`/`--environment` required even
+	  written, secret-looking bearer/basic auth, cookie, JWT, and private-key PEM
+	  scalar values, sensitive scalar assignments, URI userinfo, and sensitive
+	  URI host, path, or query parameter names or values rejected from raw or
+	  fully encoded HTTP(S), WebSocket, database-style, file, or other URI-like
+	  strings, zero-width Unicode format controls removed before scalar
+	  secret-value matching, and decoded multiline copied header/transcript
+	  strings scanned line-by-line, including folded secret header
+	  continuations after earlier non-sensitive headers, without echoing the
+	  value, explicit final
+	  `--deployment-id`/`--environment` required even
 	  for direct checker invocations, and required-row schema labels kept
 	  canonical when present while
 	  extra required-row fields outside the schema-closed payload-free required-row
@@ -10693,15 +10965,21 @@ reject duplicate `targetDomain`/`target_domain`/`domain` object aliases.
   string-list, string-array inventory, positive-integer list, digest-list, and
   tuple binding metadata such as reputation snapshot IDs/roots, provider
   IDs/counts, reviewed appeal-finance/gateway-compliance/gateway-load/Governance
-  DAG/hedging-billing/moderation-panel/orderbook/PDP/PoP
-  credentials/PoR/PoTR/repair/reserve-rent/reputation metrics and
-  metric counts, snapshot bindings, runner
-  bindings, policy/matrix/ledger
-  bindings, and roster/tally bindings
-  must also be backed by recognized artifact fingerprints from their declared
-  owner artifact kinds, so a lane summary cannot
-  claim payload-free release-review anchors that are absent from its artifacts.
-  Object-list detail metadata for billing cycles, E2E runs, multi-peer runs,
+	  DAG/hedging-billing/moderation-panel/orderbook/PDP/PoP
+	  credentials/PoR/PoTR/repair/reserve-rent/reputation metrics and
+	  metric counts, snapshot bindings, runner
+	  bindings, policy/matrix/ledger
+	  bindings, and roster/tally bindings
+	  must also be backed by recognized artifact fingerprints from their declared
+	  owner artifact kinds, so a lane summary cannot
+	  claim payload-free release-review anchors that are absent from its artifacts.
+		  The aggregate gate now also cross-checks moderation-panel
+		  `valid_roster_bindings`, `valid_tally_bindings`, `valid_e2e_runs`, and
+		  `valid_evidence_viewer_digest_sets` so forged summaries cannot skip the
+		  case -> roster -> tally relationships proven by the lane checker, and
+		  replays case-bound, roster-bound, tally-bound, and policy-bound artifact
+		  fingerprints against the exported aggregate anchors.
+	  Object-list detail metadata for billing cycles, E2E runs, multi-peer runs,
   and provider bakes must match the corresponding required artifact row
   cardinality and declare the same owner kind used for fingerprint tethering,
   with provider-bake detail rows also carrying lowercase
@@ -30090,9 +30368,11 @@ validation path.
   same-name imported fair-action reachability when they resolve to
   action-shaped targets. Progress transition aliases must resolve through named
   local INSTANCE declarations, so imported `Next` wrappers cannot rely on
-  implicit or misspelled module aliases. Progress transition aliases must
+  implicit or misspelled module aliases, including onward aliases inside
+  imported transition targets. Progress transition aliases must
   resolve to local modules, so imported `Next` wrappers cannot point at missing
-  modules. Progress transition aliases must resolve to defined zero-arity
+  modules, including onward aliases inside imported transition targets.
+  Progress transition aliases must resolve to defined zero-arity
   transition operators, so imported `Next` wrappers cannot point at undefined
   or parameterized transition operators. Progress transition aliases must
   resolve to inspectable transition operators, so imported `Next` wrappers

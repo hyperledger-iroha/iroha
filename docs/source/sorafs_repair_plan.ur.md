@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_repair_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2113511f46848a7e71e08af3906d983a88c5d687172a905419e238e5357b1bb6
-source_last_modified: "2026-07-04T05:45:35.106585+00:00"
+source_hash: b5728f722bb994f3aa63e1a1e785206525c97287a2b9db9b537d1c90e8c52c0b
+source_last_modified: "2026-07-04T23:13:28.702455+00:00"
 translation_last_reviewed: 2026-07-03
-source_mtime: 2026-07-04T05:45:35.106585+00:00
+source_mtime: "2026-07-04T23:13:28.702455+00:00"
 ---
 
 # SoraFS Repair Automation & Auditor API
@@ -473,6 +473,12 @@ The summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the observability artifact fingerprint before final
 promotion can report ready.
+Aggregate promotion also rechecks the lane-proven repair digest relationships:
+roster-bound artifact fingerprints must match `valid_roster_digests`,
+failure-bound artifact fingerprints must match `valid_failure_bundle_digests`,
+handoff-bound artifact fingerprints must match `valid_handoff_digests`, and
+policy-bound artifact fingerprints must match `valid_policy_digests` before
+final promotion can report ready.
 Its collection planner exposes those exact required payload fields through
 `--dry-run` and validates the schema-closed collection plan, required kinds,
 thresholds, external evidence map, evidence contract, and command steps before

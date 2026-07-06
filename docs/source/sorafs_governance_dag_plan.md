@@ -570,6 +570,10 @@ entries before promotion can report ready. The summary exports the sorted
 reviewed `metrics` inventory plus `metric_count_values`, and the aggregate
 production-readiness gate requires those fields to match the observability
 artifact fingerprint before final promotion can report ready. Governance DAG
+aggregate promotion also rechecks the lane-proven relationships: public-head
+bound artifact fingerprints must match `valid_public_head_cids`, and
+policy-bound artifact fingerprints must match `valid_policy_digests` before
+final promotion can report ready. Governance DAG
 payload-safety artifacts must explicitly set `payload_bytes_included`,
 `raw_head_included`, `raw_car_included`, `mirror_drift_detected`,
 `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`,

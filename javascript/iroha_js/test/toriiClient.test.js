@@ -22123,6 +22123,21 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     () => client.proposeMultisig({ ...request, creationTimeMs: -1 }),
     /non-negative integer/,
   );
+  for (const [fieldName, value] of Object.entries({
+    validation_fee_policy_version: 7,
+    validation_fee_policy_hash: "ab".repeat(32),
+    validation_fee_instruction_index: 1,
+    validation_fee_transfer_entry_index: 2,
+  })) {
+    await assert.rejects(
+      () => client.proposeMultisig({ ...request, [fieldName]: value }),
+      /unsupported snake_case validation fee field/,
+    );
+    assert.throws(
+      () => buildMultisigProposeRequest({ ...request, [fieldName]: value }),
+      /unsupported snake_case validation fee field/,
+    );
+  }
   await assert.rejects(
     () =>
       client.proposeMultisig({

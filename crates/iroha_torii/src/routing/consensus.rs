@@ -2023,8 +2023,13 @@ fn sumeragi_v1_pending_finality(snap: &sumeragi::StatusSnapshot) -> Option<HashO
     let settled = snap
         .qc_deferred_resolved_total
         .saturating_add(snap.qc_deferred_expired_total);
-    (snap.qc_deferred_missing_payload_total > settled)
-        .then(|| snap.commit_qc.block_hash.or(snap.commit_quorum.block_hash))
+    if snap.qc_deferred_missing_payload_total <= settled {
+        return None;
+    }
+    let quorum_complete = snap.commit_quorum.signatures_required > 0
+        && snap.commit_quorum.signatures_counted >= snap.commit_quorum.signatures_required;
+    (quorum_complete && snap.commit_quorum.height > snap.commit_qc.height)
+        .then_some(snap.commit_quorum.block_hash)
         .flatten()
 }
 
@@ -2052,9 +2057,11 @@ fn sumeragi_v1_quorum_policy(
 }
 
 fn sumeragi_v1_payload_status(snap: &sumeragi::StatusSnapshot) -> &'static str {
-    if sumeragi_v1_pending_finality(snap).is_some() {
-        "waiting_for_local_payload"
-    } else if matches!(
+    let settled = snap
+        .qc_deferred_resolved_total
+        .saturating_add(snap.qc_deferred_expired_total);
+    if snap.qc_deferred_missing_payload_total > settled
+        || matches!(
         snap.da_gate.reason,
         sumeragi::status::DaGateReasonSnapshot::MissingLocalData
     ) {
@@ -5079,17 +5086,13 @@ mod status_tests {
         assert_eq!(canonical.get("view").and_then(Value::as_u64), Some(3));
         assert_eq!(
             canonical.get("phase").and_then(Value::as_str),
-            Some("pending_finality")
+            Some("prepare")
         );
         assert_eq!(
             canonical.get("payload_status").and_then(Value::as_str),
-            Some("waiting_for_local_payload")
+            Some("missing_local_payload")
         );
-        let expected_block_hash = format!("{block_hash}");
-        assert_eq!(
-            canonical.get("pending_finality").and_then(Value::as_str),
-            Some(expected_block_hash.as_str())
-        );
+        assert!(canonical.get("pending_finality").and_then(Value::as_str).is_none());
         let quorum = canonical
             .get("quorum_policy")
             .and_then(Value::as_object)
@@ -5099,6 +5102,56 @@ mod status_tests {
             Some("permissioned_count")
         );
         assert_eq!(quorum.get("validators").and_then(Value::as_u64), Some(4));
+    }
+
+    #[test]
+    fn status_snapshot_json_uses_next_height_commit_quorum_for_missing_payload_pending_finality() {
+        let committed_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAD; 32]));
+        let quorum_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAE; 32]));
+        let snap = sumeragi::StatusSnapshot {
+            membership_height: 13,
+            membership_view: 5,
+            highest_qc_height: 12,
+            highest_qc_view: 4,
+            qc_deferred_missing_payload_total: 2,
+            qc_deferred_resolved_total: 1,
+            commit_qc: status::QcSnapshot {
+                height: 12,
+                view: 4,
+                block_hash: Some(committed_hash),
+                validator_set_len: 4,
+                ..Default::default()
+            },
+            commit_quorum: status::CommitQuorumSnapshot {
+                height: 13,
+                view: 5,
+                block_hash: Some(quorum_hash),
+                signatures_counted: 3,
+                signatures_required: 3,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let payload = status_snapshot_json(&snap);
+        let canonical = payload
+            .get("canonical")
+            .and_then(Value::as_object)
+            .expect("canonical v1 status");
+        assert_eq!(
+            canonical.get("phase").and_then(Value::as_str),
+            Some("pending_finality")
+        );
+        assert_eq!(
+            canonical.get("payload_status").and_then(Value::as_str),
+            Some("missing_local_payload")
+        );
+        let expected_block_hash = format!("{quorum_hash}");
+        assert_eq!(
+            canonical.get("pending_finality").and_then(Value::as_str),
+            Some(expected_block_hash.as_str())
+        );
     }
 
     #[test]
@@ -5957,6 +6010,7 @@ pub async fn handle_v1_sumeragi_status(
                 .collect(),
             lane_settlement_commitments: snap.lane_settlement_commitments.clone(),
             lane_relay_envelopes: snap.lane_relay_envelopes.clone(),
+            lane_payload_ownerships: snap.lane_payload_ownerships.clone(),
             lane_governance_sealed_total: snap.lane_governance_sealed_total,
             lane_governance_sealed_aliases: snap.lane_governance_sealed_aliases.clone(),
             lane_governance: snap
