@@ -114,39 +114,39 @@ use rust_decimal::Decimal;
 use sha2::Digest as _;
 
 #[derive(Clone, Debug, Encode)]
-struct ExecutionContextLaneBlockSubjectPreimage {
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
+pub(crate) struct ExecutionContextLaneBlockSubjectPreimage {
+    pub(crate) version: u8,
+    pub(crate) lane_id: LaneId,
+    pub(crate) dataspace_id: DataSpaceId,
+    pub(crate) lane_block_height: u64,
+    pub(crate) lane_block_view: u64,
+    pub(crate) candidate_indices: Vec<u64>,
+    pub(crate) qc_mode_tag: String,
 }
 
 #[derive(Clone, Debug, Encode)]
-struct ExecutionContextLanePayloadOwnershipPreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
+pub(crate) struct ExecutionContextLanePayloadOwnershipPreimage {
+    pub(crate) purpose: String,
+    pub(crate) version: u8,
+    pub(crate) lane_id: LaneId,
+    pub(crate) dataspace_id: DataSpaceId,
+    pub(crate) lane_block_height: u64,
+    pub(crate) lane_block_view: u64,
+    pub(crate) subject_hash: Hash,
+    pub(crate) candidate_indices: Vec<u64>,
+    pub(crate) qc_mode_tag: String,
 }
 
 #[derive(Clone, Debug, Encode)]
-struct ExecutionContextLaneRbcInstancePreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    payload_ownership_hash: Hash,
+pub(crate) struct ExecutionContextLaneRbcInstancePreimage {
+    pub(crate) purpose: String,
+    pub(crate) version: u8,
+    pub(crate) lane_id: LaneId,
+    pub(crate) dataspace_id: DataSpaceId,
+    pub(crate) lane_block_height: u64,
+    pub(crate) lane_block_view: u64,
+    pub(crate) subject_hash: Hash,
+    pub(crate) payload_ownership_hash: Hash,
 }
 
 const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";

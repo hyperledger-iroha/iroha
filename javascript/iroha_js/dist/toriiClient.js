@@ -19122,6 +19122,23 @@ function pickOverride(source, snakeName, camelName) {
   return undefined;
 }
 
+function rejectValidationFeeSnakeCaseInputs(source, context) {
+  for (const [snakeName, camelName] of [
+    ["validation_fee_policy_version", "validationFeePolicyVersion"],
+    ["validation_fee_policy_hash", "validationFeePolicyHash"],
+    ["validation_fee_instruction_index", "validationFeeInstructionIndex"],
+    ["validation_fee_transfer_entry_index", "validationFeeTransferEntryIndex"],
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(source, snakeName)) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} uses unsupported snake_case validation fee field ${snakeName}; use ${camelName}`,
+        `${context}.${snakeName}`,
+      );
+    }
+  }
+}
+
 function formatSorafsEvaluation(evaluation) {
   if (!evaluation || typeof evaluation !== "object") {
     return {
@@ -21978,6 +21995,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
 
 function normalizeMultisigProposeRequest(input) {
   const record = ensureRecord(input, "proposeMultisig request");
+  rejectValidationFeeSnakeCaseInputs(record, "proposeMultisig request");
   const selector = normalizeMultisigAccountSelector(record, "proposeMultisig request");
   const instructionsValue = pickOverride(record, "instructions", "instructions");
   if (!Array.isArray(instructionsValue) || instructionsValue.length === 0) {
@@ -22036,26 +22054,10 @@ function normalizeMultisigProposeRequest(input) {
       "proposeMultisig request.fee_sponsor",
     );
   }
-  const validationFeePolicyVersion = pickOverride(
-    record,
-    "validation_fee_policy_version",
-    "validationFeePolicyVersion",
-  );
-  const validationFeePolicyHash = pickOverride(
-    record,
-    "validation_fee_policy_hash",
-    "validationFeePolicyHash",
-  );
-  const validationFeeInstructionIndex = pickOverride(
-    record,
-    "validation_fee_instruction_index",
-    "validationFeeInstructionIndex",
-  );
-  const validationFeeTransferEntryIndex = pickOverride(
-    record,
-    "validation_fee_transfer_entry_index",
-    "validationFeeTransferEntryIndex",
-  );
+  const validationFeePolicyVersion = record.validationFeePolicyVersion;
+  const validationFeePolicyHash = record.validationFeePolicyHash;
+  const validationFeeInstructionIndex = record.validationFeeInstructionIndex;
+  const validationFeeTransferEntryIndex = record.validationFeeTransferEntryIndex;
   const hasPolicyVersion =
     validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
   const hasPolicyHash =

@@ -532,10 +532,6 @@ export interface MultisigProposeRequest extends MultisigAccountSelector {
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
-  validation_fee_policy_version?: number | string | bigint | null;
-  validation_fee_policy_hash?: string | null;
-  validation_fee_instruction_index?: number | string | bigint | null;
-  validation_fee_transfer_entry_index?: number | string | bigint | null;
   private_key?: string | BinaryLike | null;
   private_key_hex?: string | null;
   private_key_multihash?: string | null;
@@ -20243,13 +20239,9 @@ export interface MultisigProposeNoritoRequest {
   feeSponsor?: string | null;
   memo?: string | null;
   validation_fee_policy_version?: string | null;
-  validationFeePolicyVersion?: string | null;
   validation_fee_policy_hash?: string | null;
-  validationFeePolicyHash?: string | null;
   validation_fee_instruction_index?: string | null;
-  validationFeeInstructionIndex?: string | null;
   validation_fee_transfer_entry_index?: string | null;
-  validationFeeTransferEntryIndex?: string | null;
   instructions: Array<object | string | ArrayBufferView | ArrayBuffer | Buffer>;
 }
 export function noritoEncodeMultisigProposeRequest(

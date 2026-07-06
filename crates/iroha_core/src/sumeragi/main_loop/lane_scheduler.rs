@@ -2,15 +2,20 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry};
 
+use crate::{
+    block::{
+        ExecutionContextLaneBlockSubjectPreimage as LaneBlockSubjectPreimage,
+        ExecutionContextLanePayloadOwnershipPreimage as LanePayloadOwnershipPreimage,
+        ExecutionContextLaneRbcInstancePreimage as LaneRbcInstancePreimage,
+    },
+    queue::RoutingDecision,
+};
 use iroha_config::parameters::actual::Nexus;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayQuorumContext},
     peer::PeerId,
 };
-use norito::codec::Encode;
-
-use crate::queue::RoutingDecision;
 
 /// Return true when proposal assembly should look beyond the remaining block
 /// slots to discover work from other currently routable lanes.
@@ -699,42 +704,6 @@ pub(super) fn defer_accepted_proposal_actions(
 struct LaneAcceptedWork {
     dataspace_id: DataSpaceId,
     candidate_indices: Vec<usize>,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct LaneBlockSubjectPreimage {
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct LanePayloadOwnershipPreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct LaneRbcInstancePreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    payload_ownership_hash: Hash,
 }
 
 /// Derive lane-local vote/QC domains for accepted work in a scheduled batch.

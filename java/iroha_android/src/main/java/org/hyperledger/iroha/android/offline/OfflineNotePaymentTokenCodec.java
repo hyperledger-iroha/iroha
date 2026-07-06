@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.offline;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -18,6 +19,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 public final class OfflineNotePaymentTokenCodec {
   public static final String TYPE = "offline_payment_token";
   public static final String TEXT_PREFIX = "wallet-offline-bearer-cash-payment:";
+  public static final String COMPACT_TEXT_MARKER = "ios-compact-v1:";
   public static final long ENVELOPE_VERSION = 2L;
   private static final String TOKEN_ENVELOPE_SCHEMA =
       "iroha_data_model::offline::model::OfflineNotePaymentTokenEnvelope";
@@ -54,9 +56,16 @@ public final class OfflineNotePaymentTokenCodec {
     if (!value.startsWith(TEXT_PREFIX)) {
       throw new IllegalArgumentException("Offline Note payment token prefix missing");
     }
-    return decodeNorito(
-        OfflineBase64Url.decodeUnpadded(
-            value.substring(TEXT_PREFIX.length()), "Offline Note payment token payload"));
+    String payload = value.substring(TEXT_PREFIX.length());
+    final boolean compactText = payload.startsWith(COMPACT_TEXT_MARKER);
+    if (compactText) {
+      payload = payload.substring(COMPACT_TEXT_MARKER.length());
+    }
+    final OfflineNotePaymentToken token =
+        decodeNorito(
+            OfflineBase64Url.decodeUnpadded(
+                payload, "Offline Note payment token payload"));
+    return compactText ? restoreCompactBearerAuditTrail(token) : token;
   }
 
   public static List<byte[]> encodeQrFrameBytes(final OfflineNotePaymentToken token) {
@@ -71,6 +80,29 @@ public final class OfflineNotePaymentTokenCodec {
 
   public static OfflineNotePaymentToken decodeQrPayload(final byte[] payload) {
     return decodeNorito(payload);
+  }
+
+  private static OfflineNotePaymentToken restoreCompactBearerAuditTrail(
+      final OfflineNotePaymentToken token) {
+    final LinkedHashSet<String> seenTokenIds = new LinkedHashSet<>();
+    final List<OfflineNote.AuditBundle> restored =
+        new ArrayList<>(token.bearerAuditTrail().size() + 1);
+    for (final OfflineNote.AuditBundle audit : token.bearerAuditTrail()) {
+      if (seenTokenIds.add(OfflineNoteWallet.hexLower(audit.tokenId()))) {
+        restored.add(audit);
+      }
+    }
+    if (seenTokenIds.add(OfflineNoteWallet.hexLower(token.audit().tokenId()))) {
+      restored.add(token.audit());
+    }
+    return new OfflineNotePaymentToken(
+        token.chainId(),
+        token.paymentRequestId(),
+        token.tokenNonce(),
+        token.tokenId(),
+        token.audit(),
+        restored,
+        token.createdAtMs());
   }
 
   private static final TypeAdapter<OfflineNotePaymentToken> TOKEN_ADAPTER =
