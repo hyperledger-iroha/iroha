@@ -6309,6 +6309,7 @@ pub mod tests {
                 None,
             );
             let mut nexus = Nexus::default();
+            nexus.enabled = !routes.is_empty();
             nexus.lane_catalog = (*lane_catalog).clone();
             nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
             nexus.dataspace_catalog = (*dataspace_catalog).clone();
@@ -13180,11 +13181,6 @@ pub mod tests {
         queue
             .push(second_tx, state.view())
             .expect("second push should succeed");
-        *queue.nexus_limits.write() = QueueLimits {
-            fallback: scheduling,
-            per_lane: BTreeMap::from([(test_lane, scheduling)]),
-        };
-
         let mut guards = queue.collect_transactions_for_block(&state.view(), nonzero!(2usize));
         assert_eq!(
             guards.len(),

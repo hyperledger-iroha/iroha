@@ -55029,12 +55029,10 @@ mod tests {
                 ))
                 .expect("default lane relay stored");
             relays
-                .insert(sample_lane_relay_envelope(
-                    1,
-                    retired_lane_id,
-                    &signers,
-                    vec![0b0000_0001],
-                ))
+                .insert(
+                    sample_lane_relay_envelope(1, retired_lane_id, &signers, vec![0b0000_0001])
+                        .with_fastpq_proof_material(None),
+                )
                 .expect("retired lane relay stored");
         }
         seed_da_runtime_record_for_lane(&state, retired_lane_id, "retired-lane-pin", 0xB0);
@@ -65443,8 +65441,12 @@ mod tests {
             spoofed_map_key.clone(),
             encode_verified_lane_relay_record_contract_map_state_for_test(&old_record),
         );
+        state.merge_entry_candidates_from_lane_relays();
         assert!(
-            !state.merge_entry_candidates_from_lane_relays().is_empty(),
+            state
+                .lane_relay_snapshot()
+                .iter()
+                .any(|relay| relay == &old_envelope),
             "test setup should prove the old verified record can hydrate before set_nexus reset"
         );
 
@@ -68699,18 +68701,18 @@ mod tests {
     #[test]
     fn committed_verified_lane_relay_record_fills_cached_gap_before_newer_relay() {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
-        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
-        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
 
-        let newer = sample_lane_relay_envelope(3, LaneId::new(0), &signers, signers_bitmap.clone())
-            .with_manifest_root(Some([0x44; 32]));
+        let newer =
+            sample_lane_relay_envelope_for_state(&state, 3, LaneId::new(0), &validator_keypairs)
+                .with_manifest_root(Some([0x44; 32]));
         state
             .lane_relays
             .write()
             .insert(newer.clone())
             .expect("seed newer cached relay");
-        let older = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
-            .with_manifest_root(Some([0x44; 32]));
+        let older =
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+                .with_manifest_root(Some([0x44; 32]));
         let record = sample_verified_lane_relay_record(&older);
 
         commit_staged_verified_lane_relay_record(&state, record);
