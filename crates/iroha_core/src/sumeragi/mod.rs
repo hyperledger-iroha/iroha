@@ -781,13 +781,16 @@ mod tests {
     };
 
     use iroha_config::parameters::actual::SumeragiNpos;
-    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature, SignatureOf, bls_normal_pop_prove};
     use iroha_data_model::{
         block::{
             BlockHeader, BlockSignature, SignedBlock,
-            consensus::{ConsensusBlockHeader, LaneBlockCommitment, Proposal, RbcChunk},
+            consensus::{
+                ConsensusBlockHeader, LaneBlockCommitment, LaneBlockDescriptorV1,
+                LaneBlockProposalV1, LaneBlockQcV1, Proposal, RbcChunk,
+            },
         },
-        consensus::VrfEpochRecord,
+        consensus::{VALIDATOR_SET_HASH_VERSION_V1, VrfEpochRecord},
         nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
         parameter::{
             Parameter,
@@ -830,6 +833,63 @@ mod tests {
 
     fn checked_peer() -> PeerId {
         PeerId::new(checked_keypair().public_key().clone())
+    }
+
+    fn sample_lane_block_proposal() -> (LaneBlockProposalV1, KeyPair) {
+        let keypair = checked_bls_keypair();
+        let validator = PeerId::new(keypair.public_key().clone());
+        let validator_set = vec![validator];
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            previous_lane_block_height: 11,
+            previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA1; Hash::LENGTH])),
+            lane_block_height: 12,
+            lane_block_view: 1,
+            subject_hash: Hash::prehashed([0xA2; Hash::LENGTH]),
+            payload_ownership_hash: Hash::prehashed([0xA3; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0xA4; Hash::LENGTH]),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::prehashed([0xA5; Hash::LENGTH])],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: "permissioned:lane:0:dataspace:0".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        (proposal, keypair)
+    }
+
+    fn sample_lane_block_vote(phase: Phase) -> crate::lane_consensus::LaneBlockVoteV1 {
+        let (proposal, keypair) = sample_lane_block_proposal();
+        let body = proposal.vote_body(phase);
+        let signature = Signature::try_new(keypair.private_key(), &body.signature_preimage())
+            .expect("lane-block fixture vote signature");
+        crate::lane_consensus::LaneBlockVoteV1 {
+            body,
+            signer: PeerId::new(keypair.public_key().clone()),
+            bls_signature: signature.payload().to_vec(),
+        }
+    }
+
+    fn sample_lane_block_qc(phase: Phase) -> LaneBlockQcV1 {
+        let (proposal, _keypair) = sample_lane_block_proposal();
+        LaneBlockQcV1 {
+            body: proposal.vote_body(phase),
+            validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+            validator_set_hash: proposal.descriptor.validator_set_hash,
+            validator_set: proposal.descriptor.validator_set,
+            signers_bitmap: vec![1],
+            bls_aggregate_signature: vec![0xAB; 48],
+        }
     }
 
     fn test_signed_block(height: u64, view: u64) -> SignedBlock {
@@ -5142,6 +5202,162 @@ mod tests {
     fn try_incoming_block_message_from_waits_when_block_queue_full_for_commit_qc_fetch_pending_block()
      {
         assert_try_incoming_commit_qc_fetch_pending_block_waits_when_block_queue_full(true);
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum LaneBlockQueueFixture {
+        Proposal,
+        Vote,
+        Qc,
+    }
+
+    impl LaneBlockQueueFixture {
+        fn message(self) -> BlockMessage {
+            match self {
+                Self::Proposal => BlockMessage::LaneBlockProposal(sample_lane_block_proposal().0),
+                Self::Vote => BlockMessage::LaneBlockVote(sample_lane_block_vote(Phase::Prepare)),
+                Self::Qc => BlockMessage::LaneBlockQc(sample_lane_block_qc(Phase::Commit)),
+            }
+        }
+
+        fn matches(self, msg: &BlockMessage) -> bool {
+            matches!(
+                (self, msg),
+                (Self::Proposal, BlockMessage::LaneBlockProposal(_))
+                    | (Self::Vote, BlockMessage::LaneBlockVote(_))
+                    | (Self::Qc, BlockMessage::LaneBlockQc(_))
+            )
+        }
+    }
+
+    fn assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+        fixture: LaneBlockQueueFixture,
+        with_sender: bool,
+    ) {
+        const CAP: usize = 1;
+        let (block_payload_tx, _block_payload_rx) = mpsc::sync_channel(CAP);
+        let (block_tx, block_rx) = mpsc::sync_channel(CAP);
+        let (rbc_chunk_tx, _rbc_chunk_rx) = mpsc::sync_channel(CAP);
+        let (vote_tx, _vote_rx) = mpsc::sync_channel(CAP);
+        let (consensus_tx, _consensus_rx) = mpsc::sync_channel(CAP);
+        let (background_tx, _background_rx) = mpsc::sync_channel(CAP);
+        let (lane_tx, _lane_rx) = mpsc::sync_channel(CAP);
+        let vote_dedup: Arc<Mutex<DedupCache<VoteDedupKey>>> = Arc::new(Mutex::new(
+            DedupCache::new(VOTE_DEDUP_CACHE_CAP, VOTE_DEDUP_CACHE_TTL),
+        ));
+        let block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>> =
+            Arc::new(Mutex::new(BlockPayloadDedupCache::new(
+                BLOCK_PAYLOAD_DEDUP_CACHE_PER_KIND,
+                BLOCK_PAYLOAD_DEDUP_CACHE_TTL,
+            )));
+        let handle = SumeragiHandle::new(
+            block_payload_tx,
+            block_tx.clone(),
+            rbc_chunk_tx,
+            vote_tx,
+            consensus_tx,
+            background_tx,
+            lane_tx,
+            vote_dedup,
+            block_payload_dedup,
+        );
+
+        let filler = BlockMessage::ConsensusParams(message::ConsensusParamsAdvert {
+            collectors_k: 1,
+            redundant_send_r: 1,
+            membership: None,
+        });
+        block_tx
+            .send(inbound(filler))
+            .expect("fill block ingress channel");
+
+        let sender = checked_peer();
+        let expected_sender = with_sender.then_some(sender.clone());
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle_clone = handle.clone();
+        let message = fixture.message();
+        let call_sender = expected_sender.clone();
+        let join = std::thread::spawn(move || {
+            let accepted = if let Some(sender) = call_sender {
+                handle_clone.try_incoming_block_message_from(sender, message)
+            } else {
+                handle_clone.try_incoming_block_message(message)
+            };
+            let _ = done_tx.send(accepted);
+        });
+
+        done_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect_err("lane-block message should block when block ingress queue is full");
+        let _ = block_rx
+            .recv()
+            .expect("drain block ingress queue to unblock sender");
+        let accepted = done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("lane-block message should enqueue after capacity frees");
+        assert!(accepted, "lane-block message enqueue should succeed");
+        join.join().expect("join lane-block sender");
+
+        let received = block_rx
+            .try_recv()
+            .expect("lane-block message should be enqueued after capacity frees");
+        let (queue_kind, _latency_ms) = received
+            .queue_latency_ms()
+            .expect("lane-block message should record enqueue metadata");
+        assert_eq!(queue_kind, status::WorkerQueueKind::Blocks);
+        assert_eq!(received.sender, expected_sender);
+        assert!(
+            fixture.matches(&received.message),
+            "unexpected lane-block message queued: {received:?}"
+        );
+    }
+
+    #[test]
+    fn try_incoming_block_message_waits_when_block_queue_full_for_lane_block_proposal() {
+        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+            LaneBlockQueueFixture::Proposal,
+            false,
+        );
+    }
+
+    #[test]
+    fn try_incoming_block_message_from_waits_when_block_queue_full_for_lane_block_proposal() {
+        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+            LaneBlockQueueFixture::Proposal,
+            true,
+        );
+    }
+
+    #[test]
+    fn try_incoming_block_message_waits_when_block_queue_full_for_lane_block_vote() {
+        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+            LaneBlockQueueFixture::Vote,
+            false,
+        );
+    }
+
+    #[test]
+    fn try_incoming_block_message_from_waits_when_block_queue_full_for_lane_block_vote() {
+        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+            LaneBlockQueueFixture::Vote,
+            true,
+        );
+    }
+
+    #[test]
+    fn try_incoming_block_message_waits_when_block_queue_full_for_lane_block_qc() {
+        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+            LaneBlockQueueFixture::Qc,
+            false,
+        );
+    }
+
+    #[test]
+    fn try_incoming_block_message_from_waits_when_block_queue_full_for_lane_block_qc() {
+        assert_try_incoming_lane_block_message_waits_when_block_queue_full(
+            LaneBlockQueueFixture::Qc,
+            true,
+        );
     }
 
     #[test]
@@ -13449,8 +13665,9 @@ impl SumeragiHandle {
     /// to avoid stalling upstream relays. Block-sync updates and critical payload messages
     /// (block creation, exact body repair, proposals, RBC INIT, and RBC chunks),
     /// certified-block fetches, consensus-priority/commit-QC-only pending-block fetches,
-    /// plus RBC READY/DELIVER and QC votes/certificates, always use blocking semantics because
-    /// dropping them can stall consensus recovery.
+    /// standalone lane-block proposal/vote/QC evidence, plus RBC READY/DELIVER and QC
+    /// votes/certificates, always use blocking semantics because dropping them can stall
+    /// consensus or lane-block recovery.
     pub fn try_incoming_block_message(&self, msg: BlockMessage) -> bool {
         let msg = msg.normalize();
         let blocking = matches!(
@@ -13469,6 +13686,9 @@ impl SumeragiHandle {
                     ..
                 })
                 | BlockMessage::Proposal(_)
+                | BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneBlockVote(_)
+                | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::VrfCommit(_)
@@ -13506,6 +13726,9 @@ impl SumeragiHandle {
                     ..
                 })
                 | BlockMessage::Proposal(_)
+                | BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneBlockVote(_)
+                | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::VrfCommit(_)

@@ -4,17 +4,17 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shlex
 import sys
 import unicodedata
 from html import unescape as html_unescape
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import unquote
 
 try:
@@ -783,7 +783,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "requires every `UnitTestResult` `testName` value to be present, canonical, and unique",
     "contains exactly the VSTest passed-test count of `UnitTestResult` rows",
     "names `Hyperledger.Iroha.Sdk.Tests.dll`",
-    "contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`",
+    "contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest` while every present SCCP `codeBase`/`storage` assembly reference on that `TestMethod` and parent `UnitTest` points to `Hyperledger.Iroha.Sdk.Tests.dll`",
     "when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition",
     "each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character",
     "SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment",
@@ -868,7 +868,9 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "copied-summary scalar exactness",
     "lane CLI homoglyph-secret redaction markers",
     "SCCP BSC route-config canonical-manifest source inventory",
+    "SCCP BSC route-manifest CLI source inventory",
     "SCCP TRON route-config canonical-manifest source inventory",
+    "SCCP TRON route-manifest CLI source inventory",
     "SCCP Solana route-manifest CLI source inventory",
     "SCCP TON route-manifest CLI source inventory",
     "SCCP TRON runtime route-manifest source inventory",
@@ -878,6 +880,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "not-ready nested schema, hash/flag-coherence, and route-canary proof-context/hash-role/common/truth-semantic blockers",
     "SCCP all-lanes governed blocker schema source inventory",
     "SCCP all-lanes release-checklist exact-boolean source inventory",
+    "source-material `placeholder_material` exact-boolean rejection",
     "source-adapter gate hash/audit replay rejection",
     "upstream route-canary hash replay rejection",
     "destination-rollout and route-allowlist blocker container rejection",
@@ -914,6 +917,12 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "repeated public section headings",
     "noncanonical required-section order",
     "canonical Required Release Evidence bullet spelling",
+    "internal tab/control-whitespace Required Release Evidence bullet rejection",
+    "Unicode separator/format Required Release Evidence bullet rejection",
+    "canonical Blocking Items bullet spelling",
+    "Unicode separator/format Blocking Items bullet rejection",
+    "table-cell blocker exact rendering",
+    "governed live-verifier required-evidence line binding",
     "evidence-input path/bytes/hash visibility",
     "evidence-input row suppression",
     "production-corridor phase/status visibility",
@@ -940,6 +949,19 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "lane-readiness status visibility",
     "lane-readiness blocker-cell visibility",
     "lane-readiness root suppression",
+)
+READINESS_MARKDOWN_GOVERNED_LIVE_EVIDENCE_LINE_PREFIX = (
+    "- Governed live deployment evidence"
+)
+READINESS_MARKDOWN_GOVERNED_LIVE_EVIDENCE_LINE_MARKERS = (
+    "Governed live deployment evidence",
+    "offline placeholder or template-derived hashes keep the report blocked",
+    "Required source-verifier evidence by lane:",
+    "Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path",
+    "BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path",
+    "Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path",
+    "TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path",
+    "TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path",
 )
 READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_PREFIX = (
     "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include"
@@ -971,6 +993,10 @@ READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_MARKERS = tuple(
     if marker not in READINESS_MARKDOWN_DOTNET_EVIDENCE_LINE_EXCLUDED_MARKERS
 )
 READINESS_MARKDOWN_STANDALONE_REQUIRED_EVIDENCE_LINES = (
+    (
+        READINESS_MARKDOWN_GOVERNED_LIVE_EVIDENCE_LINE_PREFIX,
+        READINESS_MARKDOWN_GOVERNED_LIVE_EVIDENCE_LINE_MARKERS,
+    ),
     (
         "- Accepted VSTest success summaries",
         (
@@ -1781,6 +1807,7 @@ ETHEREUM_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_inbound_adversarial_gate_inventory",
+            "def test_release_readiness_guards_ethereum_inbound_adversarial_sdk_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_inbound_adversarial_gate",
         ),
     ),
@@ -1974,6 +2001,7 @@ ETHEREUM_OUTBOUND_PRECALLBACK_SDK_TEST_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_outbound_precallback_gate_inventory",
+            "def test_release_readiness_guards_ethereum_outbound_precallback_sdk_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_outbound_precallback_gate",
         ),
     ),
@@ -2306,6 +2334,7 @@ ETHEREUM_RECEIPT_ROOT_ZERO_SDK_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_receipt_root_zero_gate_inventory",
+            "def test_release_readiness_guards_ethereum_receipt_root_zero_sdk_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_receipt_root_zero_gate",
         ),
     ),
@@ -2414,6 +2443,7 @@ ETHEREUM_RECEIPT_RLP_ZERO_TOPIC_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_receipt_rlp_zero_topic_gate_inventory",
+            "def test_release_readiness_guards_ethereum_receipt_rlp_zero_topic_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_receipt_rlp_zero_topic_gate",
         ),
     ),
@@ -2522,6 +2552,7 @@ ETHEREUM_RECEIPT_RLP_ZERO_ADDRESS_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_receipt_rlp_zero_address_gate_inventory",
+            "def test_release_readiness_guards_ethereum_receipt_rlp_zero_address_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_receipt_rlp_zero_address_gate",
         ),
     ),
@@ -2547,7 +2578,13 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS = (
         "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
         (
             "test_collect_receipt_proof_rejects_source_event_missing_context_fields",
+            "test_collect_receipt_proof_rejects_duplicate_source_event_logs",
+            "test_collect_receipt_proof_rejects_source_event_extra_topics",
+            "test_collect_receipt_proof_rejects_source_event_non_empty_data",
             'for field in ("transactionHash", "blockHash", "blockNumber")',
+            "duplicate SCCP source event logs",
+            "must contain exactly 2 topics",
+            "source event log data must be 0x",
         ),
     ),
     (
@@ -2568,6 +2605,7 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_CONTEXT_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_receipt_source_event_context_gate_inventory",
+            "def test_release_readiness_guards_ethereum_source_event_context_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_receipt_source_event_context_gate",
         ),
     ),
@@ -2595,9 +2633,13 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_MODE_MARKERS = (
     (
         "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
         (
+            "test_collect_receipt_proof_evidence_builds_verified_source_event_proof",
             "test_collect_receipt_proof_requires_source_bridge_without_receipt_only_bypass",
             "test_collect_receipt_proof_rejects_removed_receipt_only_keyword_before_rpc",
             "test_collect_receipt_proof_rejects_direct_namespace_args_before_rpc",
+            'assert summary["evidence_mode"] == "sccp_source_event"',
+            'assert summary["source_event_validated"] is True',
+            'assert "receipt_only_evidence" not in summary',
             "removed receipt-only option reached RPC",
             "test_cli_requires_source_bridge_without_receipt_only_bypass",
             "test_cli_rejects_removed_receipt_only_mode_before_collection",
@@ -2619,6 +2661,7 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_MODE_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_receipt_source_event_mode_gate_inventory",
+            "def test_release_readiness_guards_ethereum_source_event_mode_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_receipt_source_event_mode_gate",
         ),
     ),
@@ -2658,6 +2701,7 @@ ETHEREUM_RECEIPT_SOURCE_EVENT_ZERO_DIGEST_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_receipt_source_event_zero_digest_gate_inventory",
+            "def test_release_readiness_guards_ethereum_source_event_zero_digest_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_receipt_source_event_zero_digest_gate",
         ),
     ),
@@ -2693,14 +2737,31 @@ ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS = (
         "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
         (
             "FakeRawResponse",
+            "test_receipt_domain_parser_rejects_retired_aliases_without_stringifying",
             "test_collect_receipt_proof_rejects_duplicate_json_rpc_result_keys",
             "test_collect_receipt_proof_rejects_duplicate_json_receipt_fields",
+            "test_receipt_json_rpc_rejects_envelope_drift",
             "test_receipt_json_rpc_redacts_invalid_json_parser_details",
             "test_receipt_json_rpc_url_rejects_hidden_request_state",
             "malformed receipt RPC URL reached the opener",
             "https://bad_host.rpc.example",
+            "domain must be eth or bsc",
+            "response id",
+            "protocol version",
             "test_receipt_json_rpc_redacts_transport_and_error_response_details",
+            "test_receipt_container_and_bytes_boundaries_reject_subclasses_without_hooks",
+            "HostileReceiptBytes",
+            "HostileReceiptBytearray",
+            "HostileReceiptDict",
+            "HostileReceiptList",
+            "secret-token provider URL leaked from transport",
+            "secret-token receipt bytes coerced",
+            "secret-token receipt dict get ran",
+            "secret-bearing receipt RPC transport error was accepted",
             "secret-token invalid EVM receipt JSON-RPC payload",
+            'assert "duplicate JSON key " not in message',
+            "assert exc.__cause__ is None",
+            "assert exc.__suppress_context__ is True",
             "secret-token",
             "duplicate JSON-RPC result keys were accepted",
             "duplicate JSON receipt fields were accepted",
@@ -2718,6 +2779,7 @@ ETHEREUM_RECEIPT_RPC_DUPLICATE_JSON_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_receipt_rpc_duplicate_json_gate_inventory",
+            "def test_release_readiness_guards_ethereum_receipt_rpc_duplicate_json_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_receipt_rpc_duplicate_json_gate",
         ),
     ),
@@ -2742,8 +2804,12 @@ ETHEREUM_RECEIPT_BLOCK_TRANSACTION_HASH_MARKERS = (
         "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
         (
             "test_receipt_trie_builder_rejects_duplicate_transaction_hashes",
+            "test_receipt_trie_builder_rejects_receipt_order_drift",
+            "test_receipt_trie_key_uses_rlp_transaction_index_not_hashed_key",
             'receipts[1]["transactionHash"] = receipts[0]["transactionHash"]',
             "duplicate block receipt transaction hashes were accepted",
+            "transactionIndex must match receipt order",
+            'assert module._receipt_trie_key(128) == bytes.fromhex("8180")',
         ),
     ),
     (
@@ -2841,6 +2907,7 @@ ETHEREUM_RECEIPT_BLOCK_TRANSACTION_HASH_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_receipt_block_transaction_hash_gate_inventory",
+            "def test_release_readiness_guards_ethereum_block_receipt_transaction_hash_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_receipt_block_transaction_hash_gate",
         ),
     ),
@@ -3012,6 +3079,22 @@ ETHEREUM_SDK_RECEIPT_METADATA_GUARD_MARKERS = (
         ),
     ),
     (
+        "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
+        (
+            "test_receipt_rlp_rejects_unknown_typed_receipt_prefix",
+            "test_collect_receipt_proof_rejects_failed_receipt",
+            "test_collect_receipt_proof_rejects_receipts_root_mismatch",
+            "test_collect_receipt_proof_rejects_direct_receipt_rlp_drift",
+            "test_collect_receipt_proof_rejects_block_receipt_metadata_drift",
+            "typed receipt type is not supported",
+            "receipt.status must be 0x1",
+            "computed receipt trie root does not match",
+            "target receipt RLP must match",
+            "blockHash does not match",
+            "blockNumber does not match",
+        ),
+    ),
+    (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_ethereum_sdks_keep_receipt_metadata_guards",
@@ -3180,14 +3263,19 @@ ETHEREUM_NONCANONICAL_CHAIN_ID_TEST_MARKERS = (
         "pytests/scripts/sccp_evm_receipt_proof_evidence_test.py",
         (
             "test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity",
+            "test_collect_receipt_proof_rejects_non_mainnet_chain_id",
             "test_collect_receipt_proof_rejects_boolean_domain_and_expected_chain_id_before_rpc",
             "test_collect_receipt_proof_rejects_direct_namespace_args_before_rpc",
             "test_receipt_cli_parsers_reject_non_string_values_without_stringification",
+            "test_receipt_rpc_scalar_parsers_reject_string_subclasses_without_hooks",
             'for chain_id_result in ("0x01", "0X1", " 0x1", "0x1 ", 1):',
             "rpc_response(chain_id_result)",
+            "eth_chainId for eth lane",
             "boolean receipt proof metadata reached RPC",
             "expected RPC chain id must be an exact integer",
             "HostileParserValue",
+            "HostileReceiptString",
+            "secret-token receipt exact string stripped",
             "secret-token-receipt-parser-value",
             "transaction hash must be canonical lowercase 0x hex",
         ),
@@ -3204,6 +3292,7 @@ ETHEREUM_NONCANONICAL_CHAIN_ID_TEST_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_noncanonical_chain_id_gate_inventory",
+            "def test_release_readiness_guards_ethereum_noncanonical_chain_id_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_noncanonical_chain_id_gate",
         ),
     ),
@@ -3316,6 +3405,7 @@ ETHEREUM_BEACON_REST_FINALIZED_HEADER_SHAPE_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_beacon_rest_finalized_header_shape_gate_inventory",
+            "def test_release_readiness_guards_ethereum_beacon_rest_header_shape_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_beacon_rest_finalized_header_shape_gate",
         ),
     ),
@@ -3693,6 +3783,7 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_beacon_rest_execution_payload_binding_gate_inventory",
+            "def test_release_readiness_guards_ethereum_beacon_rest_execution_payload_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_beacon_rest_execution_payload_binding_gate",
         ),
     ),
@@ -3854,6 +3945,7 @@ ETHEREUM_SYNC_COMMITTEE_ROSTER_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_sync_committee_roster_gate_inventory",
+            "def test_release_readiness_guards_ethereum_sync_committee_roster_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_sync_committee_roster_gate",
         ),
     ),
@@ -4009,6 +4101,7 @@ ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_source_bridge_config_gate_inventory",
+            "def test_release_readiness_guards_ethereum_source_bridge_config_tests",
             "def test_release_readiness_report_blocks_missing_ethereum_source_bridge_config_gate",
         ),
     ),
@@ -4031,7 +4124,17 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             '"Solana"',
             '"TON"',
             '"TRON"',
+            "def _require_builtin_template_label(",
+            "type(lane) is not str",
+            "type(field) is not str",
+            "source template local field must be a builtin string",
+            "source template match lane must be a builtin string",
+            "source template match field must be a builtin string",
+            "source template local hash must be builtin non-zero bytes32",
             "def sccp_active_source_template_component_hash_errors(",
+            "def _is_builtin_template_hash(",
+            "def _require_builtin_template_hash(",
+            "type(value) is bytes",
             "hash must be non-zero bytes32",
             "hash duplicates",
             "fields must match active launch template order",
@@ -4046,6 +4149,17 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
         (
             "test_active_source_template_denylist_is_canonical_and_unique",
             "test_active_source_template_denylist_validator_rejects_bad_entries",
+            "HostileTemplateString",
+            "test_source_template_hashes_reject_string_subclasses_without_hooks",
+            "secret-token source template string was compared",
+            "source template local field must be a builtin string",
+            "HostileTemplateBytes",
+            "test_source_template_hashes_reject_bytes_subclasses_without_hooks",
+            "secret-token source template hash was compared",
+            "source template local hash must be builtin non-zero bytes32",
+            "HostileTemplateTuple",
+            "test_source_template_hashes_reject_tuple_subclasses_without_hooks",
+            "source template match must be a lane, field tuple",
             "test_source_template_hash_match_labels_local_and_foreign_templates",
             "test_active_source_template_denylist_matches_evidence_script_templates",
             "entry 1 hash duplicates ETH.source_trust_anchor_hash",
@@ -4279,18 +4393,24 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):\n        return None, [f\"{label} source adapter gate audit-key validation failed\"]",
             "source adapter gate audit-key validation failed",
             "def _source_adapter_gate_hash_key_for_domain_chain_or_errors(",
+            "type(key) is not str",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):\n        return None, [f\"{label} source adapter gate hash-key validation failed\"]",
             "source adapter gate hash-key validation failed",
             "def _source_adapter_gate_template_hash_errors(",
             "def _source_adapter_gate_template_audit_errors(",
+            "type(domain) is not int or type(audit_hashes) is not dict",
             "all_lanes._source_material_template_hash_values(profile)",
             "for audit_field in audit_fields:",
             "if bytes.fromhex(audit_hash[2:]) in template_hashes:",
             "source_adapter_gate emit_audit_key_shape_errors must be a boolean",
             "f\"{label}.source_adapter_gate ready must be true or false\"",
+            "if type(audit_hashes) is dict:",
+            "if type(audit_hashes) is dict and audit_hashes:",
             "cryptographic_evidence source_adapter_gate "
             "emit_audit_key_shape_errors must be a boolean",
             "def _source_record_template_hash_errors(",
+            "type(domain) is not int or type(source_hashes) is not dict",
+            "if type(source_hashes) is not dict:",
             "source_verifier_material_hash",
             "source_adapter_engine_deployment_hash",
             "f\"{label} {field} must be deployed evidence, \"",
@@ -4299,6 +4419,8 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "def _route_canary_template_hash_errors(",
             "def _all_lanes_route_canary_template_hash_errors(",
             "def _all_lanes_template_hash_errors(",
+            "type(domain) is not int or type(row) is not dict",
+            "type(domain) is not int or type(route_canary) is not dict",
             "_all_lanes_template_hash_errors(",
             "evidence_label=\"destination binding evidence\"",
             "evidence_label=\"route binding evidence\"",
@@ -4323,11 +4445,21 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):\n        return None, [f\"{label} source adapter gate audit-key validation failed\"]",
             "source adapter gate audit-key validation failed",
             "def _source_adapter_gate_hash_key_for_domain_chain_or_errors(",
+            "type(key) is not str",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):\n        return None, [f\"{label} source adapter gate hash-key validation failed\"]",
             "source adapter gate hash-key validation failed",
             "source_adapter_gate emit_audit_key_errors must be a boolean",
             "f\"{label} ready must be boolean\"",
+            "if type(audit_hashes) is dict:",
+            "if type(audit_hashes) is dict and audit_hashes:",
+            "if type(source_hashes) is dict:",
+            "if type(destination_binding) is dict:",
+            "if type(route_allowlist) is dict:",
+            "if type(route_canary) is dict:",
+            "type(domain) is not int or type(audit_hashes) is not dict",
             "def _source_record_template_hash_errors(",
+            "type(domain) is not int or type(source_hashes) is not dict",
+            "if type(source_hashes) is not dict:",
             "raw, parser_errors = _canonical_fixed_hex_bytes_or_parser_errors(",
             "source_verifier_material_hash",
             "source_adapter_engine_deployment_hash",
@@ -4340,6 +4472,8 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "def _all_lanes_route_canary_template_hash_errors(",
             "_all_lanes_route_canary_template_hash_errors(",
             "def _all_lanes_template_hash_errors(",
+            "type(domain) is not int or type(row) is not dict",
+            "type(domain) is not int or type(route_canary) is not dict",
             "_all_lanes_template_hash_errors(",
             "def _all_lanes_not_ready_template_hash_errors(",
             "_all_lanes_not_ready_template_hash_errors(",
@@ -4369,6 +4503,10 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "test_release_bundle_rejects_copied_route_canary_template_replay_before_render",
             "test_release_bundle_rejects_copied_route_canary_transcript_template_replay_before_render",
             "test_release_bundle_template_loader_failures_are_bounded",
+            "test_release_bundle_template_helpers_reject_container_subclasses_without_hooks",
+            "release bundle source-template helper hostile",
+            "test_release_bundle_source_gate_semantics_reject_container_subclasses_without_hooks",
+            "release bundle source-gate semantics hostile",
             "test_release_bundle_source_gate_requirement_failures_are_bounded",
             "for exception_type in (RuntimeError, bundle.argparse.ArgumentTypeError):",
             "test_release_bundle_source_gate_audit_key_failures_are_bounded",
@@ -4376,6 +4514,7 @@ SCCP_SOURCE_MATERIAL_TEMPLATE_REJECTION_MARKERS = (
             "test_release_bundle_source_gate_hash_key_failures_are_bounded",
             "secret-token-source-gate-hash-key",
             "test_release_bundle_source_gate_hash_key_non_string_returns_are_bounded",
+            "HostileHashKeyString",
             "test_release_bundle_canonical_fixed_hex_parser_failures_are_bounded",
             "public crypto route-canary transcript template replays cover every launch domain",
             "public crypto source-record template replays hit direct row validators",
@@ -4451,12 +4590,35 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
     (
         "pytests/scripts/sccp_eth_source_bridge_evidence_test.py",
         (
+            "test_eth_address_parser_rejects_zero_and_wrong_width",
+            "test_eth_hash_parser_rejects_zero_and_wrong_width",
+            "test_eth_source_numeric_parsers_require_canonical_ascii_decimal",
+            "test_eth_runtime_bytecode_derives_source_bridge_code_hash",
+            "test_eth_runtime_bytecode_rejects_mismatched_source_bridge_code_hash",
+            "test_eth_direct_renderers_derive_source_bridge_code_hash_from_runtime_bytecode",
+            "test_eth_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding",
+            "test_eth_source_evidence_rejects_boolean_receipt_block_number",
+            "test_eth_source_evidence_rejects_deployment_transaction_readback_drift",
+            "test_eth_source_evidence_requires_receipt_block_receipts_root_for_toml",
+            "test_eth_source_evidence_rejects_boolean_target_domain",
+            "test_eth_toml_rendering_rejects_reused_role_hashes",
+            "test_eth_source_record_hashes_match_rust_vectors",
+            "test_eth_direct_record_hashes_reject_cross_role_template_component_hashes",
+            "test_eth_cli_json_summary_and_toml_output",
+            "test_eth_cli_rejects_expected_record_hash_mismatch",
+            "test_eth_cli_rejects_expected_deployment_record_hash_mismatch",
+            "test_eth_cli_rejects_non_production_lane",
+            "test_eth_cli_requires_code_hash_or_runtime_bytecode",
             "test_eth_direct_record_hashes_reject_reused_role_hashes",
             "test_eth_direct_record_hashes_reject_zero_production_inputs",
             "test_eth_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
             "test_eth_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
             "test_eth_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "test_eth_source_bridge_rejects_hostile_expected_record_hashes_without_hooks",
+            "def test_eth_source_bridge_fixed_bytes_reject_subclasses_without_hooks",
+            "HostileEthSourceBridgeBytes",
+            "HostileEthSourceBridgeBytearray",
+            "secret-token ETH source bytes coerced",
             "ETH material hash accepted zero {field}",
             "ETH deployment hash accepted zero {field}",
             "ETH source evidence accepted non-ETH source domain",
@@ -4494,12 +4656,34 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
     (
         "pytests/scripts/sccp_bsc_source_bridge_evidence_test.py",
         (
+            "test_bsc_address_parser_rejects_zero_and_wrong_width",
+            "test_bsc_hash_parser_rejects_zero_and_wrong_width",
+            "test_bsc_source_numeric_parsers_require_canonical_ascii_decimal",
+            "test_bsc_runtime_bytecode_derives_source_bridge_code_hash",
+            "test_bsc_runtime_bytecode_rejects_mismatched_source_bridge_code_hash",
+            "test_bsc_direct_renderers_derive_source_bridge_code_hash_from_runtime_bytecode",
+            "test_bsc_toml_rendering_carries_mainnet_profile_ids_and_emitter_binding",
+            "test_bsc_source_evidence_rejects_boolean_receipt_block_number",
+            "test_bsc_source_evidence_rejects_deployment_transaction_readback_drift",
+            "test_bsc_source_evidence_requires_receipt_block_receipts_root_for_toml",
+            "test_bsc_source_evidence_rejects_boolean_target_domain",
+            "test_bsc_toml_rendering_rejects_reused_role_hashes",
+            "test_bsc_source_record_hashes_match_rust_vectors",
+            "test_bsc_direct_record_hashes_reject_cross_role_template_component_hashes",
+            "test_bsc_cli_json_summary_and_toml_output",
+            "test_bsc_cli_rejects_expected_record_hash_mismatch",
+            "test_bsc_cli_rejects_non_production_lane",
+            "test_bsc_cli_requires_code_hash_or_runtime_bytecode",
             "test_bsc_direct_record_hashes_reject_reused_role_hashes",
             "test_bsc_direct_record_hashes_reject_zero_production_inputs",
             "test_bsc_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
             "test_bsc_source_evidence_rejects_adapter_verifier_vk_hash_mismatch",
             "test_bsc_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "test_bsc_source_bridge_rejects_hostile_expected_record_hashes_without_hooks",
+            "def test_bsc_source_bridge_fixed_bytes_reject_subclasses_without_hooks",
+            "HostileBscSourceBridgeBytes",
+            "HostileBscSourceBridgeBytearray",
+            "secret-token BSC source bytes coerced",
             "BSC material hash accepted zero {field}",
             "BSC deployment hash accepted zero {field}",
             "BSC source evidence accepted non-BSC source domain",
@@ -4540,6 +4724,23 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
     (
         "pytests/scripts/sccp_solana_source_state_evidence_test.py",
         (
+            "test_solana_hex_parser_rejects_zero_and_wrong_width",
+            "test_solana_source_domain_parser_requires_canonical_ascii_decimal",
+            "test_solana_toml_rendering_carries_mainnet_profile_ids",
+            "test_solana_source_state_evidence_rejects_boolean_target_domain",
+            "test_solana_source_state_hash_helpers_reject_boolean_domains",
+            "test_solana_toml_rendering_rejects_reused_role_hashes",
+            "test_solana_source_record_hashes_match_rust_vectors",
+            "test_direct_record_hashes_reject_cross_role_template_component_hashes",
+            "test_solana_cli_json_summary_and_toml_output",
+            "test_solana_cli_full_light_client_audit_hash",
+            "test_solana_cli_toml_requires_expected_full_light_client_gate_hash",
+            "test_solana_cli_rejects_partial_full_light_client_audit_evidence",
+            "test_solana_cli_rejects_full_light_client_audit_hash_reusing_source_material",
+            "test_solana_cli_rejects_full_light_client_audit_hash_reusing_deployment_material",
+            "test_solana_cli_rejects_full_light_client_audit_hash_mismatch",
+            "test_solana_cli_rejects_expected_record_hash_mismatch",
+            "test_solana_cli_rejects_non_production_lane",
             "test_solana_direct_record_hashes_reject_reused_role_hashes",
             "test_direct_record_hashes_reject_zero_component_hashes",
             "test_solana_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
@@ -4547,6 +4748,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_solana_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "test_solana_cli_rejects_duplicate_full_light_client_audit_hashes",
             "test_solana_source_state_rejects_hostile_expected_record_hashes_without_hooks",
+            "def test_solana_source_state_fixed_bytes_reject_subclasses_without_hooks",
+            "HostileSolanaSourceStateBytes",
+            "HostileSolanaSourceStateBytearray",
+            "secret-token Solana source bytes coerced",
             "Solana material hash accepted zero {field}",
             "Solana deployment hash accepted zero {field}",
             "Solana source evidence accepted non-Solana source domain",
@@ -4572,6 +4777,12 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "{label} must use lowercase 0x prefix",
             "{label} must use lowercase hex",
             "def parse_program_bytes_hex(",
+            "def parse_program_bytes_base64(",
+            "def decode_solana_base58(",
+            "def parse_positive_u64(",
+            "type(value) is not str",
+            "type(supplied) is not str",
+            "type(verifier_program_bytes_base64) is not str",
             "def _reject_program_bytes_file_symlink_path(",
             "def _read_program_bytes_file(",
             "def _optional_expected_destination_binding_hash(",
@@ -4585,6 +4796,17 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
     (
         "pytests/scripts/sccp_solana_destination_evidence_test.py",
         (
+            "test_solana_hex_parser_rejects_zero_and_wrong_width",
+            "test_solana_positive_u64_parser_rejects_noncanonical_decimal_text",
+            "test_solana_program_bytes_parsers_reject_empty_zero_malformed_and_non_elf",
+            "test_solana_program_id_parser_rejects_zero_malformed_and_wrong_width",
+            "test_solana_destination_binding_hash_matches_rust_vector",
+            "test_solana_route_allowlist_hash_matches_lane_evidence_vector",
+            "test_solana_route_canary_rejects_verifier_code_hash_role_reuse",
+            "test_solana_toml_rendering_carries_destination_profile_ids",
+            "test_solana_cli_json_summary_and_toml_output",
+            "test_solana_cli_derives_verifier_code_hash_from_program_bytes",
+            "test_solana_direct_renderers_derive_verifier_code_hash_from_program_bytes",
             "noncanonical Solana verifier hash",
             "noncanonical Solana verifier program hex",
             '("33" * 32, "canonical lowercase 0x hex")',
@@ -4592,6 +4814,14 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_solana_program_bytes_file_rejects_unreadable_file_shapes",
             "def test_solana_destination_rejects_hostile_expected_binding_hash_without_hooks",
             "def test_solana_destination_rejects_non_string_programdata_address_without_stringifying",
+            "HostileSolanaDestinationString",
+            "def test_solana_destination_exact_string_parsers_reject_string_subclasses_without_hooks",
+            "def test_solana_destination_byte_helpers_reject_subclasses_without_hooks",
+            "HostileSolanaDestinationBytes",
+            "HostileSolanaDestinationBytearray",
+            "secret-token Solana destination bytes coerced",
+            "secret-token Solana destination string was stripped",
+            "Solana verifier program byte metadata is inconsistent",
             "def test_solana_destination_toml_renderer_rejects_string_subclasses_without_hooks",
             "secret-token Solana TOML string was stringified",
         ),
@@ -4618,6 +4848,23 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
     (
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
         (
+            "test_ton_hex_parser_rejects_zero_and_wrong_width",
+            "test_ton_source_domain_parser_requires_canonical_ascii_decimal",
+            "test_ton_toml_rendering_carries_mainnet_profile_ids",
+            "test_ton_source_state_evidence_rejects_boolean_target_domain",
+            "test_ton_toml_rendering_requires_full_light_client_evidence",
+            "test_ton_toml_rendering_rejects_reused_role_hashes",
+            "test_ton_toml_rendering_rejects_audit_hashes_reusing_source_material",
+            "test_ton_source_record_hashes_match_rust_vectors",
+            "test_ton_direct_light_client_hashes_are_nonzero_and_complete",
+            "test_ton_direct_record_hashes_reject_cross_role_template_component_hashes",
+            "test_ton_cli_json_summary_and_toml_output",
+            "test_ton_cli_full_light_client_audit_hash",
+            "test_ton_cli_toml_requires_expected_full_light_client_gate_hash",
+            "test_ton_cli_rejects_partial_full_light_client_audit_evidence",
+            "test_ton_cli_rejects_full_light_client_audit_hash_mismatch",
+            "test_ton_cli_rejects_expected_record_hash_mismatch",
+            "test_ton_cli_rejects_non_production_lane",
             "test_ton_direct_record_hashes_reject_reused_role_hashes",
             "test_ton_direct_record_hashes_reject_zero_production_hashes",
             "test_ton_source_deployment_hash_rejects_noncanonical_adapter_vk_hash",
@@ -4625,6 +4872,10 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_ton_source_evidence_rejects_wrong_lane_domains_with_named_constants",
             "test_ton_toml_rendering_rejects_reused_audit_role_hashes",
             "test_ton_source_state_rejects_hostile_expected_record_hashes_without_hooks",
+            "def test_ton_source_state_fixed_bytes_reject_subclasses_without_hooks",
+            "HostileTonSourceStateBytes",
+            "HostileTonSourceStateBytearray",
+            "secret-token TON source bytes coerced",
             "TON material hash accepted zero {field}",
             "TON deployment hash accepted zero {field}",
             "TON source evidence accepted non-TON source domain",
@@ -4700,6 +4951,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON destination JSON expected_matches must be a boolean",
             'raise ValueError(f"--{output} requires --last-transaction-lt") from None',
             "--{output} has invalid verifier code BoC base64 evidence",
+            "type(account_status) is not str",
+            "type(code_boc_base64) is not str",
+            "TON verifier code BoC base64 metadata is inconsistent",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "def _optional_expected_destination_binding_hash(",
             "raise TypeError(\"unsupported TOML string value\")",
@@ -4710,6 +4964,19 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
     (
         "pytests/scripts/sccp_ton_destination_evidence_test.py",
         (
+            "test_ton_hex_parser_rejects_zero_and_wrong_width",
+            "test_ton_code_boc_inline_parsers_reject_padded_values",
+            "test_ton_raw_address_parser_rejects_zero_malformed_and_noncanonical",
+            "test_ton_last_transaction_lt_requires_canonical_ascii_decimal",
+            "test_ton_destination_binding_hash_matches_rust_vector",
+            "test_ton_code_boc_root_hash_matches_sdk_vectors",
+            "test_ton_route_allowlist_hash_matches_lane_evidence_vector",
+            "test_ton_route_canary_rejects_live_account_hash_role_reuse",
+            "test_ton_cli_derives_verifier_code_hash_from_code_boc",
+            "test_ton_direct_renderers_derive_verifier_code_hash_from_code_boc",
+            "test_ton_direct_toml_requires_code_boc_root_evidence",
+            "test_ton_toml_rendering_carries_destination_profile_ids",
+            "test_ton_cli_json_summary_and_toml_output",
             "def test_ton_destination_direct_parsers_redact_parser_causes",
             "def test_ton_destination_cli_parsers_reject_non_string_values_without_stringification",
             "HostileTonDestinationParserValue",
@@ -4734,6 +5001,14 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TON destination TOML accepted hostile last transaction LT",
             "TON destination JSON accepted hostile last transaction LT",
             "secret-token TON destination LT was stringified",
+            "HostileTonDestinationString",
+            "def test_ton_destination_exact_string_metadata_rejects_string_subclasses_without_hooks",
+            "def test_ton_destination_byte_helpers_reject_subclasses_without_hooks",
+            "HostileTonDestinationBytes",
+            "HostileTonDestinationBytearray",
+            "secret-token TON destination bytes coerced",
+            "secret-token TON destination string was stripped",
+            "TON verifier code BoC base64 metadata is inconsistent",
             "def test_ton_destination_toml_renderer_rejects_string_subclasses_without_hooks",
             "secret-token TON destination TOML string was stringified",
             "helper_failures = (",
@@ -4767,6 +5042,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "http://toncenter.example",
             "https://toncenter.local",
             "exact http(s) URL",
+            "secret-token provider URL leaked from transport",
+            "secret-bearing TON transport error was accepted",
             "def test_live_ton_account_states_redacts_invalid_json_parser_details",
             "def test_live_ton_evidence_redacts_account_address_parser_failures",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
@@ -4774,6 +5051,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
             "def test_live_ton_evidence_rejects_non_string_imported_metadata_without_stringifying",
             "secret-token imported TON metadata was stringified",
+            "def test_ton_live_exact_string_parsers_reject_string_subclasses_without_hooks",
+            "HostileTonLiveString",
+            "secret-token TON live exact string was stripped",
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "secret-token-ton-error",
             "secret-token invalid TON accountStates payload",
@@ -4785,6 +5065,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "secret-token {label} ValueError detail",
             "normalize_failure_cases = (",
             "duplicate JSON keys",
+            'assert "duplicate JSON key " not in message',
+            "assert exc.__cause__ is None",
+            "assert exc.__suppress_context__ is True",
             "def test_ton_live_api_key_file_rejects_unreadable_file_shapes",
             "secret-token",
             'assert "secret-token" not in rendered',
@@ -4817,6 +5100,47 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
     (
         "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
         (
+            "test_tron_source_bridge_config_hash_matches_solidity_abi_vector",
+            "test_tron_source_message_call_data_matches_tvm_abi_vector",
+            "test_tron_source_adapter_verifier_vk_hash_matches_rust_profile_vector",
+            "test_tron_source_record_hashes_match_rust_vectors",
+            "test_tron_destination_binding_hash_matches_rust_solidity_vector",
+            "test_tron_route_allowlist_hash_matches_rust_profile_vector",
+            "test_parse_u32_requires_canonical_decimal_text_and_exact_int",
+            "test_toml_rendering_carries_mainnet_profile_ids_and_config_hash",
+            "test_full_toml_rendering_requires_route_canary_evidence",
+            "test_full_toml_rendering_binds_route_canary_call_transcript_metadata",
+            "test_full_toml_rendering_binds_route_canary_signature_metadata",
+            "test_route_canary_transaction_hash_requires_production_destination_lane",
+            "test_route_canary_transaction_hash_requires_canonical_binding_material",
+            "test_full_toml_rendering_derives_route_canary_from_transaction_metadata",
+            "test_full_toml_rendering_requires_route_canary_used_message_state",
+            "test_full_toml_rendering_requires_route_canary_block_metadata",
+            "test_full_toml_rendering_requires_route_canary_raw_owner_binding",
+            "test_full_toml_rendering_requires_route_canary_signature_recovery",
+            "test_cli_expected_config_hash_check_accepts_matching_value",
+            "test_cli_json_emits_source_event_call_data",
+            "test_cli_json_emits_source_record_hashes_when_material_is_complete",
+            "test_cli_json_marks_unpinned_source_records_not_toml_ready",
+            "test_cli_expected_source_record_hash_requires_complete_material",
+            "test_cli_expected_destination_binding_hash_check_accepts_matching_value",
+            "test_cli_json_marks_unpinned_destination_not_full_toml_ready",
+            "test_cli_route_allowlist_hash_check_accepts_canonical_value",
+            "test_cli_json_marks_hash_only_route_canary_not_full_toml_ready",
+            "test_cli_json_marks_full_rollout_ready_with_route_canary",
+            "test_cli_route_allowlist_hash_requires_expected_destination_binding_pin",
+            "test_cli_expected_destination_binding_hash_requires_material",
+            "test_cli_route_allowlist_hash_requires_destination_material",
+            "test_cli_toml_requires_expected_config_hash",
+            "test_cli_toml_requires_expected_source_record_hashes",
+            "test_cli_toml_requires_expected_tron_dpos_source_gate_hash",
+            "test_cli_toml_derives_source_bridge_code_hash_from_runtime_bytecode",
+            "test_cli_destination_binding_derives_verifier_code_hash_from_runtime_bytecode_file",
+            "test_cli_full_toml_requires_destination_and_route_material",
+            "test_cli_full_toml_requires_expected_source_record_hashes",
+            "test_cli_full_toml_requires_expected_destination_binding_hash",
+            "test_cli_full_toml_requires_runtime_bytecode_preimages",
+            "test_cli_full_toml_emits_all_production_records",
             "def test_tron_source_bridge_direct_parsers_redact_parser_causes",
             "def test_tron_source_bridge_direct_parsers_redact_helper_exit_parser_causes",
             "secret-token-tron-source-fixed-hex",
@@ -4832,6 +5156,41 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "test_toml_rendering_rejects_wrong_source_lane_with_named_constants",
             "test_cli_rejects_adapter_verifier_vk_hash_mismatch",
             "test_tron_source_bridge_rejects_hostile_expected_record_hashes_without_hooks",
+            "test_tron_base58check_from_address20_rejects_zero_address",
+            "test_tron_source_bridge_config_hash_rejects_malformed_direct_material",
+            "test_tron_destination_binding_hash_rejects_malformed_direct_material",
+            "test_tron_address_parser_accepts_prefixed_hex_and_rejects_zero",
+            "test_parse_hex_bytes_rejects_padded_tron_source_material",
+            "test_parse_runtime_bytecode_hex_rejects_padded_inline_text",
+            "test_tron_source_bridge_hashes_reject_boolean_domain_values",
+            "test_direct_toml_renderers_reject_runtime_bytecode_hash_mismatch",
+            "test_direct_record_hashes_reject_cross_role_template_source_component_hashes",
+            "test_full_toml_rendering_rejects_retargeted_destination_lane",
+            "test_full_toml_rendering_rejects_non_production_destination_proof_family",
+            "test_full_toml_rendering_rejects_zero_route_allowlist_hash",
+            "test_full_toml_rendering_rejects_route_allowlist_hash_drift",
+            "test_full_toml_rendering_rejects_hash_only_route_canary_evidence",
+            "test_full_toml_rendering_rejects_route_canary_transcript_hash_reuse",
+            "test_full_toml_rendering_rejects_route_canary_governed_transcript_hash_reuse",
+            "test_full_toml_rendering_rejects_zero_route_canary_block_number",
+            "test_full_toml_rendering_rejects_route_canary_signature_owner_mismatch",
+            "test_full_toml_rendering_rejects_bad_route_canary_signature_recovered_address",
+            "test_full_toml_rendering_rejects_route_canary_transaction_hash_mismatch",
+            "test_full_toml_rendering_rejects_route_canary_source_record_hash_replay",
+            "test_cli_rejects_source_event_call_data_in_toml_mode",
+            "test_cli_rejects_expected_source_record_hash_mismatch",
+            "test_cli_rejects_expected_source_deployment_record_hash_mismatch",
+            "test_cli_rejects_expected_tron_dpos_source_gate_hash_mismatch",
+            "test_cli_expected_config_hash_check_rejects_mismatch",
+            "test_cli_json_marks_full_rollout_without_canary_not_full_toml_ready",
+            "test_cli_expected_destination_binding_hash_check_rejects_mismatch",
+            "test_cli_destination_binding_rejects_non_tron_target_domain",
+            "test_cli_rejects_ambiguous_output_modes",
+            "test_cli_rejects_source_bridge_code_hash_mismatch",
+            "test_cli_rejects_padded_inline_runtime_bytecode",
+            "test_cli_rejects_unsupported_target_domain",
+            "test_cli_rejects_noncanonical_decimal_domains",
+            "test_toml_rendering_rejects_supported_non_sora_target_domain",
             "TRON material hash accepted zero {field}",
             "TRON deployment hash accepted zero {field}",
             "source_domain = SCCP_DOMAIN_TRON (5)",
@@ -4962,6 +5321,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "TRON API was called before runtime boolean validation",
             "malformed TRON runtime boolean",
             "def test_tron_api_redacts_transport_and_error_response_details",
+            "secret-token provider URL leaked from transport",
+            "secret-bearing TRON transport error was accepted",
             "def test_tron_api_redacts_exception_causes",
             "def test_tron_runtime_input_parsers_redact_exception_causes",
             "def test_tron_runtime_witness_schedule_payload_rejects_non_string_without_stringifying",
@@ -4974,6 +5335,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "malformed TRON live exact-hex32 nonzero control accepted",
             "malformed TRON live hex32 nonzero control accepted",
             "malformed TRON live optional-hex nonzero control accepted",
+            "def test_tron_live_exact_string_parsers_reject_string_subclasses_without_hooks",
+            "HostileTronLiveString",
+            "secret-token TRON live exact string was stripped",
             "def test_tron_live_decimal_parsers_reject_string_subclasses_without_hooks",
             "HostileDecimalText",
             "secret-token TRON live decimal text was compared",
@@ -5142,6 +5506,28 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "def test_all_lanes_evidence_reports_deployment_source_role_shape_independently",
             "source adapter deployment source_state_verifier_hash must be a non-zero 32-byte hex value",
             "source adapter deployment source_bridge_emitter_address must be a non-zero 20-byte hex value",
+            "def test_all_lanes_evidence_rejects_reused_source_material_role_hashes",
+            "consensus_verifier_hash must not reuse source_trust_anchor_hash",
+            "def test_all_lanes_evidence_rejects_reused_source_deployment_role_hashes",
+            "deployment_receipt_hash must not reuse adapter_verifier_vk_hash",
+            "def test_all_lanes_evidence_rejects_stale_source_record_hash_comments",
+            "the canonical record hash",
+            "def test_all_lanes_evidence_rejects_reused_light_client_audit_role_hashes",
+            "solana_bank_fork_choice_verifier_hash must not reuse ",
+            "def test_all_lanes_evidence_rejects_missing_ton_audit_and_route_blocker",
+            "def test_all_lanes_evidence_rejects_source_gate_audit_hash_role_reuse",
+            "def test_all_lanes_evidence_rejects_source_gate_audit_route_canary_transcript_replay",
+            "def test_all_lanes_evidence_rejects_missing_evm_source_gate_hash",
+            "def test_all_lanes_evidence_rejects_tron_dpos_source_gate_hash_drift",
+            "def test_all_lanes_evidence_rejects_lane_foreign_audit_fields",
+            "def test_all_lanes_evidence_rejects_canonical_source_validator_drift",
+            "def test_all_lanes_evidence_rejects_source_material_cross_role_template_hashes",
+            "evidence, not built-in template material",
+            "def test_all_lanes_evidence_rejects_malformed_direct_sections",
+            "sccp_source_verifier_materials: records must be a list",
+            "sccp_route_allowlists: record 0 must be a table",
+            "def test_route_allowlist_hash_rejects_zero_or_replayed_roles",
+            "replayed route allowlist evidence role was accepted",
             "def test_all_lanes_evidence_redacts_source_gate_recompute_failures",
             "def test_all_lanes_public_source_gate_summaries_redact_signature_drift",
             "secret_token_source_gate_signature_drift",
@@ -5154,7 +5540,16 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "destination binding recompute ArgumentTypeError detail leaked",
             "destination identity ArgumentTypeError detail leaked",
             "def test_all_lanes_loader_redacts_toml_parser_failures",
+            "def test_minimal_toml_rejects_noncanonical_integer_values",
+            "noncanonical TOML integer",
+            "def test_minimal_toml_loader_rejects_duplicate_keys",
+            "def test_all_lanes_loader_rejects_duplicate_metadata_comments",
+            "def test_all_lanes_loader_rejects_duplicate_metadata_comment_aliases",
+            "duplicate-comments.toml:2: duplicate metadata comment ",
+            "for _comment_route_canary_status",
+            "for _comment_source_verifier_material_hash",
             "def test_all_lanes_minimal_toml_parser_redacts_json_exception_causes",
+            "def test_all_lanes_minimal_toml_rejects_array_subclasses_without_hooks",
             "def test_all_lanes_minimal_toml_parser_redacts_sensitive_duplicate_keys",
             "def test_all_lanes_minimal_toml_sensitive_helpers_cover_marker_families",
             "def test_all_lanes_minimal_toml_parser_redacts_unsupported_section_names",
@@ -5219,6 +5614,9 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "BSC material-only source proofs must not satisfy production without deployment evidence",
             "BSC material-only source proofs must not satisfy local admission without deployment evidence",
             "BSC material-only source material must not package local admission without deployment evidence",
+            "#[cfg(test)]\npub fn verify_nexus_sccp_message_transparent_proof_structure_with_source_verifier_material_allow_unready_manifest",
+            "Production local admission should use the deployment-bound helper below",
+            "with_source_verifier_material_and_deployment_allow_unready_manifest",
             "fn sccp_test_only_placeholder_source_adapter_opening_allowed() -> bool",
             "Source-adapter placeholder opening is test-only; production builds must",
             "sccp_test_only_placeholder_source_adapter_opening_allowed()\n            && deployment.is_none()",
@@ -5408,6 +5806,8 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "adapter verifier commitment helper must reject empty STARK public inputs",
             "adapter verifier commitment helper must verify canonical nested FastPQ proof bytes",
             "adapter verifier commitment helper must reject stale adapter transcript hashes",
+            "try_rebuild_source_adapter_verification_proof_for_current_evidence(",
+            "retarget_source_adapter_transcript_and_open_verify_for_current_envelope(",
             "adapter verifier commitment helper must reject malformed source proof envelopes after transcript and OpenVerify rebuild",
             "malformed source proof envelope must fail the outer shape gate before wrapper rebuild",
             "sccp_source_chain_proof_envelope_role_hashes_are_separated",
@@ -5434,6 +5834,7 @@ SCCP_SOURCE_MATERIAL_ROLE_VALIDATION_MARKERS = (
             "source verifier evidence reused adapter/source trust hashes",
             "source verifier evidence reused transcript/consensus hashes",
             "source verifier evidence adapter proof reused template hash",
+            "source verifier evidence adapter transcript reused template hash",
             "deployment hash pair without deployment-bound source roles",
             "source verifier evidence reused trust-anchor/consensus hashes",
             "source verifier evidence reused message/finality hashes",
@@ -5851,6 +6252,19 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
     (
         "pytests/scripts/sccp_evm_source_live_evidence_test.py",
         (
+            "test_evm_source_json_rpc_response_size_is_bounded",
+            "test_evm_source_json_rpc_http_error_detail_is_bounded",
+            "test_evm_source_json_rpc_rejects_duplicate_json_keys",
+            "test_evm_source_json_rpc_rejects_envelope_drift",
+            "test_evm_source_live_numeric_parsers_require_canonical_decimal",
+            "test_evm_source_live_evidence_collects_source_records_and_toml",
+            "test_bsc_source_live_evidence_uses_canonical_bsc_profile",
+            "test_evm_source_live_rejects_noncanonical_expected_rpc_chain_id_before_rpc",
+            "test_evm_source_live_toml_requires_deployment_receipt_evidence",
+            "test_evm_source_live_rejects_receipt_transaction_hash_drift",
+            "test_evm_source_live_rejects_missing_or_zero_receipt_block_number",
+            "test_evm_source_live_rejects_noncanonical_receipt_block_hash",
+            "test_evm_source_live_cli_json_and_toml_outputs",
             "test_evm_source_live_evidence_rejects_rpc_and_code_hash_drift",
             "test_evm_source_live_redacts_receipt_field_parser_exception_causes",
             "test_evm_source_live_redacts_receipt_readback_parser_exception_causes",
@@ -5871,9 +6285,18 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             'assert bsc_summary["block_tag"] == "latest"',
             "test_evm_source_live_block_tag_parser_rejects_unstable_or_noncanonical_tags",
             "test_evm_source_live_cli_parsers_reject_non_string_values_without_stringification",
+            "test_evm_source_live_exact_string_parsers_reject_string_subclasses_without_hooks",
             "test_evm_source_live_namespace_args_reject_non_bytes_without_stringifying",
             "test_evm_source_live_collect_rejects_namespace_args_before_rpc",
+            "test_evm_source_live_container_and_bytes_boundaries_reject_subclasses_without_hooks",
             "HostileSourceLiveParserValue",
+            "HostileSourceLiveString",
+            "HostileSourceLiveBytes",
+            "HostileSourceLiveBytearray",
+            "HostileSourceLiveDict",
+            "secret-token EVM source live exact string stripped",
+            "secret-token EVM source live bytes coerced",
+            "secret-token EVM source live dict get ran",
             "secret-token-evm-source-live-parser-value",
             "component hash must be canonical lowercase 0x hex",
             "test_evm_source_live_direct_collector_rejects_unstable_block_tag_before_rpc",
@@ -5902,6 +6325,8 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_json_rpc_url_rejects_hidden_request_state",
             "malformed EVM source RPC URL reached the opener",
             "test_evm_source_json_rpc_redacts_transport_and_error_response_details",
+            "secret-token provider URL leaked from transport",
+            "secret-bearing EVM source transport error was accepted",
             "secret-token-evm-source-error",
             "secret-token {target_method} parser detail",
             "secret-token {target_method} readback parser detail",
@@ -5955,6 +6380,7 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_evm_source_live_production_gate_inventory",
+            "def test_release_readiness_guards_evm_source_live_production_surface",
             "def test_release_readiness_report_blocks_missing_ethereum_evm_source_live_production_gate",
         ),
     ),
@@ -6070,6 +6496,25 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
     (
         "pytests/scripts/sccp_evm_live_evidence_test.py",
         (
+            "test_evm_json_rpc_response_size_is_bounded",
+            "test_evm_json_rpc_http_error_detail_is_bounded",
+            "test_evm_json_rpc_rejects_duplicate_json_keys",
+            "test_evm_json_rpc_rejects_envelope_drift",
+            "test_live_evm_evidence_collects_destination_and_offline_toml",
+            "test_live_evm_evidence_rejects_aliased_verifier_and_bridge",
+            "test_live_evm_diagnostic_offline_args_do_not_self_pin_binding",
+            "test_live_evm_full_toml_requires_route_canary_evidence",
+            "test_live_evm_diagnostic_offline_args_withhold_route_until_binding_pin",
+            "test_live_evm_evidence_rejects_missing_route_source_hashes_and_drift",
+            "test_live_evm_evidence_rejects_rpc_chain_id_drift",
+            "test_live_evm_evidence_rejects_noncanonical_expected_rpc_chain_id",
+            "test_live_evm_expected_rpc_chain_id_parser_requires_canonical_decimal",
+            "test_live_evm_full_toml_requires_expected_bridge_code_hash",
+            "test_live_evm_defaults_expected_network_id_to_canonical_mainnet_id",
+            "test_live_evm_rejects_wrong_expected_network_id",
+            "test_live_evm_rejects_noncanonical_bridge_network_id_by_default",
+            "test_live_evm_evidence_rejects_wrong_backend_and_target",
+            "test_live_evm_cli_json_and_toml_outputs",
             "test_live_evm_evidence_rejects_verifier_code_hash_drift",
             "test_live_evm_evidence_rejects_bridge_code_hash_drift",
             "test_live_evm_evidence_rejects_bridge_destination_binding_drift",
@@ -6082,8 +6527,10 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_live_evm_rejects_non_string_copied_destination_hash_without_stringifying",
             "test_live_evm_torii_query_rejects_non_string_copied_destination_metadata",
             "test_evm_live_cli_parsers_reject_non_string_values_without_stringification",
+            "test_evm_live_exact_string_parsers_reject_string_subclasses_without_hooks",
             "test_evm_live_namespace_args_reject_non_bytes_without_stringifying",
             "test_evm_live_collect_rejects_non_bytes_namespace_args_before_rpc",
+            "test_evm_live_container_and_bytes_boundaries_reject_subclasses_without_hooks",
             "test_evm_route_canary_call_summary_rejects_non_string_event_fields_without_stringifying",
             "test_evm_route_canary_evidence_hash_rejects_non_string_call_fields_without_stringifying",
             "test_evm_route_canary_evidence_hash_rejects_non_integer_summary_fields_without_coercion",
@@ -6101,6 +6548,14 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "HostileImportedInteger",
             "secret-token imported EVM live integer",
             "HostileEvmLiveParserValue",
+            "HostileEvmLiveString",
+            "HostileEvmLiveBytes",
+            "HostileEvmLiveBytearray",
+            "HostileEvmLiveDict",
+            "HostileEvmLiveList",
+            "secret-token EVM live exact string stripped",
+            "secret-token EVM live bytes coerced",
+            "secret-token EVM live dict get ran",
             "secret-token-evm-live-parser-value",
             '("expected_rpc_chain_id", True, "expected RPC chain id")',
             '("source_domain", False, "source domain")',
@@ -6138,6 +6593,8 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "test_evm_json_rpc_redacts_invalid_json_parser_details",
             "test_evm_json_rpc_url_rejects_hidden_request_state",
             "malformed EVM RPC URL reached the opener",
+            "secret-token provider URL leaked from transport",
+            "secret-bearing EVM transport error was accepted",
             "secret-token-evm-error",
             "secret-token invalid EVM JSON-RPC payload",
             "module.argparse.ArgumentTypeError",
@@ -6165,8 +6622,14 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
     (
         "scripts/sccp_evm_destination_evidence.py",
         (
+            "type(value) is not str",
+            "type(runtime_text) is not str",
+            "type(bridge_bytecode) is not str",
+            "type(verifier_bytecode) is not str",
             "{label} must be canonical lowercase 0x hex",
             "--{output} has invalid {label} evidence",
+            "bridge runtime bytecode metadata is inconsistent",
+            "verifier runtime bytecode metadata is inconsistent",
             "EVM destination runtime bytecode readiness must be a boolean",
             "def _require_exact_u64(",
             'raise ValueError(f"{label} must be an exact u64") from None',
@@ -6182,7 +6645,32 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
     (
         "pytests/scripts/sccp_evm_destination_evidence_test.py",
         (
+            "test_evm_destination_domain_parser_accepts_eth_and_bsc_only",
+            "test_evm_address_and_hash_parsers_reject_zero_and_wrong_width",
+            "test_evm_destination_binding_hash_matches_vectors_and_domain_separates",
+            "test_evm_route_allowlist_hash_matches_lane_evidence_vectors",
+            "test_evm_route_canary_transaction_hash_binds_target_domain",
+            "test_evm_destination_binding_hash_rejects_malformed_direct_material",
+            "test_evm_runtime_bytecode_derives_and_rejects_mismatched_code_hash",
+            "test_evm_direct_renderers_derive_code_hashes_from_runtime_bytecode",
+            "test_evm_toml_rendering_carries_eth_and_bsc_profile_ids",
+            "test_evm_full_toml_rejects_route_canary_transaction_readback_drift",
+            "test_evm_full_toml_rejects_route_canary_transcript_hash_reuse",
+            "test_evm_full_toml_rejects_route_canary_governed_transcript_hash_reuse",
+            "test_evm_cli_json_summary_toml_and_expected_binding_check",
+            "test_evm_cli_bsc_testnet_profile_defaults_and_scope",
+            "test_evm_cli_requires_code_hash_or_runtime_bytecode",
+            "test_evm_cli_derives_bridge_code_hash_from_runtime_bytecode",
             "def test_evm_toml_runtime_bytecode_reparse_redacts_parser_detail",
+            "def test_evm_destination_exact_runtime_strings_reject_string_subclasses_without_hooks",
+            "def test_evm_destination_byte_helpers_reject_subclasses_without_hooks",
+            "HostileEvmDestinationString",
+            "HostileEvmDestinationBytes",
+            "HostileEvmDestinationBytearray",
+            "secret-token EVM destination string was stripped",
+            "secret-token EVM destination bytes stringified",
+            "bridge runtime bytecode metadata is inconsistent",
+            "verifier runtime bytecode metadata is inconsistent",
             "def test_evm_toml_runtime_bytecode_reparse_redacts_helper_failures",
             "def test_evm_destination_json_summary_rejects_non_boolean_runtime_readiness",
             "def test_evm_destination_rejects_hostile_expected_binding_hash_without_hooks",
@@ -6230,6 +6718,7 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_evm_live_destination_production_gate_inventory",
+            "def test_release_readiness_guards_evm_live_destination_production_surface",
             "def test_release_readiness_report_blocks_missing_ethereum_evm_live_destination_production_gate",
         ),
     ),
@@ -6367,6 +6856,7 @@ ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_route_canary_finalized_receipt_block_gate_inventory",
+            "def test_release_readiness_guards_evm_route_canary_finalized_receipt_block",
             "def test_release_readiness_report_blocks_missing_ethereum_route_canary_finalized_receipt_block_gate",
         ),
     ),
@@ -6713,6 +7203,7 @@ ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_report_guards_ethereum_launch_policy_selector_gate_inventory",
+            "def test_release_readiness_guards_ethereum_launch_policy_selector",
             "def test_release_readiness_report_blocks_missing_ethereum_launch_policy_selector_gate",
         ),
     ),
@@ -6824,6 +7315,9 @@ BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS = (
             "function evidenceAllowedFields",
             "function unknownFieldBlockers",
             "function aliasFieldBlockers",
+            "function retiredAliasFieldBlockers",
+            "function canonicalAliasFieldBlockers",
+            "must not use retired alias ${present[0]}; use ${group[0]}",
             "function optionEnabled(options, key, fallback = false)",
             "if (value === undefined) {",
             'if (value === "true") return true;',
@@ -6954,6 +7448,12 @@ BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS = (
             "materialize refuses signed attestation bodies with duplicate aliases",
             "attestation-status rejects signed role files with shadow signature metadata",
             "attestation-request refuses material manifest shadow fields and aliases",
+            "secret-token-bsc-groth16-retired-material-alias",
+            "/material manifest routeId must not use retired alias route_id; use routeId/u",
+            "/material manifest productionReady must not use retired alias production_ready; use productionReady/u",
+            "/material manifest artifacts\\.provingKey sha256 must not use retired alias artifact_hash; use sha256/u",
+            "/material manifest selfChecks\\.snarkjs r1csInfoSource must not use retired alias r1cs_info_source; use r1csInfoSource/u",
+            "/material manifest attestationTrustPolicy trustedSignerFingerprints must not use retired alias trusted_signer_fingerprints; use trustedSignerFingerprints/u",
             "BSC Groth16 material converter rejects retired network option alias",
             "BSC Groth16 material CLI rejects retired network option aliases before work",
             "secret-token-bsc-groth16-network",
@@ -7085,6 +7585,13 @@ BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS = (
             "contains sensitive name",
             "result.commands.toolchainFingerprint",
             "sourceBuildTranscript sha256 must not use multiple aliases",
+            "hash-retired-alias",
+            "secret-token-bsc-groth16-retired-source-build-alias",
+            "/sourceBuildTranscript sha256 must not use retired alias hash; use sha256/u",
+            "materialize refuses transcript retired aliases without leaking values",
+            "secret-token-bsc-groth16-retired-transcript-alias",
+            "/trusted setup transcript routeId must not use retired alias route_id; use routeId/u",
+            "/reproducible build transcript verificationKey verifierKeyHash must not use retired alias verifier_key_hash; use verifierKeyHash/u",
             "semantic SCCP circuit attestation signature contains unknown field: operatorOverride",
             "forced proof object verification failure",
             "proof self-test R1CS path must be",
@@ -7094,25 +7601,46 @@ BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS = (
             "binarySha256: sha256Hex(Buffer.from(\"circom executable bytes\"))",
             "trusted setup transcript routeId must not use multiple aliases",
             "reproducible build transcript verificationKey verifierKeyHash must not use multiple aliases",
+            "secret-token-bsc-groth16-retired-handoff-command-alias",
+            "/attestation handoff commands verifyHandoff must not use retired alias verify_handoff; use verifyHandoff/u",
             "material manifest routeId must not use multiple aliases",
             "attestation request package contains unknown field: operatorShadowDecision",
+            "sign-attestation refuses request package retired aliases without leaking values",
+            "secret-token-bsc-groth16-retired-request-package-alias",
+            "/attestation request package routeId must not use retired alias route_id; use routeId/u",
+            "/attestation request package evidenceValidation\\.semanticReview sha256 must not use retired alias hash; use sha256/u",
+            "/attestation request package semantic SCCP circuit role signatureTemplate must not use retired alias signature_template; use signatureTemplate/u",
+            "sign-attestation refuses request role bodies with retired aliases without leaking values",
+            "secret-token-bsc-groth16-retired-request-body-alias",
+            "/attestation request package semantic SCCP circuit body routeId must not use retired alias route_id; use routeId/u",
             "semantic-absolute-report-path",
             "semantic-parent-report-path",
             "semantic-route-alias-conflict",
+            "semantic-retired-route-alias",
             "semantic-shadow-field",
             "semantic-report-shadow-field",
             "semantic-report-container-alias-conflict",
+            "semantic-retired-report-container-alias",
             "semantic-report-path-alias-conflict",
             "semantic-report-hash-alias-conflict",
+            "semantic-retired-report-hash-alias",
             "semantic-symlink-report-path",
             "semantic-oversized-report-path",
             "circuit-absolute-report-path",
             "circuit-parent-report-path",
             "circuit-approved-alias-conflict",
+            "circuit-retired-approved-alias",
             "circuit-shadow-field",
             "circuit-report-shadow-field",
             "circuit-symlink-report-path",
             "circuit-oversized-report-path",
+            "secret-token-bsc-groth16-retired-evidence-alias",
+            "/semantic SCCP circuit review evidence routeId must not use retired alias route_id; use routeId/u",
+            "/semantic SCCP circuit review evidence report sha256 must not use retired alias report_sha256; use sha256/u",
+            "/circuit security audit evidence approved must not use retired alias production_approved; use approved/u",
+            "attestation-status rejects signed role files with retired signature aliases without leaking values",
+            "secret-token-bsc-groth16-retired-signature-alias",
+            "/semantic SCCP circuit attestation signature signerFingerprint must not use retired alias signer_fingerprint; use signerFingerprint/u",
         ),
     ),
     (
@@ -7124,6 +7652,9 @@ BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS = (
             "function groth16MaterialManifestArtifactPath",
             "function readGroth16ProofSelfTestArtifactPath",
             "function groth16ProofSelfTestPathProblem",
+            "function groth16ProofSelfTestRetiredAliasProblems",
+            "function groth16ProofSelfTestCanonicalAliasProblems",
+            "must not use retired alias ${presentKeys[0]}; use ${keys[0]}",
             "function bscGroth16DeterministicProofSelfTestSample",
             "async function verifyBscGroth16ProofSelfTestWithSnarkjs",
             "Groth16 proof self-test sample.syntheticInputWords must match deterministic BSC Groth16 self-test input",
@@ -7165,11 +7696,19 @@ BSC_GROTH16_MATERIAL_EVIDENCE_GUARD_MARKERS = (
             "circuitSecurityAuditEvidenceSchema: undefined",
             "Groth16 material manifest contains unknown field: operatorShadow",
             "Groth16 material manifest routeId must not use multiple aliases",
+            "secret-token-bsc-groth16-material-retired-alias",
+            "Groth16 material manifest routeId must not use retired alias route_id; use routeId",
+            "Groth16 material manifest selfChecks\\.snarkjs r1csInfoSource must not use retired alias r1cs_info_source; use r1csInfoSource",
+            "Groth16 material manifest semantic SCCP circuit attestation reference signature signerFingerprint must not use retired alias signer_fingerprint; use signerFingerprint",
             "Groth16 proof self-test manifest path must be groth16-material\\.json",
             "Groth16 proof self-test R1CS path must be proof-artifact\\.r1cs",
             "Groth16 proof self-test BSC verifier key path must be verifier-key\\.json",
             "Groth16 proof self-test sample\\.id must be sccp-bsc-groth16-full-message-self-test-v1",
             "Groth16 proof self-test sample\\.inputSha256 must match deterministic self-test input",
+            "secret-token-bsc-groth16-proof-self-test-retired-alias",
+            "Groth16 proof self-test report routeId must not use retired alias route_id; use routeId",
+            "Groth16 proof self-test sample inputSha256 must not use retired alias input_sha256; use inputSha256",
+            "Groth16 proof self-test adversarialChecks\\.nonBooleanValueBit\\.case signalName must not use retired alias signal_name; use signalName",
             "Groth16 proof self-test publicSignals\\[0\\] must be a BN254 scalar field element",
             "snarkjs-drift",
             "native-prover-bundle SnarkJS proof verifier requires --snarkjs-bin",
@@ -7374,6 +7913,8 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "function normalizeCanonicalManifestText(value, label)",
             "function readFirstValue(record, ...keys)",
             "if (value !== undefined) {",
+            "function readStringArray(record, keys, label)",
+            "must not use retired alias ${selectedKey} in ${label}; use ${keys[0]}.",
             "function temporaryOutputPath(out)",
             "function replaceWithTemporaryFile(out, value, mode)",
             'await writeFile(temp, value, { flag: "wx", mode });',
@@ -7383,7 +7924,18 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "function collectStringEntries(record, keys, pathName, { allowNull = false } = {})",
             "rawValue === null && allowNull",
             "function isGeneratedBscAddressLabel(label)",
+            "function isBscDeploymentEvidencePath(pathName)",
+            "function isBscOfflineFullTomlEvidencePath(pathName)",
+            "function isBscLiveEvidencePath(pathName)",
+            "function isBscTairaBurnRecordContractPath(pathName)",
+            "function isBscBrowserProverManifestPath(pathName)",
             "function assertNoRetiredRouteManifestAlias(entries, keys, pathName, label)",
+            "isRouteManifestPath(pathName) ||",
+            "isBscDeploymentEvidencePath(pathName) ||",
+            "isBscOfflineFullTomlEvidencePath(pathName)",
+            "isBscLiveEvidencePath(pathName)",
+            "isBscTairaBurnRecordContractPath(pathName)",
+            "isBscBrowserProverManifestPath(pathName)",
             "must not use retired alias ${entries[0].key} in ${pathName}; use ${keys[0]}.",
             "function normalizeCanonicalHex32(value, label = \"value\")",
             "function normalizeCanonicalEvmAddress(value, label = \"address\")",
@@ -7455,6 +8007,9 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "route manifest BSC bridge address",
             "route manifest BSC source bridge address",
             "route manifest BSC verifier address",
+            "network: route.network,",
+            "source_bridge_address: route.sourceBridgeAddress,",
+            "destination_verifier_address: route.verifierAddress,",
         ),
     ),
     (
@@ -7481,15 +8036,38 @@ BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "BSC route-config command rejects route output path collisions with inputs before writing artifacts",
             "BSC route-config command rejects route output path collisions before reading inputs",
             "BSC route-config rejects accessor-backed scalar alias fallbacks without reading accessors",
+            "BSC route-manifest command rejects ambiguous offline full TOML evidence",
             "BSC route-config rejects retired route manifest aliases without echoing values",
+            "BSC route-manifest rejects retired deployment evidence aliases without echoing values",
+            "BSC route-manifest rejects retired live evidence aliases without echoing values",
+            "BSC route-manifest rejects retired TAIRA burn-record contract aliases without echoing values",
+            "BSC route-manifest rejects retired browser prover sidecar aliases without echoing values",
             "secret-token-bsc-retired-alias",
+            "secret-token-bsc-retired-burn-record-contract-alias",
+            "secret-token-bsc-retired-browser-sidecar-alias",
+            "opaque-bsc-retired-deployment-alias-value",
+            "opaque-bsc-retired-offline-evidence-alias",
+            "opaque-bsc-retired-live-evidence-alias",
             "/route manifest routeId must not use retired alias route_id in route manifest routeId; use routeId/u",
             "/route manifest sourceDomain must not use retired alias source_domain in route manifest destinationRollout; use sourceDomain/u",
+            "/BSC deployment evidence routeId must not use retired alias route_id in BSC deployment evidence routeId; use routeId/u",
+            "/BSC deployment evidence token address must not use retired alias bsc_token_address in BSC deployment evidence; use bscTokenAddress/u",
+            "/BSC deployment evidence destinationBindingKey must not use retired alias destinationBindingKey in BSC deployment evidence destinationBinding; use key/u",
+            "/BSC route proofArtifactHash must not use retired alias proof_artifact_hash in BSC deployment evidence; use proofArtifactHash/u",
+            "/BSC offline full TOML evidence routeId must not use retired alias route_id in BSC offline full TOML evidence routeId; use routeId/u",
+            "/BSC offline full TOML evidence postDeployLiveEvidence must not use retired alias post_deploy_live_evidence in BSC offline full TOML evidence; use postDeployLiveEvidence/u",
+            "/BSC offline full TOML evidence offlineFullTomlSha256 must not use retired alias offline_full_toml_sha256 in BSC offline full TOML evidence; use offlineFullTomlSha256/u",
+            "/BSC live evidence postDeployLiveEvidence must not use retired alias post_deploy_live_evidence in BSC live evidence; use postDeployLiveEvidence/u",
+            "/postDeployLiveEvidence\\.sourceEventTransactionId must not use retired alias source_event_transaction_id in BSC live evidence postDeployLiveEvidence; use sourceEventTransactionId/u",
             "const defineThrowingAccessors = (record, keys) => {",
             "production_ready: false",
             "counterparty_domain: SCCP_DOMAIN_BSC",
             "fullTomlReady: false",
             "counterparty_domain = 2",
+            '/network = "bsc-testnet"/u',
+            "/(^|\\n)tron_network =/u",
+            "/(^|\\n)sccp_bsc_source_bridge_address =/u",
+            "/(^|\\n)sccp_bsc_destination_verifier_address =/u",
             "sentinel:bsc-route-config-malformed-manifest",
             "sentinel:bsc-route-config-base-input",
             "BSC route-config command rejects offline full TOML evidence output collisions before writing artifacts",
@@ -7741,7 +8319,7 @@ BSC_ROUTE_MANIFEST_CLI_MARKERS = (
             "--bsc-network must be exactly testnet or mainnet.",
             'ownValue(options, "bsc-network") ?? "testnet"',
             "function normalizeBscChainProfile(value, label = \"BSC chain\")",
-            '"confirm-testnet"',
+            '"confirm-network"',
             '"allow-local-rpc"',
             '"allow-diagnostic-verifier"',
             '"allow-unready"',
@@ -7858,6 +8436,9 @@ TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "route manifest tairaXorBridgeAddress",
             "route manifest sccpTronSourceBridgeAddress",
             "route manifest tronVerifierAddress",
+            "`network = ${tomlString(route.tronNetwork, \"network\")}`",
+            "`source_bridge_address = ${tomlString(route.sccpTronSourceBridgeAddress, \"source_bridge_address\")}`",
+            "`destination_verifier_address = ${tomlString(route.tronVerifierAddress, \"destination_verifier_address\")}`",
             "route manifest destinationRollout.verifierIdentity",
         ),
     ),
@@ -7894,6 +8475,10 @@ TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
             "productionReady: \"true\"",
             "productionReady: 1",
             "production_ready: true",
+            '/network = "mainnet"/u',
+            "/(^|\\n)tron_network =/u",
+            "/(^|\\n)sccp_tron_source_bridge_address =/u",
+            "/(^|\\n)tron_verifier_address =/u",
             "/route manifest productionReady must not use retired alias production_ready; use productionReady/u",
             "/route manifest destinationRollout\\.sourceDomain must not use retired alias source_domain; use sourceDomain/u",
             "post_deploy_live_evidence: manifest.postDeployLiveEvidence",
@@ -8037,6 +8622,13 @@ TRON_ROUTE_MANIFEST_CLI_MARKERS = (
             "main(argv = process.argv.slice(2))",
             "assertKnownCommand(command);",
             "parseArgs(command, rest);",
+            "function tronConfirmNetwork(profile)",
+            "function requireTronNetworkConfirmation(options, profile, action)",
+            'if (options["confirm-network"] !== required) {',
+            "requires --confirm-network ${required}",
+            'requireTronNetworkConfirmation(options, profile, "route-manifest production readiness");',
+            "--confirm-network taira_tron_xor:mainnet --confirm-mainnet taira_tron_xor",
+            '"confirm-network"',
             '"allow-unready"',
             '"poll-attempts"',
             '"poll-ms"',
@@ -8048,18 +8640,23 @@ TRON_ROUTE_MANIFEST_CLI_MARKERS = (
         (
             "TRON CLI rejects unknown commands without echoing values",
             "TRON CLI rejects unknown options without echoing names or values",
+            "TRON deploy and broadcast reject retired testnet confirmation before operator inputs",
             "TRON CLI rejects positional arguments without echoing values",
             "TRON CLI rejects duplicate options before work",
             "TRON evidence CLI rejects bare valued options before work",
             "secret-token-tron-command",
             "secret-token-tron-option",
             "secret-token-tron-value",
+            "secret-token-tron-confirm",
             "secret-token-tron-positional",
+            "--confirm-testnet",
             "/Unknown command\\./u",
             "/Unknown option\\./u",
             "/Unexpected positional argument\\./u",
             "/Option must be specified at most once\\./u",
             "/--verifier must be specified with an explicit value\\./u",
+            "/deploy targets TRON nile and requires --confirm-network taira_tron_xor:nile/u",
+            "/confirm-network taira_tron_xor:mainnet/u",
             "TRON route-config CLI rejects removed allow-unready before writing artifacts",
         ),
     ),
@@ -8100,6 +8697,7 @@ SOLANA_ROUTE_MANIFEST_CLI_MARKERS = (
             "const isNonPublicDnsHost = (hostname) => {",
             'const DEFAULT_SOLANA_RPC_URL = "https://api.testnet.solana.com";',
             'const DEFAULT_TAIRA_TORII_URL = "https://taira.sora.org";',
+            "const CONFIRM_NETWORK = `${ROUTE_ID}:solana-testnet`;",
             "const normalizeToriiUrl = (value = DEFAULT_TAIRA_TORII_URL) => {",
             "const normalizeSolanaRpcUrl = (value = DEFAULT_SOLANA_RPC_URL) => {",
             "const RETIRED_SOLANA_ROUTE_MANIFEST_ALIASES = Object.freeze([",
@@ -8147,6 +8745,8 @@ SOLANA_ROUTE_MANIFEST_CLI_MARKERS = (
             "const normalizeOptionalBooleanOption = (args, key, defaultValue = false) => {",
             "--${key} must be true or false.",
             "const final = normalizeOptionalBooleanOption(args, \"final\");",
+            'args["confirm-network"] !== CONFIRM_NETWORK',
+            "deploy requires --broadcast true --confirm-network ${CONFIRM_NETWORK}",
             "requireOption(args, \"keypair\")",
             "const mode = normalizeProposalMode(args.mode);",
             "const outputPath = args.output ? requireOption(args, \"output\") : null;",
@@ -8192,6 +8792,8 @@ SOLANA_ROUTE_MANIFEST_CLI_MARKERS = (
             "Solana CLI rejects unknown commands without echoing values",
             "Solana route-manifest CLI rejects positional arguments without echoing values",
             "Solana deploy CLI rejects malformed final flag before spawning",
+            "Solana deploy CLI requires canonical network confirmation before spawning",
+            "Solana deploy CLI rejects retired testnet confirmation before spawning",
             "Solana evidence CLI rejects bare keypair before spawning",
             "Solana route-manifest CLI rejects padded valued options before writing output",
             "Solana route-manifest CLI rejects output path collisions with inputs",
@@ -8214,6 +8816,7 @@ SOLANA_ROUTE_MANIFEST_CLI_MARKERS = (
             "secret-token-solana-env-rpc",
             "secret-token-solana-env-torii",
             "secret-token-solana-rpc-url",
+            "secret-token-solana-retired-confirmation",
             "secret-token-solana-retired-production-ready",
             "secret-token-solana-retired-${field}",
             "secret-token-solana-retired-browser-${field}",
@@ -8228,6 +8831,7 @@ SOLANA_ROUTE_MANIFEST_CLI_MARKERS = (
             "/Unexpected positional argument\\./u",
             "/Unknown command\\./u",
             "/--final must be true or false/u",
+            "/deploy requires --broadcast true --confirm-network taira_sol_xor:solana-testnet/u",
             "/--keypair must be specified with an explicit value/u",
             "/--solana-rpc-url must use HTTPS unless it is loopback HTTP/u",
             "/--solana-rpc-url must not include credentials, params, query strings, or fragments/u",
@@ -8347,8 +8951,10 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             "function normalizeTairaBurnRecordVkName(value, label =",
             "normalized.trim() !== normalized",
             "must be 1-128 verifier-key identifier characters",
-            'const TON_TESTNET_LEGACY_NETWORK = "testnet";',
+            'const TON_TESTNET_NETWORK = "testnet";',
             "const RETIRED_TON_ROUTE_MANIFEST_FIELDS = Object.freeze([",
+            "manifest.network !== TON_TESTNET_NETWORK",
+            "TON route manifest network must be testnet.",
             "function assertNoRetiredTonRouteManifestAliases(manifest)",
             "TON route manifest must not use retired ${field}; use ${replacement}.",
             "assertNoRetiredTonRouteManifestAliases(manifest);",
@@ -8372,8 +8978,9 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             'typeof candidate !== "string"',
             "candidate.trim() !== candidate",
             "TON finalize message value in nanoTON",
-            "bridgeManifest.tron_network = TON_TESTNET_LEGACY_NETWORK;",
-            "bridgeManifest.sccp_tron_source_bridge_address =",
+            "network: TON_TESTNET_NETWORK,",
+            "function bridgeRouteManifestForInstruction(manifest)",
+            "return stableJsonValue(manifest);",
         ),
     ),
     (
@@ -8440,7 +9047,7 @@ TON_ROUTE_MANIFEST_CLI_MARKERS = (
             "RETIRED_TON_ROUTE_MANIFEST_FIELDS",
             "TON publish-route-manifest rejects retired TRON manifest aliases without echoing values",
             "secret-token-ton-retired-network",
-            "/TON route manifest must not use retired tron_network; use chain\\./u",
+            "/TON route manifest must not use retired tron_network; use network\\./u",
             "/TON route manifest must not use retired sccp_tron_source_bridge_address; use source_bridge_address\\./u",
             "/TON route manifest must not use retired tron_verifier_address; use destination_verifier_address\\./u",
             "malformedBooleanOptionValues",
@@ -8590,6 +9197,8 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "route canary solana_programdata_slot must be a canonical positive decimal string",
             "if type(value) is not str or value != value.strip():",
             "if value is None or comment is None:",
+            "type(actual) is not bool",
+            'comment not in {"true", "false"}',
             "type(value) is str and bool(value.strip())",
             "if type(value) is not str:",
             "if type(account_status) is not str or account_status != \"active\":",
@@ -8598,14 +9207,17 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "def _route_canary_scalar_absent(value: Any) -> bool:",
             "if type(value) is int:",
             "if type(value) is bool:",
+            "f\"{label} must be boolean\"",
             "not _route_canary_scalar_absent(record.get(field)) for field in fields",
             "if profile.chain != \"ton\" and not _scalar_absent(record.get(field)):",
             "if profile.chain != \"tron\" and not _scalar_absent(record.get(field)):",
             "and not _scalar_absent(record.get(field))",
             "def exact_comment_value(field: str) -> str | None:",
             "def exact_string(field: str, label: str) -> str | None:",
+            "Solana route canary immutable program flag must be true",
             "\"Solana route canary ProgramData address\",",
-            "program_immutable=(program_immutable_text == \"true\")",
+            "assert program_immutable_text == \"true\"",
+            "program_immutable=True",
             "canary[\"solana_programdata_address\"] = programdata_address",
             "def _release_checklist_route_canary_transcript_hash_blockers(",
             "route canary transaction_hash must be a canonical non-zero bytes32",
@@ -8629,6 +9241,7 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "route canary raw_data_owner_matches_transaction must be boolean",
             "route canary raw_data owner must match transaction",
             "\"signature_recovers_to_owner\"",
+            "TRON route canary signature recovery",
             "route canary signature_recovers_to_owner must be boolean",
             "route canary signature must recover to owner",
             "route_allowlist_hash cannot be recomputed",
@@ -8639,6 +9252,9 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
         (
             "def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars",
+            "def test_all_lanes_release_checklist_rejects_malformed_route_canary_summary",
+            "route canary summary is malformed",
+            'HostileAllLanesReportSection(\n        {"status": "passed"}\n    )',
             "def test_all_lanes_release_checklist_rejects_unexpected_route_canary_fields",
             "def test_all_lanes_release_checklist_requires_route_canary_hash_bindings",
             "def test_all_lanes_route_canary_evidence_sources_cover_launch_lanes",
@@ -8675,15 +9291,60 @@ ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
             "checklist_tron_malformed_signature_sha256",
             "def test_all_lanes_release_checklist_rejects_route_canary_transcript_hash_role_replay",
             "checklist_ton_last_transaction_hash_replays_account_state",
+            "def test_all_lanes_rejects_tron_route_canary_transaction_metadata_drift",
+            "TRON route canary evidence hash must match ",
+            "MessageProofAccepted transaction metadata",
+            "def test_all_lanes_rejects_tron_route_canary_call_transcript_metadata_drift",
+            "TRON route canary target domain metadata must be TRON",
+            "def test_all_lanes_rejects_tron_route_canary_transcript_hash_reuse",
+            "TRON route canary transcript hash",
+            "def test_all_lanes_rejects_tron_route_canary_governed_hash_role_reuse",
+            "TRON route canary hash role tron_route_canary_message_id must not reuse ",
+            "def test_all_lanes_rejects_tron_route_canary_signature_metadata_drift",
+            "TRON route canary signature recovered address must match transaction owner",
+            "def test_all_lanes_rejects_tron_route_canary_missing_block_metadata",
+            "TRON route canary block number metadata must be a canonical positive decimal",
+            "def test_all_lanes_rejects_tron_route_canary_missing_used_message_state",
+            "TRON route canary usedMessageProofs metadata must be true",
+            "def test_all_lanes_rejects_tron_route_canary_missing_raw_data_owner_binding",
+            "TRON route canary raw_data owner binding metadata must be true",
+            "def test_all_lanes_rejects_tron_route_canary_missing_signature_recovery",
+            "TRON route canary signature recovery metadata must be true",
+            "def test_all_lanes_rejects_tron_route_canary_bad_signature_recovered_address",
+            "TRON route canary signature recovered address metadata must be",
+            "def test_all_lanes_rejects_tron_route_canary_non_canonical_hex_metadata",
+            "TRON route canary transaction id metadata must be a non-zero bytes32",
+            "def test_all_lanes_rejects_tron_route_canary_signature_owner_mismatch",
+            "def test_all_lanes_rejects_tron_route_canary_transcript_on_non_tron_route",
+            "is only valid for TRON route canary evidence",
+            "def test_all_lanes_rejects_evm_route_canary_transaction_metadata_drift",
+            "EVM route canary evidence hash must match ",
+            "MessageProofAccepted transaction metadata",
+            "def test_all_lanes_rejects_evm_route_canary_transaction_readback_drift",
+            "EVM route canary transaction block number metadata must match",
+            "def test_all_lanes_rejects_evm_route_canary_call_transcript_metadata_drift",
+            "EVM route canary target domain metadata must match destination rollout",
+            "def test_all_lanes_rejects_evm_route_canary_transcript_hash_reuse",
+            "EVM route canary transcript hash",
+            "def test_all_lanes_rejects_evm_route_canary_governed_hash_role_reuse",
+            "EVM route canary hash role evm_route_canary_message_id must not reuse ",
+            "def test_all_lanes_rejects_evm_route_canary_transcript_on_non_evm_route",
+            "is only valid for EVM route canary evidence",
+            "def test_all_lanes_rejects_evm_route_canary_missing_used_message_state",
+            "EVM route canary usedMessageProofs metadata must be true",
             "def test_all_lanes_release_checklist_rejects_route_canary_template_hash_replays",
             "checklist_tron_signature_template_replay",
             "def test_all_lanes_rejects_hostile_solana_live_program_comments_without_stringifying",
             "secret-token Solana live comment was stringified",
+            "def test_all_lanes_rejects_solana_program_immutable_bool_aliases",
+            "def test_all_lanes_rejects_solana_route_canary_immutable_comment_aliases",
+            "Solana program immutable field must match _comment_solana_program_immutable comment",
             "def test_all_lanes_rejects_hostile_ton_live_account_comments_without_stringifying",
             "def test_all_lanes_rejects_hostile_ton_route_canary_comments_without_stringifying",
             "secret-token TON live comment was stringified",
             "def test_all_lanes_rejects_hostile_evm_route_canary_scalars_without_stringifying",
             "def test_all_lanes_rejects_hostile_tron_route_canary_scalars_without_stringifying",
+            "def test_all_lanes_rejects_route_canary_actual_boolean_aliases",
             "secret-token route canary scalar was stringified",
             "def test_all_lanes_rejects_hostile_foreign_route_canary_fields_without_stringifying",
             "secret-token all-lanes scalar was stringified",
@@ -8788,6 +9449,16 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _evidence_bundle_root_errors(records: Any)",
             "evidence bundle root must be an object",
             "evidence section name must be a string",
+            "def _records_by_domain(",
+            "if type(records) is not list:",
+            "if type(record) is not dict:",
+            "if type(document) is not dict:",
+            "evidence root must be a TOML table",
+            "if type(zk) is not dict:",
+            "for section in sorted(zk, key=_safe_public_key_sort_key):",
+            "if type(section) is not str:",
+            "unsupported zk section with malformed name",
+            "type(record) is dict for record in records",
             "def _evidence_unsupported_section_detail(",
             "unsupported evidence section",
             "unsupported evidence section with sensitive name",
@@ -8813,8 +9484,36 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
     (
         "pytests/scripts/sccp_all_lanes_evidence_test.py",
         (
+            "test_all_lanes_cli_preserves_safe_top_level_exception_detail",
+            "test_all_lanes_loader_accepts_evidence_under_system_temp_symlink_prefix",
+            "test_all_lanes_evidence_bundle_is_ready",
+            "test_all_lanes_evidence_accepts_config_route_canary_fields",
+            "test_all_lanes_evidence_requires_source_record_hash_comments",
+            "test_all_lanes_loads_source_record_hash_comments_from_toml",
+            "test_route_allowlist_hash_matches_rust_vector",
+            "test_all_lanes_accepts_verified_tron_live_full_toml",
+            "test_all_lanes_accepts_verified_solana_live_toml",
+            "test_all_lanes_accepts_verified_ton_live_toml",
+            "test_all_lanes_evidence_recomputes_audit_and_tron_config_hashes",
+            "test_all_lanes_evidence_requires_route_canary_metadata",
+            "test_all_lanes_release_checklist_reports_ready_bundle",
+            "test_all_lanes_public_summary_accepts_active_ready_with_future_lane_blockers",
+            "test_all_lanes_release_checklist_pinpoints_canary_gaps",
+            "test_all_lanes_evidence_requires_route_component_hashes",
+            "test_all_lanes_cli_merges_toml_snippets",
             "def test_all_lanes_evidence_rejects_unknown_sections",
             "unsupported evidence section sccp_shadow_rollouts",
+            "def test_all_lanes_evidence_rejects_route_canary_comment_drift",
+            "route_canary_status comment must match ",
+            "def test_all_lanes_evidence_rejects_unsupported_domain_records",
+            "uses unsupported source_domain 99",
+            "def test_all_lanes_evidence_rejects_boolean_domain_fields",
+            "missing integer source_domain",
+            "def test_all_lanes_evidence_rejects_boolean_integer_aliases",
+            "placeholder_material must be False",
+            "def test_all_lanes_evidence_rejects_unknown_record_fields",
+            "unexpected field unexpected_material_hash",
+            "def test_all_lanes_evidence_redacts_hostile_root_section_names",
             "def test_all_lanes_evidence_redacts_unsafe_direct_section_names",
             "secret-token-direct-section",
             "route|operator-direct-section",
@@ -8823,6 +9522,13 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "route|operator-material-field",
             "def test_all_lanes_load_evidence_rejects_unreadable_file_shapes",
             "secret-token-evidence-parent-link",
+            "def test_all_lanes_load_evidence_rejects_container_subclasses_without_leaking",
+            "HostileAllLanesReportSection({\"zk\": {}})",
+            "HostileAllLanesFieldName(\"sccp_source_verifier_materials\")",
+            "HostileAllLanesReportList([])",
+            "def test_all_lanes_evidence_rejects_container_subclass_inputs_without_leaking",
+            "HostileAllLanesReportSection(complete_bundle(module))",
+            "HostileAllLanesReportList(",
             "def test_all_lanes_evidence_rejects_malformed_root_inputs",
             "def test_all_lanes_evidence_rejects_non_string_section_keys",
             "records[1] = []",
@@ -8831,6 +9537,112 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "assert \"evidence section name must be a string: 1\" not in summary[\"blockers\"]",
             "def test_all_lanes_rejects_hostile_evm_live_metadata_comments_without_stringifying",
             "secret-token EVM live metadata was stringified",
+            "def test_all_lanes_accepts_direct_evm_destination_toml_with_audited_metadata",
+            "def test_all_lanes_rejects_evm_destination_without_live_bridge_metadata",
+            "EVM live RPC chain-id metadata is required",
+            "def test_all_lanes_rejects_evm_destination_with_invalid_runtime_bytecode_metadata",
+            "EVM bridge runtime bytecode metadata is invalid",
+            "def test_all_lanes_rejects_evm_destination_noncanonical_runtime_bytecode_metadata",
+            "def test_all_lanes_rejects_evm_destination_when_runtime_bytecode_hash_drifts",
+            "EVM verifier runtime bytecode hash must match verifier code hash metadata",
+            "def test_all_lanes_rejects_evm_source_without_live_bridge_metadata",
+            "EVM source live RPC chain-id metadata is required",
+            "def test_all_lanes_rejects_ethereum_nonfinalized_evm_live_metadata",
+            "Ethereum source live block-tag metadata must be finalized",
+            "def test_all_lanes_rejects_ethereum_evm_live_rpc_chain_id_drift",
+            "EVM source live RPC chain-id must be canonical for eth: expected 1",
+            "def test_all_lanes_rejects_evm_source_deployment_transaction_readback_drift",
+            "def test_all_lanes_rejects_evm_source_with_invalid_runtime_bytecode_metadata",
+            "EVM source bridge runtime bytecode metadata is invalid",
+            "def test_all_lanes_rejects_evm_source_noncanonical_runtime_bytecode_metadata",
+            "def test_all_lanes_rejects_evm_source_when_runtime_bytecode_hash_drifts",
+            "EVM source bridge runtime bytecode hash must match ",
+            "def test_all_lanes_accepts_direct_evm_source_toml_with_audited_metadata",
+            "def test_all_lanes_accepts_direct_tron_full_toml_with_audited_metadata",
+            "def test_all_lanes_rejects_tron_records_without_live_metadata",
+            "TRON source bridge runtime bytecode metadata must be present",
+            "def test_all_lanes_rejects_tron_live_comments_on_foreign_lanes",
+            "TRON source bridge live evidence",
+            "TRON destination verifier live evidence",
+            "def test_all_lanes_rejects_evm_source_comments_on_foreign_lanes",
+            "EVM source bridge live evidence",
+            "def test_all_lanes_rejects_foreign_destination_live_fields",
+            "def test_all_lanes_rejects_all_zero_tron_live_address_metadata",
+            "TRON source bridge address metadata is invalid",
+            "def test_all_lanes_rejects_mismatched_tron_live_config_hash_metadata",
+            "TRON source bridge config hash metadata must match ",
+            "def test_all_lanes_rejects_tron_invalid_runtime_bytecode_metadata",
+            "TRON source bridge runtime bytecode metadata is invalid",
+            "def test_all_lanes_rejects_padded_tron_live_metadata",
+            "def test_all_lanes_rejects_padded_tron_structured_hashes",
+            "source_bridge_network_id must be a non-zero 32-byte hex value",
+            "def test_all_lanes_rejects_tron_runtime_bytecode_hash_drift",
+            "TRON destination verifier runtime bytecode hash must match runtime ",
+            "def test_all_lanes_rejects_tron_retired_receipt_root_profile_id",
+            "receipt-root",
+            "def test_all_lanes_accepts_direct_solana_destination_toml_with_audited_metadata",
+            "def test_all_lanes_rejects_solana_destination_without_live_programdata_metadata",
+            "Solana live ProgramData account metadata is required",
+            "def test_all_lanes_rejects_noncanonical_destination_decimal_metadata",
+            "Solana ProgramData slot metadata must be a positive decimal string",
+            "def test_all_lanes_rejects_solana_programdata_slot_mismatch",
+            "Solana ProgramData slot metadata must match expected ProgramData slot",
+            "def test_all_lanes_rejects_solana_programdata_program_alias",
+            "Solana ProgramData account metadata must differ from verifier_identity",
+            "def test_all_lanes_rejects_solana_noncanonical_program_account_length",
+            "Solana Program account data length metadata must be 36 bytes",
+            "def test_all_lanes_rejects_solana_account_preimage_drift",
+            "Solana Program account data metadata must reference ProgramData",
+            "def test_all_lanes_rejects_solana_programdata_invalid_executable_base64",
+            "Solana ProgramData executable base64 metadata is invalid",
+            "def test_all_lanes_rejects_solana_programdata_executable_hash_drift",
+            "Solana ProgramData executable base64 hash must match ProgramData ",
+            "def test_all_lanes_rejects_confirmed_solana_live_evidence",
+            "Solana live RPC commitment metadata must be finalized",
+            "def test_all_lanes_rejects_mutable_solana_live_metadata",
+            "Solana verifier program immutable metadata must be true",
+            "def test_all_lanes_rejects_stale_solana_programdata_context_slot",
+            "Solana ProgramData account RPC context slot must be at or after ",
+            "def test_all_lanes_rejects_stale_solana_program_context_slot",
+            "Solana program account RPC context slot must be at or after ",
+            "def test_all_lanes_rejects_solana_route_canary_live_program_hash_drift",
+            "Solana route canary evidence hash must match live program metadata",
+            "def test_all_lanes_rejects_solana_route_canary_verifier_code_hash_role_reuse",
+            "Solana route canary hash role verifier_code_hash must not reuse ",
+            "def test_all_lanes_rejects_solana_programdata_field_comment_drift",
+            "Solana ProgramData address field must match ",
+            "def test_all_lanes_accepts_direct_ton_destination_toml_with_audited_metadata",
+            "def test_all_lanes_rejects_ton_destination_without_live_account_metadata",
+            "TON live account status metadata must be active",
+            "def test_all_lanes_rejects_ton_destination_without_live_account_comments",
+            "TON live account status comment must be present",
+            "def test_all_lanes_rejects_ton_route_canary_without_active_account_status",
+            "TON route canary account status must match active destination rollout",
+            "def test_all_lanes_rejects_ton_destination_without_live_code_hash_metadata",
+            "TON code hash metadata must be a non-zero",
+            "def test_all_lanes_rejects_ton_destination_without_code_boc_match_metadata",
+            "def test_all_lanes_rejects_ton_destination_with_false_code_boc_match_metadata",
+            "TON code BoC hash match metadata must be true",
+            "def test_all_lanes_rejects_ton_destination_without_code_boc_base64_metadata",
+            "TON code BoC base64 metadata must be present",
+            "def test_all_lanes_rejects_ton_destination_with_invalid_code_boc_base64",
+            "TON code BoC base64 metadata is invalid",
+            "def test_all_lanes_rejects_ton_destination_when_code_boc_replay_hash_drifts",
+            "TON verifier code BoC root must match root metadata",
+            "def test_all_lanes_rejects_ton_route_canary_live_account_drift",
+            "TON route canary last transaction LT must match destination rollout live account LT",
+            "TON route canary evidence hash must match live account route canary metadata",
+            "def test_all_lanes_rejects_ton_route_canary_live_account_hash_role_reuse",
+            "TON route canary account state hash must differ from last transaction hash",
+            "def test_all_lanes_rejects_ton_route_canary_governed_hash_role_reuse",
+            "TON route canary hash role ton_route_canary_account_state_hash must not ",
+            "def test_all_lanes_evidence_rejects_destination_binding_drift",
+            "def test_all_lanes_evidence_rejects_destination_comment_drift",
+            "def test_all_lanes_evidence_rejects_evm_destination_verifier_bridge_alias",
+            "def test_all_lanes_evidence_rejects_route_allowlist_hash_drift",
+            "def test_all_lanes_evidence_rejects_stale_route_canary_metadata",
+            "def test_all_lanes_evidence_rejects_padded_route_hashes",
+            "def test_all_lanes_evidence_rejects_malformed_destination_identities",
             "def test_all_lanes_rejects_hostile_not_required_source_gate_hash_without_stringifying",
             "def test_all_lanes_rejects_hostile_non_evm_live_metadata_without_stringifying",
             "def test_all_lanes_cli_rejects_copied_not_ready_route_canary_proof_context_drift",
@@ -8850,6 +9662,7 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _source_adapter_gate_hash_role_fields(",
             "def _all_lanes_route_canary_source_gate_hash_role_fields(",
             "source_adapter_gate.audit_hashes",
+            "if type(source_gate) is not dict:",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256",
             "def _all_lanes_unknown_key_errors(",
@@ -8870,6 +9683,16 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _all_lanes_route_canary_not_ready_proof_context_semantic_errors(",
             "def _all_lanes_route_canary_not_ready_hash_role_errors(",
             "def _all_lanes_destination_binding_not_ready_domain_semantic_errors(",
+            "if type(lanes) is not list:",
+            "if type(lane) is not dict:",
+            "if lane_has(field) and type(lane_get(field)) is not dict:",
+            "record_flags = records if type(records) is dict else {}",
+            "if type(source_hashes) is dict:",
+            "if type(source_gate) is dict:",
+            "if type(audit_hashes) is dict:",
+            "if type(destination_binding) is dict:",
+            "if type(route_allowlist) is dict:",
+            "if type(route_canary) is dict:",
         ),
     ),
     (
@@ -8886,9 +9709,14 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "ALL_LANES_SUMMARY_FIELDS",
             "ALL_LANES_LANE_FIELDS",
             "ALL_LANES_RECORD_FIELDS",
+            "type(value) is dict",
+            "type(value) is list",
             "def _all_lanes_summary_bundle_errors(",
             "_unknown_public_field_errors(payload, label, ALL_LANES_SUMMARY_FIELDS)",
             "def _launch_domain_list_bundle_errors(",
+            "copied launch-domain lists must reject non-integer domains",
+            "type(value) is not list",
+            "has_invalid_domain_type = False",
             "required_domains contains duplicate domains",
             "supported_launch_domains contains duplicate domains",
             "unsupported_launch_domains contains duplicate domains",
@@ -8944,12 +9772,25 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def _route_canary_not_ready_proof_context_semantic_errors(",
             "def _route_canary_not_ready_hash_role_errors(",
             "def _destination_binding_not_ready_domain_semantic_errors(",
+            "record_flags = records if type(records) is dict else {}",
+            "if type(value) is dict and value:",
+            "if type(audit_hashes) is not dict:",
+            "or type(route_canary_value) is dict",
+            "if type(lane) is not dict:",
+            "if type(lane_payload.get(\"records\")) is dict:",
+            "type(evidence_summary) is dict",
             "status must be passed",
             "evidence_source must be {expected_source}",
             "evidence_bound must be true",
             "hash role",
             "evidence_hash",
             "def _all_lanes_route_canary_cross_lane_bundle_errors(",
+            "if type(source_hashes) is dict:",
+            "if type(destination_binding) is dict:",
+            "if type(route_allowlist) is dict:",
+            "if type(route_canary) is dict:",
+            "if type(route_allowlist) is not dict:",
+            "if type(route_canary) is not dict:",
             "evidence_hash must be distinct from",
             "{field} must not reuse {governed_field}",
             "type(route_canary_route_hash) is str",
@@ -9010,11 +9851,35 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_runs_all_lanes_evidence_root_schema_inventory_sweep",
             "def test_release_bundle_verifier_rejects_missing_all_lanes_evidence_root_schema_inventory_gate",
             "def test_release_bundle_rejects_malformed_copied_evidence_before_render",
+            "def test_release_bundle_rejects_boolean_copied_evidence_launch_domains_before_render",
+            "def test_release_bundle_rejects_hostile_copied_evidence_launch_domain_lists_before_render",
+            "def test_release_bundle_rejects_hostile_copied_evidence_root_mapping_before_render",
+            "def test_release_bundle_rejects_copied_evidence_nested_container_subclasses_before_render",
+            "def test_release_bundle_verifier_rejects_all_lanes_lane_schema_container_subclasses_without_hooks",
+            "strict all-lanes lane schema hostile container",
+            "def test_release_bundle_verifier_destination_binding_exact_key_helpers_reject_hostile_required_keys",
+            'HostileVerifierFieldName("destination_binding_hash")',
+            "operator_subclass_destination",
+            "def test_release_bundle_verifier_source_record_exact_key_helpers_reject_hostile_required_keys",
+            'HostileVerifierFieldName("source_verifier_material_hash")',
+            "operator_subclass_source",
+            "def test_release_bundle_verifier_route_allowlist_exact_key_helpers_reject_hostile_required_keys",
+            'HostileVerifierFieldName("route_allowlist_hash")',
+            "operator_subclass_route",
+            'assert "hostile verifier" not in errors',
             "def test_release_bundle_rejects_empty_copied_evidence_release_checklist_before_render",
             "def test_release_bundle_rejects_missing_copied_evidence_roots_before_render",
             "def test_release_bundle_rejects_malformed_copied_evidence_nested_maps_before_render",
+            "HostileVerifierReportList([base_lane()])",
+            "HostileVerifierReportSection(base_lane())",
+            "source_adapter_gate audit_hashes ",
+            "route_allowlist.route_canary ",
             "def test_release_bundle_verifier_rejects_malformed_all_lanes_lane_roots",
             "def test_release_bundle_verifier_rejects_malformed_all_lanes_lane_rows",
+            "def test_release_bundle_verifier_indexes_malformed_all_lanes_lane_labels",
+            "readiness report embedded evidence",
+            "all-lanes summary",
+            'assert f"{label} lane 0 domain must be an integer" in verified.stdout',
             "def test_release_bundle_verifier_rejects_hostile_all_lanes_fixed_hex_without_comparing",
             '7: "reviewed outside evidence"',
             "records[7] = True",
@@ -9075,6 +9940,22 @@ ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS = (
             "def test_release_bundle_rejects_not_ready_public_nested_hash_mismatch_before_render",
             "def test_release_bundle_verifier_rejects_not_ready_public_nested_false_match_flags",
             "def test_release_bundle_rejects_not_ready_public_nested_false_match_flags_before_render",
+            "def test_release_bundle_verifier_rejects_not_ready_public_destination_domain_semantic_drift",
+            "def test_release_bundle_rejects_not_ready_public_destination_domain_semantic_drift_before_render",
+            "destination_network_id is only valid for EVM-family or TRON lanes",
+            "destination_bridge_address is only valid for EVM-family lanes",
+            "def test_release_bundle_verifier_rejects_not_ready_public_route_canary_proof_context_drift",
+            "def test_release_bundle_rejects_not_ready_public_route_canary_proof_context_drift_before_render",
+            "signature_recovered_address must match transaction_owner_address",
+            "solana_programdata_slot must be a canonical positive decimal string",
+            "def test_release_bundle_route_canary_not_ready_decimal_context_rejects_string_subclasses_without_hooks",
+            'HostileMarkdownString("secret-token-decimal")',
+            "ton_last_transaction_lt",
+            'assert "__format__" not in rendered',
+            "def test_release_bundle_verifier_rejects_not_ready_public_route_canary_hash_role_drift",
+            "def test_release_bundle_rejects_not_ready_public_route_canary_hash_role_drift_before_render",
+            "ton_last_transaction_hash must not reuse destination_binding_hash",
+            "signature_sha256 must not reuse message_id",
             "def test_release_bundle_verifier_rejects_not_ready_public_route_canary_common_semantic_drift",
             "def test_release_bundle_rejects_not_ready_public_route_canary_common_semantic_drift_before_render",
             "def test_release_bundle_route_canary_common_semantics_reject_hostile_status_source_without_comparing",
@@ -9260,6 +10141,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             'records.get(key) is not True',
             'if records.get("source_adapter_deployment") is not True:',
             'records.get("destination_rollout") is True',
+            '_expect(errors, record, "placeholder_material", False)',
             '"ready": all(item["ready"] is True for item in items)',
             '"production_ready": not all_blockers',
             "ALL_LANES_PUBLIC_SUMMARY_FIELDS = (",
@@ -9291,9 +10173,12 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def _public_mapping_get_string_key(",
             "def _public_release_checklist_errors(",
             "release_checklist require_ready must be a boolean",
+            "if type(value) is not dict:",
             "all-lanes summary release_checklist ready must be a boolean",
             "all-lanes summary release_checklist ready must be true",
+            "if type(items) is not list:",
             "all-lanes summary release_checklist items must be a list",
+            "if type(item) is not dict:",
             "type(item_id) is not str",
             "type(title) is not str",
             "title must match the canonical checklist title",
@@ -9305,6 +10190,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "blockers must not contain duplicate strings",
             "blockers must be empty",
             "def _public_nested_lane_value_errors(",
+            "if type(value) is dict:",
+            "elif type(value) is list:",
             "contains sensitive value",
             "def _public_lane_object_field_errors(",
             "Return bounded public errors for copied lane object field drift.",
@@ -9397,6 +10284,12 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def _public_lanes_errors(",
             "lanes require_ready must be a boolean",
             "all-lanes summary lanes must be a list of objects",
+            "if not all(type(lane) is dict for lane in value):",
+            "if type(records) is not dict:",
+            "type(lane.get(\"evm_live_metadata\")) is dict",
+            "if type(source_adapter_gate) is dict:",
+            "if type(audit_hashes) is not dict:",
+            "if type(route_allowlist) is dict:",
             "lane_require_ready = (",
             "require_ready or lane_ready is True or domain == SCCP_DOMAIN_ETH",
             "lane_require_structure = domain in LANE_PROFILES",
@@ -9405,6 +10298,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "if lane_require_ready and gate_blockers:",
             "all-lanes summary lanes missing domain",
             "def _public_domain_list_errors(",
+            "type(value) is not list",
             "must not contain duplicate integers",
             "required_domains contains duplicate domains",
             "supported_launch_domains contains duplicate domains",
@@ -9414,6 +10308,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "supported_launch_domains plus ",
             "unsupported_launch_domains must match required_domains",
             "def _public_summary_payload(",
+            "type(summary) is not dict",
             "all-lanes summary lanes missing",
             "all-lanes summary lanes are invalid",
             "all-lanes summary release_checklist missing",
@@ -9436,6 +10331,16 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "route canary evidence is not bound",
             "PUBLIC_LANE_ROUTE_CANARY_FIELDS_BY_DOMAIN.get(",
             "route_canary.{field}",
+            "def _check_route_canary_evidence_hashes_do_not_reuse_governed_hashes(",
+            "if type(lanes) is not list:",
+            "route canary hash-role lanes must be a list",
+            '_public_mapping_get_string_key(lane, "domain")',
+            "if type(source_record_hashes) is not dict:",
+            "source_record_hashes contains non-string field name",
+            "route canary hash-role domain ",
+            '_public_mapping_has_string_key(route_allowlist, "route_canary")',
+            '_public_mapping_has_string_key(source_adapter_gate, "audit_hashes")',
+            "source_adapter_gate.audit_hashes must be an object",
             "source_adapter_gate hash role",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.message_id",
             "source_adapter_gate hash role audit_hashes.evm_source_gate_hash must not reuse route_canary.call_data_sha256",
@@ -9471,6 +10376,10 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "_public_lane_route_allowlist_recompute_errors(",
             'root_blockers, root_blocker_schema_errors = _canonical_blocker_list(',
             '"all-lanes root"',
+            "if type(blockers) is not list:",
+            "if type(audit_hashes) is dict:",
+            "if type(route_summary) is not dict:",
+            "if type(route_canary) is not dict:",
             "def append_unexpected_fields(",
             "source record hashes summary is malformed",
             'f"{lane_label}: source adapter gate"',
@@ -9490,6 +10399,10 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         (
             "def test_all_lanes_release_checklist_compares_item_ready_exactly",
             "def test_all_lanes_release_checklist_rejects_hostile_item_text_without_comparing",
+            "def test_all_lanes_public_summary_rejects_container_subclasses_without_leaking",
+            "HostileAllLanesReportSection",
+            "HostileAllLanesReportList",
+            "all-lanes summary lanes[0].route_allowlist.route_canary ",
             "def test_all_lanes_public_helper_strictness_flags_reject_non_booleans",
             "non-boolean all-lanes release-checklist strictness flag was accepted",
             "non-boolean all-lanes lane strictness flag was accepted",
@@ -9497,6 +10410,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "non-boolean all-lanes canonical-string allow-empty flag was accepted",
             'item["ready"] = "true"',
             'assert checklist["ready"] is False',
+            "def test_all_lanes_release_checklist_rejects_malformed_record_flags",
+            "def test_all_lanes_release_checklist_rejects_malformed_lane_containers",
             "def test_all_lanes_release_checklist_rejects_malformed_lane_metadata",
             "def test_all_lanes_release_checklist_rejects_malformed_lane_rows",
             "lane 0: lane summary must be an object",
@@ -9505,6 +10420,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "domain.unsupported",
             "chain.padded",
             "chain.mismatch",
+            "def test_all_lanes_release_checklist_rejects_malformed_lane_blockers",
+            "def test_all_lanes_release_checklist_deduplicates_active_only_future_lane_blockers",
             "def test_all_lanes_release_checklist_redacts_lane_label_chain_text",
             "label_chain.invalid_domain_secret",
             "label_chain.supported_domain_secret",
@@ -9527,6 +10444,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "root_blockers.decoded_sensitive",
             "root_blockers.encoded_duplicate",
             "def test_all_lanes_release_checklist_rejects_source_record_hash_role_replay",
+            "def test_all_lanes_evidence_rejects_placeholder_material_aliases",
+            "placeholder_material_aliases = (",
+            '"placeholder_material"\n        ] = alias',
             "def test_all_lanes_release_checklist_requires_bound_route_hashes",
             "def test_all_lanes_release_checklist_requires_destination_and_route_recompute",
             "destination_hash_not_recomputed",
@@ -9577,10 +10497,12 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def test_all_lanes_cli_rejects_duplicate_public_blockers_without_leaking",
             "safe duplicated root blocker",
             "all-lanes summary blockers must not contain duplicate strings",
+            "def test_all_lanes_numbers_repeated_duplicate_blocker_diagnostics",
             "all-lanes summary lanes[0] blockers must not contain duplicate strings",
             "all-lanes summary release_checklist items[0] blockers must not contain duplicate strings",
             "def test_all_lanes_public_blocker_helpers_reject_string_subclasses_without_normalizing",
             "def test_all_lanes_cli_rejects_unknown_summary_fields_without_leaking",
+            "def test_all_lanes_cli_rejects_hostile_summary_mapping_subclass_without_leaking",
             "def test_all_lanes_public_field_names_reject_string_subclasses_without_normalizing",
             "HostileAllLanesFieldName(\"evm_source_gate_hash\")",
             "HostileAllLanesFieldName(\"_comment_evm_route_canary_transaction_hash\")",
@@ -9599,6 +10521,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "unsupported_launch_domains must be disjoint",
             '"required_domains" not in payload',
             "def test_all_lanes_public_summary_boolean_domain_does_not_alias_eth",
+            "def test_all_lanes_cli_rejects_hostile_domain_list_subclasses_without_leaking",
             "all-lanes summary lanes[0] domain must be an integer",
             "all-lanes summary lanes missing domain 1",
             "def test_all_lanes_release_checklist_boolean_domain_does_not_alias_eth_policy",
@@ -9647,6 +10570,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def test_all_lanes_matching_text_helpers_reject_string_subclasses_without_comparing",
             "def test_all_lanes_cli_rejects_copied_not_ready_hash_binding_drift",
             "def test_all_lanes_cli_rejects_copied_not_ready_route_allowlist_recompute_drift",
+            "def test_all_lanes_cli_rejects_copied_route_allowlist_recompute_helper_failures",
             "def test_all_lanes_cli_rejects_copied_not_ready_destination_binding_recompute_drift",
             "def test_all_lanes_cli_rejects_active_copied_route_allowlist_recompute_drift_when_lane_not_ready",
             "def test_route_allowlist_hash_rejects_template_source_record_inputs",
@@ -9798,6 +10722,13 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_governed_hash_replay",
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_source_gate_replay",
             "def test_all_lanes_evidence_rejects_cross_lane_route_canary_transcript_replay",
+            "def test_all_lanes_route_canary_governed_hash_collector_rejects_container_subclasses_without_leaking",
+            "HostileAllLanesReportSection(base_lane)",
+            "HostileAllLanesReportList([base_lane])",
+            "HostileAllLanesFieldName(\"domain\")",
+            "HostileAllLanesFieldName(\"source_verifier_material_hash\")",
+            "HostileAllLanesFieldName(\"route_canary\")",
+            "HostileAllLanesFieldName(\"audit_hashes\")",
             "def test_all_lanes_evidence_rejects_route_canary_evidence_hash_template_replays",
             "def test_all_lanes_evidence_rejects_route_canary_transcript_hash_template_replays",
             "def test_all_lanes_release_checklist_rejects_route_canary_evidence_hash_role_replay",
@@ -9963,6 +10894,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         (
             "TRON route allowlist evidence hashes",
             "TRON route canary governed hashes",
+            "TRON route canary transcript hashes",
         ),
     ),
     (
@@ -9970,6 +10902,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         (
             "TRON route allowlist accepted replayed hash role",
             "route canary transaction hash accepted invalid",
+            "TRON route canary transcript hashes must be distinct",
         ),
     ),
     (
@@ -9982,6 +10915,10 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "Solana route canary governed hashes",
             "TON route canary governed hashes",
             "TRON route canary governed hashes",
+            "TRON route canary transcript hashes",
+            '"sourceAdapterEngineDeploymentHash": source_adapter_engine_deployment_hash,\n'
+            '            "transactionId": transaction_id,',
+            '"finalityHeight": finality_height,',
             "TRON route allowlist governed hashes",
         ),
     ),
@@ -9994,9 +10931,13 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             'match="Solana route canary governed hashes"',
             'match="TON route canary governed hashes"',
             'match="TRON route canary governed hashes"',
+            'match="TRON route canary transcript hashes"',
             "package_root_solana_route_canary_governed_hash_reuse",
             "package_root_ton_route_canary_governed_hash_reuse",
             "package_root_tron_route_canary_governed_hash_reuse",
+            "package_root_tron_route_canary_governed_transcript_hash_reuse",
+            "package_root_tron_route_canary_transcript_hash_reuse",
+            '{"finality_height": evidence["source_adapter_engine_deployment_hash"]}',
         ),
     ),
     (
@@ -10012,6 +10953,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "Solana route canary governed hashes",
             "TON route canary governed hashes",
             "TRON route canary governed hashes",
+            "TRON route canary transcript hashes",
+            '["sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash],\n'
+            '    ["transactionId", transactionId],',
             "TRON route allowlist governed hashes",
         ),
     ),
@@ -10028,6 +10972,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "Solana route canary governed hashes",
             "TON route canary governed hashes",
             "TRON route canary governed hashes",
+            "TRON route canary transcript hashes",
+            '["sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash],\n'
+            '    ["transactionId", transactionId],',
             "TRON route allowlist governed hashes",
         ),
     ),
@@ -10043,6 +10990,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "/Solana route canary governed hashes/",
             "/TON route canary governed hashes/",
             "/TRON route canary governed hashes/",
+            "/TRON route canary transcript hashes/",
+            "finalityHeight: evidence.sourceAdapterEngineDeploymentHash",
         ),
     ),
     (
@@ -10056,6 +11005,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "distSolanaRouteCanaryGovernedHashReuse",
             "distTonRouteCanaryGovernedHashReuse",
             "distTronRouteCanaryGovernedHashReuse",
+            "distTronRouteCanaryGovernedTranscriptHashReuse",
+            "distTronRouteCanaryTranscriptHashReuse",
+            "/TRON route canary transcript hashes/u",
         ),
     ),
     (
@@ -10065,6 +11017,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "packageRootSolanaRouteCanaryGovernedHashReuse",
             "packageRootTonRouteCanaryGovernedHashReuse",
             "packageRootTronRouteCanaryGovernedHashReuse",
+            "packageRootTronRouteCanaryGovernedTranscriptHashReuse",
+            "packageRootTronRouteCanaryTranscriptHashReuse",
+            "/TRON route canary transcript hashes/u",
         ),
     ),
     (
@@ -10084,6 +11039,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         (
             "routeCanaryGovernedHashes",
             "routeAllowlistGovernedHashes",
+            "routeCanaryTranscriptHashes",
+            '("sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash),\n'
+            '            ("transactionId", transactionId),',
         ),
     ),
     (
@@ -10092,6 +11050,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
             "invalidString(\"routeCanaryGovernedHashes\")",
             "invalidField(\"routeCanaryGovernedHashes\")",
             "invalidPublicInputs(\"routeCanaryGovernedHashes\")",
+            "routeCanaryTranscriptHashes",
+            "finalityHeight: evidence.sourceAdapterEngineDeploymentHash",
         ),
     ),
     (
@@ -10111,6 +11071,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         (
             "TRON route canary governed hashes",
             "TRON route allowlist governed hashes",
+            "TRON route canary transcript hashes",
         ),
     ),
     (
@@ -10129,6 +11090,8 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TronSccpProverTest.kt",
         (
             "TRON route canary governed hashes",
+            "TRON route canary transcript hashes",
+            "evidence.copy(finalityHeight = evidence.sourceAdapterEngineDeploymentHash)",
         ),
     ),
     (
@@ -10148,6 +11111,7 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         (
             "TRON route canary governed hashes",
             "TRON route allowlist governed hashes",
+            "TRON route canary transcript hashes",
         ),
     ),
     (
@@ -10166,6 +11130,9 @@ ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
         "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TronSccpProverTests.java",
         (
             "TRON route canary governed hashes",
+            "TRON route canary transcript hashes",
+            "sampleTronRouteCanaryEvidenceWithTranscriptHashes(\n"
+            "                    null, evidence.sourceAdapterEngineDeploymentHash())",
         ),
     ),
     (
@@ -10275,8 +11242,11 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "release checklist must be an object",
             "release checklist ready must be boolean",
             "def _public_release_checklist_errors(",
+            "public release_checklist containers must reject subclasses",
             "readiness report release_checklist items must be a list",
             "readiness report release_checklist is invalid",
+            "type(gate) is not str or not gate",
+            "type(title) is not str",
             "id must be a required checklist id",
             "readiness report release_checklist missing item",
             "title must match the canonical checklist title",
@@ -10290,7 +11260,13 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_scoped_blocker(",
             "prefix_unscoped",
             "blocker_key.startswith(prefix.casefold())",
+            "def _active_launch_lane(",
+            "active launch lane selection containers must reject subclasses",
+            "type(lanes) is not list",
             "def _active_launch_blockers(",
+            "active launch blocker containers must reject subclasses",
+            "type(evidence_blockers) is not list",
+            "if type(lane_blockers) is not list:",
             "SCCP evidence blocker must be a non-empty canonical string",
             "SCCP evidence blocker contains {issue}",
             "SCCP evidence blockers must not contain duplicate strings",
@@ -10298,6 +11274,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active launch lane blocker contains {issue}",
             "active launch lane blockers must not contain duplicate strings",
             "def _active_launch_lane_blockers_for_checklist(",
+            "type(value) is not list",
             'f"{label}[{index}] contains {issue}"',
             "lane_blocker_schema_errors",
             "def _active_launch_source_record_hash_role_blockers(",
@@ -10307,6 +11284,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active required record summary is malformed",
             "type(lane_chain) is not str",
             "def _active_launch_evm_live_metadata_blockers(",
+            "if type(evm_live_metadata) is not dict:",
             "source live eth_chainId must be",
             "destination live eth_chainId must be",
             "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed",
@@ -10342,6 +11320,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             'route_blockers = route_summary.get("blockers", [])',
             "active route allowlist summary is malformed",
             "route allowlist blockers must be a list of non-empty canonical strings",
+            "active route allowlist binding containers must reject subclasses",
+            "type(route_blockers) is not list",
             "route allowlist blockers must not contain duplicate strings",
             "route allowlist blockers must be empty",
             "def _active_launch_route_allowlist_template_hash_blockers(",
@@ -10357,6 +11337,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_route_canary_blocker_container_errors(",
             'canary_blockers = canary.get("blockers", [])',
             "route canary blockers must be a list of non-empty canonical strings",
+            "type(canary_blockers) is not list",
             "route canary blockers must not contain duplicate strings",
             "route canary blockers must be empty",
             "def _active_launch_route_canary_template_hash_blockers(",
@@ -10388,6 +11369,9 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_route_canary_upstream_hash_roles(",
             "_active_launch_route_canary_upstream_hash_roles(lane)",
             "active route canary summary is malformed",
+            "route_summary_malformed = type(route_summary) is not dict",
+            "canary_malformed = type(canary) is not dict",
+            "if type(native_prover_bundle) is not dict:",
             "def _active_launch_checklist_schema_gate_inventory_errors(",
             '"active_launch_checklist_schema_gate"',
             "SCCP active-launch checklist schema source inventory",
@@ -10398,12 +11382,17 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
         (
             "def _release_checklist_schema_errors(",
             "strict release_checklist require_ready must be a boolean",
+            "strict release_checklist containers must reject subclasses",
             "_true_field_errors(f\"{label} release_checklist\", checklist, \"ready\")",
             "_boolean_field_errors(f\"{label} release_checklist\", checklist, \"ready\")",
             "readiness report release_checklist is not ready",
             "readiness report release_checklist does not match embedded evidence",
+            "def _release_checklist_item_numbering_key(",
+            "def _number_repeated_release_checklist_item_errors(",
+            "_number_repeated_release_checklist_item_errors(item_errors, label)",
             "all-lanes summary active {ACTIVE_LAUNCH_DISPLAY} release checklist is not ready",
             "release_checklist contains unknown field name with non-ASCII character",
+            "type(item_id) is not str",
             "id contains sensitive name",
             "def _public_blocker_text_issue(",
             "return _decoded_public_blocker_text(value).casefold()",
@@ -10412,7 +11401,14 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_scoped_blocker(",
             "prefix_unscoped",
             "blocker_key.startswith(prefix.casefold())",
+            "def _active_launch_lane(",
+            "active launch lane selection containers must reject subclasses",
+            "type(lanes) is not list",
+            "if type(lane) is not dict:",
             "def _active_launch_blockers(",
+            "active launch blocker containers must reject subclasses",
+            "type(evidence_blockers) is list",
+            "if type(lane_blockers) is not list:",
             "SCCP evidence blocker must be a non-empty canonical string",
             "SCCP evidence blocker contains {issue}",
             "SCCP evidence blockers must not contain duplicate strings",
@@ -10420,12 +11416,14 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active launch lane blocker contains {issue}",
             "active launch lane blockers must not contain duplicate strings",
             "def _active_launch_lane_blockers_for_checklist(",
+            "type(value) is not list",
             'f"{label}[{index}] contains {issue}"',
             "def _required_record_summary_unknown_field_blocker(",
             "f\"{lane_label}: required record summary\"",
             "active required record summary is malformed",
             "type(lane_chain) is not str",
             "def _active_launch_evm_live_metadata_blockers(",
+            "if type(evm_live_metadata) is not dict:",
             "active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed",
             "active source-record hash summary is malformed",
             "def _active_launch_source_record_hash_role_blockers(",
@@ -10459,9 +11457,12 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be deployed gate evidence, not built-in template material",
             "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes evm_source_gate_hash must be deployed audit evidence, not built-in template material",
             "def _active_launch_route_allowlist_blocker_container_errors(",
+            "type(blocker) is not str or not blocker",
             'route_blockers = route_summary.get("blockers", [])',
             "active route allowlist summary is malformed",
             "route allowlist blockers must be a list of non-empty canonical strings",
+            "active route allowlist binding containers must reject subclasses",
+            "type(route_blockers) is not list",
             "route allowlist blockers must not contain duplicate strings",
             "route allowlist blockers must be empty",
             "def _active_launch_route_allowlist_template_hash_blockers(",
@@ -10477,6 +11478,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_route_canary_blocker_container_errors(",
             'canary_blockers = canary.get("blockers", [])',
             "route canary blockers must be a list of non-empty canonical strings",
+            "type(canary_blockers) is not list",
             "route canary blockers must not contain duplicate strings",
             "route canary blockers must be empty",
             "def _active_launch_route_canary_template_hash_blockers(",
@@ -10506,6 +11508,9 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _active_launch_route_canary_upstream_hash_roles(",
             "_active_launch_route_canary_upstream_hash_roles(lane)",
             "active route canary summary is malformed",
+            "route_summary_malformed = type(route_summary) is not dict",
+            "canary_malformed = type(canary) is not dict",
+            "if type(native_prover_bundle) is not dict:",
             "def _active_launch_checklist_schema_inventory_errors(",
         ),
     ),
@@ -10519,6 +11524,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def _release_checklist_binding_bundle_errors(",
             "release_checklist cannot be recomputed",
             "def _checklist_item_id_error(",
+            "type(item_id) is not str",
+            "type(title) is not str",
             "id contains sensitive name",
             "_unknown_public_field_errors(payload, label, RELEASE_CHECKLIST_FIELDS)",
             "RELEASE_CHECKLIST_ITEM_FIELDS",
@@ -10534,6 +11541,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "def test_release_readiness_report_blocks_missing_active_launch_checklist_schema_gate",
             "def test_release_readiness_report_compares_checklist_ready_exactly",
             "def test_release_readiness_report_blocks_malformed_checklist_root",
+            "def test_release_readiness_report_rejects_public_checklist_subclasses_without_leaking",
             "def test_release_readiness_report_cli_rejects_malformed_release_checklist_without_leaking",
             '"safe checklist int-key note"',
             '"safe checklist item int-key note"',
@@ -10542,12 +11550,15 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "readiness report release_checklist is invalid",
             "readiness report release_checklist item all_required_lane_records ",
             "readiness report release_checklist items[3] id must be a required ",
+            "readiness report release_checklist items[4] id must be a non-empty ",
+            "secret-token-checklist-title",
             "readiness report release_checklist missing item no_unresolved_blockers",
             "readiness report release_checklist items[2] title must match the ",
             "readiness report release_checklist items[3] title must match the ",
             '"operator_override" not in captured.out',
             '"release_checklist" not in payload',
             "def test_active_launch_evm_live_metadata_requires_canonical_decimal_chain_id",
+            "def test_active_launch_evm_live_metadata_rejects_container_subclasses_without_hooks",
             "noncanonical_chain_ids = (",
             '"\\uff11",',
             '"\\u0661",',
@@ -10561,6 +11572,18 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "active source adapter gate summary is malformed",
             "active route allowlist summary is malformed",
             "active route canary summary is malformed",
+            "def test_release_readiness_active_source_gate_audit_hash_exact_key_helpers_reject_hostile_required_key",
+            'HostileReportFieldName("evm_source_gate_hash")',
+            "active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must contain only evm_source_gate_hash",
+            "def test_release_readiness_active_source_hash_exact_key_helpers_reject_hostile_required_key",
+            'HostileReportFieldName("source_verifier_material_hash")',
+            "route allowlist source verifier material hash must be a canonical ",
+            "def test_release_readiness_active_route_destination_gate_exact_key_helpers_reject_hostile_required_keys",
+            'HostileReportFieldName("destination_binding_hash")',
+            'HostileReportFieldName("route_allowlist_hash")',
+            'HostileReportFieldName("evidence_hash")',
+            'HostileReportFieldName("gate_hash")',
+            'assert "__eq__" not in blockers',
             "source_record_hashes.hash_reuse",
             "source_record_hashes.template_source_material_hash",
             "source_record_hashes.template_source_deployment_hash",
@@ -10590,6 +11613,9 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source adapter gate blockers[0] contains sensitive name",
             "source adapter gate blockers must not contain duplicate strings",
             "source adapter gate blockers must be empty",
+            "def test_release_readiness_report_numbers_repeated_active_component_blocker_duplicates",
+            "safe duplicated active component blocker a",
+            "safe%20duplicated%20active%20component%20blocker%20a",
             "source_adapter_gate.required",
             "source_adapter_gate.gate_hash",
             "source_adapter_gate.audit_hashes",
@@ -10651,6 +11677,13 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "chain.padded",
             "chain.hostile",
             "production_ready.string",
+            "missing launch lane evidence",
+            "active launch lane chain must be eth",
+            "active launch lane must be production ready",
+            "missing source verifier material",
+            "missing source adapter deployment",
+            "missing destination rollout",
+            "missing route allowlist",
             "def test_release_readiness_report_blocks_active_lane_unresolved_blockers",
             "lane.numeric",
             "lane.control",
@@ -10665,6 +11698,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "top_level.duplicate_root",
             "safe duplicated active evidence blocker",
             "SCCP evidence blockers must not contain duplicate strings",
+            "def test_release_readiness_report_active_launch_blockers_reject_container_subclasses_without_leaking",
+            "def test_release_readiness_report_active_checklist_rejects_container_subclasses_without_leaking",
             "def test_release_readiness_report_classifies_malformed_active_required_record_fields",
             "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
             "active launch lane blockers[0] contains control character",
@@ -10677,6 +11712,18 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "Source%20Adapter operator launch hold",
             "route canary safe duplicated active lane blocker",
             "active launch lane blockers must not contain duplicate strings",
+            "def test_release_readiness_report_numbers_repeated_active_lane_blocker_duplicates",
+            "def test_release_readiness_report_numbers_repeated_active_launch_blocker_issues",
+            "def test_release_readiness_report_numbers_repeated_active_launch_duplicate_groups",
+            'assert f"{duplicate_error} #1" in rendered',
+            'assert f"{duplicate_error} #2" in rendered',
+            'assert rendered.count(f"{duplicate_error} #") == 2',
+            'assert f"{label} {suffix} #1" in rendered',
+            'assert f"{label} {suffix} #2" in rendered',
+            'assert rendered.count(f"{label} {suffix} #") == 2',
+            'assert f"{error} #1" in rendered',
+            'assert f"{error} #2" in rendered',
+            'assert rendered.count(f"{error} #") == 2',
             "def test_release_readiness_report_decodes_active_launch_blocker_domain_prefixes",
             "domain%202%20(bsc): route canary encoded other evidence hold",
             "def test_release_readiness_public_blocker_keys_casefold_decoded_text",
@@ -10688,9 +11735,11 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
         (
             "def test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory",
             "def test_release_bundle_checklist_helper_strictness_flags_reject_non_booleans",
+            "def test_release_bundle_verifier_release_checklist_schema_rejects_subclasses_without_leaking",
             "non-boolean bundled release-checklist strictness flag was accepted",
             "non-boolean strict release-checklist strictness flag was accepted",
             "def test_release_bundle_active_evm_metadata_rejects_noncanonical_chain_id",
+            "def test_release_bundle_active_evm_metadata_rejects_container_subclasses_without_hooks",
             "noncanonical_chain_ids = (",
             '"\\uff11",',
             '"\\u0661",',
@@ -10746,6 +11795,7 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "route allowlist hash must not reuse destination binding hash",
             "route_allowlist_with_missing_blockers",
             "route_allowlist_blocker_cases = (",
+            "HostileMarkdownString(\"safe route allowlist blocker\")",
             "route allowlist blockers[0] contains sensitive name",
             "route allowlist blockers must not contain duplicate strings",
             "route allowlist blockers must be empty",
@@ -10764,6 +11814,9 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "source adapter gate blockers[0] contains sensitive name",
             "source adapter gate blockers must not contain duplicate strings",
             "source adapter gate blockers must be empty",
+            "def test_release_bundle_verifier_numbers_repeated_active_component_blocker_duplicates",
+            "safe duplicated active component blocker a",
+            "safe%20duplicated%20active%20component%20blocker%20a",
             "active_template_hash =",
             "template source verifier material hash",
             "template source adapter deployment hash",
@@ -10777,12 +11830,25 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "route canary evidence hash must be live evidence, not built-in template material",
             "expected_destination_match_flag_exactness_cases = (",
             "def test_release_bundle_verifier_treats_missing_active_governed_blockers_as_empty",
+            "def test_release_bundle_verifier_active_checklist_rejects_container_subclasses_without_leaking",
+            "def test_release_bundle_verifier_active_launch_nested_containers_reject_subclasses_without_leaking",
+            "active source adapter gate summary is malformed",
+            "source adapter gate audit hashes must be an object",
+            "secret-token-source-gate-blocker",
+            'assert "__str__" not in rendered',
             "def test_release_bundle_verifier_recomputes_active_required_record_identity_scalars",
             "required_record_flag_exactness_cases = (",
             "domain.string",
             "chain.padded",
             "chain.hostile",
             "production_ready.string",
+            "missing launch lane evidence",
+            "active launch lane chain must be eth",
+            "active launch lane must be production ready",
+            "missing source verifier material",
+            "missing source adapter deployment",
+            "missing destination rollout",
+            "missing route allowlist",
             "def test_release_bundle_verifier_recomputes_active_checklist_with_exact_metadata",
             "def test_release_bundle_verifier_rejects_release_checklist_drift",
             "def test_release_bundle_verifier_rejects_release_checklist_root_drift",
@@ -10809,11 +11875,26 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             "Source%20Adapter operator launch hold",
             "route canary safe duplicated active lane blocker",
             "active launch lane blockers must not contain duplicate strings",
+            "def test_release_bundle_verifier_numbers_repeated_active_lane_blocker_duplicates",
+            "def test_release_bundle_verifier_numbers_repeated_active_launch_blocker_issues",
+            "def test_release_bundle_verifier_numbers_repeated_active_launch_duplicate_groups",
+            'assert f"{duplicate_error} #1" in rendered',
+            'assert f"{duplicate_error} #2" in rendered',
+            'assert rendered.count(f"{duplicate_error} #") == 2',
+            'assert f"{label} {suffix} #1" in rendered',
+            'assert f"{label} {suffix} #2" in rendered',
+            'assert rendered.count(f"{label} {suffix} #") == 2',
+            'assert f"{error} #1" in rendered',
+            'assert f"{error} #2" in rendered',
+            'assert rendered.count(f"{error} #") == 2',
             "def test_release_bundle_verifier_decodes_active_launch_blocker_domain_prefixes",
             "Domain%202%20(BSC): route canary encoded other lane hold",
             "def test_release_bundle_verifier_public_blocker_keys_casefold_decoded_text",
             "route canary strasse",
             "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
+            "def test_release_bundle_verifier_numbers_repeated_release_checklist_item_errors",
+            "readiness report release_checklist item id must be a non-empty string",
+            "readiness report release_checklist item blockers must be empty",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_unknown_fields",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids",
             "def test_release_bundle_verifier_rejects_release_checklist_blocked_items",
@@ -10823,6 +11904,8 @@ ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
             'item[7] = "safe checklist item int-key note"',
             "contains malformed unknown field name",
             "def test_release_bundle_rejects_malformed_copied_checklist_before_render",
+            "secret-token-checklist-id",
+            "bundled report.release_checklist.items[5] id must be a non-empty string",
             "def test_release_bundle_rejects_empty_copied_checklist_before_render",
             "secret_token_checklist_item",
             'assert "secret_token_checklist_item" not in captured.err',
@@ -11091,6 +12174,44 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             "\\\\x5a\\\\x4b_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS",
             "\\\\u005a\\\\u004b_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS",
             "\\\\u{005a}\\\\u{004b}_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS",
+            "readiness unready transparent proof gate rejects multiline iroha_sccp test-fixtures dependencies before approved dev-dependency matching",
+            "readiness unready transparent proof gate rejects source-escaped iroha_sccp test-fixtures dependencies",
+            "readiness unready transparent proof gate rejects wide Cargo iroha_sccp test-fixtures dependency windows",
+            "readiness unready transparent proof gate rejects Cargo feature aliases for iroha_sccp test-fixtures",
+            "readiness unready transparent proof gate rejects split release rust-sccp test-fixtures commands",
+            "readiness unready transparent proof gate rejects wide split release rust-sccp test-fixtures commands",
+            "readiness unready transparent proof gate rejects short Cargo feature flags for rust-sccp test-fixtures commands",
+            "readiness unready transparent proof gate rejects shell-octal escaped test-fixtures release commands",
+            "readiness unready transparent proof gate rejects variable-indirected test-fixtures release commands",
+            "readiness unready transparent proof gate rejects long Cargo package flags and variable-indirected package names",
+            "readiness unready transparent proof gate rejects Cargo manifest-path selectors and variable-indirected manifest paths",
+            "readiness unready transparent proof gate rejects variable-indirected Cargo runner commands",
+            "readiness unready transparent proof gate rejects fully variable-indirected Cargo short-flag commands",
+            "readiness unready transparent proof gate rejects indirect shell variable expansion release commands",
+            "readiness unready transparent proof gate rejects cargo subcommand variable release commands",
+            "readiness unready transparent proof gate rejects Cargo test shorthand commands",
+            "readiness unready transparent proof gate rejects all-features release rust-sccp commands",
+            "readiness unready transparent proof gate rejects combined shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects command-substitution shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects backtick command-substitution shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects printf-v shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects read here-string shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects readarray mapfile shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects for-loop shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects shell-array flag variable release commands",
+            "readiness unready transparent proof gate rejects nested shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects local declare shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects multi-assignment shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects multiline shell-array flag variable release commands",
+            "readiness unready transparent proof gate rejects appended shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects split appended shell-flag value release commands",
+            "readiness unready transparent proof gate rejects indexed shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects parameter-expanded shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects braced-indexed shell-flag variable release commands",
+            "readiness unready transparent proof gate rejects positional shell-argument release commands",
+            "readiness unready transparent proof gate rejects positional shell-argument variable release commands",
+            "readiness unready transparent proof gate rejects multiline positional shell-argument release commands",
+            "readiness unready transparent proof gate rejects positional cargo subcommand release commands",
             "extra-source-proof",
             "extra-torii-route",
             "expected exactly",
@@ -11108,6 +12229,45 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             "\\\\x5a\\\\x4b_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS",
             "\\\\u005a\\\\u004b_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS",
             "\\\\u{005a}\\\\u{004b}_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS",
+            "strict unready transparent proof gate rejects multiline iroha_sccp test-fixtures dependencies before approved dev-dependency matching",
+            "strict unready transparent proof gate rejects source-escaped iroha_sccp test-fixtures dependencies",
+            "strict unready transparent proof gate rejects wide Cargo iroha_sccp test-fixtures dependency windows",
+            "strict unready transparent proof gate scans every non-vendor Cargo manifest",
+            "strict unready transparent proof gate rejects Cargo feature aliases for iroha_sccp test-fixtures",
+            "strict unready transparent proof gate rejects split release rust-sccp test-fixtures commands",
+            "strict unready transparent proof gate rejects wide split release rust-sccp test-fixtures commands",
+            "strict unready transparent proof gate rejects short Cargo feature flags for rust-sccp test-fixtures commands",
+            "strict unready transparent proof gate rejects shell-octal escaped test-fixtures release commands",
+            "strict unready transparent proof gate rejects variable-indirected test-fixtures release commands",
+            "strict unready transparent proof gate rejects long Cargo package flags and variable-indirected package names",
+            "strict unready transparent proof gate rejects Cargo manifest-path selectors and variable-indirected manifest paths",
+            "strict unready transparent proof gate rejects variable-indirected Cargo runner commands",
+            "strict unready transparent proof gate rejects fully variable-indirected Cargo short-flag commands",
+            "strict unready transparent proof gate rejects indirect shell variable expansion release commands",
+            "strict unready transparent proof gate rejects cargo subcommand variable release commands",
+            "strict unready transparent proof gate rejects Cargo test shorthand commands",
+            "strict unready transparent proof gate rejects all-features release rust-sccp commands",
+            "strict unready transparent proof gate rejects combined shell-flag variable release commands",
+            "strict unready transparent proof gate rejects command-substitution shell-flag variable release commands",
+            "strict unready transparent proof gate rejects backtick command-substitution shell-flag variable release commands",
+            "strict unready transparent proof gate rejects printf-v shell-flag variable release commands",
+            "strict unready transparent proof gate rejects read here-string shell-flag variable release commands",
+            "strict unready transparent proof gate rejects readarray mapfile shell-flag variable release commands",
+            "strict unready transparent proof gate rejects for-loop shell-flag variable release commands",
+            "strict unready transparent proof gate rejects shell-array flag variable release commands",
+            "strict unready transparent proof gate rejects nested shell-flag variable release commands",
+            "strict unready transparent proof gate rejects local declare shell-flag variable release commands",
+            "strict unready transparent proof gate rejects multi-assignment shell-flag variable release commands",
+            "strict unready transparent proof gate rejects multiline shell-array flag variable release commands",
+            "strict unready transparent proof gate rejects appended shell-flag variable release commands",
+            "strict unready transparent proof gate rejects split appended shell-flag value release commands",
+            "strict unready transparent proof gate rejects indexed shell-flag variable release commands",
+            "strict unready transparent proof gate rejects parameter-expanded shell-flag variable release commands",
+            "strict unready transparent proof gate rejects braced-indexed shell-flag variable release commands",
+            "strict unready transparent proof gate rejects positional shell-argument release commands",
+            "strict unready transparent proof gate rejects positional shell-argument variable release commands",
+            "strict unready transparent proof gate rejects multiline positional shell-argument release commands",
+            "strict unready transparent proof gate rejects positional cargo subcommand release commands",
             "extra-source-proof",
             "extra-torii-route",
             "expected exactly",
@@ -11119,11 +12279,15 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
         (
             "SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV = (",
             "SCCP_UNREADY_TRANSPARENT_PROOF_ALLOWED_TEST_FIXTURE_CARGO_DEPENDENCIES = {",
+            "SCCP_UNREADY_TRANSPARENT_PROOF_IGNORED_CARGO_MANIFEST_DIRS = (",
             "SCCP_UNREADY_TRANSPARENT_PROOF_RELEASE_COMMAND_PATHS = (",
             "SCCP_DIAGNOSTIC_TRANSPARENT_PROOF_FORBIDDEN_SURFACE_PATHS = (",
             "SOURCE_ESCAPE_SEQUENCE_PATTERN = re.compile(",
+            "\\\\U([0-9A-Fa-f]{8})",
+            "?P<octal>[0-7]{3}",
             "def _source_escape_decoded_text(value: str) -> str:",
             "_source_identifier_scan_text(_source_escape_decoded_text(source))",
+            "CARGO_COMMAND_NAME_PATTERN = re.compile(",
             "SCCP_UNREADY_SOURCE_PROOF_BYPASS_CALL_SITE_MARKER = (",
             "SCCP_UNREADY_SOURCE_PROOF_EXPECTED_BYPASS_CALL_SITES = 4",
             "def _sccp_unready_source_proof_bypass_call_site_errors(",
@@ -11131,11 +12295,52 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             "SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_BYPASS_GATES = (",
             "def _sccp_unready_widened_bypass_gate_errors(",
             "SCCP_UNREADY_TORII_ROUTE_BYPASS_CALL_SITE_MARKER = (",
-            "SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES = 8",
+            "SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES = 6",
             "def _sccp_unready_torii_route_bypass_call_site_errors(",
             "call_site_count != SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES",
             "expected exactly ",
+            "def _sccp_cargo_dependency_window_lines(",
+            "def _sccp_cargo_feature_window_lines(",
+            "def _sccp_cargo_dependency_alias_identifiers(",
+            "def _sccp_cargo_feature_window_enables_sccp_test_fixtures(",
+            "decoded_section.startswith(\"dependencies.\")",
+            "section_identifier == \"features\"",
+            "if \"dependencies\" not in section_identifier:",
             "def _sccp_unready_transparent_proof_test_fixture_feature_errors(",
+            "testfixtures\" in window_identifier",
+            "through Cargo feature alias outside approved dev-dependencies",
+            "line_identifier_text = _source_identifier_scan_text(",
+            "def _sccp_release_command_window_lines(",
+            "for index in range(start_index - 1,",
+            "CARGO_FEATURE_FLAG_PATTERN = re.compile(",
+            "CARGO_ALL_FEATURES_FLAG_PATTERN = re.compile(",
+            "CARGO_PACKAGE_FLAG_PATTERN = re.compile(",
+            "CARGO_MANIFEST_PATH_FLAG_PATTERN = re.compile(",
+            "SHELL_VARIABLE_ASSIGNMENT_PATTERN = re.compile(",
+            "SHELL_VARIABLE_ASSIGNMENT_TOKEN_PATTERN = re.compile(",
+            "SHELL_POSITIONAL_ARGS_ASSIGNMENT_PATTERN = re.compile(",
+            "def _sccp_release_command_enables_test_fixture_features(",
+            "CARGO_TEST_SUBCOMMAND_PATTERN = re.compile(",
+            "def _source_references_shell_variable(",
+            "def _shell_assignment_value_names_variable(",
+            "def _source_references_shell_positional_args(",
+            "def _record_shell_variable_assignment(",
+            "def _shell_variable_assignments(",
+            "def _shell_positional_args_assignments(",
+            "def _sccp_release_command_positional_args_invokes_cargo_test(",
+            "def _sccp_release_command_positional_args_enable_test_fixture_features(",
+            "def _sccp_release_command_positional_args_target_iroha_sccp(",
+            "def _shell_variable_alias_closure(",
+            "def _shell_variable_assignments_matching(",
+            "def _sccp_release_command_feature_variable_assignments(",
+            "def _sccp_release_command_split_feature_variable_assignments(",
+            "def _sccp_release_command_test_subcommand_variable_assignments(",
+            "def _sccp_release_command_split_target_variable_assignments(",
+            "def _sccp_release_command_target_variable_assignments(",
+            "def _sccp_release_command_invokes_cargo_test(",
+            "def _sccp_release_command_targets_iroha_sccp(",
+            "full_source_decoded_text",
+            "full_source_identifier_text",
             "def _sccp_unready_transparent_proof_release_command_feature_errors(",
             "_sccp_unready_source_proof_bypass_call_site_errors(inventory)",
             "_sccp_unready_widened_bypass_gate_errors(inventory)",
@@ -11143,7 +12348,7 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
             "for forbidden_env in SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV:",
             "forbidden_identifier in source_identifier_texts",
             "for forbidden_surface in SCCP_DIAGNOSTIC_TRANSPARENT_PROOF_FORBIDDEN_SURFACE:",
-            "enables iroha_sccp test-fixtures outside dev-dependencies",
+            "enables iroha_sccp test-fixtures outside approved dev-dependencies",
             "enables test-fixtures for the release/corridor rust-sccp command",
         ),
     ),
@@ -11171,7 +12376,7 @@ SCCP_UNREADY_TRANSPARENT_PROOF_BYPASS_FEATURE_WINDOW_LINES = 4
 SCCP_UNREADY_TORII_ROUTE_BYPASS_CALL_SITE_MARKER = (
     "let allow_unready = sccp_allow_unready_torii_route_bypass_enabled(allow_unready);"
 )
-SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES = 8
+SCCP_UNREADY_TORII_ROUTE_EXPECTED_BYPASS_CALL_SITES = 6
 SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV_PATHS = (
     "crates/iroha_config/src/parameters/user.rs",
     "configs/soranexus/taira/taira-irohad.service",
@@ -11200,6 +12405,23 @@ SCCP_DIAGNOSTIC_TRANSPARENT_PROOF_FORBIDDEN_SURFACE = (
 SCCP_UNREADY_TRANSPARENT_PROOF_CARGO_MANIFEST_GLOBS = (
     "Cargo.toml",
     "crates/*/Cargo.toml",
+    "crates/*/*/Cargo.toml",
+    "crates/*/*/*/Cargo.toml",
+    "data_model/samples/*/Cargo.toml",
+    "fuzz/Cargo.toml",
+    "integration_tests/Cargo.toml",
+    "mochi/*/Cargo.toml",
+    "patches/*/Cargo.toml",
+    "python/*/*/Cargo.toml",
+    "scripts/*/Cargo.toml",
+    "tools/*/Cargo.toml",
+    "tools/*/fuzz/Cargo.toml",
+    "xtask/Cargo.toml",
+)
+SCCP_UNREADY_TRANSPARENT_PROOF_IGNORED_CARGO_MANIFEST_DIRS = (
+    ".git",
+    "target",
+    "vendor",
 )
 SCCP_UNREADY_TRANSPARENT_PROOF_ALLOWED_TEST_FIXTURE_CARGO_DEPENDENCIES = {
     (
@@ -11223,7 +12445,48 @@ SCCP_UNREADY_TRANSPARENT_PROOF_RELEASE_COMMAND_PATHS = (
 )
 CARGO_TOML_SECTION_HEADER_PATTERN = re.compile(r"^\s*\[([^\]]+)\]")
 SOURCE_ESCAPE_SEQUENCE_PATTERN = re.compile(
-    r"\\x([0-9A-Fa-f]{2})|\\u\{([0-9A-Fa-f]{1,6})\}|\\u([0-9A-Fa-f]{4})"
+    r"\\x(?P<hex2>[0-9A-Fa-f]{2})|\\u\{(?P<braced_hex>[0-9A-Fa-f]{1,6})\}|"
+    r"\\u(?P<hex4>[0-9A-Fa-f]{4})|\\U(?P<hex8>[0-9A-Fa-f]{8})|"
+    r"\\(?P<octal>[0-7]{3})"
+)
+CARGO_FEATURE_FLAG_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:--features(?=$|[\s=)])|-F(?=$|[\s='\")]|test-fixtures))"
+)
+CARGO_ALL_FEATURES_FLAG_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_-])--all-features(?=$|[\s\"'$;)])"
+)
+CARGO_PACKAGE_FLAG_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:--package(?=$|[\s=)])|-p(?=$|[\s='\")]|iroha_sccp))"
+)
+CARGO_MANIFEST_PATH_FLAG_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])--manifest-path(?=$|[\s=)])")
+CARGO_COMMAND_NAME_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])cargo(?=$|[\s\"'$;])")
+CARGO_TEST_SUBCOMMAND_PATTERN = re.compile(r"(?<![A-Za-z0-9_-])(?:test|t)(?=$|[\s\"'$;)])")
+SHELL_VARIABLE_ASSIGNMENT_PATTERN = re.compile(
+    r"^\s*(?:(?:export|local|readonly|typeset)(?:\s+-[A-Za-z]+)*\s+|"
+    r"declare(?:\s+-[A-Za-z]+)*\s+)?"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]+\])?\s*\+?=\s*(?P<value>.*)$"
+)
+SHELL_VARIABLE_ASSIGNMENT_TOKEN_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<index>\[[^\]]+\])?\s*(?P<operator>\+?=)\s*"
+    r"(?P<value>\([^)]*\)|\$'[^']*'|'[^']*'|\"[^\"]*\"|[^\s;]+)"
+)
+SHELL_PRINTF_V_COMMAND_PATTERN = re.compile(r"^\s*(?:(?:builtin|command)\s+)?printf\s+")
+SHELL_READ_HERE_STRING_ASSIGNMENT_PATTERN = re.compile(
+    r"^\s*(?:IFS=(?:\$'[^']*'|'[^']*'|\"[^\"]*\"|[^\s;]*)\s+)?"
+    r"read(?:\s+-[A-Za-z]+)*\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s+<<<\s*(?P<value>.*)$"
+)
+SHELL_READARRAY_ASSIGNMENT_PATTERN = re.compile(
+    r"^\s*(?:readarray|mapfile)(?:\s+-[A-Za-z]+)*\s+"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s+"
+    r"(?:(?:<<<\s*)|(?:<\s*<\())(?P<value>.*)$"
+)
+SHELL_FOR_LOOP_ASSIGNMENT_PATTERN = re.compile(
+    r"^\s*for\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s+in\s+(?P<value>.*)$"
+)
+SHELL_ASSIGNMENT_WORD_SEPARATOR_ESCAPE_PATTERN = re.compile(r"\\[nrt]")
+SHELL_VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SHELL_POSITIONAL_ARGS_ASSIGNMENT_PATTERN = re.compile(
+    r"^\s*set\s+--(?P<value>(?:\s+.*)?)$"
 )
 TRON_DEPLOY_OPERATOR_BOOLEAN_MARKERS = (
     (
@@ -12401,6 +13664,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def _native_evm_sdk_name_blocker(",
             "contains {issue} sdk with sensitive name",
             "def _native_evm_prover_duplicate_json_key_blocker(",
+            "type(key) is not str or not key",
             "normalized_key = _decoded_sensitive_public_marker_text(key)",
             "JSON contains duplicate key with control character",
             "def _native_evm_prover_forbidden_payload_blockers(",
@@ -12408,6 +13672,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "if not artifact_path.is_file():",
             "_native_evm_prover_forbidden_payload_blockers(artifact_path, label)",
             "def _native_evm_prover_artifact_metadata_blockers(",
+            "if type(artifact) is not dict:",
             "artifact metadata must be an object",
             "artifact bytes metadata is invalid",
             "artifact sha256 metadata is invalid",
@@ -12418,7 +13683,12 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def _native_evm_prover_parity_fixture_status(",
             "def _native_evm_prover_self_test_status(",
             "def _native_evm_prover_sdk_results_by_sdk(",
+            "if type(sdk_results) is not dict or not sdk_results:",
             "def _native_evm_prover_fixture_hash_role_blockers(",
+            "if type(audit_hashes) is dict",
+            "if type(fixture) is not dict:",
+            "if type(public_signal_words) is not list",
+            "if type(result) is not dict:",
             "sha256 must match audit_hashes.cross_sdk_fixture_parity",
             "sha256 must match audit_hashes.native_prover_self_test",
             "native_prover_self_test_artifact",
@@ -12437,6 +13707,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "must match public_signal_words",
             "sdk_results contains unknown sdk",
             "sdk_results missing sdk",
+            "if type(artifacts) is not list or not artifacts:",
+            "if type(artifact) is not dict:",
             "native_sdk_artifacts[",
             "native_sdk_artifacts contains duplicate sdk",
             "native_sdk_artifacts contains unknown sdk",
@@ -12464,6 +13736,13 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "must not duplicate",
             "must not reuse",
             "canonical non-zero 32-byte hex value",
+            "if type(sdk_artifacts) is list:",
+            "if type(payload) is not dict:",
+            "if lane is None:",
+            "if type(lane) is not dict:",
+            "if type(destination_binding) is not dict:",
+            "if type(audit_hashes) is not dict or not audit_hashes:",
+            "if type(sdk_artifact_rows) is list:",
             'b"snarkjs"',
             'b"remoteprover"',
         ),
@@ -12477,6 +13756,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "JSON contains duplicate key:",
             "JSON contains duplicate key with sensitive key name",
             "NATIVE_EVM_PROVER_SENSITIVE_DUPLICATE_KEY_MARKERS = (",
+            "type(key) is not str or not key",
             "normalized_key = _decoded_sensitive_public_marker_text(key)",
             "from None",
             "def _native_evm_field_name_error(",
@@ -12484,12 +13764,24 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def _native_evm_sdk_name_error(",
             "contains {issue} sdk with sensitive name",
             "def _native_evm_prover_payload_sources(",
+            "if type(payload) is not dict:",
+            "native EVM Groth16 prover bundle native_sdk_artifacts must be a list",
+            "if type(native_sdk_artifacts) is not list:",
+            "if type(artifact) is not dict:",
+            'f"native_sdk_artifacts[{index}] must be an object"',
             "file is missing or is not a regular file",
             "path must not contain URI schemes or drive prefixes",
             "path contains percent-encoded traversal segment",
             "path contains forbidden prover dependency marker",
             "path must not reuse",
             "cross_sdk_fixture_parity_artifact",
+            "if type(sdk_artifacts) is list:",
+            "if type(audit_hashes) is not dict:",
+            'if validation_status == "passed" and type(audit_hashes) is dict:',
+            'if type(payload.get("cross_sdk_fixture_parity_artifact")) is dict:',
+            'if type(payload.get("native_prover_self_test_artifact")) is dict:',
+            "if type(row) is not dict:",
+            "if type(implementation_artifact) is not dict:",
         ),
     ),
     (
@@ -12568,6 +13860,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_nested_json_keys",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifact_keys",
             "def test_release_readiness_report_blocks_native_evm_prover_malformed_duplicate_json_keys",
+            "def test_release_readiness_duplicate_json_key_blocker_rejects_string_subclasses_without_hooks",
             "secret-token-native-duplicate",
             "recovery%2dphrase-native-duplicate",
             "def test_release_readiness_report_redacts_encoded_sensitive_native_evm_duplicate_key",
@@ -12588,6 +13881,25 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifacts",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_order",
             "def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts",
+            "def test_release_readiness_native_evm_bundle_helpers_reject_container_subclasses_without_leaking",
+            "HostileReadinessReportList([{",
+            "HostileReadinessReportSection({\"swift\":",
+            "def test_release_readiness_native_evm_fixture_helpers_reject_container_subclasses_without_leaking",
+            "HostileReadinessReportSection(parity_fixture)",
+            "HostileReadinessReportSection(self_test_fixture)",
+            "HostileReadinessReportList(valid_words)",
+            "def test_release_readiness_native_evm_bundle_status_rejects_container_subclasses_without_leaking",
+            "HostileReadinessReportSection(payload)",
+            "HostileReadinessReportList(payload[\"native_sdk_artifacts\"])",
+            "def test_release_readiness_report_rejects_hostile_native_evm_public_bundle_containers_without_hooks",
+            "HostileReadinessReportSection(root_bundle)",
+            "artifact_bundle[\"artifact\"] = HostileReadinessReportSection(",
+            "audit_bundle[\"audit_hashes\"] = HostileReadinessReportSection(",
+            "sdk_root_bundle[\"sdk_artifacts\"] = HostileReadinessReportList(",
+            "sdk_row_bundle[\"sdk_artifacts\"][0] = HostileReadinessReportSection(",
+            "implementation_bundle[\"sdk_artifacts\"][0][\n        \"implementation_artifact\"\n    ] = HostileReadinessReportSection(",
+            "blocker_bundle[\"validation_blockers\"] = HostileReadinessReportList(",
+            "readiness native EVM public bundle hostile container",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "secret_token_native_sdk_field",
             "secret-token-sdk",
@@ -12630,6 +13942,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_duplicate_native_evm_self_test_keys",
             "def test_release_readiness_report_blocks_duplicate_native_evm_self_test_sdk_result_keys",
             "def test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inventory",
+            "def test_release_readiness_report_guards_native_evm_canonical_sdk_inventory",
             "def test_release_readiness_report_blocks_missing_native_sccp_no_wasm_readiness_gate",
             "cross_sdk_fixture_parity_artifact JSON contains duplicate key",
             "native_prover_self_test_artifact JSON contains duplicate key",
@@ -12662,6 +13975,13 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "native EVM Groth16 prover bundle JSON contains duplicate key: circuit_security_audit",
             "def test_release_bundle_rejects_duplicate_native_evm_prover_sdk_artifact_keys",
             "native EVM Groth16 prover bundle JSON contains duplicate key: implementation_hash",
+            "def test_release_bundle_native_evm_payload_sources_reject_container_subclasses_without_leaking",
+            "HostileVerifierReportSection()",
+            "HostileVerifierReportList([])",
+            "def test_release_bundle_native_evm_summary_rejects_container_subclasses_without_leaking",
+            'HostileVerifierReportSection({"validation_status": "blocked"})',
+            "HostileVerifierReportList(",
+            "def test_release_bundle_duplicate_json_key_blockers_reject_string_subclasses_without_hooks",
             "def test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results",
             "sdk_results sdk key must not contain surrounding whitespace",
             "def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_keys",
@@ -12864,6 +14184,7 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "phase evidence path must not be empty",
             "def _phase_evidence_path_error(",
             "def _public_text_contains_sensitive_marker(",
+            "type(value) is not str or not value",
             "phase evidence path must not contain surrounding whitespace",
             "phase evidence path contains control character",
             "phase evidence path contains non-ASCII character",
@@ -12901,6 +14222,7 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
             "phase evidence path must not be empty",
             "def _phase_evidence_path_error(",
             "def _public_text_contains_sensitive_marker(",
+            "type(value) is not str or not value",
             "phase evidence path must not contain surrounding whitespace",
             "phase evidence path contains control character",
             "phase evidence path contains non-ASCII character",
@@ -13330,6 +14652,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _phase_block_forbidden_output_marker(",
             "def _phase_transcript_artifact_path(",
             "evidence artifact cannot be checked: malformed artifact row",
+            "type(artifact_path) is not str or not artifact_path",
             "not artifact_path.isascii()",
             "_decoded_public_blocker_text_issue(artifact_path) is not None",
             "_public_text_contains_sensitive_marker(artifact_path)",
@@ -13614,6 +14937,7 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "def _phase_block_forbidden_output_marker(",
             "def _phase_transcript_artifact_path(",
             "readiness report phase transcript cannot be checked: malformed artifact row",
+            "type(artifact_path) is not str or not artifact_path",
             "def _phase_transcript_errors(",
             "preflight_errors = _public_text_root_file_errors(path, load_error)",
             "evidence artifact cannot be read",
@@ -13640,12 +14964,14 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "test_release_readiness_phase_transcript_rejects_unreadable_artifacts",
+            'HostileMarkdownString("real-js-sdk.log")',
             "test_release_readiness_report_rejects_hidden_non_dotnet_command_trace",
         ),
     ),
     (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
+            "test_release_bundle_verifier_rejects_phase_transcript_string_subclass_path",
             "test_release_bundle_verifier_rejects_hidden_non_dotnet_command_trace",
         ),
     ),
@@ -13691,6 +15017,8 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "ASSEMBLY in value",
             "trx_assembly_reference_problem",
             "is_trusted_assembly_reference",
+            "method_assembly_references = list(element_assembly_references)",
+            "requires SCCP TRX definitions to reference only Hyperledger.Iroha.Sdk.Tests.dll assembly paths",
             "requires canonical TRX assembly path values",
             "ASCII_CONTROL_RE",
             "ASCII_WHITESPACE_RE",
@@ -13880,6 +15208,9 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
         (
             "test_sccp_production_corridor_kotlin_phase_covers_sccp_package",
             "test_sccp_production_corridor_gradle_opts_override_is_preserved",
+            'env["GRADLE_OPTS"] = "-Dorg.gradle.jvmargs=-Xmx3g -Dcustom.flag=true"',
+            "GRADLE_OPTS=-Dorg.gradle.jvmargs=-Xmx3g\\\\ -Dcustom.flag=true",
+            '"-Dkotlin.daemon.jvmargs=-Xmx6g" not in completed.stdout',
             "test_sccp_production_corridor_rejects_empty_log_dir",
             "test_sccp_production_corridor_dry_run_skips_mobile_toolchain_resolution",
             "test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades",
@@ -14116,6 +15447,8 @@ SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
             "pathlike-unit-test-id",
             "colon-execution-id",
             "assembly-path-splice",
+            "assembly-conflicting-method-codebase",
+            "assembly-conflicting-unit-storage",
             "assembly-traversal-path",
             "assembly-url-path",
             "assembly-xml-delimiter-path",
@@ -14717,13 +16050,17 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "field name with control character",
             "field name with non-ASCII character",
             "def _native_evm_prover_duplicate_json_key_blocker(",
+            "type(key) is not str or not key",
             "normalized_key = _decoded_sensitive_public_marker_text(key)",
             "JSON contains duplicate key with control character",
             "def _native_evm_prover_bundle_summary_schema_errors(",
             "type(implementation) is not str",
+            "type(prover_artifact_hash) is not str",
+            "type(artifact_proving_key_hash) is not str",
             "exact_string_fields = (",
             "type(value) is not str",
             "readiness report native_evm_prover_bundle",
+            "type(expected_hash) is str",
             "cross_sdk_fixture_parity_artifact sha256 must match",
             "native_prover_self_test_artifact sha256 must match",
             "native_sdk_artifacts must match expected SDK order",
@@ -14735,25 +16072,38 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             ".sdk must be a lowercase SDK id",
             "def _native_evm_prover_sdk_results_by_sdk(",
             "def _native_evm_prover_sdk_result_key_blocker(",
+            "def _native_evm_prover_copied_string_matches(",
+            "def _native_evm_prover_public_signal_words_match(",
             "sdk_results sdk key must not contain surrounding whitespace",
             "sdk_results sdk key contains control character",
             "sdk_results sdk key must be printable ASCII",
             "sdk_results sdk key must not contain whitespace",
             "sdk_results sdk key must be a lowercase SDK id",
             "sdk_results contains unknown sdk",
+            "def _native_evm_manifest_relative_path(",
+            "type(value) is not str or not value",
             "def _native_evm_prover_artifact_metadata_blockers(",
+            "type(artifact_path) is not str",
             "artifact metadata must be an object",
             "artifact bytes metadata is invalid",
             "artifact sha256 metadata is invalid",
             "def _native_evm_validation_blocker_issue(",
+            "type(item) is not str or not item",
+            "def _native_evm_validation_blocker_numbering_key(",
+            "def _number_repeated_native_evm_validation_blocker_diagnostics(",
             "def _native_evm_validation_blockers(",
             'return f"{item_label} contains sensitive name"',
             "must not contain duplicate strings",
             "def _readiness_native_evm_validation_blockers_cell(",
+            "sanitized_blockers = _native_evm_validation_blockers(",
+            "type(original) is not str or sanitized != original",
             "def _readiness_native_evm_validation_blockers_presence_errors(",
             "def _native_evm_sdk_name_blocker(",
+            "def _native_evm_sdk_name_diagnostic_numbering_key(",
             "contains {issue} sdk with sensitive name",
             "def _number_repeated_native_evm_sdk_name_blockers(",
+            "def _native_evm_prover_field_name_numbering_key(",
+            "def _number_repeated_native_evm_prover_field_name_diagnostics(",
             "validation_status must be passed",
             "validation_blockers must be empty",
             "native EVM Groth16 prover bundle is not UTF-8 text",
@@ -14773,19 +16123,34 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "def _sccp_release_native_prover_bundle_schema_gate_inventory_errors(",
             '"release_native_prover_bundle_schema_gate"',
             "SCCP release native-prover bundle schema source inventory",
+            "def _native_evm_prover_artifact_metadata_blockers(",
+            "type(artifact_path) is not str",
             "def _native_evm_validation_blocker_issue(",
+            "type(item) is not str or not item",
+            "def _native_evm_validation_blocker_numbering_key(",
+            "def _number_repeated_native_evm_validation_blocker_diagnostics(",
             "def _native_evm_validation_blockers(",
             'return f"{item_label} contains sensitive name"',
             "must not contain duplicate strings",
             'expected_type = int if key == "domain" else str',
             "type(value) is not expected_type",
             "type(implementation) is not str",
+            "type(prover_artifact_hash) is not str",
+            "type(artifact_proving_key_hash) is not str",
             "def _native_evm_validation_blockers_cell(",
             "native_sdk_artifacts must match expected SDK order",
             "def _native_evm_prover_sdk_results_by_sdk(",
+            "def _native_evm_prover_copied_string_matches(",
+            "def _native_evm_prover_public_signal_words_match(",
             "sdk_results contains unknown sdk",
+            "def _native_evm_manifest_relative_path(",
+            "type(value) is not str or not value",
+            "type(expected_hash) is str",
             "def _number_repeated_native_evm_sdk_name_blockers(",
             "contains {issue} sdk with sensitive name",
+            "_is_nonzero_hex32(expected_destination_binding)",
+            "_is_nonzero_hex32(actual_destination_binding)",
+            "_is_nonzero_hex32(role_hash)",
         ),
     ),
     (
@@ -14799,6 +16164,7 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "def _native_evm_prover_bundle_id(",
             "def _active_launch_chain(",
             "def _native_evm_artifact_summary_errors(",
+            "type(artifact_path) is not str or not artifact_path",
             "def _native_evm_summary_path_role_errors(",
             'if ":" in artifact_path',
             "def _native_evm_prover_summary_errors(",
@@ -14809,12 +16175,18 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             '("lanes", _active_launch_chain())',
             '("proof_backend", "evm-groth16-bn254-v1")',
             "def _native_evm_sdk_name_error(",
+            "def _native_evm_sdk_name_diagnostic_numbering_key(",
+            "def _number_repeated_native_evm_sdk_name_diagnostics(",
             "contains {issue} sdk with sensitive name",
             "def _unexpected_source_adapter_gate_audit_field_error(",
+            "def _source_adapter_gate_audit_diagnostic_numbering_key(",
+            "def _number_repeated_source_adapter_gate_audit_diagnostics(",
             "contains unexpected field with sensitive name",
             "def _native_evm_prover_binding_bundle_errors(",
             "native_evm_prover_bundle cannot be recomputed",
             "must be a canonical non-zero 32-byte hex value",
+            "type(expected_hash) is str",
+            "_is_nonzero_bytes32_hex_text(role_hash)",
             "sha256 must match implementation_hash",
             "audit_hashes missing field",
             "sdk_artifacts missing sdk",
@@ -14860,10 +16232,13 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
         "pytests/scripts/sccp_release_bundle_test.py",
         (
             "test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory",
+            "HostileMarkdownString(\"native-artifact.bin\")",
             "test_release_bundle_verifier_rejects_missing_release_native_prover_bundle_schema_inventory_gate",
             "test_release_bundle_verifier_rejects_tampered_native_evm_prover_bundle",
             "test_release_bundle_verifier_rejects_native_evm_prover_bundle_root_drift",
             "test_release_bundle_verifier_rejects_tampered_native_evm_prover_payload",
+            "test_release_bundle_verifier_native_evm_helpers_reject_string_subclasses",
+            "test_release_bundle_verifier_native_evm_payload_hash_rejects_string_subclass_comparison",
             "test_release_bundle_verifier_rejects_unlabeled_native_evm_prover_audits",
             "test_release_bundle_native_evm_prover_bundle_rejects_boolean_type_drift",
             "native_bundle_boolean_exactness_cases = (",
@@ -14873,8 +16248,14 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_rejects_copied_native_evm_summary_scalar_drift_before_render",
             "test_release_bundle_rejects_hostile_native_evm_root_identity_without_comparing",
             "test_release_bundle_rejects_copied_native_evm_sdk_artifact_order_before_render",
+            "test_release_bundle_numbers_repeated_copied_native_evm_audit_key_errors_before_render",
+            "test_release_bundle_numbers_repeated_copied_native_evm_sdk_name_errors_before_render",
+            "secret_token_copied_native_a",
+            "private-key-sdk",
             "test_release_bundle_rejects_copied_native_evm_summary_binding_before_render",
             "test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
+            "test_release_bundle_verifier_numbers_repeated_native_evm_prover_manifest_audit_key_errors",
+            "secret_token_native_audit_a",
             "test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys",
             "test_release_bundle_verifier_redacts_malformed_native_evm_prover_json",
             "test_release_bundle_verifier_redacts_malformed_native_evm_prover_fixture_json",
@@ -14883,18 +16264,50 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_blocks_malformed_native_evm_artifact_metadata",
             "test_release_bundle_rejects_native_evm_prover_malformed_duplicate_json_keys",
             "test_release_bundle_verifier_redacts_sensitive_native_evm_duplicate_json_keys",
+            "test_release_bundle_verifier_duplicate_json_key_blocker_redacts_marker_families",
             "secret-token-native-duplicate",
+            "private&#45;key-native-duplicate",
+            "client&#32;secret-native-duplicate",
             "recovery%2dphrase-native-duplicate",
+            "auth_header-native-duplicate",
             "secret-token-native-audit-field",
             "secret-token-native-blocker",
+            "HostileMarkdownString(\"proof.bin\")",
+            "HostileMarkdownString(\"safe native validation blocker\")",
             "validation_blockers[0] contains sensitive name",
             "validation_blockers contains blocker with sensitive name",
             "safe duplicated native validation blocker",
+            "test_release_bundle_verifier_numbers_repeated_native_evm_validation_blocker_duplicates",
+            "safe duplicated native validation blocker a",
+            "safe%20duplicated%20native%20validation%20blocker%20a",
             "native EVM prover validation_blockers must not contain duplicate strings",
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_order",
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift",
             "test_release_bundle_rejects_hostile_native_evm_sdk_implementation_without_comparing",
+            "test_release_bundle_verifier_rejects_hostile_native_evm_sdk_hash_bindings_without_comparing",
+            "test_release_bundle_verifier_native_evm_destination_binding_rejects_hostile_values",
+            "strict native prover destination binding hash comparison rejects hostile copied values before hooks",
+            "test_release_bundle_verifier_native_evm_status_ignores_hostile_active_destination_alias",
+            'HostileVerifierFieldName("destination_binding_hash")',
+            "test_release_bundle_verifier_native_evm_role_helpers_ignore_hostile_aliases",
+            'HostileVerifierFieldName("proof_artifact_hash")',
+            'HostileVerifierFieldName("implementation_artifact")',
+            "source_proof_hash must not reuse",
+            "test_release_bundle_verifier_native_evm_markdown_cells_ignore_hostile_aliases",
+            'assert sdk_cell == "`<invalid sdk_artifacts>`"',
+            "test_release_bundle_verifier_native_evm_sdk_results_redacts_hostile_keys",
+            'HostileVerifierFieldName("operator-subclass-sdk")',
+            "sdk_results contains malformed sdk key",
+            "test_release_bundle_verifier_native_evm_fixture_result_values_reject_hostile_without_hooks",
+            "strict native prover fixture SDK result values reject hostile copied values before hooks",
+            "test_release_bundle_verifier_native_evm_fixture_exact_key_helpers_reject_hostile_required_keys",
+            'HostileVerifierFieldName("receipt_proof_hash")',
+            'HostileVerifierFieldName("proof_hash")',
+            "missing field: receipt_proof_hash",
+            "missing field: proof_hash",
             "test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift",
+            "test_release_bundle_verifier_numbers_repeated_native_sdk_implementation_artifact_metadata_errors",
+            "duplicate-public-note",
             "test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
             "test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash",
             "test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift",
@@ -14906,6 +16319,11 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifact_ids",
             "test_release_bundle_verifier_rejects_native_evm_prover_report_malformed_sdk_artifact_ids",
             "test_release_bundle_verifier_rejects_native_evm_prover_report_sdk_artifact_order",
+            "test_release_bundle_verifier_numbers_repeated_native_evm_prover_summary_audit_key_errors",
+            "test_release_bundle_verifier_native_evm_summary_audit_roles_ignore_hostile_aliases",
+            "audit_hashes.circuit_security_audit must not reuse ",
+            "sdk_artifacts[0].implementation_hash",
+            "secret_token_native_summary_a",
             "test_release_bundle_verifier_rejects_native_evm_prover_malformed_unknown_field_names",
             "secret-token-sdk",
             "test_release_bundle_verifier_blocks_malformed_native_prover_blockers",
@@ -14915,6 +16333,19 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_native_evm_fixture_padded_sdk_results",
             "test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_keys",
             "test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse",
+            "test_release_bundle_native_evm_payload_sources_ignore_hostile_aliases",
+            'HostileVerifierFieldName("proof_artifact")',
+            'HostileMarkdownString("secret-token-sdk")',
+            "test_release_bundle_native_evm_validation_blockers_reject_list_subclasses_without_leaking",
+            "secret-token-native-validation-blocker-list",
+            "test_release_bundle_native_evm_summary_schema_errors_reject_container_subclasses_without_leaking",
+            "sdk_artifacts[0] implementation_artifact must be an object",
+            "test_release_bundle_native_evm_status_payload_helpers_reject_container_subclasses_without_leaking",
+            "native EVM Groth16 prover bundle audit_hashes must be a non-empty object",
+            "test_release_bundle_native_evm_fixture_status_reject_container_subclasses_without_leaking",
+            "public_signal_words must contain 9 words",
+            "test_release_bundle_native_evm_artifact_summary_helpers_reject_container_subclasses_without_leaking",
+            "native_sdk_artifacts[0] must be an object",
             "test_release_bundle_rejects_duplicate_native_evm_prover_payload_paths_before_copy",
             "test_release_bundle_verifier_rejects_duplicate_native_evm_prover_payload_paths",
             "test_release_bundle_verifier_rejects_duplicate_native_evm_prover_report_paths",
@@ -14932,13 +16363,20 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_readiness_report_blocks_wasm_or_remote_native_evm_prover_bundle",
             "native_bundle_boolean_exactness_cases = (",
             "test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields",
+            "test_release_readiness_native_evm_helpers_reject_string_subclasses",
+            "test_release_readiness_native_evm_payload_hash_rejects_string_subclass_comparison",
             "test_release_readiness_report_rejects_hostile_native_evm_root_identity_without_comparing",
             "test_release_readiness_report_blocks_native_evm_prover_malformed_unknown_field_names",
             "test_release_readiness_report_blocks_native_evm_prover_malformed_duplicate_json_keys",
             "secret-token-native-duplicate",
             "secret-token-native-blocker",
+            "HostileMarkdownString(\"proof.bin\")",
+            "HostileMarkdownString(\"safe native validation blocker\")",
             "validation_blockers[0] contains sensitive name",
             "safe duplicated native validation blocker",
+            "test_release_readiness_report_numbers_repeated_native_prover_blocker_duplicates",
+            "safe duplicated native validation blocker a",
+            "safe%20duplicated%20native%20validation%20blocker%20a",
             "native EVM prover validation_blockers must not contain duplicate strings",
             "test_release_readiness_report_redacts_malformed_native_evm_prover_json",
             "test_release_readiness_report_redacts_malformed_native_evm_prover_fixture_json",
@@ -14949,6 +16387,29 @@ SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
             "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_malformed_unknown_field_names",
             "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
             "test_release_readiness_report_rejects_hostile_native_evm_sdk_implementation_without_comparing",
+            "test_release_readiness_report_rejects_hostile_native_evm_sdk_hash_bindings_without_comparing",
+            "test_release_readiness_report_rejects_hostile_native_evm_destination_binding_without_hooks",
+            "readiness native prover destination binding hash comparison rejects hostile copied values before hooks",
+            "test_release_readiness_native_evm_bundle_status_ignores_hostile_active_destination_alias",
+            'HostileReportFieldName("destination_binding_hash")',
+            "test_release_readiness_native_evm_role_helpers_ignore_hostile_aliases",
+            'HostileReportFieldName("proof_artifact_hash")',
+            'HostileReportFieldName("implementation_artifact")',
+            "source_proof_hash must not reuse",
+            "test_release_readiness_native_evm_markdown_cells_ignore_hostile_aliases",
+            'assert sdk_cell == "`<invalid sdk_artifacts>`"',
+            "test_release_readiness_native_evm_sdk_results_redacts_hostile_keys",
+            'HostileReportFieldName("operator-subclass-sdk")',
+            "sdk_results contains malformed sdk key",
+            "test_release_readiness_report_native_evm_fixture_result_values_reject_hostile_without_hooks",
+            "readiness native prover fixture SDK result values reject hostile copied values before hooks",
+            "test_release_readiness_report_native_evm_fixture_exact_key_helpers_reject_hostile_required_keys",
+            'HostileReportFieldName("receipt_proof_hash")',
+            'HostileReportFieldName("proof_hash")',
+            "missing field: receipt_proof_hash",
+            "missing field: proof_hash",
+            "test_release_readiness_native_evm_bundle_status_redacts_hostile_keys",
+            "native_sdk_artifacts[0] contains malformed unknown field name",
             "secret-token-sdk",
             "test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift",
             "test_release_readiness_report_blocks_missing_native_evm_parity_fixture",
@@ -14996,6 +16457,7 @@ SCCP_RELEASE_BUNDLE_OUTPUT_PATH_MARKERS = (
             "refusing output directory that contains the repository root",
             "def _output_directory_path_error(",
             "def _public_text_contains_sensitive_marker(",
+            "type(value) is not str or not value",
             "release bundle output directory path must not contain surrounding whitespace",
             "release bundle output directory path contains control character",
             "release bundle output directory path contains non-ASCII character",
@@ -15086,6 +16548,8 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _path_markdown_unsafe_character(",
             "def _path_percent_encoded_traversal(",
             "def _public_text_contains_sensitive_marker(",
+            "type(value) is not str or not value",
+            "type(artifact_path) is not str or not artifact_path",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
             "def _reject_release_artifact_symlink_path(",
             "first_symlinked_existing_path_component",
@@ -15120,11 +16584,13 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _path_markdown_unsafe_character(",
             "def _path_percent_encoded_traversal(",
             "def _public_text_contains_sensitive_marker(",
+            "type(value) is not str or not value",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
             "def _reject_release_artifact_symlink_path(",
             "first_symlinked_existing_path_component",
             "release artifact path must not be a symlink",
             "def _native_evm_markdown_path_is_safe(",
+            "type(value) is not str\n        or not value",
             "_decoded_public_blocker_text_issue(value) is not None",
             "release artifact path contains Markdown-unsafe character",
             "release artifact path contains non-ASCII character",
@@ -15150,11 +16616,13 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _path_percent_encoded_traversal(",
             "def _path_contains_sensitive_marker(",
             "def _public_text_contains_sensitive_marker(",
+            "type(value) is not str or not value",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
             "def _reject_release_artifact_symlink_path(",
             "first_symlinked_existing_path_component",
             "release artifact path must not be a symlink",
             "def _readiness_native_evm_markdown_path_is_safe(",
+            "type(value) is not str\n        or not value",
             "_decoded_public_blocker_text_issue(value) is not None",
             "manifest artifact path contains Markdown-unsafe character",
             "manifest artifact path contains non-ASCII character",
@@ -15196,6 +16664,8 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
         (
             "test_release_bundle_verifier_guards_sccp_release_artifact_path_text_inventory",
             "test_release_bundle_verifier_rejects_missing_release_artifact_path_text_inventory_gate",
+            "test_release_bundle_rejects_string_subclass_artifact_row_paths",
+            'HostileMarkdownString("evidence/00-input.toml")',
             "test_release_bundle_rejects_markdown_unsafe_evidence_input_before_copy",
             "test_release_bundle_rejects_padded_evidence_input_filename_before_copy",
             "test_release_bundle_rejects_encoded_traversal_evidence_filename_before_copy",
@@ -15213,6 +16683,12 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_bundle_rejects_uri_or_drive_artifact_paths",
             "test_release_bundle_rejects_markdown_unsafe_artifact_paths",
             "test_release_bundle_rejects_non_ascii_or_sensitive_artifact_paths",
+            "test_release_bundle_path_helpers_reject_decoded_sensitive_marker_families",
+            "operator/secret%20key.log",
+            "operator/private&#45;key.log",
+            "operator/client&#32;secret.log",
+            "operator/recovery%2dphrase.log",
+            "release bundle output directory path contains sensitive name",
             "test_release_bundle_rejects_padded_artifact_paths",
             "test_release_bundle_rejects_symlinked_artifact_path_without_path_leak",
             "test_release_bundle_rejects_symlinked_artifact_ancestor_without_read",
@@ -15276,6 +16752,12 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_readiness_report_blocks_missing_sccp_release_artifact_path_text_gate",
             "test_release_readiness_rejects_markdown_unsafe_artifact_paths",
             "test_release_readiness_rejects_non_ascii_or_sensitive_artifact_paths",
+            "test_release_readiness_path_helpers_reject_decoded_sensitive_marker_families",
+            "secret%20key",
+            "private&#45;key",
+            "client&#32;secret",
+            "recovery%2dphrase",
+            "phase evidence name contains sensitive name",
             "test_release_readiness_rejects_padded_artifact_paths",
             "test_release_readiness_rejects_uri_or_drive_artifact_paths",
             "test_release_readiness_report_rejects_directory_phase_evidence",
@@ -15300,16 +16782,22 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
         "scripts/sccp_verify_release_bundle.py",
         (
             "def _canonical_report_input_path_errors(",
+            "type(value) is not str or not value",
             "readiness report inputs item must be a non-empty string",
             "readiness report inputs path escapes bundle",
             "readiness report inputs path is not canonical",
             "readiness report inputs path must not contain URI schemes or drive prefixes",
             "def _copied_input_layout_errors(",
+            "type(value) is not str or _canonical_report_input_path_errors(value)",
             "path must use copied evidence layout",
             "def _input_provenance_schema_errors(",
             "readiness report inputs must be a non-empty list of canonical paths",
             "readiness report inputs contains duplicate path",
+            "duplicate_input_count = 0",
+            'f"#{duplicate_input_count}"',
             "readiness report input_artifacts contains duplicate path",
+            "duplicate_artifact_count = 0",
+            'f"#{duplicate_artifact_count}"',
             "def _copied_input_summary(",
             "readiness report input_artifacts must be a non-empty list",
             "readiness report has no usable copied evidence inputs",
@@ -15330,18 +16818,28 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "readiness report input_artifacts contains duplicate path",
             "readiness report inputs do not match copied input_artifacts",
             "readiness report input_artifacts do not match inputs",
+            "def _public_report_input_path_for_salvage(",
+            "type(item) is not str",
         ),
     ),
     (
         "scripts/sccp_release_bundle.py",
         (
             "def _canonical_copied_input_path_errors(",
+            "type(value) is not str or not value",
             "def _copied_input_layout_errors(",
+            "type(value) is not str or _canonical_copied_input_path_errors(value, label)",
             "def _copied_input_provenance_bundle_errors(",
+            "if type(inputs) is not list or not inputs:",
+            "if type(input_artifacts) is not list or not input_artifacts:",
+            "if type(artifact) is not dict:",
             "must be a non-empty list of canonical paths",
             "contains duplicate path",
             "do not match copied input_artifacts",
             "path must not contain URI schemes or drive prefixes",
+            "def _corridor_evidence_artifact_duplicate_path_errors(",
+            "if type(evidence_artifacts) is not dict:",
+            "if type(artifact_path) is not str",
             "def _copied_evidence_binding_bundle_errors(",
             "evidence cannot be recomputed from copied inputs",
             "def _release_report_bundle_errors(",
@@ -15357,6 +16855,11 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "test_release_bundle_rejects_missing_copied_report_inputs_before_render",
             "test_release_bundle_rejects_malformed_copied_input_provenance_before_render",
             "test_release_bundle_rejects_uri_or_drive_copied_input_paths_before_render",
+            "test_release_bundle_rejects_string_subclass_copied_input_paths",
+            "test_release_bundle_copied_input_provenance_rejects_container_subclasses_without_leaking",
+            'HostileMarkdownString("evidence/00-input.toml")',
+            'HostileVerifierReportList(["secret-token-input.toml"])',
+            'HostileVerifierReportSection({"path": "secret-token-artifact.toml"})',
             "bundled report.inputs path must not contain surrounding whitespace",
             "bundled report.inputs path contains percent-encoded traversal segment",
             "bundled report.inputs path must not contain URI schemes or drive prefixes",
@@ -15370,6 +16873,20 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "operator-drive-input-artifact.toml",
             "test_release_bundle_verifier_rejects_input_path_drift",
             "test_release_bundle_verifier_rejects_input_provenance_noncanonical_paths",
+            "test_release_bundle_verifier_rejects_string_subclass_report_input_paths",
+            'HostileMarkdownString("evidence/00-report-input.toml")',
+            '"readiness report input artifact has no path"',
+            "test_release_bundle_verifier_rejects_artifact_field_type_drift",
+            "test_release_bundle_verifier_numbers_repeated_input_artifact_metadata_errors",
+            "test_release_bundle_verifier_rejects_zero_artifact_byte_counts",
+            "test_release_bundle_verifier_rejects_artifact_digest_text_drift",
+            "test_release_bundle_verifier_rejects_zero_artifact_hashes",
+            "readiness report input artifact bytes must be a positive integer #1",
+            "readiness report input artifact bytes must be a positive integer #2",
+            "readiness report input artifact sha256 must be a canonical SHA-256 ",
+            "hex string #1",
+            "hex string #2",
+            "readiness report input artifact sha256 must be a non-zero canonical SHA-256 hex string",
             "operator-backslash-input.toml",
             "operator-duplicate-input.toml",
             "test_release_bundle_verifier_rejects_uri_or_drive_report_paths",
@@ -15377,6 +16894,10 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "operator-drive-input-artifact.toml",
             "test_release_bundle_verifier_rejects_input_provenance_root_drift",
             "test_release_bundle_verifier_rejects_input_provenance_schema_drift",
+            "test_release_bundle_verifier_numbers_repeated_duplicate_input_provenance",
+            "readiness report inputs contains duplicate path #1",
+            "readiness report inputs contains duplicate path #2",
+            "readiness report input_artifacts contains duplicate path #2",
             "test_release_bundle_verifier_rejects_mixed_malformed_duplicate_input_artifacts",
             "readiness report input_artifacts contains duplicate path #1",
             "readiness report input artifact 1 is not an object",
@@ -15401,6 +16922,8 @@ SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
             "test_release_readiness_report_blocks_missing_release_input_provenance_schema_gate",
             "def test_release_readiness_report_cli_rejects_empty_input_provenance_without_leaking",
             "readiness report inputs must be a non-empty list of canonical strings",
+            "def test_release_readiness_report_cli_rejects_string_subclass_input_paths",
+            'HostileMarkdownString("evidence/00-complete.toml")',
             "def test_release_readiness_report_cli_rejects_duplicate_input_provenance_without_leaking",
             "def test_release_readiness_report_cli_rejects_input_provenance_drift_without_leaking",
             "def test_release_readiness_report_public_path_helpers_reject_escape_forms",
@@ -15466,15 +16989,20 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "SDK test inventory is not UTF-8 text",
             "SDK test inventory cannot be read",
             "SCCP unready transparent-proof removed-surface source inventory",
+            "release verifier public JSON roots must reject subclasses",
             "def _public_verifier_summary_artifacts(",
             "def _public_verifier_summary_payload(",
+            "strict verifier summary containers must reject subclasses",
             "type(key) is not str or not key",
             "strict verifier summary must be an object",
             "strict verifier summary contains unknown field name with sensitive name",
             "strict verifier summary verified must be boolean",
+            "def _public_verifier_error_text_blocker(",
+            "type(blocker) is not str or not blocker",
             'f"{artifact_label} must be an object"',
             "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string",
             "strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string",
+            "strict verifier summary errors must not contain duplicate strings",
             "_public_unknown_mapping_fields(payload, NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS)",
             "NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS - _public_mapping_string_keys(payload)",
             "_public_mapping_string_keys(audit_hashes)",
@@ -15488,7 +17016,24 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "_public_mapping_string_view(status)",
             "_public_unknown_mapping_fields(report, READINESS_REPORT_KEYS)",
             "_public_mapping_string_keys(report)",
+            "type(report) is not dict",
+            "type(summary) is not dict",
+            "type(raw_evidence) is not dict",
+            "type(raw_corridor) is not dict",
+            "type(raw_native_bundle) is not dict",
+            "type(source_inventory) is not dict",
+            "type(status) is not dict",
+            "release verifier public JSON lists must reject subclasses",
+            "type(inputs) is not list",
+            "type(input_artifacts) is not list",
+            "type(report_input_artifacts) is not list",
+            "type(crypto) is not list",
+            "type(surfaces) is not list",
             "readiness report source_inventory is not an object",
+            "def _source_inventory_gate_key_blocker(",
+            "def _source_inventory_unknown_gate_numbering_key(",
+            "def _number_repeated_source_inventory_unknown_gate_errors(",
+            "_number_repeated_source_inventory_unknown_gate_errors(unknown_gate_errors)",
             "type(gate) is not str or gate not in SOURCE_INVENTORY_REQUIRED_GATES",
             "type(key) is not str or key not in SOURCE_INVENTORY_KEYS",
             "_public_unknown_mapping_fields(checklist, RELEASE_CHECKLIST_KEYS)",
@@ -15525,6 +17070,8 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "CORRIDOR_PUBLIC_FIELDS = frozenset",
             "CORRIDOR_PUBLIC_PHASE_STATUSES = frozenset",
             "def _public_corridor_errors(",
+            "def _corridor_phase_key_blocker(",
+            "type(phase) is not str or not phase",
             "readiness report corridor missing field",
             "readiness report corridor phase",
             "NATIVE_EVM_PROVER_BUNDLE_PUBLIC_FIELDS = frozenset",
@@ -15539,6 +17086,17 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def _public_native_evm_prover_bundle_errors(",
             "readiness report native_evm_prover_bundle missing field",
             "readiness report native_evm_prover_bundle is invalid",
+            "if type(value) is not dict:\n        return [f\"{label} must be an object\"]",
+            "if type(audit_hashes) is not dict:",
+            "if type(value) is not list:\n        return [f\"{label} sdk_artifacts must be a non-empty list\"]",
+            "if type(row) is not dict:\n            errors.append(f\"{row_label} must be an object\")",
+            "if type(validation_blockers) is not list:",
+            "support_artifact_hashes = audit_hashes if type(audit_hashes) is dict else {}",
+            "if type(blocker) is str",
+            "if type(sdk_artifacts) is list:",
+            "if type(row) is dict:",
+            "if blocked and type(copied.get(\"implementation_artifact\")) is not dict:",
+            "type(native_bundle) is not dict",
             "def _public_embedded_evidence_errors(",
             "readiness report evidence must be a canonical public all-lanes summary",
             "SOURCE_INVENTORY_PUBLIC_FIELDS = frozenset",
@@ -15575,6 +17133,7 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def _public_cryptographic_evidence_duplicate_domain_errors(",
             "readiness report cryptographic_evidence contains duplicate ",
             "readiness report cryptographic_evidence missing required domain",
+            "type(report) is not dict",
             "_public_unknown_mapping_fields(report, public_report_fields)",
             "root_errors",
             "readiness report evidence must be an object",
@@ -15603,6 +17162,9 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "value == path.as_posix()",
             "bytes must be a positive integer",
             "sha256 must be a canonical SHA-256 hex string",
+            "def _is_canonical_sha256_text(value: Any) -> bool:\n"
+            "    return (\n"
+            "        type(value) is str",
             "sha256 must be a non-zero canonical SHA-256 hex string",
             "readiness report user_prover_submission_surfaces must be a list of objects",
             "if field in report",
@@ -15627,11 +17189,14 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def _public_mapping_string_view(",
             "key=_safe_public_key_sort_key",
             "def _release_report_preflight_errors(",
+            "type(report) is not dict",
             "production_ready must be true or false",
             "def _unknown_public_field_errors(",
             "def _corridor_evidence_artifact_duplicate_path_errors(",
             "contains duplicate path #{duplicate_count}",
             "def _source_inventory_gate_key_error(",
+            "def _source_inventory_gate_diagnostic_numbering_key(",
+            "def _number_repeated_source_inventory_gate_diagnostics(",
             "type(gate) is not str or not gate",
             "contains malformed unknown gate name",
             "contains unknown gate name with surrounding whitespace",
@@ -15658,6 +17223,7 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "validation_status must be passed",
             'f"{inventory_label} validation_blockers must be empty"',
             "def _strict_verifier_summary_errors(",
+            "strict verifier summary containers must reject subclasses",
             "strict verifier summary verified must be boolean",
             "strict verifier summary manifest_sha256 must be a canonical SHA-256 hex string",
             "strict verifier summary manifest_sha256 must be a non-zero canonical SHA-256 hex string",
@@ -15688,10 +17254,15 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "HashCollisionPublicKey(\"phase_evidence_source_gate\")",
             "HashCollisionPublicKey(\"validation_status\")",
             "HashCollisionPublicKey(\"domain\")",
+            "test_release_bundle_verifier_redacts_hostile_public_schema_keys",
+            "readiness report source_inventory contains malformed unknown gate name",
+            "all-lanes summary lane 0 contains malformed unknown field name",
+            'assert "AssertionError" not in rendered',
             "test_release_bundle_preflight_rejects_truthy_production_ready",
             "test_release_bundle_preflight_rejects_malformed_blocker_containers",
             "test_release_bundle_preflight_rejects_malformed_ready_report",
             "test_release_bundle_rejects_malformed_copied_report_before_render",
+            "test_release_bundle_rejects_hostile_copied_report_root_before_render",
             "test_release_bundle_rejects_unknown_copied_report_root_before_render",
             "operator_subclass_attestation",
             "operator_subclass_native_summary",
@@ -15699,10 +17270,18 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "operator_subclass_native_audit",
             "test_release_bundle_rejects_malformed_copied_corridor_phase_map_before_render",
             "bundled report.corridor.evidence_artifacts contains duplicate path #1",
+            "test_release_bundle_verifier_corridor_phase_helpers_reject_container_subclasses_without_leaking",
+            "readiness report corridor phases is not an object",
+            "readiness report corridor phase rust-sccp has no hashed evidence artifact",
+            'assert checklist == {"ready": False, "items": []}',
             "test_release_bundle_verifier_rejects_duplicate_corridor_evidence_artifact_paths",
             "readiness report corridor evidence_artifacts contains duplicate path #1",
             "operator|secret-token",
             "test_release_bundle_rejects_malformed_copied_source_inventory_before_render",
+            "test_release_bundle_numbers_repeated_copied_source_inventory_gate_errors_before_render",
+            "secret_token_source_gate_a",
+            'assert f"{label} {suffix} #1" in captured.err',
+            'assert f"{label} {suffix} #2" in captured.err',
             "test_release_bundle_rejects_empty_copied_source_inventory_before_render",
             "bundled report.source_inventory missing required gate",
             "contains malformed unknown gate name",
@@ -15727,21 +17306,41 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_rejects_malformed_public_json_duplicate_keys",
             "test_release_bundle_verifier_requires_non_empty_report_and_summary_json",
             "test_release_bundle_verifier_rejects_scalar_report_and_summary_json_roots",
+            "test_release_bundle_verifier_rejects_report_summary_root_subclasses_without_leaking",
             "test_release_bundle_verifier_rejects_summary_report_mismatch",
             "test_release_bundle_verifier_rejects_unknown_root_json_fields",
             "test_release_bundle_verifier_rejects_malformed_root_json_fields",
             "test_release_bundle_verifier_rejects_missing_report_root_json_fields",
             "test_release_bundle_verifier_rejects_malformed_report_sections",
+            "test_release_bundle_verifier_rejects_report_section_subclasses_without_leaking",
+            "test_release_bundle_verifier_rejects_report_list_subclasses_without_leaking",
+            "test_release_bundle_verifier_rejects_report_list_row_subclasses_without_leaking",
             "test_release_bundle_verifier_rejects_unknown_source_inventory_gate",
             "test_release_bundle_verifier_rejects_malformed_source_inventory_gate_names",
+            "test_release_bundle_verifier_numbers_repeated_source_inventory_gate_name_errors",
+            "operator_attestation_gate_a",
+            "secret-token-source-inventory-gate-a",
+            "secret-token gate blocker",
+            'assert f"{expected_error} #1" in verified.stdout',
+            'assert f"{expected_error} #2" in verified.stdout',
+            "strict verifier summary errors must not contain duplicate strings",
             "test_release_bundle_verifier_rejects_missing_source_inventory_gate",
             "test_release_bundle_verifier_rejects_source_inventory_root_drift",
             "test_release_bundle_verifier_rejects_malformed_source_inventory_gate",
+            "test_release_bundle_verifier_rejects_source_inventory_gate_row_subclass_without_leaking",
             "test_release_bundle_verifier_rejects_blocked_source_inventory_gate",
             "test_release_bundle_verifier_rejects_source_inventory_gate_malformed_unknown_fields",
             "test_release_bundle_verifier_source_inventory_exact_key_helpers_reject_hostile_required_keys",
             'HostileVerifierFieldName("proof_request_bundle_gate")',
             'HostileVerifierFieldName("validation_status")',
+            "test_release_bundle_generator_public_helper_boundaries_reject_container_subclasses_without_leaking",
+            "bundled report.native_evm_prover_bundle must be an object",
+            "bundled report.source_inventory must be an object",
+            'assert "__iter__" not in rendered',
+            'assert "__len__" not in rendered',
+            "test_release_bundle_verifier_public_helper_boundaries_reject_container_subclasses_without_leaking",
+            "source_adapter_gate_audit_hashes must not be empty when required",
+            "readiness report phase transcript cannot be checked: malformed artifact row",
             "test_release_bundle_verifier_public_schema_exact_key_helpers_reject_hostile_required_keys",
             "test_release_bundle_pre_render_exact_key_helpers_reject_hostile_required_keys",
             "test_release_bundle_verifier_manifest_root_rejects_hostile_required_key_alias",
@@ -15756,13 +17355,20 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             'HostileVerifierFieldName("domain")',
             'HostileVerifierFieldName("verified")',
             "test_generated_bundle_self_verifier_rejects_malformed_summaries",
+            "test_generated_bundle_self_verifier_rejects_summary_container_subclasses_without_leaking",
             "test_release_bundle_verifier_cli_suppresses_malformed_summary_roots",
             "test_release_bundle_verifier_cli_exit_compares_verified_exactly",
             "test_release_bundle_verifier_cli_suppresses_malformed_summary_errors",
+            "test_release_bundle_verifier_cli_numbers_repeated_malformed_summary_errors",
+            "operator-verifier-error-a",
+            "operator private-key-verifier-error",
+            'assert rendered_errors.count(f"{error} #") == 2',
             "test_release_bundle_verifier_cli_rejects_malformed_summary_public_fields",
+            "test_release_bundle_verifier_public_summary_payload_rejects_container_subclasses_without_leaking",
             "test_release_bundle_verifier_cli_rejects_unknown_summary_fields_without_leaking",
             "operator_subclass_note",
             "strict verifier summary contains unknown field: operator_note",
+            "HostileMarkdownString(\"safe strict verifier error\")",
             "strict verifier summary errors contains blocker with sensitive name",
             "test_release_bundle_verifier_rejects_non_utf8_manifest_json",
             "test_release_bundle_verifier_redacts_manifest_json_load_oserror",
@@ -15793,9 +17399,13 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "test_release_readiness_public_payload_redacts_hostile_mapping_keys",
             "class HostilePublicKey",
             "class HostileReportFieldName",
+            "class HostileReadinessReportRoot",
             "class HashCollisionPublicKey",
             "HashCollisionPublicKey(\"phase_evidence_source_gate\")",
             "HashCollisionPublicKey(\"validation_status\")",
+            "test_release_readiness_source_inventory_required_gates_reject_subclasses_without_hooks",
+            "class HostileGateSet",
+            "release-bundle verifier source-inventory gates are invalid",
             "operator_subclass_checklist_item",
             "HostileReportFieldName(\"path\")",
             "HostileReportFieldName(\"phases\")",
@@ -15808,7 +17418,10 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "operator_subclass_crypto_row",
             "def test_release_readiness_report_cli_rejects_unknown_report_fields_without_leaking",
             "operator_subclass_note",
+            "def test_release_readiness_report_cli_rejects_hostile_report_root_subclass_without_leaking",
             "def test_release_readiness_report_cli_rejects_malformed_allowed_report_roots_without_leaking",
+            "test_release_readiness_public_report_rejects_hostile_copied_containers_without_leaking",
+            "readiness report cryptographic_evidence must be a list of objects",
             "readiness report inputs must be a list of canonical strings",
             "readiness report native_evm_prover_bundle must be an object",
             "def test_release_readiness_report_cli_rejects_empty_native_bundle_without_leaking",
@@ -15817,6 +17430,7 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "def test_release_readiness_report_cli_rejects_empty_corridor_without_leaking",
             "def test_release_readiness_report_cli_rejects_malformed_corridor_without_leaking",
             "readiness report corridor blockers must be empty when production_ready is true",
+            "def test_release_readiness_corridor_phase_keys_reject_string_subclasses_without_hooks",
             "def test_release_readiness_report_cli_rejects_duplicate_corridor_evidence_artifacts_without_leaking",
             "readiness report corridor evidence_artifacts contains duplicate path #1",
             "def test_release_readiness_report_cli_rejects_ready_release_checklist_blockers_without_leaking",
@@ -15830,15 +17444,18 @@ SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
             "operator secret-token-input-object",
             "malformed public inputs must still expose input artifact mismatch",
             "def test_release_readiness_report_cli_rejects_malformed_input_artifacts_without_leaking",
+            "def test_release_readiness_report_cli_rejects_string_subclass_input_artifact_path",
             '"safe artifact int-key note"',
             "readiness report input_artifacts[0] contains malformed unknown field name",
             "readiness report input_artifacts[0] path must be a canonical public path",
             "readiness report input_artifacts[1] bytes must be a positive integer",
             "readiness report input_artifacts[2] bytes must be a positive integer",
+            "readiness report input_artifacts[0] sha256 must be a canonical SHA-256 ",
             "def test_release_readiness_report_cli_rejects_mixed_malformed_duplicate_input_artifacts_without_leaking",
             "readiness report input_artifacts contains duplicate path #1",
             "operator secret-token-input-artifact",
             "malformed public input artifacts must still expose copied input mismatch",
+            "def test_release_readiness_sha256_helpers_reject_string_subclasses",
             "def test_release_readiness_report_cli_rejects_zero_input_artifact_sha_without_leaking",
             "readiness report input_artifacts[0] sha256 must be a non-zero canonical SHA-256 hex string",
             "readiness report input_artifacts is invalid",
@@ -15891,11 +17508,17 @@ SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS = (
             "except (Exception, SystemExit):",
             "def _readiness_markdown_string_list_cell(",
             "_public_blocker_list_field_errors(",
+            "def _readiness_markdown_string_list_items(",
+            "all(type(item) is str and item for item in value)",
             "def _readiness_user_prover_validation_blockers_cell(",
             "return _readiness_markdown_string_list_cell(value, field_label=field_label)",
             "def _readiness_native_evm_validation_blockers_cell(",
             "_native_evm_validation_blockers(",
+            "def _readiness_native_evm_markdown_text_is_safe(value: Any) -> bool:\n"
+            "    return (\n"
+            "        type(value) is str",
             "_readiness_markdown_invariant_errors(report, report_markdown)",
+            "readiness report Markdown must be text",
             "readiness report Markdown does not match readiness report JSON",
             "def _readiness_markdown_public_text_is_safe(value: Any) -> bool:",
             "type(value) is str",
@@ -15910,6 +17533,7 @@ SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS = (
             "cannot render release-notes attachment",
             "except (Exception, SystemExit):",
             "_release_notes_attachment_invariant_errors(report, artifacts, notes)",
+            "release notes attachment must be text",
             "release notes attachment does not match manifest and report",
         ),
     ),
@@ -15923,18 +17547,27 @@ SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS = (
             "type(value) is str",
             "def _markdown_string_list_cell(",
             "_public_blocker_list_duplicate_error(value, field_label)",
+            "def _markdown_string_list_items(",
+            "all(type(item) is str and item for item in value)",
             "def _user_prover_validation_blockers_cell(",
             "return _markdown_string_list_cell(value, field_label=field_label)",
+            "def _native_evm_markdown_text_is_safe(value: Any) -> bool:\n"
+            "    return (\n"
+            "        type(value) is str",
         ),
     ),
     (
         "scripts/sccp_release_bundle.py",
         (
             "def _readiness_markdown_bundle_errors(",
+            "readiness Markdown bundle text must reject subclasses",
+            "type(markdown) is not str",
             ".markdown cannot be checked",
             ".markdown cannot be rendered canonically",
             "readiness report Markdown does not match readiness report JSON",
             "def _release_notes_attachment_bundle_errors(",
+            "release-notes attachment bundle text must reject subclasses",
+            "type(notes) is not str",
             ".release_notes_attachment cannot be checked",
             ".release_notes_attachment cannot be rendered",
             "except (Exception, SystemExit):",
@@ -15950,12 +17583,15 @@ SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS = (
             "test_release_bundle_verifier_redacts_public_markdown_load_errors",
             "test_release_bundle_verifier_rejects_symlinked_public_markdown_without_read",
             "test_release_bundle_verifier_public_text_root_rejects_symlinked_parent_without_read",
+            "def test_release_bundle_public_markdown_text_subclasses_reject_hooks_without_leaking",
             "markdown-parent-link",
             "test_release_bundle_verifier_rejects_directory_public_markdown_without_read",
             "test_release_bundle_verifier_redacts_public_renderer_errors",
             "test_release_bundle_redacts_builder_recompute_and_renderer_errors",
             "test_release_bundle_verifier_markdown_presence_ignores_hostile_values_without_stringifying",
             "test_release_bundle_verifier_crypto_markdown_text_rejects_hostile_scalars_without_stringifying",
+            "test_release_bundle_verifier_markdown_string_list_items_reject_string_subclass_truthiness_hooks",
+            "_readiness_native_evm_markdown_text_is_safe(hostile_text)",
             "test_release_bundle_verifier_rejects_markdown_report_drift",
             "test_release_bundle_verifier_rejects_release_notes_drift",
             "test_release_bundle_verifier_readiness_markdown_redacts_encoded_blocker_cells",
@@ -15975,6 +17611,8 @@ SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS = (
         (
             "test_release_readiness_report_guards_release_public_markdown_text_schema_gate_inventory",
             "test_release_readiness_report_markdown_text_rejects_hostile_scalars_without_stringifying",
+            "test_release_readiness_markdown_string_list_items_reject_string_subclass_truthiness_hooks",
+            "_native_evm_markdown_text_is_safe(hostile_text)",
             "test_release_readiness_report_blocks_missing_release_public_markdown_text_schema_gate",
             "test_release_readiness_report_markdown_redacts_encoded_blocker_cells",
             "safe%20duplicated%20source%20markdown%20blocker",
@@ -15988,6 +17626,14 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
         "scripts/sccp_verify_release_bundle.py",
         (
             "def _expected_cryptographic_evidence(evidence:",
+            "if type(evidence) is not dict:",
+            "if type(lane) is not dict:",
+            "if type(source_hashes) is not dict:",
+            "if type(destination_binding) is not dict:",
+            "if type(route_allowlist) is not dict:",
+            "if type(route_canary) is not dict:",
+            "if type(source_gate) is not dict:",
+            "if type(evm_live_metadata) is not dict:",
             "def _cryptographic_evidence_inventory_errors(",
             "def _cryptographic_evidence_row_schema_errors(",
             "has_route_canary_evidence = _is_nonzero_hex32(",
@@ -15998,8 +17644,11 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "type(route_canary_source) is not str",
             "route_canary_evidence_hash optional canonical validation must run before non-active lane return",
             "cryptographic_evidence enforce_evm_live_tags must be a boolean",
+            "type(row.get(field)) is str and bool(row.get(field))",
             "domain must be an integer",
             "chain must be a non-empty ",
+            "type(chain) is str",
+            "type(lane_chain) is str",
             "route_canary_evidence_source must be {expected_canary_source}",
             "route_canary_evidence_bound must be a boolean",
             "route_canary_evidence_bound must be true for finalized",
@@ -16043,6 +17692,7 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "source_adapter_gate_audit_hashes must be empty when gate is not required",
             "source_adapter_gate_required must be a boolean",
             "source_adapter_gate_audit_hashes must be an object",
+            "type(audit_hashes) is not dict",
             "source_adapter_gate hash role",
             "public source_adapter_gate audit hashes must not reuse route_canary_message_id",
             "public source_adapter_gate_hash must not reuse source, destination, route, or canary roles when audit hashes are malformed",
@@ -16060,6 +17710,9 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "must match embedded lane",
             "def _cryptographic_evidence_row_unknown_field_blocker(",
             "def _source_adapter_gate_audit_key_blocker(",
+            "def _number_repeated_all_lanes_audit_hash_diagnostics(",
+            "def _cryptographic_evidence_row_numbering_key(",
+            "def _number_repeated_cryptographic_evidence_row_errors(",
             "SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (",
             "def _unexpected_source_adapter_gate_audit_field_blocker(",
             "contains unexpected field with sensitive name",
@@ -16091,18 +17744,33 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             'SCCP_DOMAIN_BSC: "evm_source_gate_hash",',
             "ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN = {",
             "SNAPSHOT_ROUTE_CANARY_DOMAINS",
+            "def _cryptographic_evidence(evidence:",
+            "if type(evidence) is not dict:",
+            "if type(lane) is not dict:",
+            "if type(source_hashes) is not dict:",
+            "if type(destination_binding) is not dict:",
+            "if type(route_allowlist) is not dict:",
+            "if type(route_canary) is not dict:",
+            "if type(source_gate) is not dict:",
+            "if type(evm_live_metadata) is not dict:",
             "has_route_canary_evidence = _is_nonzero_hex32(",
             "def _public_crypto_scalar_absent(value: Any) -> bool:",
             "_public_crypto_scalar_absent(value_for_field)",
             "not _public_crypto_scalar_absent(canary_source)",
             "not _public_crypto_scalar_absent(row.get(field))",
             "type(route_canary_source) is not str",
+            "EVM_EXPECTED_RPC_CHAIN_IDS = {",
+            "must be Ethereum mainnet chain id 1",
+            "must be BSC chain id 56 for bsc",
+            "must be empty for non-EVM lanes",
+            "type(row.get(field)) is str and bool(row.get(field))",
             "def _sccp_release_public_crypto_evidence_binding_gate_inventory_errors(",
             '"release_public_crypto_evidence_binding_gate"',
             "SCCP release public cryptographic-evidence binding source inventory",
             "readiness report cryptographic_evidence contains duplicate domain",
             "readiness report cryptographic_evidence contains unknown domain",
             "readiness report cryptographic_evidence missing required domain",
+            "type(value) is not list or not all(type(item) is dict for item in value)",
             "route-canary public metadata must use exact evidence source",
             "route-canary public metadata must be bound",
             "route-canary public metadata must be empty when route canary evidence is absent",
@@ -16131,11 +17799,17 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "route-canary public transcript hashes must be non-zero bytes32",
             "route-canary public transcript proof context must be null",
             "source_adapter_gate_required must be boolean",
+            "if type(audit_hashes) is not dict:",
+            "if audit_hashes is not None:",
+            "if type(audit_hashes) is dict and audit_hashes:",
             "source_adapter_gate_required must be true for this domain",
             "source_adapter_gate_hash must be empty when ",
             "source_adapter_gate_audit_hashes must be empty ",
             "when gate is not required",
             "source_adapter_gate_hash must match one ",
+            "def _public_cryptographic_evidence_duplicate_domain_errors(value: Any) -> list[str]:",
+            "if type(value) is not list:",
+            "if type(row) is not dict:",
             "def _source_adapter_gate_template_hashes_or_errors(",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "template material validation failed",
@@ -16182,6 +17856,10 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "not _public_scalar_absent(route_canary_source)",
             "not _public_scalar_absent(payload.get(field))",
             "type(route_canary_source) is not str",
+            "must be Ethereum mainnet chain id 1",
+            "must be BSC chain id",
+            "must be empty for non-EVM lanes",
+            "type(payload.get(field)) is str and bool(payload.get(field))",
             "domain must be an integer",
             'errors.extend(_non_empty_string_field_errors(label, payload, "chain"))',
             "route_canary_evidence_source must be {expected_source}",
@@ -16222,6 +17900,9 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "route_canary_receipt_block_number must be null or a positive u32 integer",
             "route_canary_block_number must be null or a positive u64 integer",
             "route_canary_block_timestamp must be null or a non-negative u64 integer",
+            "type(audit_hashes) is not dict",
+            "if type(audit_hashes) is dict:",
+            "if type(audit_hashes) is dict and audit_hashes:",
             "def _cryptographic_evidence_source_adapter_gate_bundle_errors(",
             "def _cryptographic_evidence_source_adapter_gate_hash_role_errors(",
             "source_adapter_gate hash role",
@@ -16241,10 +17922,16 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "def _public_copied_value_matches(actual: Any, expected: Any) -> bool:",
             "type(actual) is not type(expected)",
             "def _cryptographic_evidence_lane_binding_bundle_errors(",
+            "if type(lanes) is not list:",
+            "if type(row) is not dict:",
+            "type(lanes[index]) is not dict",
+            "if type(expected) is not dict or not _public_mapping_has_string_key(",
             "must cover every embedded lane",
             "must match {lane_label}",
             "def _source_adapter_gate_audit_key_error(",
             "def _unexpected_source_adapter_gate_audit_field_error(",
+            "def _source_adapter_gate_audit_diagnostic_numbering_key(",
+            "def _number_repeated_source_adapter_gate_audit_diagnostics(",
             "contains unexpected field with sensitive name",
             "contains audit field name with",
             "must be empty, null, or a canonical bytes32 hex string",
@@ -16283,6 +17970,10 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "release bundle public crypto absent route-canary proof context exactness covers every launch domain",
             "test_release_bundle_rejects_copied_crypto_absent_route_canary_evm_metadata_drift_before_render",
             "release bundle public crypto absent route-canary EVM metadata exactness covers every launch domain",
+            "test_release_bundle_rejects_copied_crypto_evm_live_metadata_drift_before_render",
+            "release bundle public crypto EVM live metadata exactness covers EVM and non-EVM launch domains",
+            "test_release_bundle_rejects_hostile_copied_crypto_evm_metadata_without_hooks",
+            "release bundle public crypto hostile EVM metadata string exactness covers EVM and non-EVM lane semantics",
             "test_release_bundle_rejects_copied_crypto_message_proof_drift_before_render",
             "test_release_bundle_rejects_hostile_present_route_canary_source_without_comparing",
             "test_release_bundle_rejects_copied_crypto_scalar_drift_before_render",
@@ -16304,8 +17995,29 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_source_gate_hash_key_failures_are_bounded",
             "secret-token-source-gate-hash-key",
             "test_release_bundle_source_gate_hash_key_non_string_returns_are_bounded",
+            "HostileHashKeyString",
             "evm_message_proof_accepted_transaction for finalized ",
             "test_release_bundle_rejects_hostile_copied_crypto_lane_binding_without_comparing",
+            "test_release_bundle_rejects_hostile_copied_crypto_containers_without_hooks",
+            "release bundle public crypto hostile container exactness rejects copied audit and lane maps before hooks",
+            'HostileVerifierReportSection({"evm_source_gate_hash": fixed_hex32(0xA3)})',
+            "HostileVerifierReportList([lane])",
+            "test_release_bundle_verifier_expected_crypto_evidence_rejects_container_subclasses_without_hooks",
+            "strict verifier expected public crypto row",
+            "test_release_bundle_verifier_expected_crypto_evidence_uses_exact_nested_keys",
+            'HostileVerifierFieldName("source_verifier_material_hash")',
+            'HostileVerifierFieldName("destination_binding_hash")',
+            'HostileVerifierFieldName("source_rpc_chain_id")',
+            'assert active_crypto["source_adapter_gate_hash"] == ""',
+            'assert "__eq__" not in errors',
+            "test_release_bundle_verifier_expected_crypto_evidence_redacts_hostile_audit_keys",
+            'HostileVerifierFieldName("solana_full_light_client_gate_hash")',
+            "source_adapter_gate_audit_hashes contains an empty key",
+            'assert "hostile verifier" not in errors',
+            "test_release_bundle_verifier_rejects_hostile_crypto_chain_strings_without_hooks",
+            "strict verifier public crypto chain strings reject subclasses before lane binding and inventory comparisons",
+            "test_release_bundle_verifier_rejects_hostile_crypto_lane_binding_without_comparing",
+            "strict verifier public crypto lane bindings reject hostile copied scalars before equality",
             "test_release_bundle_rejects_copied_crypto_evidence_lane_binding_before_render",
             "test_release_bundle_verifier_rejects_unbound_crypto_evidence",
             "test_release_bundle_verifier_rejects_false_crypto_evidence_bound_with_canary_hash",
@@ -16356,7 +18068,12 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "strict verifier public crypto absent route-canary EVM metadata exactness covers every launch domain",
             "test_release_bundle_rejects_hostile_absent_crypto_route_canary_scalars_without_comparing",
             "strict verifier public crypto hostile absent route-canary scalar exactness covers every launch domain",
+            "test_release_bundle_rejects_hostile_message_proof_scalars_without_comparing",
+            "bundle public crypto hostile message-proof scalar exactness covers every message-proof launch domain",
             "HostilePublicCryptoScalar",
+            "test_release_bundle_verifier_rejects_hostile_crypto_evm_metadata_strings_without_hooks",
+            "strict verifier public crypto hostile EVM metadata string exactness covers EVM and non-EVM lane semantics",
+            "HostilePublicCryptoString",
             "test_release_bundle_verifier_rejects_tron_crypto_owner_signature_drift",
             "tron_block_metadata_cases = (",
             "test_release_bundle_verifier_rejects_crypto_source_adapter_gate_policy_drift",
@@ -16364,6 +18081,20 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "test_release_bundle_verifier_redacts_sensitive_source_adapter_gate_audit_fields",
             "secret-token-audit-field",
             "audit_hashes contains unexpected field with sensitive name",
+            "test_release_bundle_numbers_repeated_copied_crypto_unknown_field_errors_before_render",
+            "test_release_bundle_numbers_repeated_copied_crypto_audit_key_errors_before_render",
+            "test_release_bundle_verifier_numbers_repeated_all_lanes_audit_key_errors",
+            "test_release_bundle_verifier_numbers_repeated_crypto_evidence_row_errors",
+            "test_release_bundle_verifier_numbers_repeated_crypto_audit_key_errors",
+            'assert f"{label} {suffix} #1" in captured.err',
+            'assert f"{label} {suffix} #2" in captured.err',
+            'assert f"{expected_error} #1" in verified.stdout',
+            'assert f"{expected_error} #2" in verified.stdout',
+            "secret_token_crypto_unknown_a",
+            "secret_token_crypto_a",
+            "duplicate-public-note",
+            " audit_attestation_a ",
+            "secret-token-audit-field-a",
             "test_release_bundle_verifier_rejects_crypto_evidence_unknown_fields",
             "test_release_bundle_verifier_rejects_crypto_evidence_malformed_unknown_fields",
             "source_adapter_gate_audit_hashes must be an object",
@@ -16404,9 +18135,32 @@ SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
             "public crypto absent route-canary proof context exactness covers every launch domain",
             "test_release_readiness_report_public_crypto_rejects_absent_route_canary_evm_metadata_drift",
             "public crypto absent route-canary EVM metadata exactness covers every launch domain",
+            "test_release_readiness_report_public_crypto_rejects_evm_live_metadata_drift",
+            "public crypto EVM live metadata exactness covers EVM and non-EVM launch domains",
+            "test_release_readiness_report_rejects_hostile_crypto_evm_metadata_strings_without_hooks",
+            "public crypto hostile EVM metadata string exactness covers EVM and non-EVM lane semantics",
+            "test_release_readiness_report_rejects_hostile_crypto_containers_without_hooks",
+            "readiness public crypto hostile container exactness rejects roots, rows, and copied audit maps before hooks",
+            'HostileReadinessReportSection({"evm_source_gate_hash": fixed_hex32(0xA3)})',
+            "HostileReadinessReportList(rows)",
+            "test_release_readiness_cryptographic_evidence_rejects_container_subclasses_without_hooks",
+            "readiness public crypto row extraction hostile",
+            "test_release_readiness_cryptographic_evidence_exact_key_helpers_reject_hostile_required_keys",
+            'HostileReportFieldName("source_verifier_material_hash")',
+            'HostileReportFieldName("route_allowlist_hash")',
+            'HostileReportFieldName("source_rpc_chain_id")',
+            'assert active_crypto["source_adapter_gate_hash"] == ""',
+            'assert "__eq__" not in errors',
+            "test_release_readiness_expected_crypto_evidence_redacts_hostile_audit_keys",
+            'HostileReportFieldName("solana_full_light_client_gate_hash")',
+            "source_adapter_gate_audit_hashes contains malformed audit field name",
+            'assert "hostile readiness" not in errors',
             "test_release_readiness_report_rejects_hostile_absent_route_canary_scalars_without_comparing",
             "public crypto hostile absent route-canary scalar exactness covers every launch domain",
+            "test_release_readiness_report_rejects_hostile_message_proof_scalars_without_comparing",
+            "public crypto hostile message-proof scalar exactness covers every message-proof launch domain",
             "HostilePublicCryptoScalar",
+            "HostilePublicCryptoString",
             "test_release_readiness_report_rejects_hostile_present_route_canary_source_without_comparing",
             "public crypto route-canary transcript replay covers every launch domain",
             "public crypto route-canary transcript exactness covers every message-proof launch domain",
@@ -16521,6 +18275,7 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "except (Exception, SystemExit):",
             "readiness report user_prover_submission_surfaces does not match corridor phases",
             "def _submission_surface_sdk_key_blocker(",
+            "def _number_repeated_submission_surface_sdk_key_blockers(",
             "sdk_helper_symbols_by_sdk contains SDK key with",
             "contains SDK key with sensitive name",
             "def _submission_surface_required_phase_blocker(",
@@ -16537,16 +18292,19 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "on_chain_submission contains sensitive name",
             "must match expected submission text",
             "def _submission_surface_helper_symbol_blocker(",
+            "def _number_repeated_submission_surface_helper_symbol_blockers(",
             "contains helper symbol with Markdown-unsafe character",
             "contains helper symbol with sensitive name",
             "def _submission_surface_sdk_helpers_text_blocker(",
             "sdk_helpers contains sensitive name",
             "def _submission_surface_validation_blocker_text_blocker(",
+            "def _number_repeated_submission_surface_validation_blocker_blockers(",
             "validation_blockers contains blocker with sensitive name",
             "validation_blockers must not contain duplicate strings",
             "recovery phrase",
             "recovery-phrase",
             "recovery_phrase",
+            "def _number_repeated_submission_surface_row_errors(",
             "def _readiness_user_prover_validation_blockers_cell(",
             "def _readiness_user_prover_validation_blockers_presence_errors(",
             "<invalid sdk_helper_symbols_by_sdk>",
@@ -16570,9 +18328,18 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "def _helper_symbol_is_markdown_safe(",
             "def _sdk_helper_sets_cell(",
             "def _user_prover_validation_blockers_cell(",
+            "type(value) is not list or not all(type(item) is dict for item in value)",
             "type(lanes) is not str",
             "type(sdk_helpers) is str",
+            "or type(helper_symbols) is not list",
+            "if type(helper_sets) is not dict",
+            "type(helpers) is not list",
+            "or type(required_phases) is not list",
             "type(validation_status) is str",
+            "if type(validation_blockers) is not list:",
+            "def _public_user_prover_duplicate_lane_errors(value: Any) -> list[str]:",
+            "if type(value) is not list:",
+            "if type(surface) is not dict:",
             "<invalid sdk_helper_symbols_by_sdk>",
             '"release_public_submission_surface_binding_gate"',
             "SCCP release public submission-surface binding source inventory",
@@ -16590,12 +18357,21 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "def _submission_surface_known_sdks(",
             "def _submission_surface_known_required_phases(",
             "def _submission_surface_sdk_key_error(",
+            "def _number_repeated_submission_surface_sdk_key_diagnostics(",
             "def _submission_surface_lanes_key_error(",
             "def _submission_surface_proof_backend_key_error(",
             "def _submission_surface_submission_text_error(",
             "def _submission_surface_helper_symbol_error(",
+            "def _number_repeated_submission_surface_helper_symbol_diagnostics(",
+            "def _submission_surface_helper_symbol_list_errors(",
+            "if type(value) is not list:",
             "def _submission_surface_sdk_helpers_text_error(",
             "def _submission_surface_row_bundle_errors(",
+            "if type(helper_symbols) is list and all(",
+            "if type(helper_sets) is not dict:",
+            "if type(helpers) is not list or not helpers:",
+            "type(js_helpers) is list",
+            "if type(required_phases) is list and all(",
             "validation_status must be passed or blocked",
             "validation_status must be passed",
             "validation_blockers must be empty when validation_status is passed",
@@ -16603,8 +18379,16 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "def _submission_surface_binding_bundle_errors(",
             "_expected_submission_surfaces(report)",
             "_public_copied_value_matches(surfaces, expected_surfaces)",
+            'if type(surface) is dict and type(surface.get("lanes")) is str',
+            "if type(surface) is not dict:",
+            "type(expected_required_phases) is list",
+            "if type(helper_sets) is dict and type(expected_helper_sets) is dict:",
+            "type(helpers) is not list",
+            "type(helper_symbols) is list",
             "type(sdk_helpers) is not str",
             "type(helper) is str",
+            "def _number_repeated_submission_surface_validation_blocker_diagnostics(",
+            "def _number_repeated_corridor_phase_diagnostics(",
             "except (Exception, SystemExit):",
             "user_prover_submission_surfaces cannot be recomputed",
             "must match copied corridor phases",
@@ -16641,6 +18425,36 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_missing_release_public_submission_surface_binding_inventory_gate",
             "test_release_bundle_rejects_unknown_copied_submission_surface_before_render",
             "test_release_bundle_rejects_malformed_copied_submission_surface_before_render",
+            "test_release_bundle_submission_surfaces_reject_container_subclasses_without_leaking",
+            'HostileVerifierReportList(["secret-token-helper"])',
+            'HostileVerifierReportSection({"js-sdk": ["secret-token-helper"]})',
+            "test_release_bundle_numbers_repeated_copied_submission_surface_sdk_key_errors_before_render",
+            "test_release_bundle_numbers_repeated_copied_submission_surface_helper_symbol_errors_before_render",
+            "test_release_bundle_numbers_repeated_copied_submission_surface_validation_blocker_errors_before_render",
+            "test_release_bundle_numbers_repeated_copied_submission_surface_required_phase_errors_before_render",
+            "test_release_bundle_numbers_repeated_submission_surface_validation_blocker_errors",
+            "test_release_bundle_numbers_repeated_submission_surface_validation_blocker_duplicates",
+            "test_release_bundle_verifier_numbers_repeated_submission_surface_row_errors",
+            'assert f"{sensitive_error} #1" in captured.err',
+            'assert f"{sensitive_error} #2" in captured.err',
+            'assert captured.err.count(f"{sensitive_error} #") == 2',
+            'assert f"{label} {suffix} #1" in captured.err',
+            'assert f"{label} {suffix} #2" in captured.err',
+            'assert captured.err.count(f"{label} {suffix} #") == 2',
+            'assert f"{label} {suffix} #1" in rendered',
+            'assert f"{label} {suffix} #2" in rendered',
+            'assert rendered.count(f"{label} {suffix} #") == 2',
+            'assert f"{duplicate_error} #1" in rendered',
+            'assert f"{duplicate_error} #2" in rendered',
+            'assert rendered.count(f"{duplicate_error} #") == 2',
+            'assert f"{expected_error} #1" in verified.stdout',
+            'assert f"{expected_error} #2" in verified.stdout',
+            "operator private-key-user-surface-blocker",
+            "safe duplicated user-surface blocker a",
+            "safe%20duplicated%20user-surface%20blocker%20a",
+            "private-key-sdk",
+            "buildPrivate-keyProof",
+            "private-key-phase",
             "test_release_bundle_rejects_blocked_copied_submission_surface_before_render",
             "test_release_bundle_rejects_copied_submission_surface_binding_before_render",
             "test_release_bundle_rejects_copied_submission_surface_extra_helpers_before_render",
@@ -16687,6 +18501,13 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_bundle_verifier_rejects_submission_surface_malformed_sdk_helper_map_keys",
             "secret-token-sdk",
             "sdk_helper_symbols_by_sdk contains SDK key with sensitive name",
+            "test_release_bundle_verifier_user_prover_helper_sets_reject_hostile_sdk_aliases",
+            'HostileVerifierFieldName("js-sdk")',
+            'assert helper_cell == "`<invalid sdk_helper_symbols_by_sdk>`"',
+            "sdk_helper_symbols_by_sdk[js-sdk] must be a list of non-empty strings",
+            "test_release_bundle_verifier_submission_surface_schema_rejects_container_subclasses_without_leaking",
+            "sdk_helper_symbols must be a list of non-empty strings",
+            "required_phases must be a list of non-empty strings",
             "test_release_bundle_verifier_rejects_submission_surface_malformed_required_phases",
             "test_release_bundle_verifier_requires_submission_surface_sdk_core_phases",
             "test_release_bundle_verifier_requires_contract_smoke_for_contract_backends",
@@ -16711,6 +18532,14 @@ SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
             "test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory",
             "test_release_readiness_report_blocks_missing_release_public_submission_surface_binding_gate",
             "test_release_readiness_report_rejects_hostile_user_prover_submission_surface_without_comparing",
+            "test_release_readiness_report_rejects_hostile_user_prover_containers_without_hooks",
+            "readiness public submission surface hostile container exactness rejects roots, rows, helper maps, helper lists, required phases, and validation blockers before hooks",
+            'HostileReadinessReportSection({"js-sdk": ["secret-token-helper"]})',
+            "HostileReadinessReportList(surfaces)",
+            "test_release_readiness_user_prover_helper_sets_reject_hostile_sdk_aliases",
+            'HostileReportFieldName("js-sdk")',
+            'assert helper_cell == "`<invalid sdk_helper_symbols_by_sdk>`"',
+            "sdk_helper_symbols_by_sdk[js-sdk] must match expected helpers",
         ),
     ),
 )
@@ -16755,12 +18584,20 @@ SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
             "def _manifest_report_blockers(",
             "def _release_bundle_manifest(",
             "Build the release manifest without truthy-coercing readiness fields.",
+            "if type(report) is not dict:\n        return None",
+            "if type(report) is not dict:\n        return [\"invalid blockers\"]",
+            "release manifest nested readiness roots must reject subclasses",
             '"production_ready": _manifest_report_value(report, "production_ready")',
             '"release_checklist_ready": _manifest_report_nested_value(',
             '"corridor_ready": _manifest_report_nested_value(',
             '"blockers": _manifest_report_blockers(report)',
             "malformed readiness-root suppression",
             "def _release_bundle_manifest_errors(",
+            "release manifest validation readiness roots must reject subclasses",
+            "report = _public_mapping_string_view(report) if type(report) is dict else {}",
+            "summary = _public_mapping_string_view(summary) if type(summary) is dict else {}",
+            "if type(release_checklist) is dict:",
+            "if type(corridor) is dict:",
             '_boolean_field_errors("manifest", manifest, "production_ready")',
             '_boolean_field_errors("manifest", manifest, "release_checklist_ready")',
             '_boolean_field_errors("manifest", manifest, "corridor_ready")',
@@ -16828,6 +18665,9 @@ SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
             "def test_release_bundle_verifier_guards_release_manifest_readiness_flags_inventory",
             "def test_release_bundle_manifest_preserves_malformed_readiness_values",
             "def test_release_bundle_manifest_suppresses_malformed_readiness_roots",
+            "def test_release_bundle_manifest_suppresses_hostile_readiness_root_subclasses_without_leaking",
+            "def test_release_bundle_manifest_suppresses_hostile_report_root_subclasses_without_leaking",
+            "def test_release_bundle_builder_manifest_validation_rejects_readiness_subclasses_without_leaking",
             "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
             "def test_release_bundle_verifier_rejects_manifest_readiness_claim_drift",
             "def test_release_bundle_rejects_manifest_drift_before_write",
@@ -16967,11 +18807,23 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "contains unknown field name with sensitive name",
             "bytes must be a positive integer",
             "sha256 must be a canonical SHA-256 hex string",
+            "def _is_canonical_sha256_text(value: Any) -> bool:\n"
+            "    return (\n"
+            "        type(value) is str",
             "def _bundled_artifact_integrity_errors(",
+            "bundle artifact integrity containers must reject subclasses",
+            "type(artifact) is not dict",
+            "type(artifact_path) is not str or not artifact_path",
             "artifact byte length mismatch",
             "artifact sha256 mismatch",
             "def _release_report_artifact_integrity_bundle_errors(",
+            "release report artifact integrity containers must reject subclasses",
+            "type(payload) is not dict",
+            "type(input_artifacts) is list",
+            "type(phase_artifacts) is dict",
+            "type(sdk_artifacts) is list",
             "def _release_bundle_manifest_errors(",
+            "release manifest verifier containers must reject subclasses",
             "except (Exception, SystemExit):",
             "cannot compute canonical manifest artifact order",
             "manifest artifact order does not match canonical release bundle order",
@@ -16989,9 +18841,15 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def _referenced_report_artifact_paths(",
             "paths = set(REQUIRED_ARTIFACT_PATHS)",
             "def _manifest_artifacts_by_path(",
+            "duplicate_count = 0",
             "duplicate manifest artifact path",
+            "errors.append(f\"duplicate manifest artifact path #{duplicate_count}\")",
             "manifest must not list verifier root as an artifact",
+            "release manifest verifier containers must reject subclasses",
+            "artifact_values = artifacts if type(artifacts) is list else [None]",
+            "def _manifest_artifact_numbering_key(",
             "def _bundle_entry_paths(",
+            "def numbered_entry_error(message: str) -> str:",
             "bundle root is a symlink",
             "bundle root is not a directory",
             "missing manifest",
@@ -17000,7 +18858,9 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "bundle artifact path uses symlink",
             "bundle artifact path must be a regular file",
             "bundle contains symlink",
+            "errors.append(f\"bundle contains symlink #{symlink_count}\")",
             "bundle contains unsupported filesystem entry",
+            "\"bundle contains unsupported filesystem entry \"",
             "bundle contains unmanifested artifact",
             "bundle contains unmanifested directory",
             "manifest missing required artifact",
@@ -17009,6 +18869,7 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "cannot compute canonical manifest artifact order",
             "except (Exception, SystemExit):",
             "def _manifest_artifact_paths_in_order(",
+            "manifest artifact order helpers reject container subclasses",
             "def _expected_manifest_artifact_order(",
             "manifest artifact order does not match canonical",
             "def _artifact_errors(",
@@ -17017,6 +18878,14 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "contains {field_kind} field name with sensitive name",
             "manifest artifact bytes must be a positive integer",
             "manifest artifact sha256 must be a canonical SHA-256 hex string",
+            "def _is_canonical_sha256_text(value: Any) -> bool:\n"
+            "    return (\n"
+            "        type(value) is str",
+            "def _canonical_artifact_path(",
+            "type(artifact_path) is not str or not artifact_path",
+            "def _check_report_artifact(",
+            "artifact_path = _public_mapping_get_string_key(artifact, \"path\")\n"
+            "    if type(artifact_path) is not str or not artifact_path",
             "f\"{label} artifact\"",
             "artifact bytes must be a positive integer",
             "artifact sha256 must be a canonical SHA-256 hex string",
@@ -17037,6 +18906,11 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def test_release_bundle_verifier_rejects_missing_release_manifest_artifact_set_order_inventory_gate",
             "def test_release_bundle_writes_hash_bound_public_artifacts",
             "def test_release_bundle_accepts_hash_bound_full_corridor_log",
+            "def test_release_bundle_ignores_string_subclass_integrity_paths",
+            "def test_release_bundle_artifact_integrity_rejects_container_subclasses_without_leaking",
+            "def test_release_bundle_sha256_helpers_reject_string_subclasses",
+            "def test_release_bundle_verifier_sha256_helpers_reject_string_subclasses",
+            "def test_release_bundle_verifier_rejects_manifest_artifact_string_subclass_path",
             "def test_release_bundle_verifier_rejects_tampered_artifact",
             "def test_release_bundle_verifier_rejects_symlinked_manifest",
             "def test_release_bundle_verifier_rejects_manifest_root_self_listing",
@@ -17044,9 +18918,23 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "def test_release_bundle_verifier_rejects_non_directory_bundle_root",
             "def test_release_bundle_verifier_rejects_missing_manifest_without_path_leak",
             "def test_release_bundle_verifier_rejects_duplicate_manifest_artifact_paths",
+            "def test_release_bundle_verifier_numbers_repeated_duplicate_manifest_artifacts",
+            "duplicate-artifact-a.txt",
             "def test_release_bundle_verifier_rejects_unmanifested_artifact",
             "def test_release_bundle_verifier_rejects_unmanifested_directory",
+            "def test_release_bundle_verifier_numbers_repeated_unmanifested_entries",
+            "operator-side-note-a.txt",
+            "operator-notes-a",
+            "def test_release_bundle_verifier_names_repeated_missing_report_artifacts",
+            "manifest missing readiness report referenced artifact: ",
+            "def test_release_bundle_verifier_names_repeated_missing_expected_files",
+            "bundle is missing expected artifact file: ",
             "def test_release_bundle_verifier_rejects_unsupported_entry_without_path_leak",
+            "def test_release_bundle_verifier_numbers_repeated_unsupported_entries",
+            "operator-side-channel-a",
+            "def test_release_bundle_verifier_numbers_repeated_redacted_filesystem_entries",
+            "operator-nótes-a.txt",
+            "secret-token-operator-note-a.txt",
             "def test_release_bundle_verifier_rejects_omitted_phase_artifact",
             "def test_release_bundle_verifier_rejects_extra_manifested_artifact",
             "def test_release_bundle_verifier_rejects_unknown_phase_artifact_reference",
@@ -17056,6 +18944,10 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "for exception_type in (RuntimeError, SystemExit):",
             "f\"{exception_type.__name__} detail\"",
             "secret-token canonical manifest order detail",
+            "def test_release_bundle_builder_manifest_validation_rejects_container_subclasses_without_leaking",
+            "def test_release_bundle_verifier_rejects_manifest_container_subclasses_without_leaking",
+            "def test_release_bundle_verifier_rejects_manifest_artifact_list_subclass_without_leaking",
+            "def test_release_bundle_verifier_rejects_manifest_artifact_row_subclass_without_leaking",
             "def test_release_bundle_verifier_rejects_unknown_artifact_fields",
             "def test_release_bundle_verifier_rejects_malformed_artifact_fields",
             "secret_token_artifact_field",
@@ -17067,9 +18959,14 @@ SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
             "readiness report input artifact bytes must be a positive integer",
             "readiness report input artifact sha256 must be a canonical SHA-256 hex string",
             "readiness report input artifact sha256 must be a non-zero canonical SHA-256 hex string",
+            "def test_release_bundle_verifier_numbers_repeated_manifest_artifact_metadata_errors",
+            "manifest artifact bytes must be a positive integer #1",
+            "manifest artifact sha256 must be a canonical SHA-256 hex string #1",
             "def test_release_bundle_verifier_rejects_symlinked_artifact",
             "def test_release_bundle_verifier_rejects_symlinked_artifact_ancestor",
+            "def test_release_bundle_verifier_numbers_repeated_symlinked_entries",
             "artifact-parent-link/complete.toml",
+            "operator-side-link-a.toml",
             "def test_release_bundle_rejects_malformed_copied_artifacts_before_render",
             "sha256 must be a non-zero canonical SHA-256 hex string",
             "duplicate-artifact.txt",
@@ -17111,8 +19008,10 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def _public_blocker_text_blocker(",
             "def _public_blocker_list_field_errors(",
             "public blocker list allow_empty must be a boolean",
+            "type(value) is not list",
             "def _integer_list_field_errors(",
             "integer list allow_empty must be a boolean",
+            "public integer lists must reject list subclasses",
             "decoded_issue = _decoded_public_blocker_text_issue(blocker)",
             "normalized_blocker = _decoded_sensitive_public_marker_text(blocker)",
             "contains blocker with control character",
@@ -17130,7 +19029,12 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def _all_lanes_summary_schema_errors(",
             "active {ACTIVE_LAUNCH_DISPLAY} launch blockers must be empty",
             "def _all_lanes_lane_schema_errors(",
+            "def _active_launch_lane(",
+            "active launch lane selection containers must reject subclasses",
             "def _active_launch_blockers(",
+            "active launch blocker containers must reject subclasses",
+            "type(evidence_blockers) is list",
+            "if type(lane_blockers) is not list:",
             "active launch lane blocker summary is malformed",
             "def _readiness_markdown_string_list_cell(",
             "`<invalid blockers>`",
@@ -17167,8 +19071,15 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "validation_blockers must be non-empty ",
             "when validation_status is blocked",
             "def _public_report_payload(",
+            "type(report) is not dict",
             "readiness report must be an object",
             "readiness report production_ready must be boolean",
+            "def _active_launch_lane(",
+            "active launch lane selection containers must reject subclasses",
+            "def _active_launch_blockers(",
+            "active launch blocker containers must reject subclasses",
+            "type(evidence_blockers) is not list",
+            "if type(lane_blockers) is not list:",
             "def _sccp_release_public_blocker_list_schema_gate_inventory_errors(",
             '"release_public_blocker_list_schema_gate"',
             "SCCP release public blocker-list schema source inventory",
@@ -17190,6 +19101,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "safe copied passed source blocker",
             "def test_release_readiness_public_blocker_helpers_reject_decoded_unsafe_text",
             "def test_release_readiness_public_sensitive_markers_reject_encoded_confusables",
+            "_public_text_contains_sensitive_marker(hostile_sensitive)",
             "def test_release_readiness_public_blocker_keys_casefold_decoded_text",
             "api key strasse",
             "s%D0%B5cret-token",
@@ -17197,7 +19109,8 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "safe%E2%80%AEpublic-blocker",
             "safe%7Cpublic-blocker",
             "safe%3Cpublic-blocker%3E",
-        ),
+            "def test_release_readiness_report_active_launch_blockers_reject_container_subclasses_without_leaking",
+            ),
     ),
     (
         "scripts/sccp_release_bundle.py",
@@ -17220,8 +19133,10 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "normalized_blocker = _decoded_sensitive_public_marker_text(blocker)",
             "def _public_blocker_list_field_errors(",
             "public blocker list allow_empty must be a boolean",
+            "type(value) is not list",
             "def _integer_list_field_errors(",
             "integer list allow_empty must be a boolean",
+            "public integer lists must reject list subclasses",
             "contains blocker with control character",
             "contains blocker with non-ASCII character",
             "contains blocker with Markdown-unsafe character",
@@ -17261,6 +19176,7 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def test_release_bundle_rejects_empty_copied_corridor_before_render",
             "operator|secret-token",
             "def test_release_bundle_rejects_copied_corridor_not_ready_before_render",
+            "def test_release_bundle_rejects_hostile_copied_checklist_blocker_list_before_render",
             "def test_release_bundle_verifier_rejects_corridor_unknown_fields",
             "def test_release_bundle_verifier_rejects_corridor_evidence_artifacts_root_drift",
             "def test_release_bundle_verifier_rejects_corridor_phase_root_drift",
@@ -17269,15 +19185,37 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_padded_public_blocker_strings",
             "def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings",
             "manual%20duplicate%20blocker",
+            "def test_release_bundle_numbers_repeated_public_blocker_list_errors",
+            "def test_release_bundle_numbers_repeated_public_blocker_list_duplicates",
+            "operator%0Adecoded-public-blocker-a",
+            "operator%09decoded-public-blocker-b",
+            "operator private-key-public-blocker",
+            "safe duplicated public blocker a",
+            "safe%20duplicated%20public%20blocker%20a",
+            'assert f"{label} {suffix} #1" in rendered',
+            'assert f"{label} {suffix} #2" in rendered',
+            'assert rendered.count(f"{label} {suffix} #") == 2',
+            'assert f"{label} {control_suffix} #{index}" in rendered',
+            'assert rendered.count(f"{label} {control_suffix} #") == 4',
+            'assert f"{duplicate_error} #1" in rendered',
+            'assert f"{duplicate_error} #2" in rendered',
+            'assert rendered.count(f"{duplicate_error} #") == 2',
             "def test_release_bundle_verifier_rejects_hostile_public_blocker_strings",
             "operator mnemonic recovery public-blocker",
             "mnemonic recovery public-blocker",
             "operator|public-blocker",
             "operator public blоcker",
+            "def test_release_bundle_public_blocker_helpers_reject_deep_nested_encodings",
+            'deep_markdown = deep_percent_encoded_text("operator|public-blocker")',
+            'deep_sensitive = deep_percent_encoded_text("operator api key blocker")',
+            "nested_html_entity_text('private&#95;key')",
             "def test_release_bundle_public_blocker_helpers_reject_decoded_unsafe_text",
             "def test_release_bundle_public_blocker_keys_casefold_decoded_text",
+            "def test_release_bundle_public_blocker_helpers_reject_list_subclasses_without_leaking",
+            "def test_release_bundle_public_integer_helpers_reject_list_subclasses_without_leaking",
             "api key strasse",
             "def test_release_bundle_public_sensitive_markers_reject_encoded_confusables",
+            "_public_text_contains_sensitive_marker(hostile_sensitive)",
             "s%D0%B5cret-token",
             "secret%20key",
             "private%20key",
@@ -17314,6 +19252,10 @@ SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
             "def test_release_readiness_report_markdown_marks_hostile_public_blocker_strings",
             "def test_release_readiness_public_blocker_helpers_reject_decoded_unsafe_text",
             "def test_release_readiness_public_sensitive_markers_reject_encoded_confusables",
+            "def test_release_readiness_public_blocker_helpers_reject_list_subclasses_without_leaking",
+            "secret-token-public-blocker-list",
+            "readiness report blockers must be a list of non-empty canonical strings",
+            "_public_text_contains_sensitive_marker(hostile_sensitive)",
             "secret%20key",
             "private%20key",
             "private&amp;#95;key",
@@ -17378,6 +19320,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "_release_checklist_item_id_blocker(item_id_label, item_id)",
             '_non_empty_string_field_errors(item_label, item, "title")',
             "def _corridor_phase_key_blocker(",
+            "def _corridor_phase_key_numbering_key(",
+            "def _number_repeated_corridor_phase_key_errors(",
             '"readiness report corridor phases"',
             '"readiness report corridor evidence_artifacts"',
             "release verifier canonical decimal positive must be a boolean",
@@ -17385,8 +19329,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "release verifier u64 positive must be a boolean",
             "release verifier decimal text positive must be a boolean",
             "def _is_nonzero_hex32(value: Any) -> bool:",
+            'type(value) is not str or not value.startswith("0x")',
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "def _solana_pubkey_field_errors(",
+            "if type(value) is not str:",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
         ),
     ),
@@ -17453,6 +19399,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             'raise ValueError(f"{label} must be base64") from None',
             "def _parse_solana_program_id(",
             "type(value) is not str",
+            "type(data[0]) is not str",
+            "if type(value) is not str or not value or value != value.strip():",
+            "type(executable_base64) is not str",
             "def _require_rpc_commitment(",
             "def _optional_live_bytes32_arg(",
             "def _optional_live_solana_program_id_arg(",
@@ -17682,7 +19631,13 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
     (
         "scripts/sccp_evm_destination_evidence.py",
         (
+            "type(value) is not str",
+            "type(runtime_text) is not str",
+            "type(bridge_bytecode) is not str",
+            "type(verifier_bytecode) is not str",
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
+            "bridge runtime bytecode metadata is inconsistent",
+            "verifier runtime bytecode metadata is inconsistent",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "EVM destination fixed hex nonzero must be a boolean",
             "EVM destination fixed bytes nonzero must be a boolean",
@@ -17723,6 +19678,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "parse_hex_bytes nonzero must be a boolean",
             "RPC fixed hex nonzero must be a boolean",
             "compact trie path leaf must be a boolean",
+            "def _is_non_text_sequence(",
+            "return type(value) in (list, tuple)",
+            "if type(value) in (bytes, bytearray):",
             "def _require_log_not_removed(",
             "raise RuntimeError(f\"{label}.removed must be a boolean\")",
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
@@ -17848,6 +19806,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "Solana destination JSON expected_matches must be a boolean",
             'raise argparse.ArgumentTypeError(f"{label} must be base64") from None',
             'raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
+            "type(value) is not str",
+            "type(supplied) is not str",
+            "type(verifier_program_bytes_base64) is not str",
             "def _reject_program_bytes_file_symlink_path(",
             "def _read_program_bytes_file(",
             'if not path.is_file():\n        raise argparse.ArgumentTypeError(f"{label} file cannot be read") from None',
@@ -17900,6 +19861,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _require_last_transaction_lt_text(",
             'raise ValueError("last_transaction_lt must be a positive decimal") from None',
             'raise ValueError(f"--{output} requires --last-transaction-lt") from None',
+            "type(account_status) is not str",
+            "type(code_boc_base64) is not str",
+            "TON verifier code BoC base64 metadata is inconsistent",
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             'raise ValueError(f"{label} metadata is invalid") from None',
             "raise TypeError(\"unsupported TOML string value\")",
@@ -17936,6 +19900,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
     (
         "scripts/sccp_tron_source_bridge_evidence.py",
         (
+            "type(value) is not str",
+            "def _runtime_summary_text(",
+            "source bridge runtime bytecode metadata is inconsistent",
+            "destination verifier runtime bytecode metadata is inconsistent",
             'raise argparse.ArgumentTypeError(f"{label} must be hex") from None',
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "TRON source bridge fixed hex nonzero must be a boolean",
@@ -17959,10 +19927,13 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
     (
         "scripts/sccp_release_bundle.py",
         (
+            "def _cli_redacted_placeholder_end(",
+            "def _cli_error_safety_scan_text(",
             "def _cli_error_detail(",
             "if isinstance(exc, SystemExit):",
             "type(exc.code) is int",
             "if not text.isascii():",
+            "markdown_scan_text = _cli_error_safety_scan_text(text)",
             "if _decoded_public_blocker_text_issue(markdown_scan_text) is not None:",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
@@ -17990,6 +19961,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
             "def _corridor_phase_names(",
             "def _corridor_phase_key_error(",
+            "def _corridor_phase_diagnostic_numbering_key(",
+            "def _number_repeated_corridor_phase_diagnostics(",
             "phase status must be passed or blocked",
             "contains phase with sensitive name",
             "has evidence artifact for unknown phase",
@@ -18007,9 +19980,12 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def _sccp_release_public_scalar_text_schema_gate_inventory_errors(",
             '"release_public_scalar_text_schema_gate"',
             "SCCP release public scalar-text schema source inventory",
+            "def _cli_redacted_placeholder_end(",
+            "def _cli_error_safety_scan_text(",
             "def _cli_error_detail(",
             "if isinstance(exc, SystemExit):",
             "if not text.isascii():",
+            "markdown_scan_text = _cli_error_safety_scan_text(text)",
             "if _decoded_public_blocker_text_issue(markdown_scan_text) is not None:",
             "normalized_text = _decoded_public_blocker_text(text).casefold()",
             "SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (",
@@ -18021,6 +19997,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "    except (\n        argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ) as exc:",
             "SCCP release readiness report generation failed",
             "def _is_nonzero_hex32(value: Any) -> bool:",
+            'type(value) is not str or not value.startswith("0x")',
             "except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):",
         ),
     ),
@@ -18029,8 +20006,29 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "def test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory",
             "def test_release_bundle_verifier_rejects_missing_release_public_scalar_text_schema_inventory_gate",
+            "test_release_bundle_native_evm_summary_rejects_uri_or_drive_artifact_paths",
+            "test_release_bundle_verifier_rejects_legacy_native_evm_parity_fixture_schema",
+            "test_release_bundle_evidence_phase_requires_source_template_hash_guard",
+            "test_release_bundle_phase_command_matchers_accept_runner_overrides",
+            "test_release_bundle_preflight_accepts_absolute_phase_evidence_dir",
+            "test_release_bundle_verifier_accepts_artifact_under_system_temp_symlink_prefix",
+            "test_generated_bundle_self_verifier_reports_strict_errors",
+            "test_release_bundle_rejects_copied_crypto_transcript_hash_drift_before_render",
+            "test_release_bundle_rejects_copied_tron_crypto_transcript_drift_before_render",
+            "test_release_bundle_rejects_copied_crypto_route_canary_transcript_replay",
+            "test_release_bundle_rejects_copied_evidence_launch_scope_drift_before_render",
+            "test_release_bundle_accepts_evidence_under_system_temp_symlink_prefix",
+            "test_release_bundle_cli_rejects_boolean_top_level_system_exit_code",
+            "test_release_bundle_verifier_recomputes_all_lanes_destination_binding_hash",
+            "test_release_bundle_verifier_rejects_copied_native_summary_uri_artifact_paths",
+            "test_release_bundle_verifier_expected_crypto_evidence_omits_non_evm_message_id",
+            "test_release_bundle_verifier_rejects_crypto_route_canary_transcript_replay",
+            "test_release_bundle_verifier_rejects_absent_crypto_route_canary_tron_transcript",
+            "test_release_bundle_verifier_rejects_tron_crypto_transcript_drift",
+            "test_release_bundle_verifier_rejects_extra_dotnet_setup_command",
             "def test_release_bundle_verifier_rejects_padded_public_scalar_strings",
             "def test_release_bundle_verifier_rejects_hostile_public_scalar_strings",
+            "def test_release_bundle_verifier_native_evm_helpers_reject_string_subclasses",
             'checklist["items"][0]["title"] = " All required lane records "',
             'lane["chain"] = " eth "',
             'lane["destination_binding"]["destination_binding_key"]',
@@ -18053,6 +20051,15 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_bundle_verifier_rejects_submission_surface_field_type_drift",
             "def test_release_bundle_verifier_rejects_corridor_malformed_unknown_fields",
             "def test_release_bundle_verifier_rejects_corridor_malformed_phase_keys",
+            "def test_release_bundle_numbers_repeated_copied_corridor_phase_errors_before_render",
+            "def test_release_bundle_verifier_numbers_repeated_corridor_phase_key_errors",
+            'assert f"{label} {suffix} #1" in captured.err',
+            'assert f"{label} {suffix} #2" in captured.err',
+            'assert f"{expected_error} #1" in verified.stdout',
+            'assert f"{expected_error} #2" in verified.stdout',
+            "java|android-a",
+            "secret-token-phase-a",
+            " operator-extra-a ",
             "def test_release_bundle_public_allow_empty_controls_reject_non_booleans",
             "canonical decimal positive control accepted non-boolean value",
             "route-canary integer positive control accepted non-boolean value",
@@ -18085,6 +20092,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "safe%E2%80%AEbundle detail",
             "safe%7Cbundle detail",
             "safe%3Cbundle detail%3E",
+            "<invalid public evidence>",
+            "`<invalid private_key>`",
+            "`<invalid path|note>`",
+            "<invalid path%7Cnote>",
             'deep_percent_encoded_text("operator api key detail")',
             'nested_html_entity_text("private&#95;key")',
             "safe bundle SystemExit detail",
@@ -18107,6 +20118,7 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_release_bundle_solana_pubkey_redacts_parser_exit_causes",
             "bundle.argparse.ArgumentTypeError,",
             "secret-token bundle Solana pubkey ",
+            "HostileMarkdownString(candidate)",
             "assert exc.__suppress_context__ is True",
         ),
     ),
@@ -18229,13 +20241,23 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
     (
         "pytests/scripts/sccp_solana_live_evidence_test.py",
         (
+            "test_solana_json_rpc_response_size_is_bounded",
+            "test_solana_json_rpc_http_error_detail_is_bounded",
+            "test_live_solana_evidence_accepts_immutable_programdata_with_retained_authority_bytes",
+            "test_live_solana_evidence_keeps_confirmed_reads_diagnostic",
+            "test_live_solana_evidence_requires_live_pins_for_toml",
             "def test_solana_json_rpc_redacts_transport_and_error_response_details",
             "def test_solana_json_rpc_url_rejects_hidden_request_state",
             "malformed Solana RPC URL reached the opener",
             "https://bad_host.solana.example.invalid",
             "def test_solana_json_rpc_redacts_invalid_json_parser_details",
+            "def test_solana_json_rpc_rejects_duplicate_json_keys",
+            "def test_solana_json_rpc_rejects_envelope_drift",
+            "def test_live_solana_direct_api_rejects_forged_live_metadata",
+            "def test_live_solana_summary_requires_boolean_destination_readiness",
             "def test_live_solana_evidence_redacts_imported_parser_failures",
             "def test_live_solana_evidence_collects_immutable_program_hash_and_toml",
+            "def test_live_solana_evidence_rejects_mutable_program",
             "def test_live_solana_evidence_rejects_non_string_imported_metadata_without_stringifying",
             "def test_live_solana_offline_args_reject_non_string_copied_summary_metadata_without_stringifying",
             "def test_live_solana_destination_args_reject_non_string_validated_live_metadata_without_stringifying",
@@ -18259,11 +20281,28 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "malformed Solana live account executable control was accepted",
             "def test_live_solana_evidence_rejects_boolean_expected_programdata_slot",
             "boolean Solana expected ProgramData slot pin was accepted",
+            "def test_live_solana_decimal_parsers_reject_noncanonical_text",
+            "def test_live_solana_evidence_rejects_zero_programdata_slot",
+            "def test_live_solana_evidence_rejects_non_elf_programdata_executable",
+            "def test_live_solana_evidence_rejects_programdata_program_alias",
+            "def test_live_solana_evidence_rejects_noncanonical_program_account_length",
+            "def test_live_solana_evidence_rejects_noncanonical_programdata_account_base64",
+            "def test_live_solana_evidence_rejects_stale_programdata_read_context",
+            "def test_live_solana_evidence_rejects_stale_program_read_context",
+            "def test_live_solana_evidence_rejects_boolean_context_slot",
+            "def test_live_solana_evidence_rejects_code_hash_drift",
+            "def test_live_solana_evidence_rejects_programdata_drift",
+            "def test_live_solana_evidence_rejects_programdata_slot_drift",
             "def test_live_solana_decimal_parsers_reject_string_subclasses_without_hooks",
             "secret-token Solana decimal text was stringified",
+            "HostileSolanaLiveString",
+            "def test_solana_live_exact_string_parsers_reject_string_subclasses_without_hooks",
+            "secret-token Solana live exact string was stringified",
+            "Solana Program account data must use base64 encoding",
             "def test_solana_live_cli_parsers_reject_non_string_values_without_stringification",
             "HostileSolanaLiveParserValue",
             "secret-token-solana-live-parser-value",
+            "def test_solana_live_container_and_bytes_boundaries_reject_subclasses_without_hooks",
             "def test_solana_live_cli_omits_unknown_summary_fields",
             '"rpc_url": "https://solana.example.invalid/secret-token-provider"',
             'assert "rpc_url" not in payload',
@@ -18293,15 +20332,29 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
     (
         "pytests/scripts/sccp_ton_live_evidence_test.py",
         (
+            "test_live_ton_account_states_response_size_is_bounded",
+            "test_live_ton_http_error_detail_is_bounded",
+            "test_live_ton_last_transaction_lt_requires_canonical_ascii_decimal",
+            "test_live_ton_evidence_normalizes_collected_code_boc_base64",
+            "test_live_ton_evidence_requires_pins_for_toml",
+            "test_live_ton_evidence_uses_runtime_only_api_key",
             "def test_live_ton_evidence_redacts_imported_parser_failures",
             "def test_live_ton_api_url_rejects_hidden_request_state",
             "http://toncenter.example",
             "https://toncenter.local",
             "exact http(s) URL",
             "def test_live_ton_account_states_redacts_invalid_json_parser_details",
+            "def test_live_ton_account_states_json_rejects_duplicate_keys",
+            "def test_live_ton_account_states_rejects_unsuccessful_ok_flag",
+            "def test_live_ton_account_states_rejects_ambiguous_account_container",
             "def test_live_ton_hash_decoder_redacts_base64_parser_causes",
             "def test_live_ton_evidence_redacts_code_boc_parser_failures",
             "def test_live_ton_evidence_collects_account_state_and_toml",
+            "def test_live_ton_evidence_rejects_inactive_account",
+            "def test_live_ton_evidence_rejects_mismatched_account_address",
+            "def test_live_ton_evidence_rejects_padded_remote_hash_text",
+            "def test_live_ton_evidence_rejects_noncanonical_remote_hash_base64",
+            "def test_live_ton_evidence_rejects_padded_code_boc_text",
             "def test_live_ton_evidence_rejects_non_string_imported_metadata_without_stringifying",
             "def test_live_ton_offline_args_reject_non_string_copied_summary_metadata_without_stringifying",
             "def test_live_ton_destination_args_reject_non_string_validated_live_metadata_without_stringifying",
@@ -18314,13 +20367,27 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "SCCP TON live evidence collection failed",
             "TON accountStates returned duplicate JSON keys",
+            "def test_live_ton_account_states_redacts_transport_and_error_response_details",
+            "secret-token provider URL leaked from transport",
+            "secret-bearing TON transport error was accepted",
             "TON live account address metadata is invalid",
             "TON live last_transaction_lt metadata is invalid",
+            "def test_live_ton_evidence_rejects_code_hash_drift",
+            "def test_live_ton_evidence_rejects_code_boc_hash_drift",
+            "def test_live_ton_direct_api_rejects_forged_live_metadata",
+            "def test_live_ton_summary_requires_boolean_destination_readiness",
+            "def test_live_ton_evidence_rejects_malformed_remote_hash_text",
             "def test_live_ton_last_transaction_lt_rejects_boolean_json_value",
             "boolean live TON last_transaction_lt was accepted",
             "def test_ton_live_cli_parsers_reject_non_string_values_without_stringification",
             "HostileTonLiveParserValue",
             "secret-token-ton-live-parser-value",
+            "def test_ton_live_exact_string_parsers_reject_string_subclasses_without_hooks",
+            "HostileTonLiveString",
+            "HostileExpectedPinScalar",
+            "secret-token TON live exact string was stripped",
+            "secret-token TON expected pin was stringified",
+            "def test_ton_live_container_and_bytes_boundaries_reject_subclasses_without_hooks",
             "def test_ton_live_cli_omits_unknown_summary_fields",
             '"api_url": "https://toncenter.example/secret-token-provider"',
             'assert "api_url" not in payload',
@@ -18337,6 +20404,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token {label} parser detail",
             "secret-token {label} helper TypeError detail",
             "secret-token {label} ValueError detail",
+            'assert "duplicate JSON key " not in message',
+            "assert exc.__cause__ is None",
+            "assert exc.__suppress_context__ is True",
             "normalize_failure_cases = (",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
@@ -18366,7 +20436,18 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_tron_runtime_hex32_list_arg_rejects_scalar_without_stringifying",
             "def test_tron_runtime_repeated_args_reject_scalar_without_stringifying",
             "def test_tron_live_cli_parsers_reject_non_string_values_without_stringification",
+            "def test_tron_live_exact_string_parsers_reject_string_subclasses_without_hooks",
             "def test_tron_live_decimal_parsers_reject_string_subclasses_without_hooks",
+            "def test_tron_live_public_container_subclasses_reject_without_hooks",
+            "HostileTronLiveString",
+            "HostileTronLiveBytes",
+            "HostileTronLiveBytearray",
+            "HostileTronLiveDict",
+            "HostileTronLiveList",
+            "HostileTronLiveInt",
+            "secret-token TRON live exact string was stripped",
+            "secret-token TRON live bytes coerced",
+            "secret-token TRON live dict get",
             "HostileDecimalText",
             "secret-token TRON live decimal text was compared",
             "def test_tron_live_optional_hex_args_reject_non_string_without_stringifying",
@@ -18387,6 +20468,8 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "malformed TRON node URL reached the opener",
             "https://bad_host.tron.example",
             "def test_tron_api_redacts_transport_and_error_response_details",
+            "secret-token provider URL leaked from transport",
+            "secret-bearing TRON transport error was accepted",
             "for exception_type in (SystemExit, TypeError, ValueError, RuntimeError):",
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "def test_tron_live_cli_redacts_top_level_exception_details",
@@ -18550,6 +20633,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "EVM destination JSON accepted hostile",
             "EVM route canary hash accepted hostile receipt block number",
             "secret-token EVM destination route canary block number was stringified",
+            "HostileEvmDestinationString",
+            "def test_evm_destination_exact_runtime_strings_reject_string_subclasses_without_hooks",
+            "secret-token EVM destination string was stripped",
+            "bridge runtime bytecode metadata is inconsistent",
+            "verifier runtime bytecode metadata is inconsistent",
             "def test_evm_destination_toml_renderer_rejects_string_subclasses_without_hooks",
             "secret-token EVM destination TOML string was stringified",
             "secret-token-evm-destination-hex",
@@ -18582,6 +20670,12 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token-removed",
             "def test_receipt_hex_parser_redacts_helper_exit_parser_causes",
             "def test_receipt_rpc_hex_data_redacts_helper_exit_parser_causes",
+            "def test_receipt_rpc_scalar_parsers_reject_string_subclasses_without_hooks",
+            "def test_receipt_sequence_parsers_reject_string_subclasses_without_iteration",
+            "HostileReceiptString",
+            "secret-token receipt exact string stripped",
+            "secret-token receipt exact string iterated",
+            "eth_getBlockReceipts returned a non-list response",
             "secret-token-evm-receipt-hex",
             "secret-token EVM receipt hex TypeError detail",
             "secret-token EVM receipt RPC hex ",
@@ -18596,6 +20690,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_receipt_json_rpc_redacts_invalid_json_parser_details",
             "def test_receipt_json_rpc_url_rejects_hidden_request_state",
             "malformed receipt RPC URL reached the opener",
+            "test_receipt_json_rpc_redacts_transport_and_error_response_details",
+            "secret-token provider URL leaked from transport",
+            "secret-bearing receipt RPC transport error was accepted",
             "secret-token invalid EVM receipt JSON-RPC payload",
             "assert exc.__suppress_context__ is True",
             'assert "secret-token" not in captured.err',
@@ -18606,7 +20703,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "def test_evm_source_live_cli_redacts_top_level_exception_details",
             "def test_evm_source_live_cli_parsers_reject_non_string_values_without_stringification",
+            "def test_evm_source_live_exact_string_parsers_reject_string_subclasses_without_hooks",
             "HostileSourceLiveParserValue",
+            "HostileSourceLiveString",
+            "secret-token EVM source live exact string stripped",
             "secret-token-evm-source-live-parser-value",
             "for exception_type in (\n        module.argparse.ArgumentTypeError,\n        OSError,\n        SystemExit,\n        RuntimeError,\n        TypeError,\n        ValueError,\n    ):",
             "SCCP EVM source live evidence collection failed",
@@ -18616,6 +20716,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "test_evm_source_json_rpc_redacts_invalid_json_parser_details",
             "test_evm_source_json_rpc_url_rejects_hidden_request_state",
             "malformed EVM source RPC URL reached the opener",
+            "test_evm_source_json_rpc_redacts_transport_and_error_response_details",
+            "secret-token provider URL leaked from transport",
+            "secret-bearing EVM source transport error was accepted",
             "test_evm_source_live_redacts_receipt_field_parser_exception_causes",
             "test_evm_source_live_redacts_receipt_readback_parser_exception_causes",
             "test_evm_source_live_redacts_receipt_block_hash_metadata_reparse_failures",
@@ -18672,6 +20775,9 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "test_evm_json_rpc_redacts_invalid_json_parser_details",
             "test_evm_json_rpc_url_rejects_hidden_request_state",
             "malformed EVM RPC URL reached the opener",
+            "test_evm_json_rpc_redacts_transport_and_error_response_details",
+            "secret-token provider URL leaked from transport",
+            "secret-bearing EVM transport error was accepted",
             "def test_evm_live_hex_parsers_redact_typeerror_parser_causes",
             "def test_evm_live_hex_nonzero_controls_reject_non_booleans",
             "malformed EVM live exact-hex nonzero control accepted",
@@ -18698,9 +20804,12 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "test_live_evm_rejects_non_string_copied_destination_hash_without_stringifying",
             "test_live_evm_torii_query_rejects_non_string_copied_destination_metadata",
             "test_evm_live_cli_parsers_reject_non_string_values_without_stringification",
+            "test_evm_live_exact_string_parsers_reject_string_subclasses_without_hooks",
             "test_evm_live_namespace_args_reject_non_bytes_without_stringifying",
             "test_evm_live_collect_rejects_non_bytes_namespace_args_before_rpc",
             "HostileEvmLiveParserValue",
+            "HostileEvmLiveString",
+            "secret-token EVM live exact string stripped",
             "secret-token-evm-live-parser-value",
             "secret-token imported EVM live metadata was stringified",
             "secret-token bridge address parser detail",
@@ -18742,6 +20851,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "secret-token {label} helper TypeError detail",
             "secret-token {label} helper ValueError detail",
             "def test_solana_destination_rejects_non_string_programdata_address_without_stringifying",
+            "HostileSolanaDestinationString",
+            "def test_solana_destination_exact_string_parsers_reject_string_subclasses_without_hooks",
+            "secret-token Solana destination string was stripped",
+            "Solana verifier program byte metadata is inconsistent",
             "Solana destination TOML accepted hostile ProgramData address metadata",
             "Solana destination JSON accepted hostile ProgramData address metadata",
             "secret-token Solana ProgramData address was stringified",
@@ -18792,6 +20905,10 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "TON destination TOML accepted hostile last transaction LT",
             "TON destination JSON accepted hostile last transaction LT",
             "secret-token TON destination LT was stringified",
+            "HostileTonDestinationString",
+            "def test_ton_destination_exact_string_metadata_rejects_string_subclasses_without_hooks",
+            "secret-token TON destination string was stripped",
+            "TON verifier code BoC base64 metadata is inconsistent",
             "def test_ton_destination_toml_renderer_rejects_string_subclasses_without_hooks",
             "secret-token TON destination TOML string was stringified",
             "def test_ton_destination_code_boc_base64_redacts_helper_exit_decoder_causes",
@@ -18871,6 +20988,15 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "def test_parse_u64_requires_canonical_decimal_text_and_exact_int",
             "HostileDecimalText",
             "secret-token TRON decimal text was compared",
+            "HostileTronSourceString",
+            "def test_tron_source_exact_string_parsers_reject_string_subclasses_without_hooks",
+            "def test_tron_source_bridge_byte_helpers_reject_subclasses_without_hooks",
+            "HostileTronSourceBytes",
+            "HostileTronSourceBytearray",
+            "secret-token TRON source bytes coerced",
+            "secret-token TRON source string was stripped",
+            "source bridge runtime bytecode metadata is inconsistent",
+            "destination verifier runtime bytecode metadata is inconsistent",
             "def test_tron_source_bridge_toml_renderer_rejects_string_subclasses_without_hooks",
             "secret-token TRON source TOML string was stringified",
             "secret-token-tron-source-fixed-hex",
@@ -18892,6 +21018,56 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
         (
             "def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory",
             "def test_release_readiness_report_blocks_missing_release_public_scalar_text_schema_gate",
+            "test_release_readiness_active_launch_policy_is_ethereum_mainnet",
+            "test_release_readiness_source_inventory_emits_all_strict_required_gates",
+            "test_release_readiness_submission_surfaces_match_supported_launch_scope",
+            "test_release_readiness_evidence_phase_inventory_matches_corridor_runner",
+            "test_release_readiness_evidence_phase_requires_source_template_hash_guard",
+            "test_release_readiness_evidence_phase_accepts_pytest_runner_command_shape",
+            "test_release_readiness_phase_command_matchers_accept_runner_overrides",
+            "test_release_readiness_phase_command_matchers_accept_corridor_dry_run",
+            "test_release_readiness_phase_command_matchers_reject_echoed_fragments",
+            "test_release_readiness_phase_command_matchers_reject_short_circuited_fragments",
+            "test_release_readiness_sdk_helper_symbols_exist_in_sdk_sources",
+            "test_release_readiness_native_source_scan_rejects_forbidden_prover_markers",
+            "test_release_readiness_native_source_scan_checks_split_dotnet_sources",
+            "test_release_readiness_ethereum_data_collection_has_no_proxy_fallback",
+            "test_release_readiness_sdk_helper_symbols_are_unique",
+            "test_release_readiness_js_helper_symbols_exist_in_portal_artifacts",
+            "test_release_readiness_user_prover_surfaces_name_ui_hook_symbols",
+            "test_release_readiness_python_helper_symbols_are_package_root_exports",
+            "test_release_readiness_report_blocks_without_evidence_or_corridor_results",
+            "test_release_readiness_json_tracks_corridor_phase_results",
+            "test_release_readiness_user_prover_surfaces_require_core_admission",
+            "test_release_readiness_report_passes_for_complete_evidence_and_corridor",
+            "test_release_readiness_report_accepts_phase_evidence_under_system_temp_symlink_prefix",
+            "test_release_readiness_report_passes_with_only_active_launch_lane",
+            "test_release_readiness_report_markdown_compares_row_ready_exactly",
+            "test_release_readiness_report_markdown_pins_live_verifier_blockers",
+            "test_release_readiness_report_markdown_names_native_sdk_id_evidence",
+            "test_release_readiness_report_markdown_names_source_material_csharp_vectors",
+            "test_release_readiness_report_markdown_names_unsupported_scope_note",
+            "test_release_readiness_report_markdown_names_live_deployment_placeholder_blocker",
+            "test_release_readiness_report_omits_non_evm_route_canary_message_id",
+            "test_release_readiness_report_cli_rejects_zero_byte_native_artifacts",
+            "test_release_readiness_report_public_crypto_rejects_route_canary_transcript_replay",
+            "test_release_readiness_report_public_crypto_rejects_tron_transcript_drift",
+            "test_release_readiness_report_public_crypto_rejects_route_canary_transcript_context_drift",
+            "test_release_readiness_report_public_crypto_rejects_source_gate_hash_role_replay",
+            "test_release_readiness_report_public_crypto_rejects_source_gate_transcript_replay",
+            "test_release_readiness_report_blocks_native_evm_prover_payload_hash_mismatch",
+            "test_release_readiness_report_blocks_unlabeled_native_evm_prover_audits",
+            "test_release_readiness_report_blocks_legacy_native_evm_parity_fixture_schema",
+            "test_release_readiness_report_blocks_native_evm_prover_path_escape",
+            "test_release_readiness_report_blocks_active_launch_evm_live_metadata_drift",
+            "test_release_readiness_report_accepts_phase_evidence_dir",
+            "test_release_readiness_report_rejects_output_only_retired_network_scan_evidence",
+            "test_release_readiness_report_rejects_echoed_retired_network_scan_command",
+            "test_release_readiness_report_rejects_narrow_dotnet_sccp_filter",
+            "test_release_readiness_report_rejects_extra_dotnet_setup_command",
+            "test_release_readiness_report_rejects_echoed_js_phase_command_fragment",
+            "test_release_readiness_unready_guidance_describes_removed_surface",
+            "test_release_readiness_rejects_control_character_artifact_paths",
             "def test_release_readiness_report_native_evm_public_helper_flags_reject_non_booleans",
             "non-boolean readiness canonical decimal positive control was accepted",
             "non-boolean native EVM artifact redaction control was accepted",
@@ -18917,6 +21093,11 @@ SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
             "safe%E2%80%AEreadiness detail",
             "safe%7Creadiness detail",
             "safe%3Creadiness detail%3E",
+            "readiness report row uses `<invalid path>`",
+            "readiness report row uses <invalid public evidence>",
+            "readiness report row uses `<invalid private_key>`",
+            "readiness report row uses `<invalid path|note>`",
+            "readiness report row uses <invalid path%7Cnote>",
             'deep_percent_encoded_text("operator api key detail")',
             'nested_html_entity_text("private&#95;key")',
             "safe readiness SystemExit detail",
@@ -18986,12 +21167,18 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
         "scripts/sccp_release_bundle.py",
         (
             "def _release_notes_attachment(",
+            "release-notes attachment report roots must reject subclasses",
             "def _release_notes_artifact_row_cells(",
             "def _release_notes_artifact_path_is_safe(",
+            "type(value) is not str",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
             "_decoded_public_blocker_text_issue(value) is not None",
             "def _release_notes_artifact_rows(",
+            "release-notes attachment artifact containers must reject subclasses",
+            "type(artifact_path) is str",
             "def _release_notes_attachment_bundle_errors(",
+            "release-notes attachment bundle text must reject subclasses",
+            "type(notes) is not str",
             "_release_notes_attachment_invariant_errors(",
             "_expected_release_notes_attachment(",
             "release_notes_attachment cannot be checked",
@@ -19006,6 +21193,7 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "| Artifact | Bytes | SHA-256 |",
             "| --- | ---: | --- |",
             "def _markdown_string_list_items(",
+            "release-notes attachment blocker lists must reject subclasses",
             "_public_blocker_list_field_errors(",
             "lines.extend([\"\", \"## Blocking Items\", \"\"])",
         ),
@@ -19014,13 +21202,17 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
         "scripts/sccp_verify_release_bundle.py",
         (
             "def _expected_release_notes_attachment(",
+            "release-notes attachment report roots must reject subclasses",
             'status = "READY" if report.get("production_ready") is True else "NOT READY"',
             "def _release_notes_attachment_artifact_path_is_safe(",
+            "type(value) is not str",
             "normalized_value = _decoded_sensitive_public_marker_text(value)",
             "_decoded_public_blocker_text_issue(value) is not None",
             "def _release_notes_attachment_artifact_row_cells(",
             "type(artifact_bytes) is int and artifact_bytes > 0",
             "def _release_notes_attachment_artifact_rows(",
+            "release-notes attachment artifact containers must reject subclasses",
+            "type(artifact_path) is str",
             "def _release_notes_attachment_artifact_row_has_decoded_unsafe_text(",
             "decoded_row = _decoded_public_blocker_text(artifact_row)",
             "def _release_notes_attachment_artifact_row_diagnostic(",
@@ -19033,6 +21225,9 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "def _is_markdown_setext_heading_at(",
             "def _has_markdown_setext_heading(",
             "def _release_notes_attachment_invariant_errors(",
+            "release-notes attachment text must reject subclasses",
+            "type(notes) is not str",
+            "release notes attachment must be text",
             "release notes attachment missing canonical title",
             "release notes attachment has multiple canonical titles",
             "release notes attachment has unexpected top-level heading",
@@ -19057,6 +21252,11 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "release notes attachment has multiple artifact table separators",
             "release notes attachment artifact table header is not followed by separator",
             "release notes attachment artifact table scaffold is not canonical",
+            "missing_artifact_count = 0",
+            "missing_artifact_hash_count = 0",
+            'f"#{missing_artifact_count}"',
+            'f"#{missing_artifact_hash_count}"',
+            "type(path) is not str",
             "release notes attachment must not list itself as an artifact",
             "release notes attachment must not list manifest.json as an artifact",
             "`<invalid artifact>`",
@@ -19071,6 +21271,7 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "release notes attachment artifact rows are not contiguous after table separator",
             "release notes attachment does not list manifest.json",
             "def _readiness_markdown_string_list_items(",
+            "type(value) is not list",
             "_public_blocker_list_field_errors(",
             "release notes attachment missing Blocking Items section",
             "release notes attachment must not include Blocking Items section when ready",
@@ -19119,22 +21320,32 @@ SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_release_notes_invariants_reject_self_artifact_row",
             "def test_release_bundle_release_notes_exclude_manifest_root_artifact_rows",
             "def test_release_bundle_verifier_release_notes_invariants_require_artifact_rows",
+            "def test_release_bundle_verifier_release_notes_numbers_repeated_missing_artifacts",
+            "release notes attachment does not list artifact #1",
+            "release notes attachment does not list artifact hash #2",
             "def test_release_bundle_verifier_release_notes_invariants_reject_extra_artifact_rows",
             "def test_release_bundle_verifier_release_notes_redacts_sensitive_artifact_rows",
             "def test_release_bundle_verifier_release_notes_redacts_decoded_unsafe_artifact_rows",
             "def test_release_bundle_release_notes_mark_decoded_unsafe_artifact_paths",
+            'HostileMarkdownString("artifacts/release-note.json")',
+            "def test_release_bundle_verifier_release_notes_invariants_reject_string_subclass_artifact_paths_without_hooks",
+            "def test_release_bundle_release_notes_reject_string_subclass_artifact_paths_without_hooks",
             "def test_release_bundle_verifier_release_notes_invariants_require_artifact_row_order",
             "def test_release_bundle_verifier_release_notes_invariants_require_contiguous_artifact_table",
             "def test_release_bundle_verifier_rejects_release_notes_status_drift",
             "def test_release_bundle_redacts_builder_recompute_and_renderer_errors",
             "def test_release_bundle_redacts_public_markdown_invariant_helper_errors",
+            "def test_release_bundle_public_markdown_text_subclasses_reject_hooks_without_leaking",
             "def test_release_bundle_release_note_status_compares_ready_exactly",
             "def test_release_bundle_release_notes_mark_malformed_blocker_containers",
+            "def test_release_bundle_release_notes_report_roots_reject_subclasses_without_leaking",
+            "def test_release_bundle_release_notes_blocker_lists_reject_subclasses_without_leaking",
             "def test_release_bundle_release_notes_redact_encoded_blocker_lists",
             "safe%20duplicated%20release%20notes%20blocker",
             "operator secret&#45;token-release-notes-blocker",
             "def test_release_bundle_verifier_release_notes_invariants_reject_encoded_blockers",
             "def test_release_bundle_release_notes_reject_malformed_artifact_rows",
+            "def test_release_bundle_release_notes_artifact_containers_reject_subclasses_without_leaking",
             "native-prover/secret%2dtoken-artifact.bin",
             "native-prover/private&#95;key-artifact.bin",
             "native-prover/private&amp;#95;key-artifact.bin",
@@ -19162,6 +21373,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
         (
             "def _render_markdown(",
             "def _readiness_status_markdown_label(",
+            "type(report) is not dict",
             "def _input_artifact_markdown_rows(",
             "def _corridor_markdown_rows(",
             "def _cryptographic_evidence_markdown_rows(",
@@ -19178,6 +21390,12 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "submission surface must be an object",
             "native EVM prover bundle must be an object",
             "source inventory must be an object",
+            "readiness Markdown string lists must reject list subclasses",
+            "readiness Markdown checklist containers must reject subclasses",
+            "readiness Markdown table containers must reject subclasses",
+            "readiness Markdown native/source containers must reject subclasses",
+            "readiness Markdown source-inventory invariant containers must reject subclasses",
+            "readiness Markdown lane containers must reject subclasses",
             "source_adapter_gate_audit_hashes",
             "## Release Checklist",
             "## Source Inventory",
@@ -19244,7 +21462,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "requires every `UnitTestResult` `testName` value to be present, canonical, and unique",
             "contains exactly the VSTest passed-test count of `UnitTestResult` rows",
             "names `Hyperledger.Iroha.Sdk.Tests.dll`",
-            "contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`",
+            "contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest` while every present SCCP `codeBase`/`storage` assembly reference on that `TestMethod` and parent `UnitTest` points to `Hyperledger.Iroha.Sdk.Tests.dll`",
             "when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition",
             "each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character",
             "SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment",
@@ -19271,6 +21489,12 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "repeated public section headings",
             "noncanonical required-section order",
             "canonical Required Release Evidence bullet spelling",
+            "internal tab/control-whitespace Required Release Evidence bullet rejection",
+            "Unicode separator/format Required Release Evidence bullet rejection",
+            "canonical Blocking Items bullet spelling",
+            "Unicode separator/format Blocking Items bullet rejection",
+            "table-cell blocker exact rendering",
+            "governed live-verifier required-evidence line binding",
         ),
     ),
     (
@@ -19279,8 +21503,15 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "READINESS_MARKDOWN_REQUIRED_SECTIONS",
             "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
             "SCCP_NOT_REMAINING_WORK_SCOPE_NOTE",
+            "def _render_readiness_markdown(",
             "def _expected_readiness_markdown(",
+            "readiness Markdown expected render containers must reject subclasses",
+            "ordered_report = dict(report) if type(report) is dict else {}",
+            "type(report) is not dict",
             "def _readiness_markdown_invariant_errors(",
+            "readiness Markdown text must reject subclasses",
+            "type(markdown) is not str",
+            "readiness report Markdown must be text",
             "readiness report Markdown missing section",
             "readiness report Markdown has multiple canonical titles",
             "readiness report Markdown has unexpected top-level heading",
@@ -19294,9 +21525,26 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def _has_markdown_setext_heading(",
             "readiness report Markdown has unexpected section heading",
             "def _readiness_markdown_string_list_cell_presence_errors(",
+            "readiness Markdown string lists must reject list subclasses",
+            "readiness Markdown checklist containers must reject subclasses",
+            "readiness Markdown table containers must reject subclasses",
+            "readiness Markdown input/corridor invariant containers must reject subclasses",
+            "readiness Markdown native/source containers must reject subclasses",
+            "readiness Markdown user-prover invariant containers must reject subclasses",
+            "readiness Markdown lane containers must reject subclasses",
+            "readiness Markdown lane invariant containers must reject subclasses",
+            "readiness Markdown crypto invariant containers must reject subclasses",
+            "def _markdown_missing_exact_table_cell_errors(",
+            "def _expected_readiness_markdown_string_list_cell(",
             "def _readiness_markdown_string_list_items_presence_errors(",
+            "def _is_markdown_string_list_item_line(",
+            "def _is_noncanonical_markdown_string_list_item_line(",
+            "def _canonical_markdown_string_list_item_key(",
+            "readiness report Markdown {section_name} section has noncanonical {label} bullet",
+            "readiness report Markdown {section_name} section contains duplicate {label}",
             "def _markdown_missing_terminal_table_cell_errors(",
             "def _readiness_markdown_report_artifact_path(",
+            "type(artifact_path) is not str or not artifact_path",
             "def _readiness_input_artifact_markdown_rows(",
             "def _readiness_corridor_markdown_rows(",
             "def _readiness_corridor_phase_markdown_row_cells(",
@@ -19341,6 +21589,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "native_artifact_row_prefix = (",
             "native EVM prover artifact/hash row",
             "native_support_artifact_row_prefix = (",
+            "type(row.get(\"sdk\")) is str",
             "native EVM prover support-artifact row",
             "native_blocker_text = _readiness_native_evm_validation_blockers_cell(",
             "native EVM prover blocker cell",
@@ -19420,7 +21669,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "requires every `UnitTestResult` `testName` value to be present, canonical, and unique",
             "contains exactly the VSTest passed-test count of `UnitTestResult` rows",
             "names `Hyperledger.Iroha.Sdk.Tests.dll`",
-            "contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`",
+            "contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest` while every present SCCP `codeBase`/`storage` assembly reference on that `TestMethod` and parent `UnitTest` points to `Hyperledger.Iroha.Sdk.Tests.dll`",
             "when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition",
             "each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character",
             "SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment",
@@ -19444,6 +21693,12 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "repeated public section headings",
             "noncanonical required-section order",
             "canonical Required Release Evidence bullet spelling",
+            "internal tab/control-whitespace Required Release Evidence bullet rejection",
+            "Unicode separator/format Required Release Evidence bullet rejection",
+            "canonical Blocking Items bullet spelling",
+            "Unicode separator/format Blocking Items bullet rejection",
+            "table-cell blocker exact rendering",
+            "governed live-verifier required-evidence line binding",
             "or \"\\\\\" in value",
             "or \":\" in value",
             "path.is_absolute()",
@@ -19455,6 +21710,8 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
         "scripts/sccp_release_bundle.py",
         (
             "def _readiness_markdown_bundle_errors(",
+            "readiness Markdown bundle text must reject subclasses",
+            "type(markdown) is not str",
             "_readiness_markdown_invariant_errors(report, markdown)",
             ".markdown cannot be checked",
             "_expected_readiness_markdown(report)",
@@ -19470,14 +21727,28 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_readiness_markdown_renderer_is_independent",
             "def test_release_bundle_verifier_readiness_markdown_compares_rows_exactly",
             "def test_release_bundle_redacts_public_markdown_invariant_helper_errors",
+            "def test_release_bundle_public_markdown_text_subclasses_reject_hooks_without_leaking",
             "def test_release_bundle_verifier_readiness_markdown_marks_bad_blocker_containers",
             "def test_release_bundle_verifier_readiness_markdown_status_fails_closed_for_malformed_roots",
+            "class HostileVerifierReadinessReportRoot",
+            "def test_release_bundle_verifier_readiness_markdown_rejects_hostile_report_root_subclass",
+            "def test_release_bundle_verifier_expected_readiness_markdown_rejects_nested_corridor_subclasses_without_leaking",
+            "def test_release_bundle_verifier_markdown_string_list_helpers_reject_list_subclasses_without_leaking",
+            "def test_release_bundle_verifier_markdown_release_checklist_containers_reject_subclasses_without_leaking",
+            "def test_release_bundle_verifier_markdown_table_containers_reject_subclasses_without_leaking",
+            "def test_release_bundle_verifier_markdown_native_source_containers_reject_subclasses_without_leaking",
+            "def test_release_bundle_verifier_markdown_lane_containers_reject_subclasses_without_leaking",
             "def test_release_bundle_rejects_markdown_drift_before_write",
             "def test_release_bundle_verifier_markdown_invariants_require_public_sections",
             "def test_release_bundle_verifier_rejects_noncanonical_readiness_title_status_block",
             "def test_release_bundle_verifier_rejects_duplicate_required_evidence_items",
             "def test_release_bundle_verifier_rejects_whitespace_variant_required_evidence_duplicates",
+            "def test_release_bundle_verifier_rejects_internal_tab_required_evidence_duplicates",
+            "def test_release_bundle_verifier_rejects_unicode_spacing_required_evidence_duplicates",
+            "def test_release_bundle_verifier_rejects_unicode_spacing_blocking_item_duplicates",
+            "def test_release_bundle_verifier_rejects_unicode_spacing_table_cell_blocker_duplicates",
             "def test_release_bundle_verifier_rejects_noncanonical_required_evidence_bullets",
+            "def test_release_bundle_verifier_requires_governed_live_verifier_blockers_on_one_required_evidence_line",
             "def test_release_bundle_verifier_rejects_duplicate_readiness_markdown_section",
             "def test_release_bundle_verifier_rejects_noncanonical_readiness_markdown_heading",
             "def test_release_bundle_verifier_rejects_unexpected_readiness_markdown_section",
@@ -19487,6 +21758,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_markdown_invariants_require_evidence_input_row",
             "def test_release_bundle_verifier_markdown_invariants_require_corridor_phase_status",
             "def test_release_bundle_verifier_markdown_invariants_require_corridor_artifact_row",
+            "def test_release_bundle_verifier_readiness_markdown_invariants_reject_input_corridor_subclasses_without_leaking",
             "def test_release_bundle_verifier_markdown_invariants_require_checklist_status",
             "def test_release_bundle_verifier_markdown_invariants_require_checklist_blocker_row",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_input_and_corridor_rows",
@@ -19498,6 +21770,7 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_markdown_invariants_require_crypto_core_hash_row",
             "def test_release_bundle_verifier_markdown_invariants_require_crypto_route_canary_row",
             "def test_release_bundle_verifier_rejects_markdown_crypto_evidence_omission",
+            "def test_release_bundle_verifier_readiness_markdown_invariants_reject_crypto_subclasses_without_leaking",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_checklist_artifact",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_crypto_rows",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_crypto_artifact",
@@ -19506,12 +21779,16 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_markdown_invariants_require_lane_status",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_lane_rows",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_lane_artifact",
+            "def test_release_bundle_verifier_readiness_markdown_invariants_reject_lane_subclasses_without_leaking",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_user_prover_rows",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_user_prover_artifact",
+            "def test_release_bundle_verifier_readiness_markdown_invariants_reject_user_prover_subclasses_without_leaking",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_native_prover_bundle",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_native_prover_artifact",
+            "def test_release_bundle_verifier_readiness_markdown_invariants_reject_native_bundle_subclasses_without_leaking",
             "def test_release_bundle_verifier_readiness_markdown_rejects_malformed_source_inventory_rows",
             "def test_release_bundle_verifier_readiness_markdown_redacts_malformed_source_inventory_artifact",
+            "def test_release_bundle_verifier_readiness_markdown_invariants_reject_source_inventory_subclasses_without_leaking",
             "def test_release_bundle_verifier_markdown_invariants_require_lane_blocker_row",
             "def test_release_bundle_verifier_markdown_invariants_require_source_inventory_rows",
             "def test_release_bundle_verifier_markdown_invariants_require_source_inventory_blocker_row",
@@ -19522,11 +21799,13 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
             "def test_release_bundle_verifier_markdown_invariants_require_native_prover_blocker_row",
             "def test_release_bundle_verifier_markdown_invariants_require_native_prover_artifact_row",
             "def test_release_bundle_verifier_markdown_invariants_require_native_prover_support_artifact_row",
+            "def test_release_bundle_verifier_markdown_invariants_reject_native_sdk_string_subclass_truthiness_hooks",
             "def test_release_bundle_verifier_markdown_invariants_require_blocker_text",
             "def test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers",
             "def test_release_bundle_verifier_rejects_release_checklist_malformed_item_ids",
             "def test_release_bundle_verifier_suppresses_malformed_source_inventory_gate_markdown_leaks",
             "def test_release_bundle_verifier_suppresses_malformed_report_artifact_path_markdown_leaks",
+            "def test_release_bundle_verifier_markdown_report_artifact_paths_reject_string_subclasses",
             "def test_release_bundle_verifier_suppresses_crypto_evidence_malformed_markdown_leaks",
             "def test_release_bundle_verifier_requires_native_sdk_id_readiness_evidence",
             "def test_release_bundle_verifier_guards_readiness_markdown_invariants_inventory",
@@ -19538,13 +21817,31 @@ SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
         (
             "def test_release_readiness_report_guards_readiness_markdown_invariants_gate_inventory",
             "def test_release_readiness_report_blocks_missing_readiness_markdown_invariants_gate",
+            "class HostileReadinessReportRoot",
             "def test_release_readiness_report_markdown_names_direct_dotnet_trx_evidence_path",
             "def test_release_readiness_report_required_evidence_items_are_unique",
             "source_inventory_markers = [",
             'len(source_inventory_markers) == len(readiness["source_inventory"])',
             "missing_source_inventory_markers == []",
             "canonical Required Release Evidence bullet spelling",
+            "internal tab/control-whitespace Required Release Evidence bullet rejection",
+            "Unicode separator/format Required Release Evidence bullet rejection",
+            "canonical Blocking Items bullet spelling",
+            "Unicode separator/format Blocking Items bullet rejection",
+            "table-cell blocker exact rendering",
+            "governed live-verifier required-evidence line binding",
+            "def test_release_readiness_report_markdown_requires_governed_live_verifier_blockers_on_one_line",
+            "def test_release_readiness_report_markdown_rejects_internal_tab_required_evidence_duplicates",
+            "def test_release_readiness_report_markdown_rejects_unicode_spacing_required_evidence_duplicates",
+            "def test_release_readiness_report_markdown_rejects_unicode_spacing_blocking_item_duplicates",
+            "def test_release_readiness_report_markdown_rejects_unicode_spacing_table_cell_blocker_duplicates",
             "def test_release_readiness_report_markdown_rejects_malformed_top_level_status",
+            "def test_release_readiness_report_markdown_rejects_hostile_report_root_subclass",
+            "def test_release_readiness_markdown_string_list_helpers_reject_list_subclasses_without_leaking",
+            "def test_release_readiness_markdown_release_checklist_containers_reject_subclasses_without_leaking",
+            "def test_release_readiness_markdown_table_containers_reject_subclasses_without_leaking",
+            "def test_release_readiness_markdown_native_source_containers_reject_subclasses_without_leaking",
+            "def test_release_readiness_markdown_lane_containers_reject_subclasses_without_leaking",
             "def test_release_readiness_report_markdown_rejects_malformed_checklist_rows",
             "def test_release_readiness_report_markdown_rejects_malformed_input_and_corridor_rows",
             "def test_release_readiness_report_markdown_rejects_malformed_collection_roots",
@@ -19955,6 +22252,167 @@ TRON_INBOUND_ADVERSARIAL_MARKERS = (
     (
         "pytests/scripts/sccp_tron_live_evidence_test.py",
         (
+            "test_tron_api_response_size_is_bounded",
+            "test_tron_api_key_is_runtime_exact_ascii",
+            "test_live_evidence_collects_source_destination_and_offline_args",
+            "test_live_evidence_verifies_source_event_transaction_readback",
+            "test_live_evidence_reconstructs_block_with_result_extension_transactions",
+            "test_live_evidence_accepts_numeric_source_event_success_enums",
+            "test_live_evidence_emits_solid_block_header_proof_hash_when_roots_present",
+            "test_live_evidence_emits_witness_seal_hash_when_certificate_supplied",
+            "test_live_evidence_emits_transaction_source_proof_hash_when_branch_supplied",
+            "test_live_evidence_emits_ancestor_and_confirmation_header_proofs",
+            "test_live_evidence_marks_source_event_transaction_production_ready",
+            "test_live_evidence_requires_expected_witness_schedule_hash_for_production_ready",
+            "test_live_evidence_accepts_witness_schedule_transition_chain_for_production_ready",
+            "test_live_evidence_uses_source_trust_anchor_hash_for_production_ready",
+            "test_live_evidence_source_event_transaction_readback_uses_solid_endpoint",
+            "test_live_evidence_source_event_transaction_id_requires_digest",
+            "test_live_evidence_source_event_digest_requires_json_source_bridge",
+            "test_live_evidence_expected_destination_binding_requires_destination",
+            "test_live_evidence_can_use_solid_constant_endpoint",
+            "test_live_evidence_derives_route_canary_from_verifier_transaction",
+            "test_live_evidence_full_toml_requires_expected_tron_dpos_source_gate_hash",
+            "test_live_evidence_full_toml_requires_route_canary_raw_data_owner_binding",
+            "test_live_evidence_full_toml_requires_route_canary_signature_owner_binding",
+            "test_live_evidence_full_toml_revalidates_route_canary_raw_transaction_fields",
+            "test_live_evidence_full_toml_revalidates_route_canary_proof_header_fields",
+            "test_live_evidence_full_toml_revalidates_route_canary_destination_fields",
+            "test_live_evidence_full_toml_requires_route_canary_evidence",
+            "test_live_evidence_full_toml_requires_verified_route_canary_transaction",
+            "test_live_evidence_full_toml_requires_expected_source_config_pin",
+            "test_live_evidence_full_toml_requires_expected_destination_binding_pin",
+            "test_live_evidence_expected_source_config_pin_does_not_require_source_records",
+            "test_live_evidence_route_allowlist_hash_requires_destination",
+            "test_live_evidence_route_allowlist_hash_requires_source_records",
+            "test_live_evidence_torii_destination_params_require_bytecode_metadata",
+            "test_live_evidence_route_allowlist_hash_requires_expected_destination_binding_pin",
+            "test_live_evidence_full_toml_render_requires_complete_evidence",
+            "def test_witness_schedule_transition_json_rejects_duplicate_keys",
+            "def test_live_tron_address_payload_parser_rejects_all_zero_base58check",
+            "def test_live_evidence_rejects_zero_block_witness_address_before_header_hashing",
+            "def test_live_evidence_rejects_uppercase_tron_log_address_hex",
+            "def test_live_evidence_rejects_uppercase_generic_tron_hex_blob",
+            "def test_live_evidence_rejects_result_extension_hex_with_internal_whitespace",
+            "def test_live_evidence_rejects_uppercase_result_extension_hex",
+            "def test_live_evidence_rejects_non_int64_result_numbers",
+            "def test_live_evidence_accepts_zero_source_inclusion_branch_sibling",
+            "def test_live_evidence_rejects_padded_source_event_operator_proof_inputs",
+            "def test_live_evidence_rejects_witness_schedule_transition_signature_for_wrong_witness",
+            "def test_live_evidence_rejects_witness_schedule_transition_noncanonical_signature",
+            "def test_live_evidence_rejects_witness_schedule_transition_below_two_thirds_weight",
+            "def test_live_evidence_rejects_witness_schedule_hash_drift_from_source_trust_anchor",
+            "def test_live_evidence_rejects_witness_seal_hash_mismatch",
+            "def test_live_evidence_rejects_witness_seal_signature_for_wrong_witness",
+            "def test_live_evidence_rejects_witness_seal_below_two_thirds_weight",
+            "def test_live_evidence_rejects_malformed_witness_seal_signature",
+            "def test_live_evidence_rejects_witness_seal_high_s_signature",
+            "def test_live_evidence_marks_header_proof_blocked_when_parent_tx_root_zero",
+            "def test_live_evidence_rejects_witness_schedule_hash_mismatch",
+            "def test_live_evidence_rejects_block_witness_not_in_schedule",
+            "def test_live_evidence_rejects_source_event_block_tx_trie_root_mismatch",
+            "def test_live_evidence_rejects_source_event_block_id_mismatch",
+            "def test_live_evidence_rejects_padded_source_event_block_id",
+            "def test_live_evidence_rejects_source_event_parent_block_id_mismatch",
+            "def test_live_evidence_rejects_source_event_parent_link_mismatch",
+            "def test_live_evidence_rejects_source_event_parent_timestamp_not_before_child",
+            "def test_live_evidence_rejects_source_event_block_witness_signature_mismatch",
+            "def test_live_evidence_rejects_source_event_block_witness_high_s_signature",
+            "def test_live_evidence_rejects_padded_source_event_block_witness_signature",
+            "def test_live_evidence_rejects_source_event_parent_witness_signature_mismatch",
+            "def test_live_evidence_rejects_source_event_parent_witness_high_s_signature",
+            "def test_live_evidence_rejects_source_event_transaction_raw_data_hash_mismatch",
+            "def test_live_evidence_rejects_source_event_transaction_raw_data_owner_mismatch",
+            "def test_live_evidence_rejects_source_event_transaction_multiple_signatures",
+            "def test_live_evidence_rejects_source_event_transaction_malformed_signature",
+            "def test_live_evidence_rejects_source_event_transaction_high_s_signature",
+            "def test_live_evidence_rejects_source_event_signature_with_internal_whitespace",
+            "def test_live_evidence_rejects_source_event_transaction_wrong_signature_signer",
+            "def test_live_evidence_rejects_padded_source_event_log_address",
+            "def test_live_evidence_rejects_source_event_log_address_with_internal_whitespace",
+            "def test_live_evidence_rejects_padded_source_event_log_topic",
+            "def test_live_evidence_rejects_padded_source_event_raw_data_hex",
+            "def test_live_evidence_rejects_uppercase_source_event_raw_data_hex",
+            "def test_live_evidence_rejects_padded_source_event_signature",
+            "def test_live_evidence_rejects_padded_source_event_trigger_calldata",
+            "def test_live_evidence_rejects_source_event_trigger_calldata_with_internal_whitespace",
+            "def test_live_evidence_rejects_uppercase_source_event_trigger_calldata",
+            "def test_live_evidence_rejects_non_canonical_source_event_log_data_prefix",
+            "def test_live_evidence_rejects_source_event_transaction_wrong_owner",
+            "def test_live_evidence_rejects_source_event_transaction_failed_ret",
+            "def test_live_evidence_rejects_source_event_transaction_failed_ret_enum",
+            "def test_live_evidence_rejects_source_event_transaction_multiple_ret_results",
+            "def test_live_evidence_rejects_source_event_transaction_wrong_calldata",
+            "def test_live_evidence_rejects_source_event_transaction_with_extra_topics",
+            "def test_live_evidence_rejects_mismatched_source_config_hash",
+            "def test_live_evidence_rejects_constant_result_without_success_flag",
+            "def test_live_evidence_rejects_padded_constant_result_word",
+            "def test_live_evidence_rejects_non_production_source_lane",
+            "def test_live_evidence_rejects_mismatched_destination_binding_hash",
+            "def test_live_evidence_rejects_expected_destination_binding_hash_mismatch",
+            "def test_live_evidence_rejects_programmatic_malformed_hex32_bytes",
+            "def test_live_evidence_rejects_source_destination_network_id_drift",
+            "def test_live_evidence_rejects_destination_bytecode_metadata_mismatch",
+            "def test_live_evidence_rejects_destination_backend_hash_mismatch",
+            "def test_live_evidence_rejects_destination_proof_family_hash_mismatch",
+            "def test_live_evidence_rejects_missing_destination_bytecode_metadata",
+            "def test_live_evidence_rejects_mismatched_destination_metadata_address",
+            "def test_live_evidence_rejects_malformed_destination_metadata_address",
+            "def test_live_evidence_rejects_malformed_destination_metadata_bytecode",
+            "def test_live_evidence_sends_runtime_trongrid_api_key_file_without_printing_it",
+            "def test_live_evidence_full_toml_replay_requires_route_canary_block_metadata",
+            "def test_live_evidence_rejects_expected_tron_dpos_source_gate_hash_mismatch",
+            "def test_tron_route_canary_evidence_hash_rejects_invalid_transcript_fields",
+            "def test_live_evidence_rejects_route_canary_wrong_trigger_contract",
+            "def test_live_evidence_rejects_uppercase_route_canary_trigger_calldata",
+            "def test_live_evidence_rejects_route_canary_wrong_submit_selector",
+            "def test_live_evidence_rejects_route_canary_public_input_drift",
+            "def test_live_evidence_rejects_route_canary_proof_header_drift",
+            "def test_live_evidence_rejects_expected_source_record_hash_mismatch",
+            "def test_live_evidence_rejects_expected_source_config_hash_mismatch",
+            "def test_live_evidence_rejects_missing_source_bytecode_metadata",
+            "def test_live_evidence_rejects_mismatched_source_metadata_address",
+            "def test_live_evidence_rejects_malformed_source_metadata_address",
+            "def test_live_evidence_rejects_malformed_source_metadata_bytecode",
+            "def test_live_evidence_rejects_padded_source_metadata_bytecode",
+            "def test_live_evidence_rejects_source_code_hash_metadata_mismatch",
+            "def test_live_evidence_rejects_missing_source_bytecode_for_record_preflight",
+            "def test_live_evidence_rejects_route_allowlist_hash_drift",
+            "def test_live_evidence_emits_source_event_call_data_and_replay_args",
+            "def test_live_evidence_source_event_replay_args_revalidate_call_binding",
+            "def test_live_evidence_rejects_already_submitted_source_event_digest",
+            "def test_live_evidence_source_event_replay_requires_block_metadata_binding",
+            "def test_live_evidence_rejects_source_event_explicit_log_index_mismatch",
+            "def test_live_evidence_rejects_source_event_snake_log_index_mismatch",
+            "def test_live_evidence_rejects_source_event_duplicate_log_index_aliases",
+            "def test_live_evidence_rejects_source_event_info_conflicting_txid_aliases",
+            "def test_live_evidence_source_event_replay_args_revalidate_transaction_summary",
+            "def test_live_evidence_rejects_boolean_source_event_block_number",
+            "def test_live_evidence_rejects_missing_source_event_block_timestamp",
+            "def test_live_evidence_rejects_source_event_transaction_info_timestamp_drift",
+            "def test_live_evidence_rejects_source_event_block_missing_transaction",
+            "def test_live_evidence_rejects_source_event_block_conflicting_txid_aliases",
+            "def test_live_evidence_rejects_source_event_conflicting_txid_aliases",
+            "def test_live_evidence_rejects_source_event_transaction_without_txid_alias",
+            "def test_live_evidence_rejects_source_event_transaction_without_matching_log",
+            "def test_live_evidence_rejects_duplicate_source_event_transaction_logs",
+            "def test_live_evidence_rejects_route_canary_hash_mismatch",
+            "def test_live_evidence_rejects_route_canary_destination_binding_mismatch",
+            "def test_live_evidence_rejects_duplicate_route_canary_transaction_logs",
+            "def test_live_evidence_rejects_route_canary_explicit_log_index_mismatch",
+            "def test_live_evidence_rejects_route_canary_snake_log_index_mismatch",
+            "def test_live_evidence_rejects_route_canary_duplicate_log_index_aliases",
+            "def test_live_evidence_rejects_route_canary_info_conflicting_txid_aliases",
+            "def test_live_evidence_rejects_route_canary_missing_block_number",
+            "def test_live_evidence_rejects_route_canary_missing_block_timestamp",
+            "def test_live_evidence_rejects_route_canary_missing_used_message_state",
+            "def test_live_evidence_rejects_route_canary_raw_data_owner_mismatch",
+            "def test_live_evidence_rejects_route_canary_conflicting_txid_aliases",
+            "def test_live_evidence_rejects_route_canary_transaction_without_txid_alias",
+            "def test_live_evidence_rejects_route_canary_multiple_signatures",
+            "def test_live_evidence_rejects_route_canary_malformed_signature",
+            "def test_live_evidence_rejects_route_canary_high_s_signature",
+            "def test_live_evidence_rejects_route_canary_wrong_signature_signer",
             "def test_tron_recoverable_signature_rejects_legacy_recovery_id_aliases",
             "def test_live_evidence_rejects_source_event_transaction_legacy_recovery_id_aliases",
             "def test_live_evidence_rejects_route_canary_legacy_recovery_id_aliases",
@@ -20762,7 +23220,7 @@ def _source_adapter_gate_hash_key_for_domain_chain_or_errors(
 
     try:
         key = _source_adapter_gate_hash_key_for_domain_chain(domain, chain)
-        if key is not None and not isinstance(key, str):
+        if key is not None and type(key) is not str:
             raise TypeError("source adapter gate hash key must be a string")
         return key, []
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -20839,7 +23297,7 @@ def _source_adapter_gate_template_audit_errors(
     domain: Any,
     audit_hashes: Any,
 ) -> list[str]:
-    if type(domain) is not int or not isinstance(audit_hashes, dict):
+    if type(domain) is not int or type(audit_hashes) is not dict:
         return []
     audit_hashes = _public_mapping_string_view(audit_hashes)
     (
@@ -20886,7 +23344,7 @@ def _source_record_template_hash_errors(
 ) -> list[str]:
     """Return errors for copied source-record hashes that replay templates."""
 
-    if type(domain) is not int or not isinstance(source_hashes, dict):
+    if type(domain) is not int or type(source_hashes) is not dict:
         return []
     source_hashes = _public_mapping_string_view(source_hashes)
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
@@ -20924,7 +23382,7 @@ def _source_record_hash_role_errors(
 ) -> list[str]:
     """Return errors for copied source-record hashes that reuse another role."""
 
-    if not isinstance(source_hashes, dict):
+    if type(source_hashes) is not dict:
         return []
     source_hashes = _public_mapping_string_view(source_hashes)
     return _distinct_nonzero_hex_field_errors(
@@ -20950,7 +23408,7 @@ def _route_canary_template_hash_errors(
 ) -> list[str]:
     """Return errors for route-canary hashes replaying templates."""
 
-    if type(domain) is not int or not isinstance(row, dict):
+    if type(domain) is not int or type(row) is not dict:
         return []
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
         label,
@@ -20984,7 +23442,7 @@ def _all_lanes_route_canary_template_hash_errors(
 ) -> list[str]:
     """Return errors for copied route-canary hashes replaying templates."""
 
-    if type(domain) is not int or not isinstance(route_canary, dict):
+    if type(domain) is not int or type(route_canary) is not dict:
         return []
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
         label,
@@ -21021,7 +23479,7 @@ def _all_lanes_template_hash_errors(
 ) -> list[str]:
     """Return errors for all-lanes hashes replaying source templates."""
 
-    if type(domain) is not int or not isinstance(row, dict):
+    if type(domain) is not int or type(row) is not dict:
         return []
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
         label,
@@ -21034,7 +23492,7 @@ def _all_lanes_template_hash_errors(
         value = row.get(field)
         if not _is_canonical_fixed_hex_text(value, byte_length=32):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             errors.append(
                 f"{label} {field} must be {evidence_label}, "
@@ -21158,7 +23616,7 @@ def _all_lanes_route_canary_not_ready_proof_context_semantic_errors(
 
     def require_positive_decimal_string(field: str) -> None:
         value = route_canary.get(field)
-        if field in route_canary and isinstance(value, str):
+        if field in route_canary and type(value) is str:
             if not _is_canonical_decimal_text(value, positive=True):
                 errors.append(
                     f"{label} {field} must be a canonical positive decimal string"
@@ -21223,7 +23681,7 @@ def _all_lanes_route_canary_not_ready_hash_role_errors(
 
     role_fields: list[tuple[str, Any]] = []
     source_hashes = lane.get("source_record_hashes")
-    if isinstance(source_hashes, dict):
+    if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         role_fields.extend(
             (
@@ -21318,7 +23776,7 @@ def _all_lanes_not_ready_nested_schema_errors(
 
     errors: list[str] = []
     records = lane.get("records")
-    record_flags = records if isinstance(records, dict) else {}
+    record_flags = records if type(records) is dict else {}
     copied_source_records_present = (
         record_flags.get("source_verifier_material") is True
         and record_flags.get("source_adapter_deployment") is True
@@ -21328,7 +23786,7 @@ def _all_lanes_not_ready_nested_schema_errors(
     )
     copied_route_record_present = record_flags.get("route_allowlist") is True
     source_hashes = lane.get("source_record_hashes")
-    if isinstance(source_hashes, dict):
+    if type(source_hashes) is dict:
         source_hashes_label = f"{lane_label} source_record_hashes"
         source_hashes_require_structure = (
             copied_source_records_present or bool(source_hashes)
@@ -21360,7 +23818,7 @@ def _all_lanes_not_ready_nested_schema_errors(
             )
 
     source_gate = lane.get("source_adapter_gate")
-    if isinstance(source_gate, dict):
+    if type(source_gate) is dict:
         source_gate_label = f"{lane_label} source_adapter_gate"
         errors.extend(
             _all_lanes_unknown_key_errors(
@@ -21389,9 +23847,9 @@ def _all_lanes_not_ready_nested_schema_errors(
             )
         )
         audit_hashes = source_gate.get("audit_hashes")
-        if "audit_hashes" in source_gate and not isinstance(audit_hashes, dict):
+        if "audit_hashes" in source_gate and type(audit_hashes) is not dict:
             errors.append(f"{source_gate_label} audit_hashes is not an object")
-        elif isinstance(audit_hashes, dict):
+        elif type(audit_hashes) is dict:
             audit_label = f"{source_gate_label} audit_hashes"
             audit_keys = ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN.get(
                 domain,
@@ -21431,7 +23889,7 @@ def _all_lanes_not_ready_nested_schema_errors(
         )
 
     evm_metadata = lane.get("evm_live_metadata")
-    if isinstance(evm_metadata, dict):
+    if type(evm_metadata) is dict:
         metadata_label = f"{lane_label} evm_live_metadata"
         errors.extend(
             _all_lanes_unknown_key_errors(
@@ -21466,7 +23924,7 @@ def _all_lanes_not_ready_nested_schema_errors(
             )
 
     destination_binding = lane.get("destination_binding")
-    if isinstance(destination_binding, dict):
+    if type(destination_binding) is dict:
         destination_label = f"{lane_label} destination_binding"
         destination_binding_require_structure = (
             copied_destination_record_present or bool(destination_binding)
@@ -21564,7 +24022,7 @@ def _all_lanes_not_ready_nested_schema_errors(
         )
 
     route_allowlist = lane.get("route_allowlist")
-    if isinstance(route_allowlist, dict):
+    if type(route_allowlist) is dict:
         route_label = f"{lane_label} route_allowlist"
         route_allowlist_require_structure = (
             copied_route_record_present or bool(route_allowlist)
@@ -21622,9 +24080,9 @@ def _all_lanes_not_ready_nested_schema_errors(
             )
         )
         route_canary = route_allowlist.get("route_canary")
-        if "route_canary" in route_allowlist and not isinstance(route_canary, dict):
+        if "route_canary" in route_allowlist and type(route_canary) is not dict:
             errors.append(f"{route_label} route_canary is not an object")
-        elif isinstance(route_canary, dict):
+        elif type(route_canary) is dict:
             canary_label = f"{route_label} route_canary"
             canary_keys = ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN.get(
                 domain,
@@ -21706,7 +24164,7 @@ def _all_lanes_not_ready_nested_schema_errors(
                     byte_length=32,
                 )
             )
-            if isinstance(destination_binding, dict):
+            if type(destination_binding) is dict:
                 errors.extend(
                     _matching_nonzero_fixed_hex_field_errors(
                         canary_label,
@@ -21744,7 +24202,7 @@ def _all_lanes_not_ready_nested_schema_errors(
                     domain,
                     lane,
                     route_allowlist,
-                    destination_binding if isinstance(destination_binding, dict) else {},
+                    destination_binding if type(destination_binding) is dict else {},
                     route_canary,
                 )
             )
@@ -21760,7 +24218,7 @@ def _all_lanes_not_ready_template_hash_errors(
 
     errors: list[str] = []
     source_hashes = lane.get("source_record_hashes")
-    if isinstance(source_hashes, dict):
+    if type(source_hashes) is dict:
         errors.extend(
             _source_record_template_hash_errors(
                 f"{lane_label} source_record_hashes",
@@ -21770,7 +24228,7 @@ def _all_lanes_not_ready_template_hash_errors(
         )
 
     source_gate = lane.get("source_adapter_gate")
-    if isinstance(source_gate, dict):
+    if type(source_gate) is dict:
         errors.extend(
             _source_adapter_gate_template_hash_errors(
                 f"{lane_label} source_adapter_gate gate_hash",
@@ -21779,7 +24237,7 @@ def _all_lanes_not_ready_template_hash_errors(
             )
         )
         audit_hashes = source_gate.get("audit_hashes")
-        if isinstance(audit_hashes, dict):
+        if type(audit_hashes) is dict:
             errors.extend(
                 _source_adapter_gate_template_audit_errors(
                     f"{lane_label} source_adapter_gate audit_hashes",
@@ -21789,7 +24247,7 @@ def _all_lanes_not_ready_template_hash_errors(
             )
 
     destination_binding = lane.get("destination_binding")
-    if isinstance(destination_binding, dict):
+    if type(destination_binding) is dict:
         errors.extend(
             _all_lanes_template_hash_errors(
                 f"{lane_label} destination_binding",
@@ -21804,7 +24262,7 @@ def _all_lanes_not_ready_template_hash_errors(
         )
 
     route_allowlist = lane.get("route_allowlist")
-    if isinstance(route_allowlist, dict):
+    if type(route_allowlist) is dict:
         errors.extend(
             _all_lanes_template_hash_errors(
                 f"{lane_label} route_allowlist",
@@ -21818,7 +24276,7 @@ def _all_lanes_not_ready_template_hash_errors(
             )
         )
         route_canary = route_allowlist.get("route_canary")
-        if isinstance(route_canary, dict):
+        if type(route_canary) is dict:
             errors.extend(
                 _all_lanes_route_canary_template_hash_errors(
                     f"{lane_label} route_allowlist route_canary",
@@ -22159,7 +24617,7 @@ def _artifact(path: Path) -> dict[str, Any]:
 
 def _is_canonical_sha256_text(value: Any) -> bool:
     return (
-        isinstance(value, str)
+        type(value) is str
         and len(value) == 64
         and all(symbol in "0123456789abcdef" for symbol in value)
     )
@@ -22182,13 +24640,13 @@ def _native_evm_prover_artifact_metadata_blockers(
     label: str,
 ) -> list[str]:
     prefix = f"native EVM Groth16 prover bundle {label}"
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return [f"{prefix} artifact metadata must be an object"]
 
     blockers: list[str] = []
     artifact_path = artifact.get("path")
     if (
-        not isinstance(artifact_path, str)
+        type(artifact_path) is not str
         or not artifact_path
         or artifact_path.strip() != artifact_path
         or _path_control_character(artifact_path) is not None
@@ -22223,7 +24681,7 @@ def _all_lanes_module() -> Any:
 
 def _canonical_artifact_path(artifact: dict[str, Any]) -> tuple[str | None, list[str]]:
     artifact_path = _public_mapping_get_string_key(artifact, "path")
-    if not isinstance(artifact_path, str) or not artifact_path:
+    if type(artifact_path) is not str or not artifact_path:
         return None, ["manifest artifact has no path"]
     if artifact_path.strip() != artifact_path:
         return None, ["manifest artifact path must not contain surrounding whitespace"]
@@ -22261,7 +24719,7 @@ def _canonical_artifact_path(artifact: dict[str, Any]) -> tuple[str | None, list
 
 
 def _canonical_report_input_path_errors(value: Any) -> list[str]:
-    if not isinstance(value, str) or not value:
+    if type(value) is not str or not value:
         return ["readiness report inputs item must be a non-empty string"]
     if value.strip() != value:
         return [
@@ -22341,7 +24799,7 @@ def _canonical_report_artifact_path_errors(label: str, value: str) -> list[str]:
 
 
 def _copied_input_layout_errors(label: str, index: int, value: Any) -> list[str]:
-    if not isinstance(value, str) or _canonical_report_input_path_errors(value):
+    if type(value) is not str or _canonical_report_input_path_errors(value):
         return []
     expected_prefix = f"{index:02d}-"
     path = PurePosixPath(value)
@@ -22455,9 +24913,9 @@ def _manifest_artifacts_by_path(
     by_path: dict[str, dict[str, Any]] = {}
     duplicate_paths: set[str] = set()
     duplicate_count = 0
-    artifact_values = artifacts if isinstance(artifacts, list) else [None]
+    artifact_values = artifacts if type(artifacts) is list else [None]
     for artifact in artifact_values:
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         artifact_path, path_errors = _canonical_artifact_path(artifact)
         if path_errors or artifact_path is None:
@@ -22594,11 +25052,11 @@ def _check_report_artifact(
     *,
     label: str,
 ) -> None:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         errors.append(f"{label} artifact is not an object")
         return
     artifact_path = _public_mapping_get_string_key(artifact, "path")
-    if not isinstance(artifact_path, str) or not artifact_path:
+    if type(artifact_path) is not str or not artifact_path:
         errors.append(f"{label} artifact has no path")
         return
     for key in _public_unknown_mapping_fields(artifact, ARTIFACT_KEYS):
@@ -23070,12 +25528,12 @@ def _phase_transcript_artifact_path(
     bundle_dir: Path,
     artifact: Any,
 ) -> tuple[Path | None, list[str]]:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return None, [
             "readiness report phase transcript cannot be checked: malformed artifact row"
         ]
     artifact_path = artifact.get("path")
-    if not isinstance(artifact_path, str) or not artifact_path:
+    if type(artifact_path) is not str or not artifact_path:
         return None, [
             "readiness report phase transcript cannot be checked: missing artifact path"
         ]
@@ -23894,6 +26352,12 @@ def _source_escape_decoded_text(value: str) -> str:
     """Decode common source string escapes for source-inventory token scans."""
 
     def replace(match: re.Match[str]) -> str:
+        octal_text = match.group("octal")
+        if octal_text is not None:
+            try:
+                return chr(int(octal_text, 8))
+            except ValueError:
+                return match.group(0)
         hex_text = next(group for group in match.groups() if group is not None)
         try:
             return chr(int(hex_text, 16))
@@ -23920,7 +26384,161 @@ def _sccp_unready_transparent_proof_cargo_manifest_paths(
                 continue
             seen.add(resolved_path)
             paths.append(path)
+    for current_root, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if dirname not in SCCP_UNREADY_TRANSPARENT_PROOF_IGNORED_CARGO_MANIFEST_DIRS
+        ]
+        if "Cargo.toml" not in filenames:
+            continue
+        path = Path(current_root) / "Cargo.toml"
+        if path in seen:
+            continue
+        seen.add(path)
+        paths.append(path)
     return tuple(paths)
+
+
+def _sccp_cargo_dependency_window_lines(
+    lines: list[str],
+    start_index: int,
+) -> str:
+    section_index = 0
+    current_section = ""
+    for index in range(start_index, -1, -1):
+        header_match = CARGO_TOML_SECTION_HEADER_PATTERN.match(lines[index])
+        if header_match:
+            section_index = index
+            current_section = header_match.group(1).strip()
+            break
+
+    decoded_section = _source_escape_decoded_text(current_section)
+    dependency_table_section = (
+        decoded_section.startswith("dependencies.")
+        or decoded_section.startswith("dev-dependencies.")
+        or decoded_section.startswith("workspace.dependencies.")
+        or ".dependencies." in decoded_section
+        or ".dev-dependencies." in decoded_section
+    )
+    if dependency_table_section:
+        last_index = min(len(lines), section_index + 128)
+        for index in range(section_index + 1, last_index):
+            if CARGO_TOML_SECTION_HEADER_PATTERN.match(lines[index]):
+                last_index = index
+                break
+        return "\n".join(lines[section_index:last_index])
+
+    first_index = start_index
+    for index in range(start_index, section_index, -1):
+        line = lines[index]
+        first_index = index
+        if index != start_index and "=" in line and "{" in line:
+            break
+
+    window: list[str] = []
+    brace_balance = 0
+    saw_brace = False
+    for line in lines[first_index : min(len(lines), first_index + 128)]:
+        if window and CARGO_TOML_SECTION_HEADER_PATTERN.match(line):
+            break
+        window.append(line)
+        saw_brace = saw_brace or "{" in line
+        brace_balance += line.count("{") - line.count("}")
+        if saw_brace and brace_balance <= 0:
+            break
+    return "\n".join(window)
+
+
+def _sccp_cargo_feature_window_lines(
+    lines: list[str],
+    start_index: int,
+) -> str:
+    """Return the Cargo feature assignment surrounding a suspicious line."""
+
+    first_index = start_index
+    for index in range(start_index, -1, -1):
+        if CARGO_TOML_SECTION_HEADER_PATTERN.match(lines[index]):
+            break
+        first_index = index
+        if "=" in lines[index]:
+            break
+
+    window: list[str] = []
+    bracket_balance = 0
+    saw_array = False
+    for line in lines[first_index : min(len(lines), first_index + 128)]:
+        if window and CARGO_TOML_SECTION_HEADER_PATTERN.match(line):
+            break
+        if window and "=" in line and bracket_balance <= 0:
+            break
+        window.append(line)
+        saw_array = saw_array or "[" in line
+        bracket_balance += line.count("[") - line.count("]")
+        if saw_array and bracket_balance <= 0:
+            break
+    return "\n".join(window)
+
+
+def _sccp_cargo_dependency_alias_identifiers(lines: list[str]) -> set[str]:
+    """Return Cargo dependency aliases that resolve to the SCCP crate."""
+
+    aliases = {_source_identifier_scan_text("iroha_sccp")}
+    current_section = ""
+    for line_number, line in enumerate(lines, 1):
+        header_match = CARGO_TOML_SECTION_HEADER_PATTERN.match(line)
+        if header_match:
+            current_section = header_match.group(1).strip()
+
+        decoded_section = _source_escape_decoded_text(current_section)
+        section_identifier = _source_identifier_scan_text(decoded_section)
+        if "dependencies" not in section_identifier:
+            continue
+
+        window = _sccp_cargo_dependency_window_lines(lines, line_number - 1)
+        window_identifier = _source_identifier_scan_text(
+            _source_escape_decoded_text(window)
+        )
+        if "irohasccp" not in window_identifier:
+            continue
+
+        decoded_line = _source_escape_decoded_text(line)
+        if "=" in decoded_line:
+            alias = decoded_line.split("=", 1)[0].strip().strip("'\"")
+            alias_identifier = _source_identifier_scan_text(alias)
+            if alias_identifier:
+                aliases.add(alias_identifier)
+
+        dependency_table_section = (
+            decoded_section.startswith("dependencies.")
+            or decoded_section.startswith("dev-dependencies.")
+            or ".dependencies." in decoded_section
+            or ".dev-dependencies." in decoded_section
+        )
+        if dependency_table_section:
+            alias = decoded_section.rsplit(".", 1)[-1].strip().strip("'\"")
+            alias_identifier = _source_identifier_scan_text(alias)
+            if alias_identifier:
+                aliases.add(alias_identifier)
+    return aliases
+
+
+def _sccp_cargo_feature_window_enables_sccp_test_fixtures(
+    window: str,
+    sccp_dependency_aliases: set[str],
+) -> bool:
+    """Return true if a Cargo feature aliases into iroha_sccp/test-fixtures."""
+
+    decoded_window = _source_escape_decoded_text(window)
+    compact_window = "".join(
+        character
+        for character in decoded_window.casefold()
+        if character.isascii() and (character.isalnum() or character == "/")
+    )
+    return any(
+        f"{alias}/testfixtures" in compact_window
+        for alias in sccp_dependency_aliases
+    )
 
 
 def _sccp_unready_transparent_proof_test_fixture_feature_errors(
@@ -23961,25 +26579,799 @@ def _sccp_unready_transparent_proof_test_fixture_feature_errors(
             continue
 
         current_section = ""
-        for line_number, line in enumerate(source.splitlines(), 1):
+        reported_until = 0
+        lines = source.splitlines()
+        sccp_dependency_aliases = _sccp_cargo_dependency_alias_identifiers(lines)
+        for line_number, line in enumerate(lines, 1):
             header_match = CARGO_TOML_SECTION_HEADER_PATTERN.match(line)
             if header_match:
                 current_section = header_match.group(1).strip()
-            if "iroha_sccp" not in line or "test-fixtures" not in line:
+            if line_number <= reported_until:
                 continue
+            section_identifier = _source_identifier_scan_text(
+                _source_escape_decoded_text(current_section)
+            )
+            line_identifier_text = _source_identifier_scan_text(
+                _source_escape_decoded_text(line)
+            )
+            if section_identifier == "features":
+                if not any(
+                    token in line_identifier_text
+                    for token in ("irohasccp", "testfixtures")
+                ) and not any(
+                    alias in line_identifier_text
+                    for alias in sccp_dependency_aliases
+                ):
+                    continue
+
+                window = _sccp_cargo_feature_window_lines(lines, line_number - 1)
+                if _sccp_cargo_feature_window_enables_sccp_test_fixtures(
+                    window,
+                    sccp_dependency_aliases,
+                ):
+                    reported_until = min(len(lines), line_number + 11)
+                    errors.append(
+                        "SCCP unready transparent-proof removed-surface source "
+                        f"inventory {display_path}:{line_number} enables "
+                        "iroha_sccp test-fixtures through Cargo feature alias "
+                        "outside approved dev-dependencies: "
+                        f"{line.strip()}"
+                    )
+                continue
+
+            if "dependencies" not in section_identifier:
+                continue
+
+            if not any(
+                token in line_identifier_text for token in ("irohasccp", "testfixtures")
+            ):
+                continue
+
             stripped_line = line.strip()
             if (
-                display_path,
-                current_section,
-                stripped_line,
-            ) in SCCP_UNREADY_TRANSPARENT_PROOF_ALLOWED_TEST_FIXTURE_CARGO_DEPENDENCIES:
+                "irohasccp" in line_identifier_text
+                and "testfixtures" in line_identifier_text
+            ):
+                if (
+                    display_path,
+                    current_section,
+                    stripped_line,
+                ) in SCCP_UNREADY_TRANSPARENT_PROOF_ALLOWED_TEST_FIXTURE_CARGO_DEPENDENCIES:
+                    continue
+                errors.append(
+                    "SCCP unready transparent-proof removed-surface source inventory "
+                    f"{display_path}:{line_number} enables iroha_sccp test-fixtures "
+                    f"outside approved dev-dependencies: {stripped_line}"
+                )
                 continue
-            errors.append(
-                "SCCP unready transparent-proof removed-surface source inventory "
-                f"{display_path}:{line_number} enables iroha_sccp test-fixtures "
-                f"outside dev-dependencies: {stripped_line}"
+
+            window = _sccp_cargo_dependency_window_lines(lines, line_number - 1)
+            window_identifier = _source_identifier_scan_text(
+                _source_escape_decoded_text(window)
             )
+            if (
+                "irohasccp" in window_identifier
+                and "testfixtures" in window_identifier
+            ):
+                reported_until = min(len(lines), line_number + 11)
+                errors.append(
+                    "SCCP unready transparent-proof removed-surface source inventory "
+                    f"{display_path}:{line_number} enables iroha_sccp "
+                    "test-fixtures outside approved dev-dependencies: "
+                    f"{line.strip()}"
+                )
     return errors
+
+
+def _sccp_release_command_window_lines(
+    lines: list[str],
+    start_index: int,
+) -> tuple[int, int, str]:
+    first_index = start_index
+    for index in range(start_index - 1, max(-1, start_index - 64), -1):
+        if not lines[index].strip():
+            break
+        first_index = index
+
+    last_index = min(len(lines), start_index + 128)
+    for index in range(start_index + 1, last_index):
+        if not lines[index].strip():
+            last_index = index
+            break
+    return first_index, last_index, "\n".join(lines[first_index:last_index])
+
+
+def _sccp_release_command_enables_test_fixture_features(
+    decoded_text: str,
+    identifier_text: str,
+    full_source_identifier_text: str,
+    feature_variables: set[str],
+    feature_flag_variables: set[str],
+    test_fixture_value_variables: set[str],
+    positional_args_enable_features: bool,
+) -> bool:
+    if CARGO_ALL_FEATURES_FLAG_PATTERN.search(decoded_text) is not None:
+        return True
+    if (
+        positional_args_enable_features
+        and _source_references_shell_positional_args(decoded_text)
+    ):
+        return True
+    if any(
+        _source_references_shell_variable(decoded_text, variable)
+        for variable in feature_variables
+    ):
+        return True
+    if any(
+        _source_references_shell_variable(decoded_text, variable)
+        for variable in feature_flag_variables
+    ) and any(
+        _source_references_shell_variable(decoded_text, variable)
+        for variable in test_fixture_value_variables
+    ):
+        return True
+    if "testfixtures" in identifier_text and (
+        "features" in identifier_text
+        or CARGO_FEATURE_FLAG_PATTERN.search(decoded_text) is not None
+    ):
+        return True
+    return (
+        "testfixtures" in full_source_identifier_text
+        and CARGO_FEATURE_FLAG_PATTERN.search(decoded_text) is not None
+    )
+
+
+def _source_references_shell_variable(decoded_text: str, variable: str) -> bool:
+    escaped_variable = re.escape(variable)
+    braced_reference = (
+        r"\{"
+        + r"!?"
+        + escaped_variable
+        + r"(?:\[[^\]]+\])?(?:[^A-Za-z0-9_}][^}]*)?\}"
+    )
+    return (
+        re.search(
+            rf"\$(?:{escaped_variable}(?![A-Za-z0-9_])|{braced_reference})",
+            decoded_text,
+        )
+        is not None
+    )
+
+
+def _shell_assignment_value_names_variable(value: str, variable: str) -> bool:
+    stripped = value.strip()
+    if stripped.startswith("$'") and stripped.endswith("'"):
+        stripped = stripped[2:-1]
+    elif (
+        (stripped.startswith('"') and stripped.endswith('"'))
+        or (stripped.startswith("'") and stripped.endswith("'"))
+    ):
+        stripped = stripped[1:-1]
+    return stripped == variable
+
+
+def _source_references_shell_positional_args(decoded_text: str) -> bool:
+    return (
+        re.search(r"\$(?:[@*](?![A-Za-z0-9_])|\{[@*][^}]*\})", decoded_text)
+        is not None
+    )
+
+
+def _record_shell_variable_assignment(
+    assignments: dict[str, str],
+    name: str,
+    value: str,
+    *,
+    append: bool,
+) -> None:
+    value = SHELL_ASSIGNMENT_WORD_SEPARATOR_ESCAPE_PATTERN.sub(" ", value)
+    if append and name in assignments:
+        assignments[name] = f"{assignments[name]} {value}"
+    else:
+        assignments[name] = value
+
+
+def _shell_continued_command_part(line: str) -> str:
+    part = line.strip()
+    if part.endswith("\\"):
+        return part[:-1].rstrip()
+    return part
+
+
+def _shell_printf_v_assignment(line: str) -> tuple[str, str] | None:
+    if SHELL_PRINTF_V_COMMAND_PATTERN.match(line) is None:
+        return None
+    try:
+        tokens = shlex.split(line, comments=True)
+    except ValueError:
+        return None
+    if tokens[:1] in (["builtin"], ["command"]):
+        tokens = tokens[1:]
+    if not tokens or tokens[0] != "printf":
+        return None
+    for index, token in enumerate(tokens[1:], 1):
+        if token == "-v" and index + 1 < len(tokens):
+            name = tokens[index + 1]
+            if SHELL_VARIABLE_NAME_PATTERN.match(name) is None:
+                return None
+            return name, " ".join(tokens[index + 2 :])
+        if token.startswith("-v") and len(token) > 2:
+            name = token[2:]
+            if SHELL_VARIABLE_NAME_PATTERN.match(name) is None:
+                return None
+            return name, " ".join(tokens[index + 1 :])
+    return None
+
+
+def _shell_read_here_string_assignment(line: str) -> tuple[str, str] | None:
+    match = SHELL_READ_HERE_STRING_ASSIGNMENT_PATTERN.match(line)
+    if match is None:
+        return None
+    return match.group("name"), match.group("value")
+
+
+def _shell_readarray_assignment(line: str) -> tuple[str, str] | None:
+    match = SHELL_READARRAY_ASSIGNMENT_PATTERN.match(line)
+    if match is None:
+        return None
+    return match.group("name"), match.group("value")
+
+
+def _shell_for_loop_assignment(line: str) -> tuple[str, str] | None:
+    match = SHELL_FOR_LOOP_ASSIGNMENT_PATTERN.match(line)
+    if match is None:
+        return None
+    value = match.group("value").strip()
+    value = re.split(r"\s*;\s*do(?:\s+|$)", value, maxsplit=1)[0]
+    if value.endswith(" do"):
+        value = value[:-3].rstrip()
+    return match.group("name"), value
+
+
+def _shell_variable_assignments(decoded_text: str) -> dict[str, str]:
+    assignments: dict[str, str] = {}
+    pending_name: str | None = None
+    pending_append = False
+    pending_parts: list[str] = []
+    pending_terminator = ")"
+    pending_printf_parts: list[str] = []
+    pending_for_parts: list[str] = []
+    for line in decoded_text.splitlines():
+        if pending_name is not None:
+            pending_parts.append(line)
+            if pending_terminator in line:
+                _record_shell_variable_assignment(
+                    assignments,
+                    pending_name,
+                    " ".join(pending_parts),
+                    append=pending_append,
+                )
+                pending_name = None
+                pending_append = False
+                pending_parts = []
+                pending_terminator = ")"
+            continue
+        if pending_printf_parts:
+            pending_printf_parts.append(_shell_continued_command_part(line))
+            if not line.rstrip().endswith("\\"):
+                printf_assignment = _shell_printf_v_assignment(
+                    " ".join(pending_printf_parts)
+                )
+                if printf_assignment is not None:
+                    name, value = printf_assignment
+                    _record_shell_variable_assignment(
+                        assignments,
+                        name,
+                        value,
+                        append=False,
+                    )
+                pending_printf_parts = []
+            continue
+        if pending_for_parts:
+            pending_for_parts.append(_shell_continued_command_part(line))
+            if not line.rstrip().endswith("\\"):
+                for_assignment = _shell_for_loop_assignment(" ".join(pending_for_parts))
+                if for_assignment is not None:
+                    name, value = for_assignment
+                    _record_shell_variable_assignment(
+                        assignments,
+                        name,
+                        value,
+                        append=False,
+                    )
+                pending_for_parts = []
+            continue
+        if (
+            SHELL_PRINTF_V_COMMAND_PATTERN.match(line) is not None
+            and line.rstrip().endswith("\\")
+        ):
+            pending_printf_parts = [_shell_continued_command_part(line)]
+            continue
+        printf_assignment = _shell_printf_v_assignment(line)
+        if printf_assignment is not None:
+            name, value = printf_assignment
+            _record_shell_variable_assignment(
+                assignments,
+                name,
+                value,
+                append=False,
+            )
+            continue
+        if (
+            SHELL_FOR_LOOP_ASSIGNMENT_PATTERN.match(line) is not None
+            and line.rstrip().endswith("\\")
+        ):
+            pending_for_parts = [_shell_continued_command_part(line)]
+            continue
+        for_assignment = _shell_for_loop_assignment(line)
+        if for_assignment is not None:
+            name, value = for_assignment
+            _record_shell_variable_assignment(
+                assignments,
+                name,
+                value,
+                append=False,
+            )
+            continue
+        read_assignment = _shell_read_here_string_assignment(line)
+        if read_assignment is not None:
+            name, value = read_assignment
+            _record_shell_variable_assignment(
+                assignments,
+                name,
+                value,
+                append=False,
+            )
+            continue
+        readarray_assignment = _shell_readarray_assignment(line)
+        if readarray_assignment is not None:
+            name, value = readarray_assignment
+            _record_shell_variable_assignment(
+                assignments,
+                name,
+                value,
+                append=False,
+            )
+            continue
+        if SHELL_VARIABLE_ASSIGNMENT_PATTERN.match(line) is None:
+            continue
+        for match in SHELL_VARIABLE_ASSIGNMENT_TOKEN_PATTERN.finditer(line):
+            name = match.group("name")
+            value = match.group("value")
+            append = match.group("operator") == "+=" or match.group("index") is not None
+            if value.startswith("$("):
+                value = line[match.start("value") :]
+                if ")" not in value:
+                    pending_name = name
+                    pending_append = append
+                    pending_parts = [value]
+                    pending_terminator = ")"
+                    break
+                _record_shell_variable_assignment(
+                    assignments,
+                    name,
+                    value,
+                    append=append,
+                )
+                break
+            if value.startswith("`"):
+                value = line[match.start("value") :]
+                if "`" not in value[1:]:
+                    pending_name = name
+                    pending_append = append
+                    pending_parts = [value]
+                    pending_terminator = "`"
+                    break
+                _record_shell_variable_assignment(
+                    assignments,
+                    name,
+                    value,
+                    append=append,
+                )
+                break
+            if value.startswith("(") and ")" not in value:
+                pending_name = name
+                pending_append = append
+                pending_parts = [line[match.start("value") :]]
+                pending_terminator = ")"
+                break
+            _record_shell_variable_assignment(
+                assignments,
+                name,
+                value,
+                append=append,
+            )
+    if pending_name is not None:
+        _record_shell_variable_assignment(
+            assignments,
+            pending_name,
+            " ".join(pending_parts),
+            append=pending_append,
+        )
+    if pending_for_parts:
+        for_assignment = _shell_for_loop_assignment(" ".join(pending_for_parts))
+        if for_assignment is not None:
+            name, value = for_assignment
+            _record_shell_variable_assignment(
+                assignments,
+                name,
+                value,
+                append=False,
+            )
+    if pending_printf_parts:
+        printf_assignment = _shell_printf_v_assignment(" ".join(pending_printf_parts))
+        if printf_assignment is not None:
+            name, value = printf_assignment
+            _record_shell_variable_assignment(
+                assignments,
+                name,
+                value,
+                append=False,
+            )
+    return assignments
+
+
+def _shell_positional_args_assignments(decoded_text: str) -> str:
+    assignments: list[str] = []
+    pending_parts: list[str] = []
+    for line in decoded_text.splitlines():
+        if pending_parts:
+            pending_parts.append(line.strip())
+            if not line.rstrip().endswith("\\"):
+                assignments.append(" ".join(pending_parts))
+                pending_parts = []
+            continue
+        match = SHELL_POSITIONAL_ARGS_ASSIGNMENT_PATTERN.match(line)
+        if match is not None:
+            value = match.group("value").strip()
+            if value.endswith("\\"):
+                pending_parts = [value]
+            else:
+                assignments.append(value)
+    if pending_parts:
+        assignments.append(" ".join(pending_parts))
+    return " ".join(assignments)
+
+
+def _shell_variable_assignments_matching(
+    assignments: dict[str, str],
+    predicate: Callable[[str], bool],
+) -> set[str]:
+    variables: set[str] = set()
+    for name, value in assignments.items():
+        if predicate(value):
+            variables.add(name)
+    return variables
+
+
+def _shell_variable_alias_closure(
+    assignments: dict[str, str],
+    variables: set[str],
+) -> set[str]:
+    expanded_variables = set(variables)
+    changed = True
+    while changed:
+        changed = False
+        for name, value in assignments.items():
+            if name in expanded_variables:
+                continue
+            if any(
+                _source_references_shell_variable(value, variable)
+                or _shell_assignment_value_names_variable(value, variable)
+                for variable in expanded_variables
+            ):
+                expanded_variables.add(name)
+                changed = True
+    return expanded_variables
+
+
+def _sccp_release_command_positional_args_invokes_cargo_test(
+    positional_args: str,
+    test_subcommand_variables: set[str],
+) -> bool:
+    if not positional_args:
+        return False
+    return CARGO_TEST_SUBCOMMAND_PATTERN.search(positional_args) is not None or any(
+        _source_references_shell_variable(positional_args, variable)
+        for variable in test_subcommand_variables
+    )
+
+
+def _sccp_release_command_positional_args_enable_test_fixture_features(
+    decoded_text: str,
+    positional_args: str,
+    feature_variables: set[str],
+    feature_flag_variables: set[str],
+    test_fixture_value_variables: set[str],
+) -> bool:
+    if not positional_args:
+        return False
+    if any(
+        _source_references_shell_variable(positional_args, variable)
+        for variable in feature_variables
+    ):
+        return True
+    if any(
+        _source_references_shell_variable(positional_args, variable)
+        for variable in feature_flag_variables
+    ) and any(
+        _source_references_shell_variable(positional_args, variable)
+        for variable in test_fixture_value_variables
+    ):
+        return True
+    if CARGO_ALL_FEATURES_FLAG_PATTERN.search(positional_args) is not None:
+        return True
+    positional_identifier_text = _source_identifier_scan_text(positional_args)
+    if (
+        "testfixtures" in positional_identifier_text
+        and CARGO_FEATURE_FLAG_PATTERN.search(positional_args) is not None
+    ):
+        return True
+    if CARGO_FEATURE_FLAG_PATTERN.search(positional_args) is None:
+        return False
+    assignments = _shell_variable_assignments(decoded_text)
+    test_fixture_value_variables = _shell_variable_alias_closure(
+        assignments,
+        _shell_variable_assignments_matching(
+            assignments,
+            lambda value: "testfixtures" in _source_identifier_scan_text(value),
+        ),
+    )
+    return any(
+        _source_references_shell_variable(positional_args, variable)
+        for variable in test_fixture_value_variables
+    )
+
+
+def _sccp_release_command_positional_args_target_iroha_sccp(
+    decoded_text: str,
+    positional_args: str,
+    target_variables: set[str],
+    target_flag_variables: set[str],
+    target_value_variables: set[str],
+) -> bool:
+    if not positional_args:
+        return False
+    if any(
+        _source_references_shell_variable(positional_args, variable)
+        for variable in target_variables
+    ):
+        return True
+    if any(
+        _source_references_shell_variable(positional_args, variable)
+        for variable in target_flag_variables
+    ) and any(
+        _source_references_shell_variable(positional_args, variable)
+        for variable in target_value_variables
+    ):
+        return True
+    if (
+        CARGO_PACKAGE_FLAG_PATTERN.search(positional_args) is None
+        and CARGO_MANIFEST_PATH_FLAG_PATTERN.search(positional_args) is None
+    ):
+        return False
+    positional_identifier_text = _source_identifier_scan_text(positional_args)
+    if "irohasccp" in positional_identifier_text:
+        return True
+    assignments = _shell_variable_assignments(decoded_text)
+    target_value_variables = _shell_variable_alias_closure(
+        assignments,
+        _shell_variable_assignments_matching(
+            assignments,
+            lambda value: "irohasccp" in _source_identifier_scan_text(value),
+        ),
+    )
+    return any(
+        _source_references_shell_variable(positional_args, variable)
+        for variable in target_value_variables
+    )
+
+
+def _sccp_release_command_feature_variable_assignments(decoded_text: str) -> set[str]:
+    assignments = _shell_variable_assignments(decoded_text)
+    test_fixture_value_variables = _shell_variable_alias_closure(
+        assignments,
+        _shell_variable_assignments_matching(
+            assignments,
+            lambda value: "testfixtures" in _source_identifier_scan_text(value),
+        ),
+    )
+    feature_variables: set[str] = set()
+
+    def value_enables_test_fixtures(value: str) -> bool:
+        value_identifier_text = _source_identifier_scan_text(value)
+        return CARGO_ALL_FEATURES_FLAG_PATTERN.search(value) is not None or (
+            "testfixtures" in value_identifier_text
+            and CARGO_FEATURE_FLAG_PATTERN.search(value) is not None
+        ) or (
+            CARGO_FEATURE_FLAG_PATTERN.search(value) is not None
+            and any(
+                _source_references_shell_variable(value, variable)
+                for variable in test_fixture_value_variables
+            )
+        )
+
+    changed = True
+    while changed:
+        changed = False
+        for name, value in assignments.items():
+            if name in feature_variables:
+                continue
+            if value_enables_test_fixtures(value) or any(
+                _source_references_shell_variable(value, variable)
+                for variable in feature_variables
+            ):
+                feature_variables.add(name)
+                changed = True
+    return feature_variables
+
+
+def _sccp_release_command_split_feature_variable_assignments(
+    decoded_text: str,
+) -> tuple[set[str], set[str]]:
+    assignments = _shell_variable_assignments(decoded_text)
+    test_fixture_value_variables = _shell_variable_alias_closure(
+        assignments,
+        _shell_variable_assignments_matching(
+            assignments,
+            lambda value: "testfixtures" in _source_identifier_scan_text(value),
+        ),
+    )
+    feature_flag_variables = _shell_variable_alias_closure(
+        assignments,
+        _shell_variable_assignments_matching(
+            assignments,
+            lambda value: CARGO_FEATURE_FLAG_PATTERN.search(value) is not None,
+        ),
+    )
+    return feature_flag_variables, test_fixture_value_variables
+
+
+def _sccp_release_command_test_subcommand_variable_assignments(
+    decoded_text: str,
+) -> set[str]:
+    assignments = _shell_variable_assignments(decoded_text)
+    test_subcommand_variables: set[str] = set()
+
+    changed = True
+    while changed:
+        changed = False
+        for name, value in assignments.items():
+            if name in test_subcommand_variables:
+                continue
+            if CARGO_TEST_SUBCOMMAND_PATTERN.search(value) is not None or any(
+                _source_references_shell_variable(value, variable)
+                for variable in test_subcommand_variables
+            ):
+                test_subcommand_variables.add(name)
+                changed = True
+    return test_subcommand_variables
+
+
+def _sccp_release_command_invokes_cargo_test(
+    decoded_text: str,
+    _identifier_text: str,
+    full_source_decoded_text: str,
+    test_subcommand_variables: set[str],
+    positional_args_invoke_cargo_test: bool,
+) -> bool:
+    cargo_in_scope = (
+        CARGO_COMMAND_NAME_PATTERN.search(decoded_text) is not None
+        or CARGO_COMMAND_NAME_PATTERN.search(full_source_decoded_text) is not None
+    )
+    if not cargo_in_scope:
+        return False
+    if (
+        positional_args_invoke_cargo_test
+        and _source_references_shell_positional_args(decoded_text)
+    ):
+        return True
+    return CARGO_TEST_SUBCOMMAND_PATTERN.search(decoded_text) is not None or any(
+        _source_references_shell_variable(decoded_text, variable)
+        for variable in test_subcommand_variables
+    )
+
+
+def _sccp_release_command_targets_iroha_sccp(
+    decoded_text: str,
+    identifier_text: str,
+    full_source_identifier_text: str,
+    target_variables: set[str],
+    target_flag_variables: set[str],
+    target_value_variables: set[str],
+    positional_args_target_iroha_sccp: bool,
+) -> bool:
+    if "irohasccp" in identifier_text:
+        return True
+    if (
+        positional_args_target_iroha_sccp
+        and _source_references_shell_positional_args(decoded_text)
+    ):
+        return True
+    if any(
+        _source_references_shell_variable(decoded_text, variable)
+        for variable in target_variables
+    ):
+        return True
+    if any(
+        _source_references_shell_variable(decoded_text, variable)
+        for variable in target_flag_variables
+    ) and any(
+        _source_references_shell_variable(decoded_text, variable)
+        for variable in target_value_variables
+    ):
+        return True
+    return (
+        "irohasccp" in full_source_identifier_text
+        and (
+            CARGO_PACKAGE_FLAG_PATTERN.search(decoded_text) is not None
+            or CARGO_MANIFEST_PATH_FLAG_PATTERN.search(decoded_text) is not None
+        )
+    )
+
+
+def _sccp_release_command_target_variable_assignments(decoded_text: str) -> set[str]:
+    assignments = _shell_variable_assignments(decoded_text)
+    target_value_variables = _shell_variable_alias_closure(
+        assignments,
+        _shell_variable_assignments_matching(
+            assignments,
+            lambda value: "irohasccp" in _source_identifier_scan_text(value),
+        ),
+    )
+    target_variables: set[str] = set()
+
+    def value_targets_iroha_sccp(value: str) -> bool:
+        value_identifier_text = _source_identifier_scan_text(value)
+        return "irohasccp" in value_identifier_text and (
+            CARGO_PACKAGE_FLAG_PATTERN.search(value) is not None
+            or CARGO_MANIFEST_PATH_FLAG_PATTERN.search(value) is not None
+        ) or (
+            (
+                CARGO_PACKAGE_FLAG_PATTERN.search(value) is not None
+                or CARGO_MANIFEST_PATH_FLAG_PATTERN.search(value) is not None
+            )
+            and any(
+                _source_references_shell_variable(value, variable)
+                for variable in target_value_variables
+            )
+        )
+
+    changed = True
+    while changed:
+        changed = False
+        for name, value in assignments.items():
+            if name in target_variables:
+                continue
+            if value_targets_iroha_sccp(value) or any(
+                _source_references_shell_variable(value, variable)
+                for variable in target_variables
+            ):
+                target_variables.add(name)
+                changed = True
+    return target_variables
+
+
+def _sccp_release_command_split_target_variable_assignments(
+    decoded_text: str,
+) -> tuple[set[str], set[str]]:
+    assignments = _shell_variable_assignments(decoded_text)
+    target_value_variables = _shell_variable_alias_closure(
+        assignments,
+        _shell_variable_assignments_matching(
+            assignments,
+            lambda value: "irohasccp" in _source_identifier_scan_text(value),
+        ),
+    )
+    target_flag_variables = _shell_variable_alias_closure(
+        assignments,
+        _shell_variable_assignments_matching(
+            assignments,
+            lambda value: CARGO_PACKAGE_FLAG_PATTERN.search(value) is not None
+            or CARGO_MANIFEST_PATH_FLAG_PATTERN.search(value) is not None,
+        ),
+    )
+    return target_flag_variables, target_value_variables
 
 
 def _sccp_unready_transparent_proof_release_command_feature_errors(
@@ -24018,24 +27410,116 @@ def _sccp_unready_transparent_proof_release_command_feature_errors(
             )
             continue
 
-        for line_number, line in enumerate(source.splitlines(), 1):
-            source_identifier_text = _source_identifier_scan_text(
-                _source_escape_decoded_text(line)
+        lines = source.splitlines()
+        full_source_decoded_text = _source_escape_decoded_text(source)
+        full_source_identifier_text = _source_identifier_scan_text(
+            full_source_decoded_text
+        )
+        feature_variables = _sccp_release_command_feature_variable_assignments(
+            full_source_decoded_text
+        )
+        feature_flag_variables, test_fixture_value_variables = (
+            _sccp_release_command_split_feature_variable_assignments(
+                full_source_decoded_text
             )
-            if not all(
-                token in source_identifier_text
-                for token in (
-                    "cargo",
-                    "test",
-                    "irohasccp",
-                    "features",
-                    "testfixtures",
+        )
+        test_subcommand_variables = (
+            _sccp_release_command_test_subcommand_variable_assignments(
+                full_source_decoded_text
+            )
+        )
+        target_variables = _sccp_release_command_target_variable_assignments(
+            full_source_decoded_text
+        )
+        target_flag_variables, target_value_variables = (
+            _sccp_release_command_split_target_variable_assignments(
+                full_source_decoded_text
+            )
+        )
+        positional_args = _shell_positional_args_assignments(full_source_decoded_text)
+        positional_args_invoke_cargo_test = (
+            _sccp_release_command_positional_args_invokes_cargo_test(
+                positional_args,
+                test_subcommand_variables,
+            )
+        )
+        positional_args_enable_features = (
+            _sccp_release_command_positional_args_enable_test_fixture_features(
+                full_source_decoded_text,
+                positional_args,
+                feature_variables,
+                feature_flag_variables,
+                test_fixture_value_variables,
+            )
+        )
+        positional_args_target_iroha_sccp = (
+            _sccp_release_command_positional_args_target_iroha_sccp(
+                full_source_decoded_text,
+                positional_args,
+                target_variables,
+                target_flag_variables,
+                target_value_variables,
+            )
+        )
+        reported_until = 0
+        for line_number, line in enumerate(lines, 1):
+            if line_number <= reported_until:
+                continue
+            decoded_line = _source_escape_decoded_text(line)
+            line_identifier_text = _source_identifier_scan_text(decoded_line)
+            if not (
+                any(
+                    token in line_identifier_text
+                    for token in (
+                        "cargo",
+                        "test",
+                        "irohasccp",
+                        "features",
+                        "testfixtures",
+                    )
                 )
+                or CARGO_TEST_SUBCOMMAND_PATTERN.search(decoded_line) is not None
             ):
                 continue
+            first_index, last_index, window = _sccp_release_command_window_lines(
+                lines, line_number - 1
+            )
+            decoded_window = _source_escape_decoded_text(window)
+            source_identifier_text = _source_identifier_scan_text(
+                decoded_window
+            )
+            if not _sccp_release_command_invokes_cargo_test(
+                decoded_window,
+                source_identifier_text,
+                full_source_decoded_text,
+                test_subcommand_variables,
+                positional_args_invoke_cargo_test,
+            ):
+                continue
+            if not _sccp_release_command_targets_iroha_sccp(
+                decoded_window,
+                source_identifier_text,
+                full_source_identifier_text,
+                target_variables,
+                target_flag_variables,
+                target_value_variables,
+                positional_args_target_iroha_sccp,
+            ):
+                continue
+            if not _sccp_release_command_enables_test_fixture_features(
+                decoded_window,
+                source_identifier_text,
+                full_source_identifier_text,
+                feature_variables,
+                feature_flag_variables,
+                test_fixture_value_variables,
+                positional_args_enable_features,
+            ):
+                continue
+            reported_until = last_index
             errors.append(
                 "SCCP unready transparent-proof removed-surface source inventory "
-                f"{display_path}:{line_number} enables test-fixtures for the "
+                f"{display_path}:{first_index + 1} enables test-fixtures for the "
                 "release/corridor rust-sccp command"
             )
     return errors
@@ -24127,28 +27611,31 @@ def _sccp_unready_widened_bypass_gate_errors(
             )
             continue
 
-        source_texts = (
-            source,
-            _source_escape_decoded_text(source),
-        )
-        source_identifier_texts = tuple(
-            _source_identifier_scan_text(text) for text in source_texts
+        source_texts = tuple(
+            dict.fromkeys(
+                (
+                    source,
+                    _source_escape_decoded_text(source),
+                )
+            )
         )
         for forbidden_gate in SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_BYPASS_GATES:
-            forbidden_identifier = _source_identifier_scan_text(forbidden_gate)
-            if any(forbidden_gate in source_text for source_text in source_texts) or any(
-                forbidden_identifier in source_identifier_text
-                for source_identifier_text in source_identifier_texts
-            ):
+            if any(forbidden_gate in source_text for source_text in source_texts):
                 errors.append(
                     "SCCP unready transparent-proof removed-surface source inventory "
                     f"{display_path} contains forbidden widened allow_unready "
                     f"gate: {forbidden_gate}"
                 )
 
+        feature_gate_reported = False
         for source_text in source_texts:
             identifier_lines = [
-                _source_identifier_scan_text(line) for line in source_text.splitlines()
+                (
+                    ""
+                    if line.lstrip().startswith("//")
+                    else _source_identifier_scan_text(line)
+                )
+                for line in source_text.splitlines()
             ]
             for start in range(len(identifier_lines)):
                 window = "".join(
@@ -24166,7 +27653,10 @@ def _sccp_unready_widened_bypass_gate_errors(
                         f"inventory {display_path} contains forbidden widened "
                         "allow_unready gate using the test-fixtures feature"
                     )
+                    feature_gate_reported = True
                     break
+            if feature_gate_reported:
+                break
     return errors
 
 
@@ -26794,38 +30284,40 @@ def _phase_block_forbidden_output_marker(phase: str, phase_block: str) -> str | 
 
 def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    if type(evidence) is not dict:
+        return rows
     for lane in evidence.get("lanes", []):
-        if not isinstance(lane, dict):
+        if type(lane) is not dict:
             continue
         lane = _public_mapping_string_view(lane)
         domain = lane.get("domain")
         chain = lane.get("chain")
         source_hashes = lane.get("source_record_hashes")
-        if not isinstance(source_hashes, dict):
+        if type(source_hashes) is not dict:
             source_hashes = {}
         source_hashes = _public_mapping_string_view(source_hashes)
         destination_binding = lane.get("destination_binding")
-        if not isinstance(destination_binding, dict):
+        if type(destination_binding) is not dict:
             destination_binding = {}
         destination_binding = _public_mapping_string_view(destination_binding)
         route_allowlist = lane.get("route_allowlist")
-        if not isinstance(route_allowlist, dict):
+        if type(route_allowlist) is not dict:
             route_allowlist = {}
         route_allowlist = _public_mapping_string_view(route_allowlist)
         route_canary = route_allowlist.get("route_canary")
-        if not isinstance(route_canary, dict):
+        if type(route_canary) is not dict:
             route_canary = {}
         route_canary = _public_mapping_string_view(route_canary)
         route_canary_evidence_bound = route_canary.get("evidence_bound")
         if route_canary_evidence_bound is None:
             route_canary_evidence_bound = False
         source_gate = lane.get("source_adapter_gate")
-        if not isinstance(source_gate, dict):
+        if type(source_gate) is not dict:
             source_gate = {}
         source_gate = _public_mapping_string_view(source_gate)
         source_gate_audit_hashes = source_gate.get("audit_hashes")
         evm_live_metadata = lane.get("evm_live_metadata")
-        if not isinstance(evm_live_metadata, dict):
+        if type(evm_live_metadata) is not dict:
             evm_live_metadata = {}
         evm_live_metadata = _public_mapping_string_view(evm_live_metadata)
         exact_domain = domain if type(domain) is int else None
@@ -26932,9 +30424,15 @@ def _expected_cryptographic_evidence(evidence: dict[str, Any]) -> list[dict[str,
     return rows
 
 
-def _active_launch_lane(evidence: dict[str, Any]) -> dict[str, Any] | None:
-    for lane in evidence.get("lanes", []):
-        if not isinstance(lane, dict):
+def _active_launch_lane(evidence: Any) -> dict[str, Any] | None:
+    # Source-inventory marker: active launch lane selection containers must reject subclasses.
+    if type(evidence) is not dict:
+        return None
+    lanes = evidence.get("lanes")
+    if type(lanes) is not list:
+        return None
+    for lane in lanes:
+        if type(lane) is not dict:
             continue
         lane_domain = _public_mapping_get_string_key(lane, "domain")
         if (
@@ -27025,7 +30523,9 @@ def _active_launch_blocker_mentions(blocker: str, tokens: tuple[str, ...]) -> bo
     return any(token in blocker_key for token in tokens)
 
 
-def _public_text_contains_sensitive_marker(value: str) -> bool:
+def _public_text_contains_sensitive_marker(value: object) -> bool:
+    if type(value) is not str or not value:
+        return False
     normalized_value = _decoded_sensitive_public_marker_text(value)
     return any(marker in normalized_value for marker in SENSITIVE_PUBLIC_FIELD_NAME_MARKERS)
 
@@ -27089,7 +30589,7 @@ def _active_launch_scoped_blocker(
     return blocker
 
 
-def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
+def _active_launch_blockers(evidence: Any) -> list[str]:
     prefix = f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN}): "
     blockers: list[str] = []
     blocker_counts: dict[str, int] = {}
@@ -27114,10 +30614,14 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
         if blocker not in blockers:
             blockers.append(blocker)
 
-    evidence_blockers = evidence.get("blockers")
-    if not isinstance(evidence_blockers, list):
+    # Source-inventory marker: active launch blocker containers must reject subclasses.
+    if type(evidence) is not dict:
         add("SCCP evidence blocker summary is malformed")
+        evidence_for_lane: dict[str, Any] = {}
     else:
+        evidence_for_lane = evidence
+    evidence_blockers = evidence_for_lane.get("blockers")
+    if type(evidence_blockers) is list:
         seen_evidence_blockers: set[str] = set()
         duplicate_evidence_blocker_keys: set[str] = set()
         for blocker in evidence_blockers:
@@ -27148,7 +30652,9 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
                 continue
             seen_evidence_blockers.add(canonical_blocker_key)
             add(canonical_blocker)
-    lane = _active_launch_lane(evidence)
+    else:
+        add("SCCP evidence blocker summary is malformed")
+    lane = _active_launch_lane(evidence_for_lane)
     if lane is None:
         add(
             f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN}): missing launch lane evidence"
@@ -27156,7 +30662,7 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
         return blockers
 
     lane_blockers = lane.get("blockers")
-    if not isinstance(lane_blockers, list):
+    if type(lane_blockers) is not list:
         add(f"{prefix}active launch lane blocker summary is malformed")
         return blockers
     seen_lane_blockers: set[str] = set()
@@ -27195,11 +30701,11 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
 
 
 def _string_list_or_schema_blockers(value: Any, label: str) -> list[str]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [f"{label} must be a list of non-empty canonical strings"]
     blockers: list[str] = []
     for index, item in enumerate(value):
-        if not isinstance(item, str) or not item or item.strip() != item:
+        if type(item) is not str or not item or item.strip() != item:
             blockers.append(
                 f"{label}[{index}] must be a non-empty canonical string"
             )
@@ -27214,7 +30720,7 @@ def _native_evm_validation_blocker_issue(
     index: int,
 ) -> str | None:
     item_label = f"{label}[{index}]"
-    if not isinstance(item, str) or not item or item.strip() != item:
+    if type(item) is not str or not item or item.strip() != item:
         return f"{item_label} must be a non-empty canonical string"
     if _path_control_character(item) is not None:
         return f"{item_label} contains control character"
@@ -27268,7 +30774,7 @@ def _number_repeated_native_evm_validation_blocker_diagnostics(
 
 
 def _native_evm_validation_blockers(value: Any, label: str) -> list[str]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [f"{label} must be a list of non-empty canonical strings"]
     blockers: list[str] = []
     seen: set[str] = set()
@@ -27321,7 +30827,7 @@ def _active_launch_lane_blockers_for_checklist(
     lane_label: str,
 ) -> tuple[list[str], list[str]]:
     label = f"{lane_label}: active launch lane blockers"
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [], [f"{label} must be a list of non-empty canonical strings"]
     blockers: list[str] = []
     schema_blockers: list[str] = []
@@ -27365,7 +30871,7 @@ def _active_launch_evm_live_metadata_blockers(
 ) -> list[str]:
     evm_live_metadata = lane.get("evm_live_metadata")
     blockers: list[str] = []
-    if not isinstance(evm_live_metadata, dict):
+    if type(evm_live_metadata) is not dict:
         if "evm_live_metadata" in lane:
             blockers.append(
                 f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} live metadata summary is malformed"
@@ -27582,11 +31088,11 @@ def _active_launch_route_canary_binding_hash_blockers(
     blockers: list[str] = []
     canary = _public_mapping_string_view(canary)
     route_summary = lane.get("route_allowlist")
-    if not isinstance(route_summary, dict):
+    if type(route_summary) is not dict:
         route_summary = {}
     route_summary = _public_mapping_string_view(route_summary)
     destination_binding = lane.get("destination_binding")
-    if not isinstance(destination_binding, dict):
+    if type(destination_binding) is not dict:
         destination_binding = {}
     destination_binding = _public_mapping_string_view(destination_binding)
 
@@ -27636,7 +31142,7 @@ def _active_launch_route_canary_template_hash_blockers(
 ) -> list[str]:
     """Return blockers when copied active route-canary hashes replay templates."""
 
-    if not isinstance(canary, dict):
+    if type(canary) is not dict:
         return []
     canary = _public_mapping_string_view(canary)
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
@@ -27664,7 +31170,7 @@ def _active_launch_route_canary_template_hash_blockers(
         value = canary.get(field)
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             # Source-inventory marker: route canary hashes must be live evidence, not built-in template material
             blockers.append(
@@ -27683,7 +31189,7 @@ def _active_launch_route_canary_blocker_container_errors(
     canary = _public_mapping_string_view(canary)
     canary_blockers = canary.get("blockers", [])
     label = f"{lane_label}: route canary blockers"
-    if not isinstance(canary_blockers, list):
+    if type(canary_blockers) is not list:
         # Source-inventory marker: route canary blockers must be a list of non-empty canonical strings
         return [f"{label} must be a list of non-empty canonical strings"]
     blockers: list[str] = []
@@ -27712,19 +31218,19 @@ def _active_launch_route_canary_upstream_hash_roles(
     """Return upstream active-launch hash roles a route canary must not replay."""
 
     source_hashes = lane.get("source_record_hashes")
-    if not isinstance(source_hashes, dict):
+    if type(source_hashes) is not dict:
         source_hashes = {}
     source_hashes = _public_mapping_string_view(source_hashes)
     destination_binding = lane.get("destination_binding")
-    if not isinstance(destination_binding, dict):
+    if type(destination_binding) is not dict:
         destination_binding = {}
     destination_binding = _public_mapping_string_view(destination_binding)
     source_gate = lane.get("source_adapter_gate")
-    if not isinstance(source_gate, dict):
+    if type(source_gate) is not dict:
         source_gate = {}
     source_gate = _public_mapping_string_view(source_gate)
     route_summary = lane.get("route_allowlist")
-    if not isinstance(route_summary, dict):
+    if type(route_summary) is not dict:
         route_summary = {}
     route_summary = _public_mapping_string_view(route_summary)
     return (
@@ -27753,7 +31259,8 @@ def _active_launch_governed_deployment_metadata_blockers(
 
     blockers: list[str] = []
     source_hashes = lane.get("source_record_hashes")
-    if not isinstance(source_hashes, dict):
+    # Source-inventory marker: active route allowlist binding containers must reject subclasses.
+    if type(source_hashes) is not dict:
         if "source_record_hashes" in lane:
             blockers.append(
                 f"{lane_label}: active source-record hash summary is malformed"
@@ -27797,7 +31304,7 @@ def _active_launch_governed_deployment_metadata_blockers(
     )
 
     destination_binding = lane.get("destination_binding")
-    if not isinstance(destination_binding, dict):
+    if type(destination_binding) is not dict:
         if "destination_binding" in lane:
             blockers.append(
                 f"{lane_label}: active destination binding summary is malformed"
@@ -27854,7 +31361,7 @@ def _active_launch_governed_deployment_metadata_blockers(
         )
 
     source_gate = lane.get("source_adapter_gate")
-    if not isinstance(source_gate, dict):
+    if type(source_gate) is not dict:
         if "source_adapter_gate" in lane:
             blockers.append(
                 f"{lane_label}: active source adapter gate summary is malformed"
@@ -27893,7 +31400,7 @@ def _active_launch_governed_deployment_metadata_blockers(
         )
     )
     audit_hashes = source_gate.get("audit_hashes")
-    if not isinstance(audit_hashes, dict):
+    if type(audit_hashes) is not dict:
         blockers.append(
             f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes must be an object"
         )
@@ -27940,7 +31447,7 @@ def _active_launch_destination_binding_template_hash_blockers(
     ):
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             # Source-inventory marker: destination binding hashes must be destination binding evidence, not built-in template material
             blockers.append(
@@ -27967,18 +31474,18 @@ def _active_launch_source_adapter_gate_template_hash_blockers(
         return []
     blockers: list[str] = []
     if _is_nonzero_hex32(gate_hash):
-        assert isinstance(gate_hash, str)
+        assert type(gate_hash) is str
         if bytes.fromhex(gate_hash[2:]) in template_hashes:
             blockers.append(
                 f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate hash must be deployed gate evidence, not built-in template material"
             )
-    if isinstance(audit_hashes, dict):
+    if type(audit_hashes) is dict:
         audit_hash = _public_mapping_get_string_key(
             audit_hashes,
             "evm_source_gate_hash",
         )
         if _is_nonzero_hex32(audit_hash):
-            assert isinstance(audit_hash, str)
+            assert type(audit_hash) is str
             if bytes.fromhex(audit_hash[2:]) in template_hashes:
                 blockers.append(
                     f"{lane_label}: active {ACTIVE_LAUNCH_DISPLAY} source adapter gate audit hashes evm_source_gate_hash must be deployed audit evidence, not built-in template material"
@@ -27992,7 +31499,7 @@ def _active_launch_source_record_template_hash_blockers(
 ) -> list[str]:
     """Return blockers when copied active source records replay templates."""
 
-    if not isinstance(source_hashes, dict):
+    if type(source_hashes) is not dict:
         return []
     source_hashes = _public_mapping_string_view(source_hashes)
     template_hashes, template_errors = _source_adapter_gate_template_hashes_or_errors(
@@ -28014,7 +31521,7 @@ def _active_launch_source_record_template_hash_blockers(
         value = source_hashes.get(field)
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             # Source-inventory marker: governed deployment source verifier material hash must be deployed evidence, not built-in template material
             # Source-inventory marker: governed deployment source adapter engine deployment hash must be deployed evidence, not built-in template material
@@ -28034,7 +31541,7 @@ def _active_launch_source_adapter_gate_blocker_container_errors(
     source_gate = _public_mapping_string_view(source_gate)
     gate_blockers = source_gate.get("blockers", [])
     label = f"{lane_label}: source adapter gate blockers"
-    if not isinstance(gate_blockers, list):
+    if type(gate_blockers) is not list:
         # Source-inventory marker: source adapter gate blockers must be a list of non-empty canonical strings
         return [f"{label} must be a list of non-empty canonical strings"]
     blockers: list[str] = []
@@ -28066,7 +31573,7 @@ def _active_launch_destination_binding_blocker_container_errors(
     destination_binding = _public_mapping_string_view(destination_binding)
     destination_blockers = destination_binding.get("blockers", [])
     label = f"{lane_label}: destination rollout blockers"
-    if not isinstance(destination_blockers, list):
+    if type(destination_blockers) is not list:
         # Source-inventory marker: destination rollout blockers must be a list of non-empty canonical strings
         return [f"{label} must be a list of non-empty canonical strings"]
     blockers: list[str] = []
@@ -28115,7 +31622,7 @@ def _active_launch_required_record_metadata_blockers(
         blockers.append(f"{lane_label}: active launch lane must be production ready")
 
     records = lane.get("records")
-    if not isinstance(records, dict):
+    if type(records) is not dict:
         if "records" in lane:
             blockers.append(
                 f"{lane_label}: active required record summary is malformed"
@@ -28140,7 +31647,7 @@ def _active_launch_route_allowlist_binding_blockers(
 
     blockers: list[str] = []
     source_hashes = lane.get("source_record_hashes")
-    if not isinstance(source_hashes, dict):
+    if type(source_hashes) is not dict:
         if "source_record_hashes" in lane:
             blockers.append(
                 f"{lane_label}: active source-record hash summary is malformed"
@@ -28148,7 +31655,7 @@ def _active_launch_route_allowlist_binding_blockers(
         source_hashes = {}
     source_hashes = _public_mapping_string_view(source_hashes)
     destination_binding = lane.get("destination_binding")
-    if not isinstance(destination_binding, dict):
+    if type(destination_binding) is not dict:
         if "destination_binding" in lane:
             blockers.append(
                 f"{lane_label}: active destination binding summary is malformed"
@@ -28156,7 +31663,7 @@ def _active_launch_route_allowlist_binding_blockers(
         destination_binding = {}
     destination_binding = _public_mapping_string_view(destination_binding)
     route_summary = lane.get("route_allowlist")
-    if not isinstance(route_summary, dict):
+    if type(route_summary) is not dict:
         blockers.append(f"{lane_label}: active route allowlist summary is malformed")
         return blockers
     route_summary = _public_mapping_string_view(route_summary)
@@ -28274,7 +31781,7 @@ def _active_launch_route_allowlist_template_hash_blockers(
     ):
         if not _is_nonzero_hex32(value):
             continue
-        assert isinstance(value, str)
+        assert type(value) is str
         if bytes.fromhex(value[2:]) in template_hashes:
             # Source-inventory marker: route allowlist hashes must be route binding evidence, not built-in template material
             blockers.append(
@@ -28287,7 +31794,7 @@ def _active_launch_route_allowlist_template_hash_blockers(
 def _active_launch_route_allowlist_blocker_text_issue(blocker: Any) -> str | None:
     """Return a public-safe issue category for a copied route blocker."""
 
-    if not isinstance(blocker, str) or not blocker or blocker.strip() != blocker:
+    if type(blocker) is not str or not blocker or blocker.strip() != blocker:
         return "non-empty canonical string"
     if _path_control_character(blocker) is not None:
         return "control character"
@@ -28310,7 +31817,7 @@ def _active_launch_blocker_list_duplicate_errors(
 ) -> list[str]:
     """Return bounded blockers when copied active-launch blockers repeat values."""
 
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     seen: set[str] = set()
     duplicate_keys_reported: set[str] = set()
@@ -28355,7 +31862,7 @@ def _active_launch_route_allowlist_blocker_container_errors(
     route_summary = _public_mapping_string_view(route_summary)
     route_blockers = route_summary.get("blockers", [])
     label = f"{lane_label}: route allowlist blockers"
-    if not isinstance(route_blockers, list):
+    if type(route_blockers) is not list:
         # Source-inventory marker: route allowlist blockers must be a list of non-empty canonical strings
         return [f"{label} must be a list of non-empty canonical strings"]
     blockers: list[str] = []
@@ -28379,7 +31886,7 @@ def _active_launch_route_allowlist_blocker_container_errors(
 
 
 def _is_nonzero_hex32(value: Any) -> bool:
-    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 66:
+    if type(value) is not str or not value.startswith("0x") or len(value) != 66:
         return False
     try:
         raw = bytes.fromhex(value[2:])
@@ -28389,7 +31896,7 @@ def _is_nonzero_hex32(value: Any) -> bool:
 
 
 def _is_hex32(value: Any) -> bool:
-    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 66:
+    if type(value) is not str or not value.startswith("0x") or len(value) != 66:
         return False
     try:
         raw = bytes.fromhex(value[2:])
@@ -28403,7 +31910,7 @@ def _native_evm_manifest_relative_path(
     label: str,
 ) -> tuple[PurePosixPath | None, list[str]]:
     prefix = f"native EVM Groth16 prover bundle {label}"
-    if not isinstance(value, str) or not value:
+    if type(value) is not str or not value:
         return None, [
             f"{prefix} path must be a non-empty relative POSIX file path"
         ]
@@ -28529,12 +32036,12 @@ def _native_evm_prover_payload_artifact(
     elif artifact["bytes"] < min_bytes:
         blockers.append(f"{prefix} must be at least {min_bytes} bytes")
 
-    if isinstance(manifest_artifact, dict):
+    if type(manifest_artifact) is dict:
         manifest_artifact_path = _public_mapping_get_string_key(
             manifest_artifact,
             "path",
         )
-        if isinstance(manifest_artifact_path, str) and manifest_artifact_path:
+        if type(manifest_artifact_path) is str and manifest_artifact_path:
             manifest_relative_path = PurePosixPath(manifest_artifact_path)
             artifact["path"] = (
                 manifest_relative_path.parent.joinpath(relative_path).as_posix()
@@ -28542,7 +32049,7 @@ def _native_evm_prover_payload_artifact(
 
     expected_hash = _public_mapping_get_string_key(payload, hash_field)
     actual_hash = f"0x{artifact['sha256']}"
-    if isinstance(expected_hash, str) and actual_hash != expected_hash:
+    if type(expected_hash) is str and actual_hash != expected_hash:
         blockers.append(f"{prefix} sha256 must match {hash_field}")
     blockers.extend(
         _native_evm_prover_forbidden_payload_blockers(artifact_path, label)
@@ -28558,7 +32065,7 @@ def _native_evm_prover_bundle_artifact_summary(
     manifest_artifact: dict[str, Any] | None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     blockers: list[str] = []
-    if not isinstance(artifacts, list) or not artifacts:
+    if type(artifacts) is not list or not artifacts:
         return [], ["native_sdk_artifacts must be a non-empty list"]
 
     rows: list[dict[str, Any]] = []
@@ -28567,7 +32074,7 @@ def _native_evm_prover_bundle_artifact_summary(
     sdk_name_blockers: list[str] = []
     for index, artifact in enumerate(artifacts):
         label = f"native_sdk_artifacts[{index}]"
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             blockers.append(f"{label} must be an object")
             continue
         for key in _public_unknown_mapping_fields(
@@ -28608,9 +32115,19 @@ def _native_evm_prover_bundle_artifact_summary(
             blockers.append(
                 f"{sdk} implementation must be {expected_implementation}"
             )
-        if artifact.get("prover_artifact_hash") != proof_artifact_hash:
+        prover_artifact_hash = artifact.get("prover_artifact_hash")
+        if (
+            type(prover_artifact_hash) is not str
+            or type(proof_artifact_hash) is not str
+            or prover_artifact_hash != proof_artifact_hash
+        ):
             blockers.append(f"{sdk} prover_artifact_hash must match proof_artifact_hash")
-        if artifact.get("proving_key_hash") != proving_key_hash:
+        artifact_proving_key_hash = artifact.get("proving_key_hash")
+        if (
+            type(artifact_proving_key_hash) is not str
+            or type(proving_key_hash) is not str
+            or artifact_proving_key_hash != proving_key_hash
+        ):
             blockers.append(f"{sdk} proving_key_hash must match proving_key_hash")
         if not _is_nonzero_hex32(artifact.get("implementation_hash")):
             blockers.append(
@@ -28692,7 +32209,7 @@ def _native_evm_prover_sdk_results_by_sdk(
     prefix: str,
     sdk_results: Any,
 ) -> tuple[dict[str, Any], list[str]]:
-    if not isinstance(sdk_results, dict) or not sdk_results:
+    if type(sdk_results) is not dict or not sdk_results:
         return {}, [f"{prefix} sdk_results must be a non-empty object"]
 
     blockers: list[str] = []
@@ -28875,6 +32392,36 @@ def _public_mapping_string_view(payload: dict[Any, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if type(key) is str}
 
 
+def _public_copied_value_matches(actual: Any, expected: Any) -> bool:
+    """Compare copied public values without invoking hostile scalar hooks."""
+
+    if actual is None or expected is None:
+        return actual is expected
+    if type(actual) is not type(expected):
+        return False
+    if type(actual) in (str, int, bool):
+        return actual == expected
+    if type(actual) is dict:
+        if not all(type(key) is str for key in actual):
+            return False
+        if not all(type(key) is str for key in expected):
+            return False
+        if set(actual) != set(expected):
+            return False
+        return all(
+            _public_copied_value_matches(actual[key], expected[key])
+            for key in actual
+        )
+    if type(actual) is list:
+        if len(actual) != len(expected):
+            return False
+        return all(
+            _public_copied_value_matches(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected)
+        )
+    return False
+
+
 SENSITIVE_PUBLIC_FIELD_NAME_MARKERS = (
     "secret-token",
     "secret key",
@@ -28968,7 +32515,7 @@ def _unexpected_source_adapter_gate_audit_field_blocker(
     label: str,
     key: Any,
 ) -> str:
-    if isinstance(key, str) and _public_text_contains_sensitive_marker(key):
+    if type(key) is str and _public_text_contains_sensitive_marker(key):
         return f"{label} contains unexpected field with sensitive name"
     return _native_evm_prover_field_name_blocker(label, key, "unexpected")
 
@@ -28985,7 +32532,7 @@ def _required_record_summary_unknown_field_blocker(
 
 
 def _native_evm_prover_duplicate_json_key_blocker(label: str, key: Any) -> str:
-    if not isinstance(key, str) or not key:
+    if type(key) is not str or not key:
         return f"{label} JSON contains malformed duplicate key"
     if _path_control_character(key) is not None:
         return f"{label} JSON contains duplicate key with control character"
@@ -29023,7 +32570,7 @@ def _source_adapter_gate_audit_key_blocker(key: Any) -> str | None:
 
 
 def _source_adapter_gate_audit_keys_are_markdown_safe(value: Any) -> bool:
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return True
     return all(
         _source_adapter_gate_audit_key_blocker(audit_key) is None
@@ -29419,7 +32966,7 @@ def _submission_surface_validation_blocker_list_errors(
     value: Any,
     label: str,
 ) -> list[str]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     errors: list[str] = []
     seen_blockers: set[str] = set()
@@ -29452,7 +32999,7 @@ def _submission_surface_helper_symbol_list_errors(
     value: Any,
     label: str,
 ) -> list[str]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     errors: list[str] = []
     for symbol in value:
@@ -29607,7 +33154,7 @@ def _number_repeated_source_inventory_unknown_gate_errors(
 
 
 def _release_checklist_item_id_malformed_blocker(label: str, item_id: Any) -> str | None:
-    if not isinstance(item_id, str) or not item_id:
+    if type(item_id) is not str or not item_id:
         return f"{label} id must be a non-empty string"
     if _path_control_character(item_id) is not None:
         return f"{label} id contains control character"
@@ -29744,6 +33291,26 @@ def _number_repeated_all_lanes_audit_hash_diagnostics(
     return numbered_errors
 
 
+def _native_evm_prover_copied_string_matches(actual: Any, expected: Any) -> bool:
+    return type(actual) is str and type(expected) is str and actual == expected
+
+
+def _native_evm_prover_public_signal_words_match(
+    actual: Any,
+    expected: Any,
+) -> bool:
+    if type(actual) is not list or type(expected) is not list:
+        return False
+    if len(actual) != len(expected):
+        return False
+    return all(
+        type(actual_word) is str
+        and type(expected_word) is str
+        and actual_word == expected_word
+        for actual_word, expected_word in zip(actual, expected)
+    )
+
+
 def _native_evm_prover_parity_fixture_status(
     manifest_path: Path | None,
     manifest_artifact: dict[str, Any] | None,
@@ -29781,9 +33348,12 @@ def _native_evm_prover_parity_fixture_status(
         blockers.extend(metadata_blockers)
         return None, blockers
 
-    if isinstance(manifest_artifact, dict):
-        manifest_artifact_path = manifest_artifact.get("path")
-        if isinstance(manifest_artifact_path, str) and manifest_artifact_path:
+    if type(manifest_artifact) is dict:
+        manifest_artifact_path = _public_mapping_get_string_key(
+            manifest_artifact,
+            "path",
+        )
+        if type(manifest_artifact_path) is str and manifest_artifact_path:
             manifest_relative_path = PurePosixPath(manifest_artifact_path)
             artifact["path"] = (
                 manifest_relative_path.parent.joinpath(relative_path).as_posix()
@@ -29800,11 +33370,11 @@ def _native_evm_prover_parity_fixture_status(
     audit_hashes = _public_mapping_get_string_key(payload, "audit_hashes")
     expected_hash = (
         _public_mapping_get_string_key(audit_hashes, "cross_sdk_fixture_parity")
-        if isinstance(audit_hashes, dict)
+        if type(audit_hashes) is dict
         else None
     )
     actual_hash = f"0x{artifact['sha256']}"
-    if isinstance(expected_hash, str) and actual_hash != expected_hash:
+    if type(expected_hash) is str and actual_hash != expected_hash:
         blockers.append(
             f"{prefix} sha256 must match audit_hashes.cross_sdk_fixture_parity"
         )
@@ -29824,7 +33394,7 @@ def _native_evm_prover_parity_fixture_status(
         blockers.append(f"{prefix} cannot be read as JSON")
         fixture = {}
 
-    if not isinstance(fixture, dict):
+    if type(fixture) is not dict:
         blockers.append(f"{prefix} must be a JSON object")
         fixture = {}
 
@@ -29865,9 +33435,15 @@ def _native_evm_prover_parity_fixture_status(
         ),
     }
     for key, expected in expected_fields.items():
+        value = fixture.get(key)
+        expected_type = int if key == "domain" else str
         if (
             _public_mapping_has_string_key(fixture, key)
-            and fixture.get(key) != expected
+            and (
+                type(value) is not expected_type
+                or type(expected) is not expected_type
+                or value != expected
+            )
         ):
             blockers.append(f"{prefix} {key} must match native prover bundle")
 
@@ -29890,7 +33466,7 @@ def _native_evm_prover_parity_fixture_status(
     )
 
     public_signal_words = fixture.get("public_signal_words")
-    if not isinstance(public_signal_words, list) or len(public_signal_words) != 9:
+    if type(public_signal_words) is not list or len(public_signal_words) != 9:
         blockers.append(f"{prefix} public_signal_words must contain 9 words")
         public_signal_words = []
     else:
@@ -29911,7 +33487,7 @@ def _native_evm_prover_parity_fixture_status(
         key=lambda item: _safe_public_key_sort_key(item[0]),
     ):
         result_label = f"{label} sdk_results.{sdk}"
-        if not isinstance(result, dict):
+        if type(result) is not dict:
             blockers.append(
                 f"native EVM Groth16 prover bundle {result_label} must be an object"
             )
@@ -29942,11 +33518,17 @@ def _native_evm_prover_parity_fixture_status(
             "calldata_hash",
             "torii_submit_payload_hash",
         ):
-            if key in result and result.get(key) != fixture.get(key):
+            if key in result and not _native_evm_prover_copied_string_matches(
+                result.get(key),
+                fixture.get(key),
+            ):
                 blockers.append(
                     f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
                 )
-        if result.get("public_signal_words") != public_signal_words:
+        if not _native_evm_prover_public_signal_words_match(
+            result.get("public_signal_words"),
+            public_signal_words,
+        ):
             blockers.append(
                 f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
                 "must match public_signal_words"
@@ -29995,9 +33577,12 @@ def _native_evm_prover_self_test_status(
         blockers.extend(metadata_blockers)
         return None, blockers
 
-    if isinstance(manifest_artifact, dict):
-        manifest_artifact_path = manifest_artifact.get("path")
-        if isinstance(manifest_artifact_path, str) and manifest_artifact_path:
+    if type(manifest_artifact) is dict:
+        manifest_artifact_path = _public_mapping_get_string_key(
+            manifest_artifact,
+            "path",
+        )
+        if type(manifest_artifact_path) is str and manifest_artifact_path:
             manifest_relative_path = PurePosixPath(manifest_artifact_path)
             artifact["path"] = (
                 manifest_relative_path.parent.joinpath(relative_path).as_posix()
@@ -30014,11 +33599,11 @@ def _native_evm_prover_self_test_status(
     audit_hashes = _public_mapping_get_string_key(payload, "audit_hashes")
     expected_hash = (
         _public_mapping_get_string_key(audit_hashes, "native_prover_self_test")
-        if isinstance(audit_hashes, dict)
+        if type(audit_hashes) is dict
         else None
     )
     actual_hash = f"0x{artifact['sha256']}"
-    if isinstance(expected_hash, str) and actual_hash != expected_hash:
+    if type(expected_hash) is str and actual_hash != expected_hash:
         blockers.append(
             f"{prefix} sha256 must match audit_hashes.native_prover_self_test"
         )
@@ -30038,7 +33623,7 @@ def _native_evm_prover_self_test_status(
         blockers.append(f"{prefix} cannot be read as JSON")
         fixture = {}
 
-    if not isinstance(fixture, dict):
+    if type(fixture) is not dict:
         blockers.append(f"{prefix} must be a JSON object")
         fixture = {}
 
@@ -30079,9 +33664,15 @@ def _native_evm_prover_self_test_status(
         ),
     }
     for key, expected in expected_fields.items():
+        value = fixture.get(key)
+        expected_type = int if key == "domain" else str
         if (
             _public_mapping_has_string_key(fixture, key)
-            and fixture.get(key) != expected
+            and (
+                type(value) is not expected_type
+                or type(expected) is not expected_type
+                or value != expected
+            )
         ):
             blockers.append(f"{prefix} {key} must match native prover bundle")
 
@@ -30106,7 +33697,7 @@ def _native_evm_prover_self_test_status(
     )
 
     public_signal_words = fixture.get("public_signal_words")
-    if not isinstance(public_signal_words, list) or len(public_signal_words) != 9:
+    if type(public_signal_words) is not list or len(public_signal_words) != 9:
         blockers.append(f"{prefix} public_signal_words must contain 9 words")
         public_signal_words = []
     else:
@@ -30127,7 +33718,7 @@ def _native_evm_prover_self_test_status(
         key=lambda item: _safe_public_key_sort_key(item[0]),
     ):
         result_label = f"{label} sdk_results.{sdk}"
-        if not isinstance(result, dict):
+        if type(result) is not dict:
             blockers.append(
                 f"native EVM Groth16 prover bundle {result_label} must be an object"
             )
@@ -30159,11 +33750,17 @@ def _native_evm_prover_self_test_status(
             "calldata_hash",
             "torii_submit_payload_hash",
         ):
-            if key in result and result.get(key) != fixture.get(key):
+            if key in result and not _native_evm_prover_copied_string_matches(
+                result.get(key),
+                fixture.get(key),
+            ):
                 blockers.append(
                     f"native EVM Groth16 prover bundle {result_label}.{key} must match {key}"
                 )
-        if result.get("public_signal_words") != public_signal_words:
+        if not _native_evm_prover_public_signal_words_match(
+            result.get("public_signal_words"),
+            public_signal_words,
+        ):
             blockers.append(
                 f"native EVM Groth16 prover bundle {result_label}.public_signal_words "
                 "must match public_signal_words"
@@ -30184,9 +33781,9 @@ def _native_evm_prover_hash_role_blockers(payload: dict[str, Any]) -> list[str]:
         ("destination_binding_hash", payload.get("destination_binding_hash")),
     ]
     sdk_artifacts = payload.get("native_sdk_artifacts")
-    if isinstance(sdk_artifacts, list):
+    if type(sdk_artifacts) is list:
         for index, artifact in enumerate(sdk_artifacts):
-            if isinstance(artifact, dict):
+            if type(artifact) is dict:
                 artifact = _public_mapping_string_view(artifact)
                 roles.append(
                     (
@@ -30249,9 +33846,9 @@ def _native_evm_prover_payload_path_role_blockers(
         ),
     ]
     sdk_artifacts = payload.get("native_sdk_artifacts")
-    if isinstance(sdk_artifacts, list):
+    if type(sdk_artifacts) is list:
         for index, artifact in enumerate(sdk_artifacts):
-            if isinstance(artifact, dict):
+            if type(artifact) is dict:
                 artifact = _public_mapping_string_view(artifact)
                 roles.append(
                     (
@@ -30298,9 +33895,9 @@ def _native_evm_prover_summary_path_role_errors(
         ),
     ]
     sdk_artifacts = status.get("sdk_artifacts")
-    if isinstance(sdk_artifacts, list):
+    if type(sdk_artifacts) is list:
         for index, row in enumerate(sdk_artifacts):
-            if isinstance(row, dict):
+            if type(row) is dict:
                 row = _public_mapping_string_view(row)
                 roles.append(
                     (
@@ -30312,7 +33909,7 @@ def _native_evm_prover_summary_path_role_errors(
     errors: list[str] = []
     seen: dict[str, str] = {}
     for role, artifact in roles:
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         artifact_path, path_errors = _canonical_artifact_path(artifact)
         if path_errors or artifact_path is None:
@@ -30333,7 +33930,7 @@ def _native_evm_prover_bundle_status_from_payload(
     blockers: list[str] | None = None,
 ) -> dict[str, Any]:
     blockers = list(blockers or [])
-    if not isinstance(payload, dict):
+    if type(payload) is not dict:
         blockers.append("native EVM Groth16 prover bundle must be a JSON object")
         payload = {}
 
@@ -30391,18 +33988,22 @@ def _native_evm_prover_bundle_status_from_payload(
     blockers.extend(_native_evm_prover_payload_path_role_blockers(payload))
 
     lane = _active_launch_lane(evidence) or {}
-    if not isinstance(lane, dict):
+    if type(lane) is not dict:
         lane = {}
     lane = _public_mapping_string_view(lane)
     destination_binding = lane.get("destination_binding")
-    if not isinstance(destination_binding, dict):
+    if type(destination_binding) is not dict:
         destination_binding = {}
     destination_binding = _public_mapping_string_view(destination_binding)
     expected_destination_binding = destination_binding.get("destination_binding_hash")
+    actual_destination_binding = _public_mapping_get_string_key(
+        payload,
+        "destination_binding_hash",
+    )
     if (
-        expected_destination_binding
-        and _public_mapping_get_string_key(payload, "destination_binding_hash")
-        != expected_destination_binding
+        _is_nonzero_hex32(expected_destination_binding)
+        and _is_nonzero_hex32(actual_destination_binding)
+        and actual_destination_binding != expected_destination_binding
     ):
         blockers.append(
             "native EVM Groth16 prover bundle destination_binding_hash must match "
@@ -30410,7 +34011,7 @@ def _native_evm_prover_bundle_status_from_payload(
         )
 
     audit_hashes = _public_mapping_get_string_key(payload, "audit_hashes")
-    if not isinstance(audit_hashes, dict) or not audit_hashes:
+    if type(audit_hashes) is not dict or not audit_hashes:
         blockers.append(
             "native EVM Groth16 prover bundle audit_hashes must be a non-empty object"
         )
@@ -30456,9 +34057,9 @@ def _native_evm_prover_bundle_status_from_payload(
             "destination_binding_hash": payload.get("destination_binding_hash"),
         }
         sdk_artifact_rows = payload.get("native_sdk_artifacts")
-        if isinstance(sdk_artifact_rows, list):
+        if type(sdk_artifact_rows) is list:
             for sdk_index, sdk_artifact in enumerate(sdk_artifact_rows):
-                if isinstance(sdk_artifact, dict):
+                if type(sdk_artifact) is dict:
                     sdk_artifact = _public_mapping_string_view(sdk_artifact)
                     reserved_audit_hash_roles[
                         f"native_sdk_artifacts[{sdk_index}].implementation_hash"
@@ -30483,7 +34084,7 @@ def _native_evm_prover_bundle_status_from_payload(
                 )
             seen_audit_hashes[audit_hash] = key
             for role, role_hash in reserved_audit_hash_roles.items():
-                if audit_hash == role_hash:
+                if _is_nonzero_hex32(role_hash) and audit_hash == role_hash:
                     blockers.append(
                         "native EVM Groth16 prover bundle "
                         f"audit_hashes.{key} must not reuse {role}"
@@ -30613,10 +34214,10 @@ def _expected_native_evm_prover_bundle_status(
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
     raw_status = report.get("native_evm_prover_bundle")
-    if not isinstance(raw_status, dict):
+    if type(raw_status) is not dict:
         return _missing_native_evm_prover_bundle_status()
     artifact = raw_status.get("artifact")
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return _missing_native_evm_prover_bundle_status()
     artifact_path = _bundle_artifact_path(bundle_dir, artifact)
     if artifact_path is None:
@@ -30653,6 +34254,8 @@ def _expected_native_evm_prover_bundle_status(
 def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> list[str]:
     label = "readiness report native_evm_prover_bundle"
     errors: list[str] = []
+    if type(status) is not dict:
+        return [f"{label} must be an object"]
     for key in _public_unknown_mapping_fields(
         status,
         NATIVE_EVM_PROVER_BUNDLE_SUMMARY_KEYS,
@@ -30699,7 +34302,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                 f"{label} {field} must be a canonical non-zero 32-byte hex value"
             )
     artifact = status.get("artifact")
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         errors.append(f"{label} artifact must be an object")
     else:
         for key in _public_unknown_mapping_fields(artifact, ARTIFACT_KEYS):
@@ -30718,7 +34321,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
         ("verifier_key", "verifier_key_hash"),
     ):
         artifact = status.get(artifact_field)
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             errors.append(f"{label} {artifact_field} must be an object")
             continue
         for key in _public_unknown_mapping_fields(artifact, ARTIFACT_KEYS):
@@ -30735,12 +34338,12 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
         expected_hash = status.get(hash_field)
         if (
             _is_nonzero_canonical_sha256_text(artifact_hash)
-            and isinstance(expected_hash, str)
+            and type(expected_hash) is str
             and f"0x{artifact_hash}" != expected_hash
         ):
             errors.append(f"{label} {artifact_field} sha256 must match {hash_field}")
     parity_artifact = status.get("cross_sdk_fixture_parity_artifact")
-    if not isinstance(parity_artifact, dict):
+    if type(parity_artifact) is not dict:
         errors.append(f"{label} cross_sdk_fixture_parity_artifact must be an object")
     else:
         for key in _public_unknown_mapping_fields(parity_artifact, ARTIFACT_KEYS):
@@ -30757,7 +34360,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
             for error in path_errors
         )
     self_test_artifact = status.get("native_prover_self_test_artifact")
-    if not isinstance(self_test_artifact, dict):
+    if type(self_test_artifact) is not dict:
         errors.append(f"{label} native_prover_self_test_artifact must be an object")
     else:
         for key in _public_unknown_mapping_fields(self_test_artifact, ARTIFACT_KEYS):
@@ -30774,7 +34377,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
             for error in path_errors
         )
     audit_hashes = status.get("audit_hashes")
-    if not isinstance(audit_hashes, dict) or not audit_hashes:
+    if type(audit_hashes) is not dict or not audit_hashes:
         errors.append(f"{label} audit_hashes must be a non-empty object")
     else:
         audit_key_errors: list[str] = []
@@ -30813,8 +34416,11 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
             "verifier_key_hash": status.get("verifier_key_hash"),
             "destination_binding_hash": status.get("destination_binding_hash"),
         }
-        for index, row in enumerate(status.get("sdk_artifacts", [])):
-            if isinstance(row, dict):
+        sdk_artifact_rows = status.get("sdk_artifacts", [])
+        if type(sdk_artifact_rows) is list:
+            for index, row in enumerate(sdk_artifact_rows):
+                if type(row) is not dict:
+                    continue
                 row = _public_mapping_string_view(row)
                 reserved_audit_hash_roles[
                     f"sdk_artifacts[{index}].implementation_hash"
@@ -30837,26 +34443,26 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                 )
             seen_audit_hashes[value] = key
             for role, role_hash in reserved_audit_hash_roles.items():
-                if value == role_hash:
+                if _is_nonzero_hex32(role_hash) and value == role_hash:
                     errors.append(f"{label} audit_hashes.{key} must not reuse {role}")
-        if isinstance(parity_artifact, dict):
+        if type(parity_artifact) is dict:
             artifact_hash = _public_mapping_get_string_key(parity_artifact, "sha256")
             parity_hash = semantic_audit_hashes.get("cross_sdk_fixture_parity")
             if (
                 _is_nonzero_canonical_sha256_text(artifact_hash)
-                and isinstance(parity_hash, str)
+                and type(parity_hash) is str
                 and f"0x{artifact_hash}" != parity_hash
             ):
                 errors.append(
                     f"{label} cross_sdk_fixture_parity_artifact sha256 must match "
                     "audit_hashes.cross_sdk_fixture_parity"
                 )
-        if isinstance(self_test_artifact, dict):
+        if type(self_test_artifact) is dict:
             artifact_hash = _public_mapping_get_string_key(self_test_artifact, "sha256")
             self_test_hash = semantic_audit_hashes.get("native_prover_self_test")
             if (
                 _is_nonzero_canonical_sha256_text(artifact_hash)
-                and isinstance(self_test_hash, str)
+                and type(self_test_hash) is str
                 and f"0x{artifact_hash}" != self_test_hash
             ):
                 errors.append(
@@ -30864,7 +34470,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                     "audit_hashes.native_prover_self_test"
                 )
     sdk_artifacts = status.get("sdk_artifacts")
-    if not isinstance(sdk_artifacts, list) or not sdk_artifacts:
+    if type(sdk_artifacts) is not list or not sdk_artifacts:
         errors.append(f"{label} sdk_artifacts must be a non-empty list")
     else:
         seen_sdks: set[str] = set()
@@ -30873,7 +34479,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
         sdk_artifacts_label = f"{label} sdk_artifacts"
         for index, row in enumerate(sdk_artifacts):
             row_label = f"{sdk_artifacts_label}[{index}]"
-            if not isinstance(row, dict):
+            if type(row) is not dict:
                 errors.append(f"{row_label} must be an object")
                 continue
             for key in _public_unknown_mapping_fields(
@@ -30932,7 +34538,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                     f"{row_label} implementation_hash must be a canonical non-zero 32-byte hex value"
                 )
             implementation_artifact = row.get("implementation_artifact")
-            if not isinstance(implementation_artifact, dict):
+            if type(implementation_artifact) is not dict:
                 errors.append(f"{row_label} implementation_artifact must be an object")
             else:
                 for key in _public_unknown_mapping_fields(
@@ -30957,7 +34563,7 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                 )
                 if (
                     _is_nonzero_canonical_sha256_text(artifact_hash)
-                    and isinstance(row.get("implementation_hash"), str)
+                    and type(row.get("implementation_hash")) is str
                     and f"0x{artifact_hash}" != row.get("implementation_hash")
                 ):
                     errors.append(
@@ -30992,14 +34598,15 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
                 f"{label} validation_blockers",
             )
         )
-    if status.get("validation_blockers"):
+    validation_blockers = status.get("validation_blockers")
+    if type(validation_blockers) is list and validation_blockers:
         errors.append(f"{label} validation_blockers must be empty")
     return errors
 
 
 def _active_launch_release_checklist(
-    evidence: dict[str, Any],
-    native_prover_bundle: dict[str, Any] | None = None,
+    evidence: Any,
+    native_prover_bundle: Any = None,
 ) -> dict[str, Any]:
     lane = _active_launch_lane(evidence) or {}
     lane_label = f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN})"
@@ -31060,13 +34667,13 @@ def _active_launch_release_checklist(
     ]
     canary_blockers.extend(lane_blocker_schema_errors)
     route_summary = lane.get("route_allowlist")
-    route_summary_malformed = not isinstance(route_summary, dict)
-    if not isinstance(route_summary, dict):
+    route_summary_malformed = type(route_summary) is not dict
+    if type(route_summary) is not dict:
         route_summary = {}
     route_summary = _public_mapping_string_view(route_summary)
     canary = route_summary.get("route_canary")
-    canary_malformed = not isinstance(canary, dict)
-    if not isinstance(canary, dict):
+    canary_malformed = type(canary) is not dict
+    if type(canary) is not dict:
         canary = {}
     canary = _public_mapping_string_view(canary)
     if route_summary_malformed:
@@ -31104,7 +34711,7 @@ def _active_launch_release_checklist(
     if canary.get("evidence_bound") is not True:
         canary_blockers.append(f"{lane_label}: route canary evidence is not bound")
 
-    if native_prover_bundle is None:
+    if type(native_prover_bundle) is not dict:
         native_prover_bundle = _missing_native_evm_prover_bundle_status()
     native_prover_blockers = _native_evm_validation_blockers(
         native_prover_bundle.get("validation_blockers"),
@@ -31156,7 +34763,7 @@ def _active_launch_release_checklist(
 
 
 def _readiness_markdown_record_flags(records: Any) -> str:
-    if not isinstance(records, dict):
+    if type(records) is not dict:
         records = {}
     records = _public_mapping_string_view(records)
     labels = {
@@ -31174,7 +34781,7 @@ def _readiness_markdown_record_flags(records: Any) -> str:
 def _readiness_markdown_lane_row_cells(
     lane: Any,
 ) -> tuple[str, str, str, str, Any]:
-    if not isinstance(lane, dict):
+    if type(lane) is not dict:
         return "-", "-", "blocked", _readiness_markdown_record_flags({}), [
             "lane summary must be an object"
         ]
@@ -31257,7 +34864,7 @@ def _readiness_markdown_crypto_field_presence_value(
 
 
 def _readiness_markdown_audit_hashes_cell(value: Any) -> str:
-    if not isinstance(value, dict) or not value:
+    if type(value) is not dict or not value:
         return "-"
     rows: list[str] = []
     for key, audit_hash in sorted(
@@ -31286,7 +34893,7 @@ def _readiness_markdown_boolean_cell(value: Any) -> str:
 
 
 def _readiness_markdown_crypto_row_cells(row: Any) -> list[str]:
-    if not isinstance(row, dict):
+    if type(row) is not dict:
         row = {}
     domain = row.get("domain")
     chain = row.get("chain")
@@ -31372,7 +34979,7 @@ def _readiness_markdown_crypto_row_cells(row: Any) -> list[str]:
 
 
 def _readiness_markdown_sdk_helper_sets_cell(surface: Any) -> str:
-    if not isinstance(surface, dict):
+    if type(surface) is not dict:
         return "`<invalid sdk_helper_symbols_by_sdk>`"
     lanes = surface.get("lanes")
     expected_helpers_by_sdk = (
@@ -31383,7 +34990,7 @@ def _readiness_markdown_sdk_helper_sets_cell(surface: Any) -> str:
     if expected_helpers_by_sdk is None:
         return "`<invalid sdk_helper_symbols_by_sdk>`"
     helper_sets = surface.get("sdk_helper_symbols_by_sdk")
-    if not isinstance(helper_sets, dict):
+    if type(helper_sets) is not dict:
         return "`<invalid sdk_helper_symbols_by_sdk>`"
     helper_sets_keys = _public_mapping_string_keys(helper_sets)
     if helper_sets_keys != set(expected_helpers_by_sdk):
@@ -31398,7 +35005,7 @@ def _readiness_markdown_sdk_helper_sets_cell(surface: Any) -> str:
         helpers = _public_mapping_get_string_key(helper_sets, sdk)
         expected_helpers = expected_helpers_by_sdk[sdk]
         if (
-            not isinstance(helpers, list)
+            type(helpers) is not list
             or any(type(helper) is not str for helper in helpers)
             or tuple(helpers) != expected_helpers
         ):
@@ -31419,7 +35026,8 @@ def _readiness_markdown_sdk_helper_sets_cell(surface: Any) -> str:
 
 
 def _readiness_markdown_string_list_cell(value: Any, *, field_label: str) -> str:
-    if not isinstance(value, list):
+    # Source-inventory marker: readiness Markdown string lists must reject list subclasses
+    if type(value) is not list:
         return f"`<invalid {field_label}>`"
     if not value:
         return "-"
@@ -31486,7 +35094,7 @@ def _readiness_markdown_user_prover_required_phases_cell(
     required_phases = surface.get("required_phases")
     if (
         expected_phases is not None
-        and isinstance(required_phases, list)
+        and type(required_phases) is list
         and all(
             type(phase) is str
             and _submission_surface_required_phase_blocker(phase) is None
@@ -31511,7 +35119,7 @@ def _readiness_markdown_user_prover_validation_cell(
     if not validation_status_valid:
         validation_issues.append("`<invalid validation_status>`")
     validation_blockers = surface.get("validation_blockers")
-    if not isinstance(validation_blockers, list) or validation_blockers:
+    if type(validation_blockers) is not list or validation_blockers:
         validation_issues.append(
             _readiness_user_prover_validation_blockers_cell(validation_blockers)
         )
@@ -31521,7 +35129,7 @@ def _readiness_markdown_user_prover_validation_cell(
 
 
 def _readiness_markdown_user_prover_surface_row_cells(surface: Any) -> list[str]:
-    if not isinstance(surface, dict):
+    if type(surface) is not dict:
         return [
             "`<invalid lanes>`",
             "`<invalid proof_backend>`",
@@ -31570,21 +35178,25 @@ def _readiness_markdown_user_prover_surface_row_cells(surface: Any) -> list[str]
 
 def _readiness_native_evm_validation_blockers_cell(value: Any) -> str:
     field_label = "validation_blockers"
-    if not isinstance(value, list):
+    if type(value) is not list:
         return f"`<invalid {field_label}>`"
     if not value:
         return "-"
-    if _native_evm_validation_blockers(
+    sanitized_blockers = _native_evm_validation_blockers(
         value,
         "native EVM prover validation_blockers",
-    ) != value:
+    )
+    if len(sanitized_blockers) != len(value):
         return f"`<invalid {field_label}>`"
+    for original, sanitized in zip(value, sanitized_blockers):
+        if type(original) is not str or sanitized != original:
+            return f"`<invalid {field_label}>`"
     return "<br>".join(value)
 
 
 def _readiness_native_evm_markdown_path_is_safe(value: Any) -> bool:
     if (
-        not isinstance(value, str)
+        type(value) is not str
         or not value
         or value.strip() != value
         or not value.isascii()
@@ -31608,7 +35220,7 @@ def _readiness_native_evm_markdown_path_is_safe(value: Any) -> bool:
 
 def _readiness_native_evm_markdown_text_is_safe(value: Any) -> bool:
     return (
-        isinstance(value, str)
+        type(value) is str
         and _public_blocker_text_blocker(value, "readiness report Markdown", "cell")
         is None
         and not any(character.isspace() for character in value)
@@ -31620,7 +35232,7 @@ def _readiness_native_evm_artifact_path_cell(
     *,
     field_label: str,
 ) -> str:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return "-"
     artifact = _public_mapping_string_view(artifact)
     artifact_path = artifact.get("path")
@@ -31634,7 +35246,7 @@ def _readiness_native_evm_artifact_hash_cell(
     *,
     field_label: str,
 ) -> str:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return "-"
     artifact = _public_mapping_string_view(artifact)
     artifact_hash = artifact.get("sha256")
@@ -31656,7 +35268,7 @@ def _readiness_native_evm_support_artifact_cell(
     *,
     field_label: str,
 ) -> str:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return "-"
     artifact = _public_mapping_string_view(artifact)
     artifact_path = artifact.get("path")
@@ -31670,16 +35282,16 @@ def _readiness_native_evm_support_artifact_cell(
 
 
 def _readiness_native_evm_sdk_artifacts_cell(value: Any) -> str:
-    if not isinstance(value, list) or not value:
+    if type(value) is not list or not value:
         return "-"
     by_sdk: dict[str, dict[str, Any]] = {}
     for row in value:
-        if not isinstance(row, dict):
+        if type(row) is not dict:
             return "`<invalid sdk_artifacts>`"
         row = _public_mapping_string_view(row)
         sdk = row.get("sdk")
         if (
-            not isinstance(sdk, str)
+            type(sdk) is not str
             or sdk in by_sdk
             or sdk not in NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS
         ):
@@ -31739,7 +35351,8 @@ def _readiness_native_evm_bundle_blockers_cell(native_bundle: dict[str, Any]) ->
 
 
 def _readiness_native_evm_bundle_row_cells(native_bundle: Any) -> list[str]:
-    if not isinstance(native_bundle, dict):
+    # Source-inventory marker: readiness Markdown native/source containers must reject subclasses
+    if type(native_bundle) is not dict:
         return [
             "no",
             "blocked",
@@ -31798,7 +35411,7 @@ def _readiness_native_evm_bundle_row_cells(native_bundle: Any) -> list[str]:
 
 def _readiness_source_inventory_gate_cell(gate: Any) -> str:
     if (
-        isinstance(gate, str)
+        type(gate) is str
         and _release_checklist_item_id_malformed_blocker(
             "source inventory gate",
             gate,
@@ -31810,7 +35423,7 @@ def _readiness_source_inventory_gate_cell(gate: Any) -> str:
 
 
 def _readiness_source_inventory_status_cell(inventory: Any) -> str:
-    if isinstance(inventory, dict) and inventory.get("validation_status") in {
+    if type(inventory) is dict and inventory.get("validation_status") in {
         "passed",
         "blocked",
     }:
@@ -31819,7 +35432,7 @@ def _readiness_source_inventory_status_cell(inventory: Any) -> str:
 
 
 def _readiness_source_inventory_blockers_cell(inventory: Any) -> str:
-    if not isinstance(inventory, dict):
+    if type(inventory) is not dict:
         return "source inventory gate must be an object"
     blockers = _readiness_markdown_string_list_cell(
         inventory.get("validation_blockers"),
@@ -31835,7 +35448,7 @@ def _readiness_source_inventory_blockers_cell(inventory: Any) -> str:
 def _readiness_source_inventory_markdown_rows(
     source_inventory: Any,
 ) -> list[list[str]]:
-    if not isinstance(source_inventory, dict):
+    if type(source_inventory) is not dict:
         return [
             [
                 "`<invalid gate>`",
@@ -31859,7 +35472,7 @@ def _readiness_source_inventory_markdown_rows(
 
 
 def _readiness_release_checklist_item_id_cell(item: Any) -> str:
-    item_id = item.get("id") if isinstance(item, dict) else None
+    item_id = item.get("id") if type(item) is dict else None
     if (
         _release_checklist_item_id_malformed_blocker(
             "readiness report release_checklist item",
@@ -31872,7 +35485,7 @@ def _readiness_release_checklist_item_id_cell(item: Any) -> str:
 
 
 def _readiness_release_checklist_item_status_cell(item: Any) -> str:
-    return "ready" if isinstance(item, dict) and item.get("ready") is True else "blocked"
+    return "ready" if type(item) is dict and item.get("ready") is True else "blocked"
 
 
 def _readiness_release_checklist_item_blockers_cell(
@@ -31880,12 +35493,12 @@ def _readiness_release_checklist_item_blockers_cell(
     *,
     max_blockers_per_lane: int,
 ) -> str:
-    if not isinstance(item, dict):
+    if type(item) is not dict:
         return "release checklist item must be an object"
     item_blockers = item.get("blockers")
     blockers = (
         item_blockers[:max_blockers_per_lane]
-        if isinstance(item_blockers, list)
+        if type(item_blockers) is list
         else item_blockers
     )
     blocker_text = _readiness_markdown_string_list_cell(
@@ -31893,7 +35506,7 @@ def _readiness_release_checklist_item_blockers_cell(
         field_label="blockers",
     )
     if (
-        isinstance(item_blockers, list)
+        type(item_blockers) is list
         and len(item_blockers) > max_blockers_per_lane
     ):
         remaining = len(item_blockers) - max_blockers_per_lane
@@ -31906,10 +35519,11 @@ def _readiness_release_checklist_markdown_rows(
     *,
     max_blockers_per_lane: int,
 ) -> list[list[str]]:
-    if not isinstance(release_checklist, dict):
+    # Source-inventory marker: readiness Markdown checklist containers must reject subclasses
+    if type(release_checklist) is not dict:
         return [["`<invalid id>`", "blocked", "release checklist must be an object"]]
     items = release_checklist.get("items")
-    if not isinstance(items, list):
+    if type(items) is not list:
         return [
             [
                 "`<invalid id>`",
@@ -31933,13 +35547,14 @@ def _readiness_release_checklist_markdown_rows(
 def _readiness_cryptographic_evidence_markdown_rows(
     value: Any,
 ) -> list[list[str]]:
-    if not isinstance(value, list):
+    # Source-inventory marker: readiness Markdown table containers must reject subclasses
+    if type(value) is not list:
         return [_readiness_markdown_crypto_row_cells(value)]
     return [_readiness_markdown_crypto_row_cells(row) for row in value]
 
 
 def _readiness_user_prover_surface_markdown_rows(value: Any) -> list[list[str]]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [_readiness_markdown_user_prover_surface_row_cells(value)]
     return [
         _readiness_markdown_user_prover_surface_row_cells(surface)
@@ -31948,7 +35563,7 @@ def _readiness_user_prover_surface_markdown_rows(value: Any) -> list[list[str]]:
 
 
 def _readiness_artifact_path_cell(artifact: Any, *, field_label: str) -> str:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return f"`<invalid {field_label}>`"
     artifact_path = artifact.get("path")
     if _readiness_native_evm_markdown_path_is_safe(artifact_path):
@@ -31957,7 +35572,7 @@ def _readiness_artifact_path_cell(artifact: Any, *, field_label: str) -> str:
 
 
 def _readiness_artifact_bytes_cell(artifact: Any) -> str:
-    if isinstance(artifact, dict) and type(artifact.get("bytes")) is int:
+    if type(artifact) is dict and type(artifact.get("bytes")) is int:
         artifact_bytes = artifact["bytes"]
         if artifact_bytes > 0:
             return str(artifact_bytes)
@@ -31968,7 +35583,7 @@ def _readiness_artifact_hash_cell(artifact: Any, *, field_label: str) -> str:
     invalid_label = (
         field_label if field_label == "sha256" else f"{field_label}.sha256"
     )
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return f"`<invalid {invalid_label}>`"
     artifact_hash = artifact.get("sha256")
     if _is_nonzero_canonical_sha256_text(artifact_hash):
@@ -31979,7 +35594,7 @@ def _readiness_artifact_hash_cell(artifact: Any, *, field_label: str) -> str:
 def _readiness_input_artifact_markdown_rows(
     input_artifacts: Any,
 ) -> list[list[str]]:
-    if not isinstance(input_artifacts, list):
+    if type(input_artifacts) is not list:
         return [
             [
                 "`<invalid path>`",
@@ -32043,7 +35658,7 @@ def _readiness_corridor_phase_markdown_row_cells(
 
 
 def _readiness_corridor_markdown_rows(corridor: Any) -> list[list[str]]:
-    if not isinstance(corridor, dict):
+    if type(corridor) is not dict:
         return [
             [
                 "`<invalid phase>`",
@@ -32053,7 +35668,7 @@ def _readiness_corridor_markdown_rows(corridor: Any) -> list[list[str]]:
             ]
         ]
     phases = corridor.get("phases")
-    if not isinstance(phases, dict):
+    if type(phases) is not dict:
         return [
             [
                 "`<invalid phase>`",
@@ -32063,7 +35678,7 @@ def _readiness_corridor_markdown_rows(corridor: Any) -> list[list[str]]:
             ]
         ]
     evidence_artifacts = corridor.get("evidence_artifacts")
-    if not isinstance(evidence_artifacts, dict):
+    if type(evidence_artifacts) is not dict:
         evidence_artifacts = {}
     return [
         _readiness_corridor_phase_markdown_row_cells(
@@ -32080,11 +35695,11 @@ def _readiness_markdown_string_list_items(
     *,
     field_label: str,
 ) -> list[str]:
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [f"- `<invalid {field_label}>`"]
     if not value:
         return ["- None"]
-    if not all(isinstance(item, str) and item for item in value):
+    if not all(type(item) is str and item for item in value):
         return [f"- `<invalid {field_label}>`"]
     if any(
         _public_blocker_text_blocker(item, "readiness report Markdown", field_label)
@@ -32107,8 +35722,9 @@ def _readiness_lane_markdown_rows(
     *,
     max_blockers_per_lane: int,
 ) -> list[list[str]]:
-    lanes = evidence.get("lanes") if isinstance(evidence, dict) else None
-    if not isinstance(lanes, list):
+    # Source-inventory marker: readiness Markdown lane containers must reject subclasses
+    lanes = evidence.get("lanes") if type(evidence) is dict else None
+    if type(lanes) is not list:
         lanes = [None]
     rows: list[list[str]] = []
     for lane in lanes:
@@ -32121,7 +35737,7 @@ def _readiness_lane_markdown_rows(
         ) = _readiness_markdown_lane_row_cells(lane)
         blockers = (
             lane_blockers[:max_blockers_per_lane]
-            if isinstance(lane_blockers, list)
+            if type(lane_blockers) is list
             else lane_blockers
         )
         blocker_text = _readiness_markdown_string_list_cell(
@@ -32129,7 +35745,7 @@ def _readiness_lane_markdown_rows(
             field_label="blockers",
         )
         if (
-            isinstance(lane_blockers, list)
+            type(lane_blockers) is list
             and len(lane_blockers) > max_blockers_per_lane
         ):
             remaining = len(lane_blockers) - max_blockers_per_lane
@@ -32151,7 +35767,7 @@ def _render_readiness_markdown(
     *,
     max_blockers_per_lane: int,
 ) -> str:
-    if not isinstance(report, dict):
+    if type(report) is not dict:
         report = {}
     status = "READY" if report.get("production_ready") is True else "NOT READY"
     lines = [
@@ -32278,7 +35894,7 @@ def _render_readiness_markdown(
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             f"- {ACTIVE_LAUNCH_DISPLAY} route-canary transaction metadata must include a canonical non-zero transaction hash, finalized receipt block number/hash, receipts root, message id, and `{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}` evidence source before launch readiness can pass.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked. Required source-verifier evidence by lane: Ethereum recursive source-adapter verifier deployment and remaining beacon light-client update/state branches are not complete for the SCCP inbound path; BSC recursive source-adapter verifier deployment is not complete for the SCCP inbound path; Solana audited Tower replay, full-bank AccountsDB lattice, bank/fork-choice, and source-adapter verifier deployment evidence is not complete for the SCCP inbound path; TON governed full-light-client verifier deployment, canary, and source-adapter deployment evidence are not complete for the SCCP inbound path; TRON transaction-Merkle source-call verifier deployment is not complete for the SCCP inbound path.",
-            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, that strict `dotnet test` command carrying `--artifacts-path <bridge-target>/dotnet-artifacts`, `-p:ProduceReferenceAssembly=false`, and `--nologo`, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, TRX `UnitTestResult` outcome values must be present and literal `Passed`, missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence, requires every present `UnitTestResult` `isExecuted` flag to be `true`, Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`, and truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, tab/control-whitespace separators remain forged evidence, and Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
+            "- Windows `.NET 8.0.x` SCCP SDK phase evidence must include the full C# SCCP test run filtered by `FullyQualifiedName~Sccp`, canonical-case rejection coverage for proof-request, message-bundle, source-proof, and optional Groth16 artifact hash fields, including uppercase byte aliases and `0X` public-input, statement, bundle/source-proof, proof-artifact, and proving-key hashes, the `SCCP .NET SDK version:` marker emitted after `dotnet --version`, phase commands in `dotnet --version`, `dotnet --info`, `cargo build -p connect_norito_bridge`, `dotnet restore`, then strict `dotnet test` order, no restore/build diagnostics such as `error NU*`/`CS*`/`MSB*`/`NETSDK*`/`CA*`, non-zero `Error(s)` counts, `Failed to restore`, or restore/build failed markers, exact host markers `SCCP .NET SDK OS: Windows`, `SCCP .NET SDK RID: win-{x64,x86,arm64,arm}`, and `SCCP .NET SDK Architecture: {x64,x86,arm64,arm}` emitted after `dotnet --info`, exact native bridge markers `connect_norito_bridge native bridge: ...connect_norito_bridge.dll` and `connect_norito_bridge native bridge sha256: <64 lowercase hex>` emitted after `cargo build -p connect_norito_bridge`, `dotnet restore Hyperledger.Iroha.Sdk.sln` before the strict `dotnet test` command, that strict `dotnet test` command carrying `--artifacts-path <bridge-target>/dotnet-artifacts`, `-p:ProduceReferenceAssembly=false`, and `--nologo`, a non-zero passed VSTest summary, the strict `SCCP .NET SDK TRX: .../sccp-dotnet-sdk.trx` marker, and `SCCP .NET SDK TRX bytes: <positive integer>` marker each emitted exactly once after the strict `dotnet test` command, with the summary from `Hyperledger.Iroha.Sdk.Tests.dll (net8.0)` reporting `Failed: 0`, `Skipped: 0`, `Total == Passed`, and a canonical ordered numeric unit duration with non-repeated descending units, and with a positive TRX byte count plus a TRX marker that full-matches the direct C# test project `TestResults/sccp-dotnet-sdk.trx` path, and with direct VSTest-shaped TRX XML that is rooted at `TestRun`, contains exactly one `Results` section and exactly one `TestDefinitions` section, keeps `Results` and `TestDefinitions` sections directly under `TestRun`, uses one consistent XML namespace for VSTest elements, either no XML namespace or the VSTest 2010 XML namespace, keeps `UnitTestResult` rows directly under `Results`, keeps `UnitTest` definitions directly under `TestDefinitions`, keeps `TestMethod` and `Execution` definitions directly under `UnitTest`, requires every `UnitTestResult` row to be a leaf element, requires every `UnitTest` definition to contain only direct `Execution` and `TestMethod` children, requires every `TestMethod` definition to be a leaf element, requires every `Execution` definition to be a leaf element, requires each `UnitTest` definition to contain exactly one direct `TestMethod`, requires every `TestMethod` definition to carry `className` and `name`, requires canonical TRX present `UnitTest` definition name values, requires canonical TRX `TestMethod className` and `TestMethod name` values, requires TRX `TestMethod className` values to use the `Hyperledger.Iroha.Sdk.Tests` namespace, requires present `UnitTest` definition names to match their `TestMethod` exactly or by suffix, requires each `UnitTest` definition to contain at most one direct `Execution`, names `Hyperledger.Iroha.Sdk.Tests.dll`, requires canonical TRX assembly `codeBase`/`storage` path values without empty-component, padded/control-bearing, URI-like, drive-relative, percent-encoded, URI-delimiter, traversal, XML-delimiter, or suffixed or nested `.dll` aliases, is at most 16777216 bytes, contains no DTD or entity declarations including NUL-interleaved UTF-16 DTD/entity declarations, requires every `UnitTest` definition to carry an `id` and every present `Execution` definition to carry an `id`, uses canonical, alphanumeric-ending, empty-component-free, unique TRX `UnitTest` and `Execution` ids, requires each present `UnitTestResult` `testId` value and each present `UnitTestResult` `executionId` value to be canonical, alphanumeric-ending, empty-component-free, and unique, and requires unique `UnitTestResult` `testId`/`executionId` bindings, requires every `UnitTestResult` `testName` value to be present, canonical, and unique, contains exactly the VSTest passed-test count of `UnitTestResult` rows, contains only `UnitTestResult` rows bound by `testId` or `executionId` to `Hyperledger.Iroha.Sdk.Tests.dll` SCCP test definitions whose actual `TestMethod className.name` pair contains an exact `Sccp...` test token with at least one suffix character, whose `TestMethod className` uses the `Hyperledger.Iroha.Sdk.Tests` namespace, whose present `UnitTest` definition name matches that `TestMethod` exactly or by suffix, and whose SCCP method token shares that expected assembly evidence on the same `TestMethod` or its parent `UnitTest` while every present SCCP `codeBase`/`storage` assembly reference on that `TestMethod` and parent `UnitTest` points to `Hyperledger.Iroha.Sdk.Tests.dll`, when both TRX identifiers are present, `testId` and `executionId` must bind the same SCCP test definition, each `UnitTestResult` `testName` must match the bound SCCP test definition name and carry an exact `Sccp...` token with at least one suffix character, SCCP TRX test definition/result names used for binding must be unpadded, ASCII-only, empty-component-free, whitespace-free, control-character-free, and free of XML/path/URI delimiters, quotes, backticks, pipes, slashes, colons, semicolons, hashes, percent signs, question marks, and ampersands, and must not rely on a bare `Sccp` namespace/class segment, contains at least one passed SCCP `UnitTestResult`, contains no failed, skipped, timed-out, or aborted SCCP `UnitTestResult`, TRX `UnitTestResult` outcome values must be present and literal `Passed`, missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence, requires every present `UnitTestResult` `isExecuted` flag to be `true`, Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`, and truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence. Canonical `.NET` SCCP marker lines must use a single literal space after the colon; VSTest summary label/value and number/unit separators must be present, padding must use ordinary spaces only, tab/control-whitespace separators remain forged evidence, and Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping. Traced restore/test `PATH` prefixes must start with the printed `connect_norito_bridge.dll` directory and must not contain empty path-list segments. Named or traversal subdirectories before or after `TestResults` remain forged evidence and cannot satisfy release readiness. Windows backslash or drive-qualified TRX marker paths remain forged evidence too.",
             "- Accepted VSTest success summaries must match raw canonical text before ANSI/control/format stripping; normalization is only used to classify malformed summary-shaped lines.",
             "- TRX `UnitTestResult` outcome values must be present and literal `Passed`; missing, lowercase, padded, control-bearing, or otherwise aliased outcomes remain forged evidence.",
             "- Present TRX `UnitTestResult` `isExecuted` flags must be unpadded literal lowercase `true`; truthy numeric, padded, control-bearing, or case-variant aliases remain forged evidence.",
@@ -32299,25 +35915,26 @@ def _render_readiness_markdown(
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, missing source-event validation, settlement payload/route alias rejection, and EVM-style recoverable-signature recovery-id enforcement before BSC inbound source proofs can be accepted.",
             "- SCCP TON inbound adversarial source inventory must pin JavaScript TON settlement payload/route alias rejection and TON source-event digest binding before TON inbound source proofs can be accepted.",
-            "- SCCP TRON inbound adversarial source inventory must pin runtime duplicate source-event log rejection plus runtime and Python/JavaScript/Kotlin/Java/Swift SDK legacy recoverable-signature recovery-id alias rejection before TRON transaction-info receipts can satisfy inbound source-proof admission.",
-            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, public-DNS BSC RPC, Torii, CLI/runtime traversal-safe browser-module URL rejection, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, retired route-manifest alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and retired generic network alias rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON inbound adversarial source inventory must pin runtime witness schedule/seal, source-event block/header/transaction/log, destination/source metadata, route-canary transcript, canonical-shape, secret-redaction, and Python/JavaScript/Kotlin/Java/Swift SDK legacy recoverable-signature recovery-id alias regressions before TRON transaction-info receipts can satisfy inbound source-proof admission.",
+            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, raw publish HTTP-error preservation, public-DNS BSC RPC, Torii, CLI/runtime traversal-safe browser-module URL rejection, browser-prover sidecar/reference duplicate-or-malformed-alias rejection, retired route-manifest, browser-prover sidecar, deployment-evidence, live-evidence, offline full-TOML evidence, and TAIRA burn-record contract alias rejection, accessor-backed scalar alias suppression, handoff-placeholder, lowercase bytes32, lowercase EVM address, and retired generic network alias rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP BSC route-manifest CLI source inventory must pin command option allowlists, redacted unknown-command/unknown-option/positional/duplicate diagnostics, explicit valued-option requirements for deploy/evidence inputs, exact boolean parsing, exact `testnet`/`mainnet` BSC network selectors with retired `--network`/environment aliases rejected, removed allow-unready preflight, and module-guarded CLI tests before governed TAIRA BSC XOR helper artifacts can satisfy production readiness.",
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, retired-alias and duplicate-alias rejection, accessor-backed alias suppression, handoff-placeholder, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON route-manifest CLI source inventory must pin per-command allowlists, redacted unknown-command/unknown-option/positional/duplicate diagnostics, explicit valued-option requirements, canonical `taira_tron_xor:<network>` confirmation, retired `--confirm-testnet` rejection, removed allow-unready preflight, and module-guarded CLI tests before governed TAIRA TRON XOR helper artifacts can satisfy production readiness.",
             "- SCCP Solana route-manifest CLI source inventory must pin canonical-only exact boolean `production_ready` ingestion with retired top-level route-manifest alias rejection, exact string/integer/hash scalar ingestion, duplicate-alias rejection, false-manifest rejection, browser-prover public-DNS HTTPS/loopback/package-relative module URL validation, browser-prover export and route-binding validation, explicit non-padded CLI valued-option requirements, exact deploy/evidence option preflights, duplicate/unknown/positional CLI rejection without echoing names or values, fixed public Solana RPC/Torii URL defaults with environment URL aliases ignored, public-DNS HTTPS-or-loopback Solana RPC URLs, proposal mode allowlisting, public-DNS HTTPS-or-loopback Torii URLs, route/proposal output path collision rejection, symlink-safe output replacement, module-guarded CLI tests, and no-output/no-network/no-spawn-on-rejection behavior before governed TAIRA Solana XOR route-manifest artifacts can satisfy production readiness.",
             "- SCCP TON route-manifest CLI source inventory must pin redacted duplicate-option rejection, explicit option-value requirements, valued-help rejection, exact burn-record VK names, non-empty input/output path preflight, unknown-command and unknown-option rejection, redacted unexpected positional arguments, exact publish booleans, submit-only option rejection, gas metadata preflight before manifest reads, canonical I105 authorities, submit metadata preflight before private-key lookup, bounded private-key env names, public-DNS HTTPS-or-loopback Torii URLs, top-level and post-deploy public DNS explorer plus traversal-safe browser-module URL validation, output path collision rejection, retired TRON-named public manifest alias rejection, and exact string-only nanoTON decimal manifest ingestion before governed TAIRA TON XOR route-manifest artifacts can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, post-deploy anchor rejection, and malformed/non-empty post-deploy blocker-list rejection before runtime config evidence can satisfy production readiness.",
-            "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
+            "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers, raw route-canary actual-boolean exactness, and Solana immutable boolean/comment plus route-canary immutable-comment exactness before all-lanes release-checklist route-canary readiness can pass.",
             "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, non-string section-key, not-ready nested schema, hash/flag-coherence, and route-canary proof-context/hash-role/common/truth-semantic blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
-            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, route-canary hash replay rejection, and upstream route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
+            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-material `placeholder_material` exact-boolean rejection, source-adapter gate hash/audit replay rejection, route-canary hash replay rejection, and upstream route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed release-checklist roots, malformed lane metadata, and verifier recomputation before production readiness can pass.",
             "- SCCP route allowlist canary summary source inventory must pin optional canary-summary exactness, route-hash binding, and hash role-separation regressions before route profiles can be published as production evidence.",
             "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, malformed readiness-root suppression, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
             "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, malformed public artifact field-name classification, and canonical attachment order before published bundle readiness can pass.",
             "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
-            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, encoded sensitive-name and decoded Markdown-unsafe scalar rejection, fixed release-checklist item-id classification, public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, route-canary status/source fields, lane CLI homoglyph-secret redaction markers, and redacted destination/Solana JSON-RPC/ProgramData/TON BoC/TRON route-canary scalar diagnostics before published bundle readiness can pass.",
+            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text, encoded sensitive-name and decoded Markdown-unsafe scalar rejection, fixed release-checklist item-id classification, public object-key classification for release-checklist titles, corridor phase keys, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, all-lanes unknown object/audit keys, destination-binding keys, route-canary status/source fields, lane CLI homoglyph-secret redaction markers, concrete helper transport-redaction sentinels, top-level release CLI placeholder-aware redaction, and redacted destination/Solana JSON-RPC/ProgramData/TON BoC/TRON route-canary scalar diagnostics before published bundle readiness can pass.",
             "- SCCP release-notes attachment invariants source inventory must pin canonical single top-level title/status block, Markdown short-indented heading recognition, Setext heading rejection, no unexpected section headings, exact manifest handoff/root-exclusion block, canonical single artifact table scaffold/shape and position, self-row exclusion, release-note artifact-row suppression, contiguous exact ordered row-set binding, canonical blocker-section visibility, no noncanonical trailing content, and canonical attachment drift rejection before public bundle readiness can pass.",
-            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, canonical top-level title/status block, Markdown short-indented heading recognition, Setext heading rejection, exact public section-heading spelling, no unexpected public section headings, repeated public section headings, noncanonical required-section order, canonical Required Release Evidence bullet spelling, top-level readiness status fail-closed rendering, evidence-input path/bytes/hash visibility, evidence-input row suppression, production-corridor phase/status visibility, production-corridor artifact/hash visibility, production-corridor row suppression, checklist gate/status visibility, checklist blocker-cell visibility, release-checklist row suppression, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, cryptographic row route-canary source whitespace suppression, cryptographic row renderer-visible field diagnostics, cryptographic-evidence root suppression, lane-readiness status visibility, lane-readiness blocker-cell visibility, lane-readiness root suppression, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, user-prover root suppression, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, source-inventory row suppression, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, native-prover row suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, canonical top-level title/status block, Markdown short-indented heading recognition, Setext heading rejection, exact public section-heading spelling, no unexpected public section headings, repeated public section headings, noncanonical required-section order, canonical Required Release Evidence bullet spelling, internal tab/control-whitespace Required Release Evidence bullet rejection, Unicode separator/format Required Release Evidence bullet rejection, canonical Blocking Items bullet spelling, Unicode separator/format Blocking Items bullet rejection, table-cell blocker exact rendering, governed live-verifier required-evidence line binding, top-level readiness status fail-closed rendering, evidence-input path/bytes/hash visibility, evidence-input row suppression, production-corridor phase/status visibility, production-corridor artifact/hash visibility, production-corridor row suppression, checklist gate/status visibility, checklist blocker-cell visibility, release-checklist row suppression, cryptographic row live-EVM visibility, cryptographic row core-hash visibility, cryptographic row route-canary visibility, cryptographic row route-canary source whitespace suppression, cryptographic row renderer-visible field diagnostics, cryptographic-evidence root suppression, lane-readiness status visibility, lane-readiness blocker-cell visibility, lane-readiness root suppression, source-inventory gate/status visibility, source-inventory blocker-cell visibility, user-prover validation-status visibility, user-prover blocker-cell visibility, user-prover helper/phase row visibility, user-prover root suppression, native-prover validation-status visibility, native-prover blocker-cell visibility, native-prover artifact/hash row visibility, native-prover support-artifact row visibility, source-inventory blocker visibility, invalid-marker rendering, malformed source-inventory gate-name, source-inventory row suppression, report-artifact path, and cryptographic-evidence row-domain/audit-key suppression, native-prover row suppression, and canonical Markdown drift rejection before public bundle readiness can pass.",
             "- SCCP transparent OpenVerify summary source inventory must pin schema/verifier-key manifest binding, canonical six-column public-input decoding, and malformed-column adversarial coverage before proof metadata can be published.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
@@ -32364,7 +35981,7 @@ def _render_readiness_markdown(
             "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, row-key and audit-key classification, lane-field binding, canonical row recomputation, Markdown row-domain/audit-key suppression, and active route-canary binding rejection before published bundle readiness can pass.",
             "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
-            "- SCCP unready transparent-proof source inventory must pin the removed runtime/config surface, keep the exact reviewed `allow_unready` manifest/source-proof and Torii route/proof bypass call-site counts effective only under `cfg(test)`, keep `test-fixtures` out of production SCCP dependencies and release/corridor Rust commands, reject case-variant, split-token, and source-escaped environment override names, reject reintroduced runtime config fields, and require BSC/TRON route configs to reject the removed `--allow-unready` option while stripping stale merged config keys.",
+            "- SCCP unready transparent-proof source inventory must pin the removed runtime/config surface, keep the `allow_unready` manifest and source-proof bypasses effective only under `cfg(test)`, keep Torii route/proof `allow_unready` bypasses effective only under `cfg(test)`, keep the exact reviewed `allow_unready` manifest/source-proof and Torii route/proof bypass call-site counts effective only under `cfg(test)`, keep `test-fixtures` out of production SCCP dependencies and release/corridor Rust commands, reject Cargo feature aliases, case-variant, split-token, and source-escaped environment override names, reject reintroduced runtime config fields, and require BSC/TRON route configs to reject the removed `--allow-unready` option while stripping stale merged config keys.",
             "- SCCP TRON deploy operator boolean source inventory must pin malformed operator-boolean, public-DNS endpoint rejection, and canonical deployer-secret network metadata before TRON deploy helper evidence can satisfy production readiness.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
@@ -32373,12 +35990,14 @@ def _render_readiness_markdown(
 
 
 def _expected_readiness_markdown(report: Any) -> str:
-    ordered_report = copy.deepcopy(report) if isinstance(report, dict) else {}
-    corridor = ordered_report.get("corridor")
-    if isinstance(corridor, dict):
+    # Source-inventory marker: readiness Markdown expected render containers must reject subclasses.
+    ordered_report = dict(report) if type(report) is dict else {}
+    corridor = report.get("corridor") if type(report) is dict else None
+    if type(corridor) is dict:
+        ordered_corridor = dict(corridor)
         for field in ("phases", "evidence_artifacts"):
             values = corridor.get(field)
-            if not isinstance(values, dict):
+            if type(values) is not dict:
                 continue
             ordered = {
                 phase: values[phase]
@@ -32395,7 +36014,8 @@ def _expected_readiness_markdown(report: Any) -> str:
                 ):
                     continue
                 ordered[phase] = values[phase]
-            corridor[field] = ordered
+            ordered_corridor[field] = ordered
+        ordered_report["corridor"] = ordered_corridor
     return _render_readiness_markdown(ordered_report, max_blockers_per_lane=4)
 
 
@@ -32403,6 +36023,8 @@ def _expected_release_notes_attachment(
     report: dict[str, Any],
     artifacts: list[Any],
 ) -> str:
+    # Source-inventory marker: release-notes attachment report roots must reject subclasses.
+    report = report if type(report) is dict else {}
     status = "READY" if report.get("production_ready") is True else "NOT READY"
     lines = [
         "# SCCP Public Release Notes Attachment",
@@ -32439,7 +36061,7 @@ def _expected_release_notes_attachment(
 
 def _release_notes_attachment_artifact_path_is_safe(value: Any) -> bool:
     if (
-        not isinstance(value, str)
+        type(value) is not str
         or not value
         or value.strip() != value
         or not value.isascii()
@@ -32456,7 +36078,7 @@ def _release_notes_attachment_artifact_path_is_safe(value: Any) -> bool:
 
 
 def _release_notes_attachment_artifact_row_cells(artifact: Any) -> list[str]:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return [
             "`<invalid artifact>`",
             "`<invalid bytes>`",
@@ -32484,7 +36106,8 @@ def _release_notes_attachment_artifact_row_cells(artifact: Any) -> list[str]:
 
 
 def _release_notes_attachment_artifact_rows(artifacts: Any) -> list[list[str]]:
-    if not isinstance(artifacts, list):
+    # Source-inventory marker: release-notes attachment artifact containers must reject subclasses.
+    if type(artifacts) is not list:
         return [
             [
                 "`<invalid artifact>`",
@@ -32494,10 +36117,11 @@ def _release_notes_attachment_artifact_rows(artifacts: Any) -> list[list[str]]:
         ]
     rows: list[list[str]] = []
     for artifact in artifacts:
+        artifact_path = artifact.get("path") if type(artifact) is dict else None
         if (
-            isinstance(artifact, dict)
-            and artifact.get("path")
-            in {"manifest.json", "sccp-release-notes-attachment.md"}
+            type(artifact) is dict
+            and type(artifact_path) is str
+            and artifact_path in {"manifest.json", "sccp-release-notes-attachment.md"}
         ):
             continue
         rows.append(_release_notes_attachment_artifact_row_cells(artifact))
@@ -32577,6 +36201,10 @@ def _release_notes_attachment_invariant_errors(
     artifacts: list[Any],
     notes: str,
 ) -> list[str]:
+    # Source-inventory marker: release-notes attachment text must reject subclasses.
+    if type(notes) is not str:
+        return ["release notes attachment must be text"]
+    report = report if type(report) is dict else {}
     errors: list[str] = []
     lines = notes.splitlines()
     canonical_title = "# SCCP Public Release Notes Attachment"
@@ -32693,9 +36321,11 @@ def _release_notes_attachment_invariant_errors(
     expected_artifact_rows_in_order: list[str] = []
     seen_manifest_paths: set[str] = set()
     duplicate_manifest_paths: set[str] = set()
+    if type(artifacts) is not list:
+        artifacts = [artifacts]
     for artifact in artifacts:
-        path = artifact.get("path") if isinstance(artifact, dict) else None
-        if not isinstance(path, str):
+        path = artifact.get("path") if type(artifact) is dict else None
+        if type(path) is not str:
             continue
         if path in seen_manifest_paths:
             duplicate_manifest_paths.add(path)
@@ -32704,18 +36334,18 @@ def _release_notes_attachment_invariant_errors(
     missing_artifact_count = 0
     missing_artifact_hash_count = 0
     for artifact in artifacts:
-        path = artifact.get("path") if isinstance(artifact, dict) else None
-        digest = artifact.get("sha256") if isinstance(artifact, dict) else None
-        if isinstance(path, str) and path in duplicate_manifest_paths:
+        path = artifact.get("path") if type(artifact) is dict else None
+        digest = artifact.get("sha256") if type(artifact) is dict else None
+        if type(path) is str and path in duplicate_manifest_paths:
             continue
-        if path == "sccp-release-notes-attachment.md":
+        if type(path) is str and path == "sccp-release-notes-attachment.md":
             self_artifact_row_prefix = f"| `{path}` |"
             if any(line.startswith(self_artifact_row_prefix) for line in lines):
                 errors.append(
                     "release notes attachment must not list itself as an artifact"
                 )
             continue
-        if path == "manifest.json":
+        if type(path) is str and path == "manifest.json":
             manifest_artifact_row_prefix = f"| `{path}` |"
             if any(line.startswith(manifest_artifact_row_prefix) for line in lines):
                 errors.append(
@@ -32723,7 +36353,11 @@ def _release_notes_attachment_invariant_errors(
                     "as an artifact"
                 )
             continue
-        if _release_notes_attachment_artifact_path_is_safe(path) and path not in notes:
+        if (
+            type(path) is str
+            and _release_notes_attachment_artifact_path_is_safe(path)
+            and path not in notes
+        ):
             missing_artifact_count += 1
             errors.append(
                 "release notes attachment does not list artifact "
@@ -32935,9 +36569,36 @@ def _markdown_presence_text(value: Any) -> str | None:
     return None
 
 
+def _required_evidence_bullet_has_noncanonical_spacing(line: str) -> bool:
+    return any(
+        ch != " " and (ch.isspace() or unicodedata.category(ch) == "Cf")
+        for ch in line[2:]
+    )
+
+
+def _is_markdown_string_list_item_line(line: str) -> bool:
+    stripped = line.lstrip(" \t")
+    return stripped.startswith(("- ", "-\t", "* ", "*\t", "+ ", "+\t"))
+
+
+def _is_noncanonical_markdown_string_list_item_line(line: str) -> bool:
+    return _is_noncanonical_required_evidence_bullet_line(line)
+
+
+def _canonical_markdown_string_list_item_key(line: str) -> str:
+    stripped = line.lstrip(" \t")
+    if stripped.startswith(("- ", "-\t", "* ", "*\t", "+ ", "+\t")):
+        stripped = "- " + stripped[2:]
+    return _canonical_required_evidence_item_key(stripped)
+
+
 def _is_noncanonical_required_evidence_bullet_line(line: str) -> bool:
     if line.startswith("- "):
-        return line.startswith("-  ") or line.endswith((" ", "\t"))
+        return (
+            line.startswith("-  ")
+            or line.endswith((" ", "\t"))
+            or _required_evidence_bullet_has_noncanonical_spacing(line)
+        )
     markdown_bullet_prefixes = ("-\t", "* ", "*\t", "+ ", "+\t")
     if line.startswith(markdown_bullet_prefixes):
         return True
@@ -32948,7 +36609,15 @@ def _is_noncanonical_required_evidence_bullet_line(line: str) -> bool:
 
 
 def _canonical_required_evidence_item_key(line: str) -> str:
-    return re.sub(r" +", " ", line[2:].strip(" "))
+    canonical_chars = []
+    for ch in line[2:]:
+        if ch.isspace():
+            canonical_chars.append(" ")
+        elif unicodedata.category(ch) == "Cf":
+            continue
+        else:
+            canonical_chars.append(ch)
+    return re.sub(r" +", " ", "".join(canonical_chars).strip(" "))
 
 
 def _markdown_missing_terminal_table_cell_errors(
@@ -32971,6 +36640,43 @@ def _markdown_missing_terminal_table_cell_errors(
     return [
         f"readiness report Markdown {section_name} section missing {label}: {text}"
     ]
+
+
+def _markdown_missing_exact_table_cell_errors(
+    section_name: str,
+    section_text: str,
+    *,
+    value: Any,
+    label: str,
+) -> list[str]:
+    text = _markdown_presence_text(value)
+    if text is None:
+        return []
+    for line in section_text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if text in cells:
+            return []
+    return [
+        f"readiness report Markdown {section_name} section missing {label}: {text}"
+    ]
+
+
+def _expected_readiness_markdown_string_list_cell(
+    value: list[Any],
+    *,
+    field_label: str,
+    max_items: int | None = None,
+) -> str:
+    rendered_items = value if max_items is None else value[:max_items]
+    expected_cell = _readiness_markdown_string_list_cell(
+        rendered_items,
+        field_label=field_label,
+    )
+    if max_items is not None and len(value) > max_items:
+        expected_cell += f"<br>... {len(value) - max_items} more"
+    return expected_cell
 
 
 def _readiness_markdown_string_list_cell_presence_errors(
@@ -32999,9 +36705,21 @@ def _readiness_markdown_string_list_cell_presence_errors(
             )
         )
         return errors
-    if not isinstance(value, list):
+    if type(value) is not list:
         return errors
     rendered_items = value if max_items is None else value[:max_items]
+    errors.extend(
+        _markdown_missing_exact_table_cell_errors(
+            section_name,
+            section_text,
+            value=_expected_readiness_markdown_string_list_cell(
+                value,
+                field_label=field_label,
+                max_items=max_items,
+            ),
+            label=label,
+        )
+    )
     for item in rendered_items:
         errors.extend(
             _markdown_missing_value_errors(
@@ -33040,9 +36758,17 @@ def _readiness_user_prover_validation_blockers_presence_errors(
             expected_cell,
             label,
         )
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     errors: list[str] = []
+    errors.extend(
+        _markdown_missing_exact_table_cell_errors(
+            section_name,
+            section_text,
+            value=expected_cell,
+            label=label,
+        )
+    )
     for item in value:
         errors.extend(
             _markdown_missing_value_errors(
@@ -33072,9 +36798,17 @@ def _readiness_native_evm_validation_blockers_presence_errors(
             expected_cell,
             label,
         )
-    if not isinstance(value, list):
+    if type(value) is not list:
         return []
     errors: list[str] = []
+    errors.extend(
+        _markdown_missing_exact_table_cell_errors(
+            section_name,
+            section_text,
+            value=expected_cell,
+            label=label,
+        )
+    )
     for item in value:
         errors.extend(
             _markdown_missing_value_errors(
@@ -33100,6 +36834,32 @@ def _readiness_markdown_string_list_items_presence_errors(
         field_label=field_label,
     )
     errors: list[str] = []
+    expected_item_counts: dict[str, int] = {}
+    for item in expected_items:
+        item_key = _canonical_markdown_string_list_item_key(item)
+        expected_item_counts[item_key] = expected_item_counts.get(item_key, 0) + 1
+    observed_item_counts: dict[str, int] = {}
+    reported_noncanonical = False
+    for line in section_text.splitlines():
+        if not _is_markdown_string_list_item_line(line):
+            continue
+        if _is_noncanonical_markdown_string_list_item_line(line):
+            if not reported_noncanonical:
+                errors.append(
+                    f"readiness report Markdown {section_name} section has "
+                    f"noncanonical {label} bullet"
+                )
+                reported_noncanonical = True
+        item_key = _canonical_markdown_string_list_item_key(line)
+        observed_item_counts[item_key] = observed_item_counts.get(item_key, 0) + 1
+    for item_key, observed_count in observed_item_counts.items():
+        expected_count = expected_item_counts.get(item_key, 0)
+        if expected_count and observed_count > expected_count:
+            errors.append(
+                f"readiness report Markdown {section_name} section contains "
+                f"duplicate {label}"
+            )
+            break
     for item in expected_items:
         errors.extend(
             _markdown_missing_value_errors(
@@ -33116,10 +36876,10 @@ def _readiness_markdown_report_artifact_path(
     label: str,
     artifact: Any,
 ) -> str | None:
-    if not isinstance(artifact, dict):
+    if type(artifact) is not dict:
         return None
     artifact_path = artifact.get("path")
-    if not isinstance(artifact_path, str) or not artifact_path:
+    if type(artifact_path) is not str or not artifact_path:
         return None
     if _canonical_report_artifact_path_errors(label, artifact_path):
         return None
@@ -33130,6 +36890,9 @@ def _readiness_markdown_invariant_errors(
     report: dict[str, Any],
     markdown: str,
 ) -> list[str]:
+    # Source-inventory marker: readiness Markdown text must reject subclasses.
+    if type(markdown) is not str:
+        return ["readiness report Markdown must be text"]
     errors: list[str] = []
     lines = markdown.splitlines()
     canonical_title = "# SCCP Release Readiness Report"
@@ -33167,67 +36930,105 @@ def _readiness_markdown_invariant_errors(
 
     evidence_section = sections.get("## Evidence Inputs", "")
     input_artifacts = report.get("input_artifacts")
-    if isinstance(input_artifacts, list):
-        for artifact in input_artifacts:
-            if not isinstance(artifact, dict):
-                continue
-            artifact_path = _readiness_markdown_report_artifact_path(
-                "readiness report input",
-                artifact,
-            )
-            if artifact_path is None:
-                continue
+    # Source-inventory marker: readiness Markdown input/corridor invariant containers must reject subclasses.
+    if type(input_artifacts) is not list:
+        input_artifacts = [input_artifacts]
+    for artifact in input_artifacts:
+        if type(artifact) is not dict:
+            input_artifact_cells = [
+                _readiness_artifact_path_cell(artifact, field_label="path"),
+                _readiness_artifact_bytes_cell(artifact),
+                _readiness_artifact_hash_cell(artifact, field_label="sha256"),
+            ]
+            input_artifact_row = "| " + " | ".join(input_artifact_cells) + " |"
             errors.extend(
                 _markdown_missing_value_errors(
                     "Evidence Inputs",
                     evidence_section,
-                    artifact_path,
-                    "input artifact path",
+                    input_artifact_row,
+                    "input artifact malformed row",
                 )
             )
+            continue
+        artifact_path = _readiness_markdown_report_artifact_path(
+            "readiness report input",
+            artifact,
+        )
+        if artifact_path is None:
+            continue
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Evidence Inputs",
+                evidence_section,
+                artifact_path,
+                "input artifact path",
+            )
+        )
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Evidence Inputs",
+                evidence_section,
+                _readiness_artifact_hash_cell(
+                    artifact,
+                    field_label="sha256",
+                ),
+                f"input artifact hash for {artifact_path}",
+            )
+        )
+        artifact_bytes = artifact.get("bytes")
+        artifact_hash = artifact.get("sha256")
+        if (
+            type(artifact_bytes) is int
+            and artifact_bytes > 0
+            and _is_canonical_sha256_text(artifact_hash)
+        ):
+            input_artifact_cells = [
+                _readiness_artifact_path_cell(artifact, field_label="path"),
+                _readiness_artifact_bytes_cell(artifact),
+                _readiness_artifact_hash_cell(
+                    artifact,
+                    field_label="sha256",
+                ),
+            ]
+            input_artifact_row = "| " + " | ".join(input_artifact_cells) + " |"
             errors.extend(
                 _markdown_missing_value_errors(
                     "Evidence Inputs",
                     evidence_section,
-                    _readiness_artifact_hash_cell(
-                        artifact,
-                        field_label="sha256",
-                    ),
-                    f"input artifact hash for {artifact_path}",
+                    input_artifact_row,
+                    f"input artifact row for {artifact_path}",
                 )
             )
-            artifact_bytes = artifact.get("bytes")
-            artifact_hash = artifact.get("sha256")
-            if (
-                type(artifact_bytes) is int
-                and artifact_bytes > 0
-                and _is_canonical_sha256_text(artifact_hash)
-            ):
-                input_artifact_cells = [
-                    _readiness_artifact_path_cell(artifact, field_label="path"),
-                    _readiness_artifact_bytes_cell(artifact),
-                    _readiness_artifact_hash_cell(
-                        artifact,
-                        field_label="sha256",
-                    ),
-                ]
-                input_artifact_row = (
-                    "| " + " | ".join(input_artifact_cells) + " |"
-                )
-                errors.extend(
-                    _markdown_missing_value_errors(
-                        "Evidence Inputs",
-                        evidence_section,
-                        input_artifact_row,
-                        f"input artifact row for {artifact_path}",
-                    )
-                )
 
     corridor_section = sections.get("## Production Corridor", "")
     corridor = report.get("corridor")
-    if isinstance(corridor, dict):
+    if type(corridor) is not dict:
+        corridor_row = "| `<invalid phase>` | `<invalid status>` | - | - |"
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Production Corridor",
+                corridor_section,
+                corridor_row,
+                "corridor malformed row",
+            )
+        )
+    else:
         phases = corridor.get("phases")
-        if isinstance(phases, dict):
+        phase_artifacts = corridor.get("evidence_artifacts")
+        if type(phases) is not dict:
+            corridor_row = "| `<invalid phase>` | `<invalid status>` | - | - |"
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Production Corridor",
+                    corridor_section,
+                    corridor_row,
+                    "corridor malformed phases row",
+                )
+            )
+        else:
+            phase_artifact_map = (
+                phase_artifacts if type(phase_artifacts) is dict else {}
+            )
             for phase, phase_status in phases.items():
                 if (
                     _corridor_phase_key_blocker(
@@ -33247,23 +37048,36 @@ def _readiness_markdown_invariant_errors(
                 )
                 errors.extend(
                     _markdown_missing_value_errors(
-                    "Production Corridor",
-                    corridor_section,
-                    "| "
-                    + " | ".join(
-                        _readiness_corridor_phase_markdown_row_cells(
-                            phase,
-                            phase_status,
-                            None,
-                        )[:2]
+                        "Production Corridor",
+                        corridor_section,
+                        "| "
+                        + " | ".join(
+                            _readiness_corridor_phase_markdown_row_cells(
+                                phase,
+                                phase_status,
+                                None,
+                            )[:2]
+                        )
+                        + " |",
+                        f"status for phase {phase}",
                     )
-                    + " |",
-                    f"status for phase {phase}",
                 )
-            )
-        phase_artifacts = corridor.get("evidence_artifacts")
-        if isinstance(phase_artifacts, dict):
-            for phase, artifact in phase_artifacts.items():
+                if type(phase_artifacts) is not dict:
+                    corridor_cells = _readiness_corridor_phase_markdown_row_cells(
+                        phase,
+                        phase_status,
+                        None,
+                    )
+                    phase_artifact_row = "| " + " | ".join(corridor_cells) + " |"
+                    errors.extend(
+                        _markdown_missing_value_errors(
+                            "Production Corridor",
+                            corridor_section,
+                            phase_artifact_row,
+                            f"evidence artifact row for phase {phase}",
+                        )
+                    )
+            for phase, artifact in phase_artifact_map.items():
                 if (
                     _corridor_phase_key_blocker(
                         "readiness report corridor evidence_artifacts",
@@ -33272,7 +37086,23 @@ def _readiness_markdown_invariant_errors(
                     is not None
                 ):
                     continue
-                if not isinstance(artifact, dict):
+                if phase not in phases:
+                    continue
+                if type(artifact) is not dict:
+                    corridor_cells = _readiness_corridor_phase_markdown_row_cells(
+                        phase,
+                        phases[phase],
+                        artifact,
+                    )
+                    phase_artifact_row = "| " + " | ".join(corridor_cells) + " |"
+                    errors.extend(
+                        _markdown_missing_value_errors(
+                            "Production Corridor",
+                            corridor_section,
+                            phase_artifact_row,
+                            f"evidence artifact row for phase {phase}",
+                        )
+                    )
                     continue
                 artifact_path = _readiness_markdown_report_artifact_path(
                     f"readiness report phase {phase}",
@@ -33297,19 +37127,13 @@ def _readiness_markdown_invariant_errors(
                     )
                 )
                 artifact_hash = artifact.get("sha256")
-                if (
-                    isinstance(phases, dict)
-                    and phase in phases
-                    and _is_canonical_sha256_text(artifact_hash)
-                ):
+                if _is_canonical_sha256_text(artifact_hash):
                     corridor_cells = _readiness_corridor_phase_markdown_row_cells(
                         phase,
                         phases[phase],
                         artifact,
                     )
-                    phase_artifact_row = (
-                        "| " + " | ".join(corridor_cells) + " |"
-                    )
+                    phase_artifact_row = "| " + " | ".join(corridor_cells) + " |"
                     errors.extend(
                         _markdown_missing_value_errors(
                             "Production Corridor",
@@ -33321,11 +37145,11 @@ def _readiness_markdown_invariant_errors(
 
     checklist_section = sections.get("## Release Checklist", "")
     release_checklist = report.get("release_checklist")
-    if isinstance(release_checklist, dict):
+    if type(release_checklist) is dict:
         items = release_checklist.get("items")
-        if isinstance(items, list):
+        if type(items) is list:
             for item in items:
-                if not isinstance(item, dict):
+                if type(item) is not dict:
                     continue
                 checklist_cells = [
                     _readiness_release_checklist_item_id_cell(item),
@@ -33383,138 +37207,174 @@ def _readiness_markdown_invariant_errors(
 
     crypto_section = sections.get("## Cryptographic Evidence", "")
     crypto_rows = report.get("cryptographic_evidence")
-    if isinstance(crypto_rows, list):
-        for row in crypto_rows:
-            if not isinstance(row, dict):
-                continue
-            domain = row.get("domain")
-            if type(domain) is not int:
-                continue
+    # Source-inventory marker: readiness Markdown crypto invariant containers must reject subclasses.
+    if type(crypto_rows) is not list:
+        crypto_rows = [crypto_rows]
+    for row in crypto_rows:
+        if type(row) is not dict:
             crypto_cells = _readiness_markdown_crypto_row_cells(row)
-            domain_cell, chain_cell = crypto_cells[0], crypto_cells[1]
+            crypto_row = "| " + " | ".join(crypto_cells) + " |"
             errors.extend(
                 _markdown_missing_value_errors(
                     "Cryptographic Evidence",
                     crypto_section,
-                    domain_cell,
-                    "domain",
+                    crypto_row,
+                    "cryptographic evidence malformed row",
                 )
             )
+            continue
+        domain = row.get("domain")
+        if type(domain) is not int:
+            continue
+        crypto_cells = _readiness_markdown_crypto_row_cells(row)
+        domain_cell, chain_cell = crypto_cells[0], crypto_cells[1]
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Cryptographic Evidence",
+                crypto_section,
+                domain_cell,
+                "domain",
+            )
+        )
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Cryptographic Evidence",
+                crypto_section,
+                chain_cell,
+                f"chain for domain {domain}",
+            )
+        )
+        live_evm_row_prefix = "| " + " | ".join(crypto_cells[:6]) + " |"
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Cryptographic Evidence",
+                crypto_section,
+                live_evm_row_prefix,
+                f"live EVM cells for domain {domain}",
+            )
+        )
+        core_crypto_row_prefix = "| " + " | ".join(crypto_cells[:10]) + " |"
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Cryptographic Evidence",
+                crypto_section,
+                core_crypto_row_prefix,
+                f"core cryptographic cells for domain {domain}",
+            )
+        )
+        gate_audits = row.get("source_adapter_gate_audit_hashes")
+        if _source_adapter_gate_audit_keys_are_markdown_safe(gate_audits):
+            route_canary_row_prefix = "| " + " | ".join(crypto_cells) + " |"
             errors.extend(
                 _markdown_missing_value_errors(
                     "Cryptographic Evidence",
                     crypto_section,
-                    chain_cell,
-                    f"chain for domain {domain}",
+                    route_canary_row_prefix,
+                    f"route-canary cells for domain {domain}",
                 )
             )
-            live_evm_row_prefix = "| " + " | ".join(crypto_cells[:6]) + " |"
+        for field in (
+            "evm_source_block_tag",
+            "evm_destination_block_tag",
+            "source_verifier_material_hash",
+            "source_adapter_engine_deployment_hash",
+            "destination_binding_hash",
+            "route_allowlist_hash",
+            "route_canary_evidence_hash",
+            "route_canary_evidence_source",
+            "route_canary_transaction_hash",
+            "route_canary_receipt_block_hash",
+            "route_canary_block_receipts_root",
+            "route_canary_message_id",
+            "source_adapter_gate_hash",
+        ):
+            field_value = row.get(field)
             errors.extend(
                 _markdown_missing_value_errors(
                     "Cryptographic Evidence",
                     crypto_section,
-                    live_evm_row_prefix,
-                    f"live EVM cells for domain {domain}",
+                    _readiness_markdown_crypto_field_presence_value(
+                        field,
+                        field_value,
+                    ),
+                    f"{field} for domain {domain}",
                 )
             )
-            core_crypto_row_prefix = "| " + " | ".join(crypto_cells[:10]) + " |"
-            errors.extend(
-                _markdown_missing_value_errors(
-                    "Cryptographic Evidence",
-                    crypto_section,
-                    core_crypto_row_prefix,
-                    f"core cryptographic cells for domain {domain}",
-                )
-            )
-            gate_audits = row.get("source_adapter_gate_audit_hashes")
-            if _source_adapter_gate_audit_keys_are_markdown_safe(gate_audits):
-                route_canary_row_prefix = "| " + " | ".join(crypto_cells) + " |"
+        audit_hashes_visible = (
+            type(gate_audits) is dict
+            and _readiness_markdown_audit_hashes_cell(gate_audits)
+            not in ("-", "`<invalid source_adapter_gate_audit_hashes>`")
+        )
+        if audit_hashes_visible:
+            for audit_key, audit_hash in gate_audits.items():
+                if _source_adapter_gate_audit_key_blocker(audit_key) is not None:
+                    continue
+                if not _is_nonzero_hex32(audit_hash):
+                    continue
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Cryptographic Evidence",
                         crypto_section,
-                        route_canary_row_prefix,
-                        f"route-canary cells for domain {domain}",
+                        audit_key,
+                        f"source_adapter_gate_audit_hashes key for domain {domain}",
                     )
                 )
-            for field in (
-                "evm_source_block_tag",
-                "evm_destination_block_tag",
-                "source_verifier_material_hash",
-                "source_adapter_engine_deployment_hash",
-                "destination_binding_hash",
-                "route_allowlist_hash",
-                "route_canary_evidence_hash",
-                "route_canary_evidence_source",
-                "route_canary_transaction_hash",
-                "route_canary_receipt_block_hash",
-                "route_canary_block_receipts_root",
-                "route_canary_message_id",
-                "source_adapter_gate_hash",
-            ):
-                field_value = row.get(field)
                 errors.extend(
                     _markdown_missing_value_errors(
                         "Cryptographic Evidence",
                         crypto_section,
-                        _readiness_markdown_crypto_field_presence_value(
-                            field,
-                            field_value,
-                        ),
-                        f"{field} for domain {domain}",
+                        audit_hash,
+                        f"source_adapter_gate_audit_hashes value for domain {domain}",
                     )
                 )
-            audit_hashes_visible = (
-                isinstance(gate_audits, dict)
-                and _readiness_markdown_audit_hashes_cell(gate_audits)
-                not in ("-", "`<invalid source_adapter_gate_audit_hashes>`")
+        for field in (
+            "route_canary_receipt_block_number",
+            "route_canary_log_index",
+            "route_canary_target_domain",
+            "route_canary_proof_version",
+            "route_canary_proof_source_domain",
+            "route_canary_block_number",
+            "route_canary_block_timestamp",
+        ):
+            field_value = row.get(field)
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Cryptographic Evidence",
+                    crypto_section,
+                    field_value if type(field_value) is int else None,
+                    f"{field} for domain {domain}",
+                )
             )
-            if audit_hashes_visible:
-                for audit_key, audit_hash in gate_audits.items():
-                    if _source_adapter_gate_audit_key_blocker(audit_key) is not None:
-                        continue
-                    if not _is_nonzero_hex32(audit_hash):
-                        continue
-                    errors.extend(
-                        _markdown_missing_value_errors(
-                            "Cryptographic Evidence",
-                            crypto_section,
-                            audit_key,
-                            f"source_adapter_gate_audit_hashes key for domain {domain}",
-                        )
-                    )
-                    errors.extend(
-                        _markdown_missing_value_errors(
-                            "Cryptographic Evidence",
-                            crypto_section,
-                            audit_hash,
-                            f"source_adapter_gate_audit_hashes value for domain {domain}",
-                        )
-                    )
-            for field in (
-                "route_canary_receipt_block_number",
-                "route_canary_log_index",
-                "route_canary_target_domain",
-                "route_canary_proof_version",
-                "route_canary_proof_source_domain",
-                "route_canary_block_number",
-                "route_canary_block_timestamp",
-            ):
-                field_value = row.get(field)
-                errors.extend(
-                    _markdown_missing_value_errors(
-                        "Cryptographic Evidence",
-                        crypto_section,
-                        field_value if type(field_value) is int else None,
-                        f"{field} for domain {domain}",
-                    )
-                )
 
     surfaces_section = sections.get("## User Prover Submission Surfaces", "")
     surfaces = report.get("user_prover_submission_surfaces")
-    if isinstance(surfaces, list):
+    # Source-inventory marker: readiness Markdown user-prover invariant containers must reject subclasses.
+    if type(surfaces) is not list:
+        surface_cells = _readiness_markdown_user_prover_surface_row_cells(surfaces)
+        surface_row = "| " + " | ".join(surface_cells) + " |"
+        errors.extend(
+            _markdown_missing_value_errors(
+                "User Prover Submission Surfaces",
+                surfaces_section,
+                surface_row,
+                "user-prover malformed row",
+            )
+        )
+    else:
         for surface in surfaces:
-            if not isinstance(surface, dict):
+            if type(surface) is not dict:
+                surface_cells = _readiness_markdown_user_prover_surface_row_cells(
+                    surface
+                )
+                surface_row = "| " + " | ".join(surface_cells) + " |"
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "User Prover Submission Surfaces",
+                        surfaces_section,
+                        surface_row,
+                        "user-prover malformed row",
+                    )
+                )
                 continue
             surface_cells = _readiness_markdown_user_prover_surface_row_cells(surface)
             lanes = surface.get("lanes")
@@ -33558,9 +37418,18 @@ def _readiness_markdown_invariant_errors(
                         surface.get(field),
                         f"{field} for lanes {lanes}",
                     )
-                )
+            )
             helper_sets = surface.get("sdk_helper_symbols_by_sdk")
-            if isinstance(helper_sets, dict):
+            if type(helper_sets) is not dict:
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "User Prover Submission Surfaces",
+                        surfaces_section,
+                        surface_cells[2],
+                        f"sdk_helper_symbols_by_sdk for lanes {lanes}",
+                    )
+                )
+            else:
                 expected_helpers_by_sdk = (
                     USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK.get(lanes, {})
                     if type(lanes) is str
@@ -33577,7 +37446,15 @@ def _readiness_markdown_invariant_errors(
                             f"SDK row for lanes {lanes}",
                         )
                     )
-                    if not isinstance(helpers, list):
+                    if type(helpers) is not list:
+                        errors.extend(
+                            _markdown_missing_value_errors(
+                                "User Prover Submission Surfaces",
+                                surfaces_section,
+                                surface_cells[2],
+                                f"sdk_helper_symbols_by_sdk for lanes {lanes}",
+                            )
+                        )
                         continue
                     expected_helpers = expected_helpers_by_sdk.get(sdk)
                     if expected_helpers is None:
@@ -33606,7 +37483,16 @@ def _readiness_markdown_invariant_errors(
                             )
                         )
             required_phases = surface.get("required_phases")
-            if isinstance(required_phases, list):
+            if type(required_phases) is not list:
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "User Prover Submission Surfaces",
+                        surfaces_section,
+                        surface_cells[4],
+                        f"required_phases for lanes {lanes}",
+                    )
+                )
+            else:
                 for phase in required_phases:
                     if _submission_surface_required_phase_blocker(phase) is not None:
                         continue
@@ -33640,14 +37526,14 @@ def _readiness_markdown_invariant_errors(
                 )
                 is None
                 and submission == USER_PROVER_ON_CHAIN_SUBMISSION_BY_LANE.get(lanes)
-                and isinstance(required_phases, list)
+                and type(required_phases) is list
                 and required_phases
                 and all(
                     type(phase) is str
                     and _submission_surface_required_phase_blocker(phase) is None
                     for phase in required_phases
                 )
-                and isinstance(helper_sets, dict)
+                and type(helper_sets) is dict
             ):
                 if not any(cell.startswith("`<invalid ") for cell in surface_cells[:5]):
                     user_prover_row_prefix = (
@@ -33686,7 +37572,7 @@ def _readiness_markdown_invariant_errors(
                         label=f"validation_status for lanes {lanes}",
                     )
                 )
-                if not isinstance(validation_blockers, list) or validation_blockers:
+                if type(validation_blockers) is not list or validation_blockers:
                     validation_cell = surface_cells[5]
                     errors.extend(
                         _markdown_missing_terminal_table_cell_errors(
@@ -33697,7 +37583,7 @@ def _readiness_markdown_invariant_errors(
                             label=f"validation cell for lanes {lanes}",
                         )
                     )
-            if not isinstance(validation_blockers, list) or validation_blockers:
+            if type(validation_blockers) is not list or validation_blockers:
                 errors.extend(
                     _readiness_user_prover_validation_blockers_presence_errors(
                         "User Prover Submission Surfaces",
@@ -33709,7 +37595,26 @@ def _readiness_markdown_invariant_errors(
 
     native_section = sections.get("## Native Prover Bundle", "")
     native_bundle = report.get("native_evm_prover_bundle")
-    if isinstance(native_bundle, dict):
+    if type(native_bundle) is not dict:
+        native_cells = _readiness_native_evm_bundle_row_cells(native_bundle)
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Native Prover Bundle",
+                native_section,
+                f"| {native_cells[0]} | {native_cells[1]} |",
+                "native EVM prover validation_status",
+            )
+        )
+        errors.extend(
+            _markdown_missing_terminal_table_cell_errors(
+                "Native Prover Bundle",
+                native_section,
+                row_prefix=f"| {native_cells[0]} | {native_cells[1]} |",
+                value=native_cells[11],
+                label="native EVM prover blocker cell",
+            )
+        )
+    else:
         native_cells = _readiness_native_evm_bundle_row_cells(native_bundle)
         native_status = native_bundle.get("validation_status")
         if native_status in {"passed", "blocked"}:
@@ -33723,7 +37628,7 @@ def _readiness_markdown_invariant_errors(
                 )
             )
             native_artifact = native_bundle.get("artifact")
-            if isinstance(native_artifact, dict):
+            if type(native_artifact) is dict:
                 native_artifact_path, path_errors = _canonical_artifact_path(
                     native_artifact
                 )
@@ -33762,9 +37667,9 @@ def _readiness_markdown_invariant_errors(
                     )
                     sdk_artifacts = native_bundle.get("sdk_artifacts")
                     if (
-                        isinstance(parity_artifact, dict)
-                        and isinstance(self_test_artifact, dict)
-                        and isinstance(sdk_artifacts, list)
+                        type(parity_artifact) is dict
+                        and type(self_test_artifact) is dict
+                        and type(sdk_artifacts) is list
                         and sdk_artifacts
                     ):
                         parity_path, parity_path_errors = _canonical_artifact_path(
@@ -33783,8 +37688,8 @@ def _readiness_markdown_invariant_errors(
                             and _is_canonical_sha256_text(parity_hash)
                             and _is_canonical_sha256_text(self_test_hash)
                             and all(
-                                isinstance(row, dict)
-                                and isinstance(row.get("sdk"), str)
+                                type(row) is dict
+                                and type(row.get("sdk")) is str
                                 and row.get("sdk")
                                 and type(row.get("implementation")) is str
                                 and row.get("implementation")
@@ -33825,14 +37730,51 @@ def _readiness_markdown_invariant_errors(
 
     inventory_section = sections.get("## Source Inventory", "")
     source_inventory = report.get("source_inventory")
-    if isinstance(source_inventory, dict):
+    # Source-inventory marker: readiness Markdown source-inventory invariant containers must reject subclasses.
+    if type(source_inventory) is not dict:
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Source Inventory",
+                inventory_section,
+                "source inventory must be an object",
+                "source inventory root",
+            )
+        )
+    else:
         for gate, inventory in sorted(
             source_inventory.items(),
             key=lambda item: _safe_public_key_sort_key(item[0]),
         ):
             if _source_inventory_gate_key_blocker(gate) is not None:
                 continue
-            if not isinstance(inventory, dict):
+            if type(inventory) is not dict:
+                source_inventory_row = (
+                    "| "
+                    + " | ".join(
+                        [
+                            _readiness_source_inventory_gate_cell(gate),
+                            "blocked",
+                            "source inventory gate must be an object",
+                        ]
+                    )
+                    + " |"
+                )
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Source Inventory",
+                        inventory_section,
+                        source_inventory_row,
+                        f"source inventory {gate} row",
+                    )
+                )
+                errors.extend(
+                    _markdown_missing_value_errors(
+                        "Source Inventory",
+                        inventory_section,
+                        "source inventory gate must be an object",
+                        f"source inventory {gate} validation_blockers",
+                    )
+                )
                 continue
             source_inventory_cells = [
                 _readiness_source_inventory_gate_cell(gate),
@@ -33872,78 +37814,107 @@ def _readiness_markdown_invariant_errors(
 
     lane_section = sections.get("## Lane Readiness", "")
     evidence = report.get("evidence")
-    if isinstance(evidence, dict):
+    # Source-inventory marker: readiness Markdown lane invariant containers must reject subclasses.
+    if type(evidence) is not dict:
+        lanes = [None]
+    else:
         lanes = evidence.get("lanes")
-        if isinstance(lanes, list):
-            for lane in lanes:
-                if not isinstance(lane, dict):
-                    continue
-                domain = lane.get("domain")
-                if type(domain) is not int:
-                    continue
-                errors.extend(
-                    _markdown_missing_value_errors(
-                        "Lane Readiness",
-                        lane_section,
-                        domain,
-                        "domain",
-                    )
+        if type(lanes) is not list:
+            lanes = [None]
+    for lane in lanes:
+        if type(lane) is not dict:
+            domain_cell, chain_cell, lane_status, records_cell, blockers = (
+                _readiness_markdown_lane_row_cells(lane)
+            )
+            lane_row = (
+                "| "
+                + " | ".join(
+                    [
+                        domain_cell,
+                        chain_cell,
+                        lane_status,
+                        records_cell,
+                        _readiness_markdown_string_list_cell(
+                            blockers,
+                            field_label="blockers",
+                        ),
+                    ]
                 )
-                errors.extend(
-                    _markdown_missing_value_errors(
-                        "Lane Readiness",
-                        lane_section,
-                        lane.get("chain"),
-                        f"chain for domain {domain}",
-                    )
+                + " |"
+            )
+            errors.extend(
+                _markdown_missing_value_errors(
+                    "Lane Readiness",
+                    lane_section,
+                    lane_row,
+                    "lane summary row",
                 )
-                lane_status = (
-                    "ready" if lane.get("production_ready") is True else "blocked"
+            )
+            continue
+        domain = lane.get("domain")
+        if type(domain) is not int:
+            continue
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Lane Readiness",
+                lane_section,
+                domain,
+                "domain",
+            )
+        )
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Lane Readiness",
+                lane_section,
+                lane.get("chain"),
+                f"chain for domain {domain}",
+            )
+        )
+        lane_status = "ready" if lane.get("production_ready") is True else "blocked"
+        domain_cell, chain_cell, lane_status, _, _ = (
+            _readiness_markdown_lane_row_cells(lane)
+        )
+        row_prefix = f"| {domain_cell} | {chain_cell} | {lane_status} |"
+        errors.extend(
+            _markdown_missing_value_errors(
+                "Lane Readiness",
+                lane_section,
+                row_prefix,
+                f"status for domain {domain}",
+            )
+        )
+        lane_blockers = lane.get("blockers")
+        if type(lane_blockers) is not list or lane_blockers:
+            blockers = (
+                lane_blockers[:4]
+                if type(lane_blockers) is list
+                else lane_blockers
+            )
+            blocker_text = _readiness_markdown_string_list_cell(
+                blockers,
+                field_label="blockers",
+            )
+            if type(lane_blockers) is list and len(lane_blockers) > 4:
+                blocker_text += f"<br>... {len(lane_blockers) - 4} more"
+            errors.extend(
+                _markdown_missing_terminal_table_cell_errors(
+                    "Lane Readiness",
+                    lane_section,
+                    row_prefix=row_prefix,
+                    value=blocker_text,
+                    label=f"blocker cell for domain {domain}",
                 )
-                domain_cell, chain_cell, lane_status, _, _ = (
-                    _readiness_markdown_lane_row_cells(lane)
-                )
-                row_prefix = f"| {domain_cell} | {chain_cell} | {lane_status} |"
-                errors.extend(
-                    _markdown_missing_value_errors(
-                        "Lane Readiness",
-                        lane_section,
-                        row_prefix,
-                        f"status for domain {domain}",
-                    )
-                )
-                lane_blockers = lane.get("blockers")
-                if not isinstance(lane_blockers, list) or lane_blockers:
-                    blockers = (
-                        lane_blockers[:4]
-                        if isinstance(lane_blockers, list)
-                        else lane_blockers
-                    )
-                    blocker_text = _readiness_markdown_string_list_cell(
-                        blockers,
-                        field_label="blockers",
-                    )
-                    if isinstance(lane_blockers, list) and len(lane_blockers) > 4:
-                        blocker_text += f"<br>... {len(lane_blockers) - 4} more"
-                    errors.extend(
-                        _markdown_missing_terminal_table_cell_errors(
-                            "Lane Readiness",
-                            lane_section,
-                            row_prefix=row_prefix,
-                            value=blocker_text,
-                            label=f"blocker cell for domain {domain}",
-                        )
-                    )
-                errors.extend(
-                    _readiness_markdown_string_list_cell_presence_errors(
-                        "Lane Readiness",
-                        lane_section,
-                        lane_blockers,
-                        field_label="blockers",
-                        label=f"blockers for domain {domain}",
-                        max_items=4,
-                    )
-                )
+            )
+        errors.extend(
+            _readiness_markdown_string_list_cell_presence_errors(
+                "Lane Readiness",
+                lane_section,
+                lane_blockers,
+                field_label="blockers",
+                label=f"blockers for domain {domain}",
+                max_items=4,
+            )
+        )
 
     blockers_section = sections.get("## Blocking Items", "")
     errors.extend(
@@ -34030,8 +38001,10 @@ def _readiness_markdown_invariant_errors(
 
 def _manifest_artifact_paths_in_order(artifacts: list[Any]) -> list[str]:
     paths: list[str] = []
-    for artifact in artifacts:
-        if not isinstance(artifact, dict):
+    # Source-inventory marker: manifest artifact order helpers reject container subclasses.
+    artifact_values = artifacts if type(artifacts) is list else []
+    for artifact in artifact_values:
+        if type(artifact) is not dict:
             continue
         artifact_path, path_errors = _canonical_artifact_path(artifact)
         if not path_errors and artifact_path is not None:
@@ -34047,9 +38020,9 @@ def _expected_manifest_artifact_order(report: dict[str, Any]) -> list[str]:
         *_expected_input_paths(report),
     ]
     native_bundle = report.get("native_evm_prover_bundle")
-    if isinstance(native_bundle, dict):
+    if type(native_bundle) is dict:
         artifact = native_bundle.get("artifact")
-        if isinstance(artifact, dict):
+        if type(artifact) is dict:
             artifact_path, path_errors = _canonical_artifact_path(artifact)
             if not path_errors and artifact_path is not None:
                 paths.append(artifact_path)
@@ -34061,31 +38034,31 @@ def _expected_manifest_artifact_order(report: dict[str, Any]) -> list[str]:
             "native_prover_self_test_artifact",
         ):
             artifact = native_bundle.get(artifact_field)
-            if isinstance(artifact, dict):
+            if type(artifact) is dict:
                 artifact_path, path_errors = _canonical_artifact_path(artifact)
                 if not path_errors and artifact_path is not None:
                     paths.append(artifact_path)
         sdk_artifacts = native_bundle.get("sdk_artifacts")
-        if isinstance(sdk_artifacts, list):
+        if type(sdk_artifacts) is list:
             for row in sdk_artifacts:
-                if not isinstance(row, dict):
+                if type(row) is not dict:
                     continue
                 artifact = row.get("implementation_artifact")
-                if isinstance(artifact, dict):
+                if type(artifact) is dict:
                     artifact_path, path_errors = _canonical_artifact_path(artifact)
                     if not path_errors and artifact_path is not None:
                         paths.append(artifact_path)
 
     corridor = report.get("corridor")
-    if isinstance(corridor, dict):
+    if type(corridor) is dict:
         phases = corridor.get("phases")
         phase_artifacts = corridor.get("evidence_artifacts")
-        if isinstance(phases, dict) and isinstance(phase_artifacts, dict):
+        if type(phases) is dict and type(phase_artifacts) is dict:
             for phase in CORRIDOR_PHASES:
                 if phases.get(phase) != "passed":
                     continue
                 artifact = phase_artifacts.get(phase)
-                if not isinstance(artifact, dict):
+                if type(artifact) is not dict:
                     continue
                 artifact_path, path_errors = _canonical_artifact_path(artifact)
                 if not path_errors and artifact_path is not None:
@@ -34098,7 +38071,7 @@ def _expected_manifest_artifact_order(report: dict[str, Any]) -> list[str]:
 def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]]:
     corridor = report.get("corridor")
     phase_status = {}
-    if isinstance(corridor, dict) and isinstance(corridor.get("phases"), dict):
+    if type(corridor) is dict and type(corridor.get("phases")) is dict:
         phase_status = corridor["phases"]
 
     surfaces: list[dict[str, Any]] = []
@@ -34140,10 +38113,10 @@ def _expected_submission_surfaces(report: dict[str, Any]) -> list[dict[str, Any]
 def _corridor_phase_errors(corridor: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     phases = corridor.get("phases")
-    if not isinstance(phases, dict):
+    if type(phases) is not dict:
         return ["readiness report corridor phases is not an object"]
     phase_artifacts = corridor.get("evidence_artifacts")
-    if not isinstance(phase_artifacts, dict):
+    if type(phase_artifacts) is not dict:
         phase_artifacts = {}
 
     expected_set = set(CORRIDOR_PHASES)
@@ -34178,7 +38151,7 @@ def _corridor_phase_errors(corridor: dict[str, Any]) -> list[str]:
                 f"readiness report corridor phase {phase} status must be passed"
             )
         artifact = phase_artifacts.get(phase)
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             errors.append(
                 "readiness report corridor phase "
                 f"{phase} has no hashed evidence artifact"
@@ -34190,17 +38163,18 @@ def _corridor_phase_errors(corridor: dict[str, Any]) -> list[str]:
                 "readiness report phase "
                 f"{phase} evidence artifact path must be {expected_path}"
             )
-    if corridor.get("blockers"):
+    blockers = corridor.get("blockers")
+    if type(blockers) is list and blockers:
         errors.append("readiness report production corridor contains blockers")
     return errors
 
 
 def _expected_release_checklist(report: dict[str, Any]) -> dict[str, Any]:
     evidence = report.get("evidence")
-    if not isinstance(evidence, dict):
+    if type(evidence) is not dict:
         return {"ready": False, "items": []}
     native_prover_bundle = report.get("native_evm_prover_bundle")
-    if not isinstance(native_prover_bundle, dict):
+    if type(native_prover_bundle) is not dict:
         native_prover_bundle = _missing_native_evm_prover_bundle_status()
     return _active_launch_release_checklist(evidence, native_prover_bundle)
 
@@ -34224,7 +38198,7 @@ def _list_field_errors(
 ) -> list[str]:
     if not _public_mapping_has_string_key(payload, field):
         return []
-    if not isinstance(_public_mapping_get_string_key(payload, field), list):
+    if type(_public_mapping_get_string_key(payload, field)) is not list:
         return [f"{label} {field} must be a list"]
     return []
 
@@ -34245,7 +38219,7 @@ def _is_canonical_hex32_text(value: Any) -> bool:
 def _canonical_fixed_hex_bytes(value: Any, *, byte_length: int) -> bytes | None:
     if not _is_canonical_fixed_hex_text(value, byte_length=byte_length):
         return None
-    assert isinstance(value, str)
+    assert type(value) is str
     try:
         raw = bytes.fromhex(value[2:])
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -34266,7 +38240,7 @@ def _canonical_fixed_hex_bytes_or_parser_errors(
 
     if not _is_canonical_fixed_hex_text(value, byte_length=byte_length):
         return None, []
-    assert isinstance(value, str)
+    assert type(value) is str
     try:
         raw = bytes.fromhex(value[2:])
     except (argparse.ArgumentTypeError, SystemExit, RuntimeError, TypeError, ValueError):
@@ -34468,7 +38442,7 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
             type_label="bytes32",
         )
     )
-    if isinstance(audit_hashes, dict):
+    if type(audit_hashes) is dict:
         for field, value in sorted(
             audit_hashes.items(),
             key=lambda item: _safe_public_key_sort_key(item[0]),
@@ -34525,7 +38499,7 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
                 "readiness report cryptographic evidence row "
                 "source_adapter_gate_required must be false for this domain"
             )
-        elif isinstance(audit_hashes, dict):
+        elif type(audit_hashes) is dict:
             semantic_audit_keys = semantic_audit_hashes.keys()
             for key in sorted(
                 semantic_audit_keys - expected_audit_keys,
@@ -34571,7 +38545,7 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
             )
         if (
             _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
-            and isinstance(audit_hashes, dict)
+            and type(audit_hashes) is dict
             and semantic_audit_hashes
             and gate_hash not in set(semantic_audit_hashes.values())
         ):
@@ -34593,7 +38567,7 @@ def _cryptographic_evidence_source_adapter_gate_schema_errors(
             return errors
         expected_gate_hash = (
             semantic_audit_hashes.get(expected_gate_key)
-            if expected_gate_key is not None and isinstance(audit_hashes, dict)
+            if expected_gate_key is not None and type(audit_hashes) is dict
             else None
         )
         if (
@@ -34722,12 +38696,13 @@ def _cryptographic_evidence_row_schema_errors(
     domain = raw_domain if type(raw_domain) is int else None
     if domain == SCCP_DOMAIN_ETH:
         for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
+            value = row.get(field)
             if (
                 enforce_evm_live_tags
-                and isinstance(row.get(field), str)
+                and type(value) is str
                 and (
-                    not _is_canonical_decimal_text(row.get(field), positive=True)
-                    or int(row[field], 10)
+                    not _is_canonical_decimal_text(value, positive=True)
+                    or int(value, 10)
                     != EVM_EXPECTED_RPC_CHAIN_IDS[SCCP_DOMAIN_ETH]
                 )
             ):
@@ -34736,10 +38711,11 @@ def _cryptographic_evidence_row_schema_errors(
                     f"{field} must be Ethereum mainnet chain id 1"
                 )
         for field in ("evm_source_block_tag", "evm_destination_block_tag"):
+            value = row.get(field)
             if (
                 enforce_evm_live_tags
-                and isinstance(row.get(field), str)
-                and row.get(field) != "finalized"
+                and type(value) is str
+                and value != "finalized"
             ):
                 errors.append(
                     "readiness report cryptographic evidence row "
@@ -34747,7 +38723,7 @@ def _cryptographic_evidence_row_schema_errors(
                 )
     elif domain == SCCP_DOMAIN_BSC:
         bsc_has_evm_evidence = any(
-            row.get(field)
+            type(row.get(field)) is str and bool(row.get(field))
             for field in (
                 "source_verifier_material_hash",
                 "source_adapter_engine_deployment_hash",
@@ -34757,13 +38733,14 @@ def _cryptographic_evidence_row_schema_errors(
             )
         )
         for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
+            value = row.get(field)
             if (
                 enforce_evm_live_tags
                 and bsc_has_evm_evidence
-                and isinstance(row.get(field), str)
+                and type(value) is str
                 and (
-                    not _is_canonical_decimal_text(row.get(field), positive=True)
-                    or int(row[field], 10)
+                    not _is_canonical_decimal_text(value, positive=True)
+                    or int(value, 10)
                     != _expected_evm_rpc_chain_id(SCCP_DOMAIN_BSC, row.get("chain"))
                 )
             ):
@@ -34779,11 +38756,12 @@ def _cryptographic_evidence_row_schema_errors(
                     f"{field} must be BSC chain id {expected_chain_id} for {expected_chain}"
                 )
         for field in ("evm_source_block_tag", "evm_destination_block_tag"):
+            value = row.get(field)
             if (
                 enforce_evm_live_tags
                 and bsc_has_evm_evidence
-                and isinstance(row.get(field), str)
-                and not row.get(field)
+                and type(value) is str
+                and not value
             ):
                 errors.append(
                     "readiness report cryptographic evidence row "
@@ -34791,13 +38769,15 @@ def _cryptographic_evidence_row_schema_errors(
                 )
     elif domain in ALL_LANES_CHAIN_BY_DOMAIN:
         for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
-            if isinstance(row.get(field), str) and row.get(field):
+            value = row.get(field)
+            if type(value) is str and value:
                 errors.append(
                     "readiness report cryptographic evidence row "
                     f"{field} must be empty for non-EVM lanes"
                 )
         for field in ("evm_source_block_tag", "evm_destination_block_tag"):
-            if isinstance(row.get(field), str) and row.get(field):
+            value = row.get(field)
+            if type(value) is str and value:
                 errors.append(
                     "readiness report cryptographic evidence row "
                     f"{field} must be empty for non-EVM lanes"
@@ -34856,7 +38836,7 @@ def _cryptographic_evidence_row_schema_errors(
             "source_adapter_gate_required must be a boolean"
         )
     audit_hashes = row.get("source_adapter_gate_audit_hashes")
-    if "source_adapter_gate_audit_hashes" in row and not isinstance(audit_hashes, dict):
+    if "source_adapter_gate_audit_hashes" in row and type(audit_hashes) is not dict:
         errors.append(
             "readiness report cryptographic evidence row "
             "source_adapter_gate_audit_hashes must be an object"
@@ -35530,11 +39510,11 @@ def _cryptographic_evidence_lane_binding_errors(
     lanes: Any,
 ) -> list[str]:
     errors: list[str] = []
-    if not isinstance(lanes, list):
+    if type(crypto) is not list or type(lanes) is not list:
         return errors
     seen_domains: set[int] = set()
     for index, row in enumerate(crypto):
-        if not isinstance(row, dict):
+        if type(row) is not dict:
             continue
         row = _public_mapping_string_view(row)
         raw_domain = row.get("domain")
@@ -35546,7 +39526,7 @@ def _cryptographic_evidence_lane_binding_errors(
                     f"{index} duplicates domain {domain}"
                 )
             seen_domains.add(domain)
-        if index >= len(lanes) or not isinstance(lanes[index], dict):
+        if index >= len(lanes) or type(lanes[index]) is not dict:
             continue
         lane = _public_mapping_string_view(lanes[index])
         lane_domain = lane.get("domain")
@@ -35558,9 +39538,9 @@ def _cryptographic_evidence_lane_binding_errors(
         chain = row.get("chain")
         lane_chain = lane.get("chain")
         if (
-            isinstance(chain, str)
+            type(chain) is str
             and chain
-            and isinstance(lane_chain, str)
+            and type(lane_chain) is str
             and lane_chain
             and chain != lane_chain
         ):
@@ -35737,11 +39717,14 @@ def _cryptographic_evidence_lane_binding_errors(
                 continue
             expected: Any = lane
             for segment in lane_path:
-                if not isinstance(expected, dict) or segment not in expected:
+                if type(expected) is not dict or segment not in expected:
                     expected = None
                     break
                 expected = expected[segment]
-            if expected is not None and row.get(field) != expected:
+            if expected is not None and not _public_copied_value_matches(
+                row.get(field),
+                expected,
+            ):
                 lane_field = ".".join(lane_path)
                 errors.append(
                     "readiness report cryptographic evidence row "
@@ -35753,9 +39736,11 @@ def _cryptographic_evidence_lane_binding_errors(
 def _cryptographic_evidence_inventory_errors(crypto: list[Any]) -> list[str]:
     label = "readiness report cryptographic_evidence"
     errors: list[str] = []
+    if type(crypto) is not list:
+        return errors
     seen_domains: set[int] = set()
     for row in crypto:
-        if not isinstance(row, dict):
+        if type(row) is not dict:
             continue
         row = _public_mapping_string_view(row)
         domain = row.get("domain")
@@ -35770,7 +39755,7 @@ def _cryptographic_evidence_inventory_errors(crypto: list[Any]) -> list[str]:
             errors.append(f"{label} contains unknown domain: {domain}")
             continue
         chain = row.get("chain")
-        if isinstance(chain, str) and chain and not _chain_matches_domain(domain, chain):
+        if type(chain) is str and chain and not _chain_matches_domain(domain, chain):
             errors.append(
                 f"{label} chain mismatch for domain {domain}: "
                 f"expected {expected_chain}, got {chain!r}"
@@ -35836,7 +39821,7 @@ def _string_list_field_errors(
         return []
     value = _public_mapping_get_string_key(payload, field)
     if (
-        not isinstance(value, list)
+        type(value) is not list
         or (not allow_empty and not value)
         or any(
             type(item) is not str or not item or item.strip() != item
@@ -35991,7 +39976,7 @@ def _public_blocker_list_field_errors(
     if not _public_mapping_has_string_key(payload, field):
         return []
     value = _public_mapping_get_string_key(payload, field)
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [
             f"{label} {field} must be a list of non-empty strings "
             "with no surrounding whitespace"
@@ -36029,7 +40014,7 @@ def _public_verifier_error_text_blocker(
     label: str,
     field: str,
 ) -> str | None:
-    if not isinstance(blocker, str) or not blocker:
+    if type(blocker) is not str or not blocker:
         return (
             f"{label} {field} must be a list of non-empty strings "
             "with no surrounding whitespace"
@@ -36124,8 +40109,9 @@ def _integer_list_field_errors(
 
     if not _public_mapping_has_string_key(payload, field):
         return []
+    # Source-inventory marker: public integer lists must reject list subclasses
     value = _public_mapping_get_string_key(payload, field)
-    if not isinstance(value, list) or (
+    if type(value) is not list or (
         not allow_empty and not value
     ) or any(type(item) is not int for item in value):
         return [f"{label} {field} must be a list of integers"]
@@ -36173,7 +40159,7 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
         )
     )
     helper_symbols = row.get("sdk_helper_symbols")
-    if isinstance(helper_symbols, list) and all(
+    if type(helper_symbols) is list and all(
         _submission_surface_helper_symbol_blocker(
             item,
             "readiness report user prover submission surface row sdk_helper_symbols",
@@ -36194,7 +40180,7 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
                 "sdk_helpers must match sdk_helper_symbols"
             )
     helper_sets = row.get("sdk_helper_symbols_by_sdk")
-    if not isinstance(helper_sets, dict):
+    if type(helper_sets) is not dict:
         errors.append(
             "readiness report user prover submission surface row "
             "sdk_helper_symbols_by_sdk must be an object"
@@ -36236,7 +40222,7 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             )
         for sdk in expected_sdk_order:
             helpers = semantic_helper_sets.get(sdk)
-            if not isinstance(helpers, list) or not helpers:
+            if type(helpers) is not list or not helpers:
                 errors.append(
                     "readiness report user prover submission surface row "
                     f"sdk_helper_symbols_by_sdk[{sdk}] must be a list of "
@@ -36290,8 +40276,8 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
                     )
         js_helpers = semantic_helper_sets.get("js-sdk")
         if (
-            isinstance(js_helpers, list)
-            and isinstance(helper_symbols, list)
+            type(js_helpers) is list
+            and type(helper_symbols) is list
             and all(type(helper) is str for helper in js_helpers)
             and all(type(helper) is str for helper in helper_symbols)
             and js_helpers != helper_symbols
@@ -36302,12 +40288,12 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             )
         expected_js_helpers = (
             expected_helpers_by_sdk.get("js-sdk")
-            if isinstance(expected_helpers_by_sdk, dict)
+            if type(expected_helpers_by_sdk) is dict
             else None
         )
         if (
             expected_js_helpers is not None
-            and isinstance(helper_symbols, list)
+            and type(helper_symbols) is list
             and all(type(helper) is str for helper in helper_symbols)
             and all(type(helper) is str for helper in expected_js_helpers)
             and helper_symbols != list(expected_js_helpers)
@@ -36320,7 +40306,7 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
         _string_list_field_errors(label, row, "required_phases", allow_empty=False)
     )
     required_phases = row.get("required_phases")
-    if isinstance(required_phases, list) and all(
+    if type(required_phases) is list and all(
         type(item) is str and item for item in required_phases
     ):
         semantic_required_phases: list[str] = []
@@ -36406,7 +40392,7 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
         )
     )
     blockers = row.get("validation_blockers")
-    if isinstance(blockers, list) and blockers:
+    if type(blockers) is list and blockers:
         errors.append(
             "readiness report user prover submission surface row "
             "validation_blockers must be empty"
@@ -36448,9 +40434,11 @@ def _number_repeated_submission_surface_row_errors(
 def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
     label = "readiness report user_prover_submission_surfaces"
     errors: list[str] = []
+    if type(surfaces) is not list:
+        return errors
     seen_lanes: set[str] = set()
     for row in surfaces:
-        if not isinstance(row, dict):
+        if type(row) is not dict:
             continue
         lanes = row.get("lanes")
         proof_backend = row.get("proof_backend")
@@ -36494,11 +40482,11 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
             else None
         )
         helper_sets = row.get("sdk_helper_symbols_by_sdk")
-        if isinstance(expected_helpers_by_sdk, dict) and isinstance(helper_sets, dict):
+        if type(expected_helpers_by_sdk) is dict and type(helper_sets) is dict:
             for sdk, expected_helpers in expected_helpers_by_sdk.items():
                 helpers = _public_mapping_get_string_key(helper_sets, sdk)
                 if (
-                    not isinstance(helpers, list)
+                    type(helpers) is not list
                     or any(type(helper) is not str for helper in helpers)
                     or any(type(helper) is not str for helper in expected_helpers)
                 ):
@@ -36518,7 +40506,7 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
             helper_symbols = row.get("sdk_helper_symbols")
             expected_js_helpers = expected_helpers_by_sdk.get("js-sdk", ())
             if (
-                isinstance(helper_symbols, list)
+                type(helper_symbols) is list
                 and all(type(helper) is str for helper in helper_symbols)
                 and all(type(helper) is str for helper in expected_js_helpers)
             ):
@@ -36540,7 +40528,7 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
                 expected_backend,
             )
             if (
-                isinstance(required_phases, list)
+                type(required_phases) is list
                 and all(type(phase) is str for phase in required_phases)
                 and required_phases != expected_required_phases
             ):
@@ -36557,7 +40545,8 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
 def _source_inventory_schema_errors(source_inventory: Any) -> list[str]:
     label = "readiness report source_inventory"
     errors: list[str] = []
-    if not isinstance(source_inventory, dict):
+    # Source-inventory marker: release verifier public JSON roots must reject subclasses.
+    if type(source_inventory) is not dict:
         return [f"{label} is not an object"]
     unknown_gate_errors: list[str] = []
     for gate in sorted(
@@ -36590,7 +40579,7 @@ def _source_inventory_schema_errors(source_inventory: Any) -> list[str]:
         if type(gate) is not str or gate not in SOURCE_INVENTORY_REQUIRED_GATES:
             continue
         gate_label = f"{label}.{gate}"
-        if not isinstance(status, dict):
+        if type(status) is not dict:
             errors.append(f"{gate_label} must be an object")
             continue
         for key in sorted(
@@ -36628,7 +40617,7 @@ def _source_inventory_schema_errors(source_inventory: Any) -> list[str]:
             )
         )
         blockers = _public_mapping_get_string_key(status, "validation_blockers")
-        if isinstance(blockers, list) and blockers:
+        if type(blockers) is list and blockers:
             errors.append(f"{gate_label} validation_blockers must be empty")
     return errors
 
@@ -36691,7 +40680,7 @@ def _nonzero_fixed_hex_field_errors(
     if errors or not _public_mapping_has_string_key(payload, field):
         return errors
     value = _public_mapping_get_string_key(payload, field)
-    if isinstance(value, str) and all(char == "0" for char in value[2:]):
+    if type(value) is str and all(char == "0" for char in value[2:]):
         return [
             f"{label} {field} must be a non-zero canonical {type_label} hex string"
         ]
@@ -36763,7 +40752,7 @@ def _source_adapter_gate_coherence_errors(
                     gate_hash,
                 )
             )
-            if isinstance(audit_hashes, dict):
+            if type(audit_hashes) is dict:
                 errors.extend(
                     _source_adapter_gate_template_audit_errors(
                         f"{label} audit_hashes",
@@ -36779,13 +40768,13 @@ def _source_adapter_gate_coherence_errors(
             return errors
         if ready is not True:
             errors.append(f"{label} ready must be true when gate is not required")
-        if isinstance(audit_hashes, dict) and audit_hashes:
+        if type(audit_hashes) is dict and audit_hashes:
             errors.append(
                 f"{label} audit_hashes must be empty when gate is not required"
             )
         if not _public_scalar_absent(gate_hash):
             errors.append(f"{label} gate_hash must be empty when gate is not required")
-        if isinstance(blockers, list) and blockers:
+        if type(blockers) is list and blockers:
             errors.append(f"{label} blockers must be empty when gate is not required")
         return errors
 
@@ -36798,7 +40787,7 @@ def _source_adapter_gate_coherence_errors(
                 gate_hash,
             )
         )
-        if isinstance(audit_hashes, dict):
+        if type(audit_hashes) is dict:
             errors.extend(
                 _source_adapter_gate_template_audit_errors(
                     f"{label} audit_hashes",
@@ -36826,7 +40815,7 @@ def _source_adapter_gate_coherence_errors(
     if hash_key_errors:
         errors.extend(hash_key_errors)
         return errors
-    if isinstance(audit_hashes, dict):
+    if type(audit_hashes) is dict:
         semantic_audit_hashes: dict[str, Any] = {}
         audit_key_errors: list[str] = []
         for key, value in sorted(
@@ -36888,7 +40877,7 @@ def _source_adapter_gate_coherence_errors(
         )
         role_fields: list[tuple[str, Any]] = []
         source_hashes = lane.get("source_record_hashes")
-        if isinstance(source_hashes, dict):
+        if type(source_hashes) is dict:
             source_hashes = _public_mapping_string_view(source_hashes)
             role_fields.extend(
                 (
@@ -36900,7 +40889,7 @@ def _source_adapter_gate_coherence_errors(
                 )
             )
         destination_binding = lane.get("destination_binding")
-        if isinstance(destination_binding, dict):
+        if type(destination_binding) is dict:
             destination_binding = _public_mapping_string_view(destination_binding)
             role_fields.append(
                 (
@@ -36909,13 +40898,13 @@ def _source_adapter_gate_coherence_errors(
                 )
             )
         route_allowlist = lane.get("route_allowlist")
-        if isinstance(route_allowlist, dict):
+        if type(route_allowlist) is dict:
             route_allowlist = _public_mapping_string_view(route_allowlist)
             role_fields.append(
                 ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
             )
             route_canary = route_allowlist.get("route_canary")
-            if isinstance(route_canary, dict):
+            if type(route_canary) is dict:
                 role_fields.append(
                     (
                         "route_canary_evidence_hash",
@@ -36948,7 +40937,7 @@ def _source_adapter_gate_coherence_errors(
     if type(ready) is not bool:
         errors.append(f"{label} ready must be boolean")
         return errors
-    if not isinstance(blockers, list):
+    if type(blockers) is not list:
         return errors
     if not ready:
         errors.append(f"{label} ready must be true when gate is required")
@@ -36968,7 +40957,7 @@ def _distinct_nonzero_hex_field_errors(
     for field, value in fields:
         if (
             not _is_canonical_fixed_hex_text(value, byte_length=byte_length)
-            or not isinstance(value, str)
+            or type(value) is not str
             or all(char == "0" for char in value[2:])
         ):
             continue
@@ -37024,7 +41013,7 @@ def _solana_pubkey_field_errors(
     if not _public_mapping_has_string_key(payload, field):
         return []
     value = _public_mapping_get_string_key(payload, field)
-    if not isinstance(value, str):
+    if type(value) is not str:
         return [f"{label} {field} must be a non-zero canonical base58 Solana address"]
     try:
         raw = _decode_solana_base58(value)
@@ -37055,7 +41044,7 @@ def _decode_solana_base58(value: str) -> bytes:
 
 def _is_canonical_tron_address_text(value: Any) -> bool:
     return (
-        isinstance(value, str)
+        type(value) is str
         and _is_canonical_fixed_hex_text(value, byte_length=21)
         and value.startswith("0x41")
         and any(byte != "0" for byte in value[4:])
@@ -37084,7 +41073,7 @@ def _matching_text_field_errors(
 def _canonical_nonzero_fixed_hex_value(value: Any, *, byte_length: int) -> str | None:
     if not _is_canonical_fixed_hex_text(value, byte_length=byte_length):
         return None
-    assert isinstance(value, str)
+    assert type(value) is str
     if all(char == "0" for char in value[2:]):
         return None
     return value
@@ -37154,7 +41143,7 @@ def _source_adapter_gate_hash_role_fields(
     lane: dict[str, Any],
 ) -> tuple[tuple[str, Any], ...]:
     source_gate = lane.get("source_adapter_gate")
-    if not isinstance(source_gate, dict):
+    if type(source_gate) is not dict:
         return ()
 
     fields: list[tuple[str, Any]] = []
@@ -37169,7 +41158,7 @@ def _source_adapter_gate_hash_role_fields(
         seen_hashes.add(gate_hash)
 
     audit_hashes = source_gate.get("audit_hashes")
-    if not isinstance(audit_hashes, dict):
+    if type(audit_hashes) is not dict:
         return tuple(fields)
 
     for audit_key, audit_hash in sorted(
@@ -37200,7 +41189,7 @@ def _route_canary_common_hash_role_errors(
     route_allowlist = lane.get("route_allowlist")
     destination_binding = lane.get("destination_binding")
     fields: list[tuple[str, Any]] = []
-    if isinstance(source_hashes, dict):
+    if type(source_hashes) is dict:
         source_hashes = _public_mapping_string_view(source_hashes)
         fields.extend(
             (
@@ -37212,12 +41201,12 @@ def _route_canary_common_hash_role_errors(
             )
         )
     fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
-    if isinstance(route_allowlist, dict):
+    if type(route_allowlist) is dict:
         route_allowlist = _public_mapping_string_view(route_allowlist)
         fields.append(
             ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
         )
-    if isinstance(destination_binding, dict):
+    if type(destination_binding) is dict:
         destination_binding = _public_mapping_string_view(destination_binding)
         fields.append(
             (
@@ -37241,7 +41230,7 @@ def _route_allowlist_recompute_errors(
     route_allowlist = _public_mapping_string_view(route_allowlist)
     source_hashes = lane.get("source_record_hashes")
     destination_binding = lane.get("destination_binding")
-    if not isinstance(source_hashes, dict) or not isinstance(destination_binding, dict):
+    if type(source_hashes) is not dict or type(destination_binding) is not dict:
         return []
     source_hashes = _public_mapping_string_view(source_hashes)
     destination_binding = _public_mapping_string_view(destination_binding)
@@ -37389,17 +41378,17 @@ def _all_lanes_route_canary_cross_lane_errors(
     label: str,
     lanes: Any,
 ) -> list[str]:
-    if not isinstance(lanes, list):
+    if type(lanes) is not list:
         return []
 
     errors: list[str] = []
     governed_hashes: dict[str, tuple[str, str]] = {}
     for index, lane in enumerate(lanes):
-        if not isinstance(lane, dict):
+        if type(lane) is not dict:
             continue
         lane_label = _all_lanes_lane_label(label, index, lane)
         source_hashes = lane.get("source_record_hashes")
-        if isinstance(source_hashes, dict):
+        if type(source_hashes) is dict:
             source_hashes = _public_mapping_string_view(source_hashes)
             for field in (
                 "source_verifier_material_hash",
@@ -37412,7 +41401,7 @@ def _all_lanes_route_canary_cross_lane_errors(
                 if value is not None:
                     governed_hashes.setdefault(value, (lane_label, field))
         destination_binding = lane.get("destination_binding")
-        if isinstance(destination_binding, dict):
+        if type(destination_binding) is dict:
             value = _canonical_nonzero_fixed_hex_value(
                 destination_binding.get("destination_binding_hash"),
                 byte_length=32,
@@ -37423,7 +41412,7 @@ def _all_lanes_route_canary_cross_lane_errors(
                     (lane_label, "destination_binding_hash"),
                 )
         route_allowlist = lane.get("route_allowlist")
-        if isinstance(route_allowlist, dict):
+        if type(route_allowlist) is dict:
             value = _canonical_nonzero_fixed_hex_value(
                 route_allowlist.get("route_allowlist_hash"),
                 byte_length=32,
@@ -37431,7 +41420,7 @@ def _all_lanes_route_canary_cross_lane_errors(
             if value is not None:
                 governed_hashes.setdefault(value, (lane_label, "route_allowlist_hash"))
             route_canary = route_allowlist.get("route_canary")
-            if isinstance(route_canary, dict):
+            if type(route_canary) is dict:
                 raw_domain = lane.get("domain")
                 domain = raw_domain if type(raw_domain) is int else None
                 canary_fields = ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN.get(
@@ -37460,14 +41449,14 @@ def _all_lanes_route_canary_cross_lane_errors(
 
     seen_canaries: dict[str, str] = {}
     for index, lane in enumerate(lanes):
-        if not isinstance(lane, dict):
+        if type(lane) is not dict:
             continue
         lane_label = _all_lanes_lane_label(label, index, lane)
         route_allowlist = lane.get("route_allowlist")
-        if not isinstance(route_allowlist, dict):
+        if type(route_allowlist) is not dict:
             continue
         route_canary = route_allowlist.get("route_canary")
-        if not isinstance(route_canary, dict):
+        if type(route_canary) is not dict:
             continue
         raw_domain = lane.get("domain")
         domain = raw_domain if type(raw_domain) is int else None
@@ -37547,7 +41536,7 @@ def _all_lanes_route_canary_schema_errors(
         errors.append(f"{label} evidence_source must be {expected_source}")
     errors.extend(_true_field_errors(label, route_canary, "evidence_bound"))
     route_allowlist = lane.get("route_allowlist")
-    if isinstance(route_allowlist, dict):
+    if type(route_allowlist) is dict:
         route_allowlist = _public_mapping_string_view(route_allowlist)
         expected_route_hash = route_allowlist.get("route_allowlist_hash")
         route_canary_route_hash = route_canary.get("route_allowlist_hash")
@@ -37561,7 +41550,7 @@ def _all_lanes_route_canary_schema_errors(
                 "route_allowlist_hash"
             )
     destination_binding = lane.get("destination_binding")
-    if isinstance(destination_binding, dict):
+    if type(destination_binding) is dict:
         destination_binding = _public_mapping_string_view(destination_binding)
         expected_destination_hash = destination_binding.get("destination_binding_hash")
         route_canary_destination_hash = route_canary.get("destination_binding_hash")
@@ -37613,7 +41602,7 @@ def _all_lanes_route_canary_schema_errors(
         )
         governed_hash_fields: list[tuple[str, Any]] = []
         source_hashes = lane.get("source_record_hashes")
-        if isinstance(source_hashes, dict):
+        if type(source_hashes) is dict:
             source_hashes = _public_mapping_string_view(source_hashes)
             governed_hash_fields.extend(
                 (
@@ -37625,11 +41614,11 @@ def _all_lanes_route_canary_schema_errors(
                 )
             )
         governed_hash_fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
-        if isinstance(route_allowlist, dict):
+        if type(route_allowlist) is dict:
             governed_hash_fields.append(
                 ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
             )
-        if isinstance(destination_binding, dict):
+        if type(destination_binding) is dict:
             governed_hash_fields.append(
                 (
                     "destination_binding_hash",
@@ -37735,7 +41724,7 @@ def _all_lanes_route_canary_schema_errors(
         )
         governed_hash_fields: list[tuple[str, Any]] = []
         source_hashes = lane.get("source_record_hashes")
-        if isinstance(source_hashes, dict):
+        if type(source_hashes) is dict:
             source_hashes = _public_mapping_string_view(source_hashes)
             governed_hash_fields.extend(
                 (
@@ -37747,11 +41736,11 @@ def _all_lanes_route_canary_schema_errors(
                 )
             )
         governed_hash_fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
-        if isinstance(route_allowlist, dict):
+        if type(route_allowlist) is dict:
             governed_hash_fields.append(
                 ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
             )
-        if isinstance(destination_binding, dict):
+        if type(destination_binding) is dict:
             governed_hash_fields.append(
                 (
                     "destination_binding_hash",
@@ -37860,7 +41849,7 @@ def _all_lanes_route_canary_schema_errors(
         )
         governed_hash_fields = []
         source_hashes = lane.get("source_record_hashes")
-        if isinstance(source_hashes, dict):
+        if type(source_hashes) is dict:
             source_hashes = _public_mapping_string_view(source_hashes)
             governed_hash_fields.extend(
                 (
@@ -37870,13 +41859,13 @@ def _all_lanes_route_canary_schema_errors(
                         "source_adapter_engine_deployment_hash",
                     )
                 )
-            )
+        )
         governed_hash_fields.extend(_source_adapter_gate_hash_role_fields(label, lane))
-        if isinstance(route_allowlist, dict):
+        if type(route_allowlist) is dict:
             governed_hash_fields.append(
                 ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
             )
-        if isinstance(destination_binding, dict):
+        if type(destination_binding) is dict:
             governed_hash_fields.append(
                 (
                     "destination_binding_hash",
@@ -37898,10 +41887,10 @@ def _all_lanes_route_canary_schema_errors(
 
 def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
     errors: list[str] = []
-    if not isinstance(lanes, list):
+    if type(lanes) is not list:
         return errors
     for index, lane in enumerate(lanes):
-        if not isinstance(lane, dict):
+        if type(lane) is not dict:
             errors.append(f"{label} lane {index} is not an object")
             continue
         lane_label = _all_lanes_lane_label(label, index, lane)
@@ -37954,7 +41943,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             "destination_binding",
             "route_allowlist",
         ):
-            if lane_has(field) and not isinstance(lane_get(field), dict):
+            if lane_has(field) and type(lane_get(field)) is not dict:
                 errors.append(f"{lane_label} {field} is not an object")
         errors.extend(
             _public_blocker_list_field_errors(
@@ -37965,10 +41954,10 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             )
         )
         blockers = lane_get("blockers")
-        if domain == ACTIVE_LAUNCH_DOMAIN and isinstance(blockers, list) and blockers:
+        if domain == ACTIVE_LAUNCH_DOMAIN and type(blockers) is list and blockers:
             errors.append(f"{lane_label} blockers must be empty")
         records = lane_get("records")
-        if isinstance(records, dict):
+        if type(records) is dict:
             records_label = f"{lane_label} records"
             errors.extend(
                 _exact_object_key_errors(
@@ -37986,7 +41975,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                         errors.extend(_true_field_errors(records_label, records, field))
                     else:
                         errors.extend(_boolean_field_errors(records_label, records, field))
-        records_complete = isinstance(records, dict) and all(
+        records_complete = type(records) is dict and all(
             _public_mapping_get_string_key(records, field) is True
             for field in ALL_LANES_RECORD_KEYS
         )
@@ -38010,7 +41999,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             )
             continue
         source_hashes = lane_get("source_record_hashes")
-        if isinstance(source_hashes, dict):
+        if type(source_hashes) is dict:
             source_hashes_label = f"{lane_label} source_record_hashes"
             errors.extend(
                 _exact_object_key_errors(
@@ -38037,7 +42026,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 )
             )
         source_gate = lane_get("source_adapter_gate")
-        if isinstance(source_gate, dict):
+        if type(source_gate) is dict:
             source_gate_label = f"{lane_label} source_adapter_gate"
             errors.extend(
                 _exact_object_key_errors(
@@ -38063,12 +42052,9 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             )
             gate_hash = source_gate.get("gate_hash")
             audit_hashes = source_gate.get("audit_hashes")
-            if "audit_hashes" in source_gate and not isinstance(
-                audit_hashes,
-                dict,
-            ):
+            if "audit_hashes" in source_gate and type(audit_hashes) is not dict:
                 errors.append(f"{source_gate_label} audit_hashes is not an object")
-            elif isinstance(audit_hashes, dict):
+            elif type(audit_hashes) is dict:
                 audit_key_errors: list[str] = []
                 for field, value in sorted(
                     audit_hashes.items(),
@@ -38082,7 +42068,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                         audit_key_errors.append(field_blocker)
                         continue
                     if not _is_canonical_fixed_hex_text(value, byte_length=32) or (
-                        isinstance(value, str) and all(char == "0" for char in value[2:])
+                        type(value) is str and all(char == "0" for char in value[2:])
                     ):
                         errors.append(
                             f"{source_gate_label} audit_hashes {field} must be a "
@@ -38098,7 +42084,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 if (
                     not _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
                     or (
-                        isinstance(gate_hash, str)
+                        type(gate_hash) is str
                         and all(char == "0" for char in gate_hash[2:])
                     )
                 ):
@@ -38106,7 +42092,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                         f"{source_gate_label} gate_hash must be a non-zero "
                         "canonical bytes32 hex string when required"
                     )
-                if isinstance(audit_hashes, dict):
+                if type(audit_hashes) is dict:
                     if not audit_hashes:
                         errors.append(
                             f"{source_gate_label} audit_hashes must not be empty "
@@ -38114,7 +42100,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                         )
                     elif (
                         _is_canonical_fixed_hex_text(gate_hash, byte_length=32)
-                        and isinstance(gate_hash, str)
+                        and type(gate_hash) is str
                         and any(char != "0" for char in gate_hash[2:])
                         and not any(
                             gate_hash == value for value in audit_hashes.values()
@@ -38135,7 +42121,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
             blockers = source_gate.get("blockers")
             if (
                 source_gate.get("ready") is True
-                and isinstance(blockers, list)
+                and type(blockers) is list
                 and blockers
             ):
                 errors.append(f"{source_gate_label} blockers must be empty when ready")
@@ -38148,7 +42134,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 )
             )
         evm_metadata = lane.get("evm_live_metadata")
-        if isinstance(evm_metadata, dict):
+        if type(evm_metadata) is dict:
             metadata_label = f"{lane_label} evm_live_metadata"
             errors.extend(
                 _exact_object_key_errors(
@@ -38193,7 +42179,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 )
                 for field in ("source_rpc_chain_id", "destination_rpc_chain_id"):
                     value = evm_metadata.get(field)
-                    if isinstance(value, str) and (
+                    if type(value) is str and (
                         not _is_canonical_decimal_text(value, positive=True)
                         or int(value, 10) != expected_chain_id
                     ):
@@ -38225,10 +42211,10 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 ):
                     if not _public_scalar_absent(evm_metadata.get(field)):
                         errors.append(
-                            f"{metadata_label} {field} must be empty for non-EVM lanes"
+                        f"{metadata_label} {field} must be empty for non-EVM lanes"
                         )
         destination_binding = lane.get("destination_binding")
-        if isinstance(destination_binding, dict):
+        if type(destination_binding) is dict:
             destination_label = f"{lane_label} destination_binding"
             for key in _public_unknown_mapping_fields(
                 destination_binding,
@@ -38352,7 +42338,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 )
             )
         route_allowlist = lane.get("route_allowlist")
-        if isinstance(route_allowlist, dict):
+        if type(route_allowlist) is dict:
             route_label = f"{lane_label} route_allowlist"
             errors.extend(
                 _exact_object_key_errors(
@@ -38408,7 +42394,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                 )
             )
             route_canary = route_allowlist.get("route_canary")
-            if not isinstance(route_canary, dict):
+            if type(route_canary) is not dict:
                 errors.append(f"{route_label} route_canary is not an object")
             else:
                 canary_label = f"{route_label} route_canary"
@@ -38435,7 +42421,7 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
                         "lane route_allowlist_hash",
                     )
                 )
-                if isinstance(destination_binding, dict):
+                if type(destination_binding) is dict:
                     errors.extend(
                         _matching_text_field_errors(
                             canary_label,
@@ -38452,6 +42438,9 @@ def _all_lanes_summary_schema_errors(
     label: str,
     summary: dict[str, Any],
 ) -> list[str]:
+    if type(summary) is not dict:
+        return [f"{label} is not an object"]
+
     errors: list[str] = []
     for key in _public_unknown_mapping_fields(summary, ALL_LANES_SUMMARY_KEYS):
         errors.append(
@@ -38500,7 +42489,7 @@ def _all_lanes_summary_schema_errors(
         default,
     )
     blockers = summary_get("blockers")
-    if isinstance(blockers, list):
+    if type(blockers) is list:
         launch_blockers = _active_launch_blockers(summary)
         if launch_blockers:
             errors.append(f"{label} active {ACTIVE_LAUNCH_DISPLAY} launch blockers must be empty")
@@ -38511,15 +42500,15 @@ def _all_lanes_summary_schema_errors(
     unsupported_launch_domains = summary_get("unsupported_launch_domains")
     lanes = summary_get("lanes")
     if (
-        isinstance(required_domains, list)
+        type(required_domains) is list
         and all(type(domain) is int for domain in required_domains)
-        and isinstance(supported_launch_domains, list)
+        and type(supported_launch_domains) is list
         and all(type(domain) is int for domain in supported_launch_domains)
-        and isinstance(unsupported_launch_domains, list)
+        and type(unsupported_launch_domains) is list
         and all(type(domain) is int for domain in unsupported_launch_domains)
-        and isinstance(lanes, list)
+        and type(lanes) is list
         and all(
-            isinstance(lane, dict)
+            type(lane) is dict
             and type(_public_mapping_get_string_key(lane, "domain")) is int
             for lane in lanes
         )
@@ -38567,7 +42556,7 @@ def _all_lanes_summary_schema_errors(
             errors.append(f"{label} required_domains must match lane domains")
     if _public_mapping_has_string_key(summary, "release_checklist"):
         release_checklist = _public_mapping_get_string_key(summary, "release_checklist")
-        if not isinstance(release_checklist, dict):
+        if type(release_checklist) is not dict:
             errors.append(f"{label} release_checklist is not an object")
         else:
             errors.extend(
@@ -38582,12 +42571,16 @@ def _all_lanes_summary_schema_errors(
 
 def _release_checklist_schema_errors(
     label: str,
-    checklist: dict[str, Any],
+    checklist: Any,
     *,
     require_ready: bool = True,
 ) -> list[str]:
     if type(require_ready) is not bool:
         raise ValueError("strict release_checklist require_ready must be a boolean")
+
+    # Source-inventory marker: strict release_checklist containers must reject subclasses
+    if type(checklist) is not dict:
+        return [f"{label} release_checklist is not an object"]
 
     errors: list[str] = []
     for key in _public_unknown_mapping_fields(checklist, RELEASE_CHECKLIST_KEYS):
@@ -38606,13 +42599,13 @@ def _release_checklist_schema_errors(
     else:
         errors.extend(_boolean_field_errors(f"{label} release_checklist", checklist, "ready"))
     items = _public_mapping_get_string_key(checklist, "items")
-    if not isinstance(items, list):
+    if type(items) is not list:
         errors.append(f"{label} release_checklist items is not a list")
         return errors
     seen_item_ids: set[str] = set()
     item_errors: list[str] = []
     for item in items:
-        if not isinstance(item, dict):
+        if type(item) is not dict:
             item_errors.append(f"{label} release_checklist item is not an object")
             continue
         item_id = _public_mapping_get_string_key(item, "id")
@@ -38623,7 +42616,7 @@ def _release_checklist_schema_errors(
         )
         item_label = (
             f"{label} release_checklist item {item_id}"
-            if item_id_malformed_blocker is None and isinstance(item_id, str) and item_id
+            if item_id_malformed_blocker is None and type(item_id) is str and item_id
             else f"{label} release_checklist item"
         )
         item_id_blocker = item_id_malformed_blocker
@@ -38666,13 +42659,16 @@ def _release_checklist_schema_errors(
             )
         )
         blockers = _public_mapping_get_string_key(item, "blockers")
-        if require_ready and isinstance(blockers, list) and blockers:
+        if require_ready and type(blockers) is list and blockers:
             item_errors.append(f"{item_label} blockers must be empty")
     errors.extend(_number_repeated_release_checklist_item_errors(item_errors, label))
     return errors
 
 
 def _corridor_schema_errors(corridor: dict[str, Any]) -> list[str]:
+    if type(corridor) is not dict:
+        return ["readiness report corridor is not an object"]
+
     errors: list[str] = []
     for key in _public_unknown_mapping_fields(corridor, CORRIDOR_KEYS):
         errors.append(
@@ -38689,12 +42685,9 @@ def _corridor_schema_errors(corridor: dict[str, Any]) -> list[str]:
         errors.append("readiness report corridor production_ready is not a boolean")
     if type(_public_mapping_get_string_key(corridor, "require_phase_evidence")) is not bool:
         errors.append("readiness report corridor require_phase_evidence is not a boolean")
-    if not isinstance(_public_mapping_get_string_key(corridor, "phases"), dict):
+    if type(_public_mapping_get_string_key(corridor, "phases")) is not dict:
         errors.append("readiness report corridor phases is not an object")
-    if not isinstance(
-        _public_mapping_get_string_key(corridor, "evidence_artifacts"),
-        dict,
-    ):
+    if type(_public_mapping_get_string_key(corridor, "evidence_artifacts")) is not dict:
         errors.append("readiness report corridor evidence_artifacts is not an object")
     errors.extend(
         _corridor_evidence_artifact_duplicate_path_errors(
@@ -38710,7 +42703,7 @@ def _corridor_schema_errors(corridor: dict[str, Any]) -> list[str]:
         )
     )
     blockers = _public_mapping_get_string_key(corridor, "blockers")
-    if isinstance(blockers, list) and blockers:
+    if type(blockers) is list and blockers:
         errors.append("readiness report corridor blockers must be empty")
     return errors
 
@@ -38718,13 +42711,13 @@ def _corridor_schema_errors(corridor: dict[str, Any]) -> list[str]:
 def _corridor_evidence_artifact_duplicate_path_errors(value: Any) -> list[str]:
     """Return duplicate-path blockers from inspectable corridor artifacts."""
 
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         return []
     seen_paths: set[str] = set()
     duplicate_path_count = 0
     errors: list[str] = []
     for artifact in value.values():
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         artifact_path, path_errors = _canonical_artifact_path(artifact)
         if path_errors or artifact_path is None:
@@ -38743,10 +42736,10 @@ def _corridor_evidence_artifact_duplicate_path_errors(value: Any) -> list[str]:
 def _expected_input_paths(report: dict[str, Any]) -> list[str]:
     paths: list[str] = []
     input_artifacts = report.get("input_artifacts")
-    if not isinstance(input_artifacts, list):
+    if type(input_artifacts) is not list:
         return paths
     for artifact in input_artifacts:
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         artifact_path, path_errors = _canonical_artifact_path(artifact)
         if not path_errors and artifact_path is not None:
@@ -38757,7 +42750,8 @@ def _expected_input_paths(report: dict[str, Any]) -> list[str]:
 def _input_provenance_schema_errors(report: dict[str, Any]) -> list[str]:
     errors: list[str] = []
     inputs = report.get("inputs")
-    if not isinstance(inputs, list) or not inputs:
+    # Source-inventory marker: release verifier public JSON lists must reject subclasses.
+    if type(inputs) is not list or not inputs:
         errors.append(
             "readiness report inputs must be a non-empty list of canonical paths"
         )
@@ -38771,21 +42765,21 @@ def _input_provenance_schema_errors(report: dict[str, Any]) -> list[str]:
             errors.extend(
                 _copied_input_layout_errors("readiness report inputs", index, item)
             )
-            if isinstance(item, str) and item in seen_inputs:
+            if type(item) is str and item in seen_inputs:
                 duplicate_input_count += 1
                 errors.append(
                     "readiness report inputs contains duplicate path "
                     f"#{duplicate_input_count}"
                 )
-            if isinstance(item, str):
+            if type(item) is str:
                 seen_inputs.add(item)
 
     input_artifacts = report.get("input_artifacts")
-    if isinstance(input_artifacts, list):
+    if type(input_artifacts) is list:
         seen_artifacts: set[str] = set()
         duplicate_artifact_count = 0
         for index, artifact in enumerate(input_artifacts):
-            if not isinstance(artifact, dict):
+            if type(artifact) is not dict:
                 continue
             artifact_path, path_errors = _canonical_artifact_path(artifact)
             if path_errors or artifact_path is None:
@@ -38821,11 +42815,11 @@ def _copied_input_summary(
 ) -> dict[str, Any] | None:
     input_paths: list[Path] = []
     input_artifacts = report.get("input_artifacts")
-    if not isinstance(input_artifacts, list) or not input_artifacts:
+    if type(input_artifacts) is not list or not input_artifacts:
         errors.append("readiness report input_artifacts must be a non-empty list")
         return None
     for index, artifact in enumerate(input_artifacts):
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             errors.append(f"readiness report input artifact {index} is not an object")
             return None
         artifact_path, path_errors = _canonical_artifact_path(artifact)
@@ -38849,18 +42843,18 @@ def _copied_input_summary(
 def _referenced_report_artifact_paths(report: dict[str, Any]) -> set[str]:
     paths = set(REQUIRED_ARTIFACT_PATHS)
     input_artifacts = report.get("input_artifacts")
-    if isinstance(input_artifacts, list):
+    if type(input_artifacts) is list:
         for artifact in input_artifacts:
-            if not isinstance(artifact, dict):
+            if type(artifact) is not dict:
                 continue
             artifact_path, path_errors = _canonical_artifact_path(artifact)
             if not path_errors and artifact_path is not None:
                 paths.add(artifact_path)
 
     native_bundle = report.get("native_evm_prover_bundle")
-    if isinstance(native_bundle, dict):
+    if type(native_bundle) is dict:
         artifact = native_bundle.get("artifact")
-        if isinstance(artifact, dict):
+        if type(artifact) is dict:
             artifact_path, path_errors = _canonical_artifact_path(artifact)
             if not path_errors and artifact_path is not None:
                 paths.add(artifact_path)
@@ -38872,29 +42866,29 @@ def _referenced_report_artifact_paths(report: dict[str, Any]) -> set[str]:
             "native_prover_self_test_artifact",
         ):
             artifact = native_bundle.get(artifact_field)
-            if isinstance(artifact, dict):
+            if type(artifact) is dict:
                 artifact_path, path_errors = _canonical_artifact_path(artifact)
                 if not path_errors and artifact_path is not None:
                     paths.add(artifact_path)
         sdk_artifacts = native_bundle.get("sdk_artifacts")
-        if isinstance(sdk_artifacts, list):
+        if type(sdk_artifacts) is list:
             for row in sdk_artifacts:
-                if not isinstance(row, dict):
+                if type(row) is not dict:
                     continue
                 artifact = row.get("implementation_artifact")
-                if isinstance(artifact, dict):
+                if type(artifact) is dict:
                     artifact_path, path_errors = _canonical_artifact_path(artifact)
                     if not path_errors and artifact_path is not None:
                         paths.add(artifact_path)
 
     corridor = report.get("corridor")
-    if not isinstance(corridor, dict):
+    if type(corridor) is not dict:
         return paths
     phase_artifacts = corridor.get("evidence_artifacts")
-    if not isinstance(phase_artifacts, dict):
+    if type(phase_artifacts) is not dict:
         return paths
     phases = corridor.get("phases")
-    if not isinstance(phases, dict):
+    if type(phases) is not dict:
         return paths
     for phase, status in phases.items():
         if (
@@ -38909,7 +42903,7 @@ def _referenced_report_artifact_paths(report: dict[str, Any]) -> set[str]:
         if status != "passed":
             continue
         artifact = phase_artifacts.get(phase)
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             continue
         artifact_path, path_errors = _canonical_artifact_path(artifact)
         if not path_errors and artifact_path is not None:
@@ -38922,10 +42916,10 @@ def _referenced_native_evm_prover_report_artifact_paths(
 ) -> set[str]:
     paths: set[str] = set()
     native_bundle = report.get("native_evm_prover_bundle")
-    if not isinstance(native_bundle, dict):
+    if type(native_bundle) is not dict:
         return paths
     artifact = native_bundle.get("artifact")
-    if isinstance(artifact, dict):
+    if type(artifact) is dict:
         artifact_path, path_errors = _canonical_artifact_path(artifact)
         if not path_errors and artifact_path is not None:
             paths.add(artifact_path)
@@ -38937,17 +42931,17 @@ def _referenced_native_evm_prover_report_artifact_paths(
         "native_prover_self_test_artifact",
     ):
         artifact = native_bundle.get(artifact_field)
-        if isinstance(artifact, dict):
+        if type(artifact) is dict:
             artifact_path, path_errors = _canonical_artifact_path(artifact)
             if not path_errors and artifact_path is not None:
                 paths.add(artifact_path)
     sdk_artifacts = native_bundle.get("sdk_artifacts")
-    if isinstance(sdk_artifacts, list):
+    if type(sdk_artifacts) is list:
         for row in sdk_artifacts:
-            if not isinstance(row, dict):
+            if type(row) is not dict:
                 continue
             artifact = row.get("implementation_artifact")
-            if isinstance(artifact, dict):
+            if type(artifact) is dict:
                 artifact_path, path_errors = _canonical_artifact_path(artifact)
                 if not path_errors and artifact_path is not None:
                     paths.add(artifact_path)
@@ -39022,7 +43016,8 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             "artifacts": [],
             "manifest_sha256": manifest_sha256,
         }
-    if not isinstance(manifest, dict):
+    # Source-inventory marker: release manifest verifier containers must reject subclasses.
+    if type(manifest) is not dict:
         return {
             "verified": False,
             "errors": ["manifest is not a JSON object"],
@@ -39058,13 +43053,13 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         )
     )
     artifacts = manifest.get("artifacts")
-    if not isinstance(artifacts, list) or not artifacts:
+    if type(artifacts) is not list or not artifacts:
         errors.append("manifest artifacts must be a non-empty list")
         artifacts = []
     manifest_artifacts = _manifest_artifacts_by_path(artifacts, errors)
     manifest_artifact_error_counts: dict[str, int] = {}
     for artifact in artifacts:
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             errors.append("manifest artifact entry is not an object")
             continue
         artifact_errors = _artifact_errors(bundle_dir, artifact)
@@ -39113,7 +43108,8 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     notes_path = bundle_dir / "sccp-release-notes-attachment.md"
     report, report_load_errors = _load_public_json_root("readiness report", report_path)
     errors.extend(report_load_errors)
-    if not isinstance(report, dict) or not report:
+    # Source-inventory marker: release verifier public JSON roots must reject subclasses.
+    if type(report) is not dict or not report:
         errors.append("readiness report JSON must be a non-empty object")
         report = {}
     else:
@@ -39137,7 +43133,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         summary_path,
     )
     errors.extend(summary_load_errors)
-    if not isinstance(summary, dict) or not summary:
+    if type(summary) is not dict or not summary:
         errors.append("all-lanes summary JSON must be a non-empty object")
         summary = {}
     else:
@@ -39164,7 +43160,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             )
         )
         raw_evidence = report.get("evidence")
-        if not isinstance(raw_evidence, dict):
+        if type(raw_evidence) is not dict:
             errors.append("readiness report evidence is not an object")
         else:
             report_evidence = raw_evidence
@@ -39175,7 +43171,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             errors.extend(evidence_schema_errors)
             report_evidence_schema_valid = not evidence_schema_errors
         raw_release_checklist = report.get("release_checklist")
-        if not isinstance(raw_release_checklist, dict):
+        if type(raw_release_checklist) is not dict:
             errors.append("readiness report release_checklist is not an object")
         else:
             report_release_checklist = raw_release_checklist
@@ -39186,13 +43182,13 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             errors.extend(release_checklist_schema_errors)
             report_release_checklist_schema_valid = not release_checklist_schema_errors
         raw_corridor = report.get("corridor")
-        if not isinstance(raw_corridor, dict):
+        if type(raw_corridor) is not dict:
             errors.append("readiness report corridor is not an object")
         else:
             report_corridor = raw_corridor
             errors.extend(_corridor_schema_errors(report_corridor))
         raw_native_bundle = report.get("native_evm_prover_bundle")
-        if not isinstance(raw_native_bundle, dict):
+        if type(raw_native_bundle) is not dict:
             errors.append("readiness report native_evm_prover_bundle is not an object")
         else:
             report_native_bundle = raw_native_bundle
@@ -39208,7 +43204,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
         )
         summary = _public_mapping_string_view(summary)
         raw_summary_checklist = summary.get("release_checklist")
-        if not isinstance(raw_summary_checklist, dict):
+        if type(raw_summary_checklist) is not dict:
             errors.append("all-lanes summary release_checklist is not an object")
         else:
             summary_release_checklist = raw_summary_checklist
@@ -39278,7 +43274,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     if report:
         errors.extend(_input_provenance_schema_errors(report))
         report_inputs = report.get("inputs")
-        if isinstance(report_inputs, list) and report_inputs != _expected_input_paths(report):
+        if type(report_inputs) is list and report_inputs != _expected_input_paths(report):
             errors.append(
                 "readiness report inputs do not match copied input artifacts"
             )
@@ -39424,7 +43420,8 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                 )
     if report:
         report_input_artifacts = report.get("input_artifacts")
-        if not isinstance(report_input_artifacts, list):
+        # Source-inventory marker: release verifier public JSON lists must reject subclasses.
+        if type(report_input_artifacts) is not list:
             report_input_artifacts = []
         input_artifact_error_counts: dict[str, int] = {}
         for artifact in report_input_artifacts:
@@ -39465,12 +43462,12 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                     manifest_artifacts,
                     report_native_bundle.get(artifact_field),
                     label=f"readiness report native EVM prover {artifact_field}",
-                )
+            )
             sdk_artifacts = report_native_bundle.get("sdk_artifacts")
-            if isinstance(sdk_artifacts, list):
+            if type(sdk_artifacts) is list:
                 native_sdk_artifact_error_counts: dict[str, int] = {}
                 for row in sdk_artifacts:
-                    if not isinstance(row, dict):
+                    if type(row) is not dict:
                         continue
                     sdk = row.get("sdk", "-")
                     artifact_errors: list[str] = []
@@ -39500,11 +43497,11 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                             )
         corridor = report_corridor
         phase_artifacts = corridor.get("evidence_artifacts", {})
-        if not isinstance(phase_artifacts, dict):
+        if type(phase_artifacts) is not dict:
             errors.append("readiness report corridor evidence_artifacts is not an object")
             phase_artifacts = {}
         phases = corridor.get("phases", {})
-        if isinstance(phases, dict):
+        if type(phases) is dict:
             phase_artifact_key_errors: list[str] = []
             for phase in sorted(phase_artifacts, key=_safe_public_key_sort_key):
                 blocker = _corridor_phase_key_blocker(
@@ -39565,11 +43562,11 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
             errors.append("readiness report corridor phases is not an object")
         crypto = report.get("cryptographic_evidence")
         lanes = report_evidence.get("lanes", [])
-        if not isinstance(crypto, list) or not crypto:
+        if type(crypto) is not list or not crypto:
             errors.append("readiness report cryptographic_evidence is missing")
-        elif isinstance(lanes, list) and len(crypto) != len(lanes):
+        elif type(lanes) is list and len(crypto) != len(lanes):
             errors.append("readiness report cryptographic_evidence does not cover every lane")
-        if isinstance(crypto, list):
+        if type(crypto) is list:
             errors.extend(_cryptographic_evidence_inventory_errors(crypto))
             errors.extend(_cryptographic_evidence_lane_binding_errors(crypto, lanes))
             expected_crypto = _expected_cryptographic_evidence(report_evidence)
@@ -39578,12 +43575,12 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                     "readiness report cryptographic_evidence does not match embedded lane evidence"
                 )
         surfaces = report.get("user_prover_submission_surfaces")
-        if not isinstance(surfaces, list) or not surfaces:
+        if type(surfaces) is not list or not surfaces:
             errors.append("readiness report user_prover_submission_surfaces is missing")
         else:
             surface_row_errors: list[str] = []
             for row in surfaces:
-                if not isinstance(row, dict):
+                if type(row) is not dict:
                     surface_row_errors.append(
                         "readiness report user prover submission surface row "
                         "is not an object"
@@ -39624,16 +43621,16 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                         "does not match corridor phases"
                     )
         lane_by_domain: dict[int, dict[str, Any]] = {}
-        if isinstance(lanes, list):
+        if type(lanes) is list:
             lane_by_domain = {
                 lane["domain"]: lane
                 for lane in lanes
-                if isinstance(lane, dict) and type(lane.get("domain")) is int
+                if type(lane) is dict and type(lane.get("domain")) is int
             }
-        if isinstance(crypto, list):
+        if type(crypto) is list:
             crypto_row_errors: list[str] = []
             for row in crypto:
-                if not isinstance(row, dict):
+                if type(row) is not dict:
                     crypto_row_errors.append(
                         "readiness report cryptographic evidence row is not an object"
                     )
@@ -39651,7 +43648,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                 lane = lane_by_domain.get(domain)
                 enforce_evm_live_tags = (
                     domain == ACTIVE_LAUNCH_DOMAIN
-                    or (isinstance(lane, dict) and lane.get("production_ready") is True)
+                    or (type(lane) is dict and lane.get("production_ready") is True)
                 )
                 crypto_row_errors.extend(
                     _cryptographic_evidence_row_schema_errors(
@@ -39762,14 +43759,14 @@ def _public_verifier_summary_artifacts(
     value: Any,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     label = "strict verifier summary"
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [], [f"{label} artifacts must be a list"]
 
     public_artifacts: list[dict[str, Any]] = []
     errors: list[str] = []
     for index, artifact in enumerate(value):
         artifact_label = f"{label} artifact {index}"
-        if not isinstance(artifact, dict):
+        if type(artifact) is not dict:
             errors.append(f"{artifact_label} must be an object")
             continue
         unknown_fields = _public_unknown_mapping_fields(artifact, ARTIFACT_KEYS)
@@ -39810,7 +43807,7 @@ def _public_verifier_summary_errors(value: Any) -> tuple[list[str], list[str]]:
 
     label = "strict verifier summary"
     field = "errors"
-    if not isinstance(value, list):
+    if type(value) is not list:
         return [], [f"{label} {field} must be a list"]
     public_errors: list[str] = []
     validation_errors: list[str] = []
@@ -39822,7 +43819,7 @@ def _public_verifier_summary_errors(value: Any) -> tuple[list[str], list[str]]:
         if blocker_error is not None:
             summary_error_blockers.append(blocker_error)
             continue
-        assert isinstance(blocker, str)
+        assert type(blocker) is str
         if blocker in seen_public_errors:
             duplicate_error = f"{label} {field} must not contain duplicate strings"
             if duplicate_error not in seen_validation_errors:
@@ -39845,7 +43842,8 @@ def _public_verifier_summary_payload(summary: Any) -> dict[str, Any]:
     """Return a fail-closed public strict-verifier summary payload."""
 
     label = "strict verifier summary"
-    if not isinstance(summary, dict):
+    # Source-inventory marker: strict verifier summary containers must reject subclasses
+    if type(summary) is not dict:
         return {
             "verified": False,
             "errors": [f"{label} must be an object"],
@@ -39891,7 +43889,7 @@ def _public_verifier_summary_payload(summary: Any) -> dict[str, Any]:
     verified = _public_mapping_get_string_key(summary, "verified")
     if type(verified) is not bool:
         errors.append("strict verifier summary verified must be boolean")
-    elif not summary_error_field_errors and isinstance(raw_errors, list):
+    elif not summary_error_field_errors and type(raw_errors) is list:
         if verified and raw_errors:
             errors.append(f"{label} errors must be empty when verified is true")
         if not verified and not raw_errors:

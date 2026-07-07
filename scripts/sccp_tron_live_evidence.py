@@ -145,7 +145,7 @@ TRON_SENSITIVE_FIELD_NAME_MARKERS = (
 
 
 def _unsupported_tron_field_detail(field: Any) -> str:
-    if not isinstance(field, str):
+    if type(field) is not str:
         return "non-string field name"
     lowered = field.lower()
     if any(marker in lowered for marker in TRON_SENSITIVE_FIELD_NAME_MARKERS):
@@ -161,7 +161,7 @@ def _unsupported_tron_field_detail(field: Any) -> str:
 
 
 def _safe_public_key_sort_key(value: object) -> tuple[int, str]:
-    if isinstance(value, str):
+    if type(value) is str:
         return (0, value)
     return (1, type(value).__name__)
 
@@ -190,7 +190,7 @@ def _parse_hex32(value: str, *, label: str) -> bytes:
 
 def _exact_summary_string(record: dict[str, Any], field: str, *, label: str) -> str:
     value = record.get(field)
-    if not isinstance(value, str) or not value or value != value.strip():
+    if type(value) is not str or not value or value != value.strip():
         raise ValueError(f"{label} must be an exact non-empty string") from None
     return value
 
@@ -234,7 +234,7 @@ def _parse_exact_hex_blob(value: Any, *, label: str, nonzero: bool = True) -> by
     if type(nonzero) is not bool:
         raise ValueError("TRON live exact hex nonzero must be a boolean")
 
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise RuntimeError(f"{label} must be hex")
     if value != value.strip():
         raise RuntimeError(f"{label} must not contain surrounding whitespace")
@@ -315,7 +315,7 @@ def _protobuf_bytes_field(field_number: int, value: bytes) -> bytes:
 
 
 def _protobuf_string_field(field_number: int, value: str) -> bytes:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise RuntimeError("protobuf string field value must be a string")
     return _protobuf_bytes_field(field_number, value.encode("utf-8"))
 
@@ -356,7 +356,7 @@ def _optional_hex32_arg(args: argparse.Namespace, name: str) -> bytes | None:
     if value is None:
         return None
     label = name.replace("_", " ")
-    if isinstance(value, (bytes, bytearray)):
+    if type(value) in (bytes, bytearray):
         return _parse_hex32(_hex(bytes(value)), label=label)
     return _parse_exact_hex32(value, label=label)
 
@@ -373,7 +373,7 @@ def _optional_hex_blob_arg(
     value = getattr(args, name, None)
     if value is None:
         return None
-    if isinstance(value, (bytes, bytearray)):
+    if type(value) in (bytes, bytearray):
         value = _hex(bytes(value))
     return _parse_exact_hex_blob(
         value,
@@ -493,7 +493,7 @@ def _url(base_url: str, endpoint: str) -> str:
 
 
 def _tron_pro_api_key_token(value: Any, *, label: str) -> str:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise ValueError(f"{label} must be text")
     if not value:
         raise ValueError(f"{label} must not be empty")
@@ -566,7 +566,7 @@ def _post_json(
         if str(exc) == "duplicate JSON keys":
             raise RuntimeError(f"TRON API {endpoint} returned duplicate JSON keys") from None
         raise RuntimeError(f"TRON API {endpoint} returned invalid JSON") from None
-    if not isinstance(decoded, dict):
+    if type(decoded) is not dict:
         raise RuntimeError(f"TRON API {endpoint} returned a non-object response")
     if decoded.get("Error") is not None or decoded.get("error") is not None:
         raise RuntimeError(f"TRON API {endpoint} returned error response")
@@ -633,7 +633,7 @@ def _block_by_number(
 
 
 def _decode_tron_error_message(value: Any) -> str:
-    if not isinstance(value, str):
+    if type(value) is not str:
         return ""
     text = _strip_0x(value)
     if len(text) % 2 == 0:
@@ -671,10 +671,10 @@ def _constant_word(
         timeout=timeout,
     )
     result = response.get("result")
-    if not isinstance(result, dict) or result.get("result") is not True:
+    if type(result) is not dict or result.get("result") is not True:
         raise RuntimeError(f"TRON constant call {function_selector} failed")
     values = response.get("constant_result")
-    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], str):
+    if type(values) is not list or len(values) != 1 or type(values[0]) is not str:
         raise RuntimeError(f"TRON constant call {function_selector} returned no single word")
     try:
         word = _parse_exact_hex_blob(
@@ -725,7 +725,7 @@ def _parse_transaction_info_id(
         if field not in response:
             continue
         raw_id = response[field]
-        if not isinstance(raw_id, str):
+        if type(raw_id) is not str:
             raise RuntimeError(f"{label} {field} must be a transaction id")
         transaction_ids[field] = _parse_exact_hex32(
             raw_id,
@@ -768,7 +768,7 @@ def _parse_required_transaction_id_aliases(
         if field not in response:
             continue
         raw_id = response[field]
-        if not isinstance(raw_id, str):
+        if type(raw_id) is not str:
             raise RuntimeError(f"{label} {field} must be a transaction id")
         transaction_ids[field] = _parse_exact_hex32(
             raw_id,
@@ -1173,7 +1173,7 @@ def _require_canonical_tron_recoverable_signature(
 
 def _parse_tron_transaction_signature(response: dict[str, Any], *, label: str) -> bytes:
     signatures = response.get("signature")
-    if not isinstance(signatures, list) or len(signatures) != 1:
+    if type(signatures) is not list or len(signatures) != 1:
         raise RuntimeError(f"{label} transaction must contain exactly one signature")
     signature = _parse_exact_hex_blob(
         signatures[0],
@@ -1324,9 +1324,9 @@ def _is_canonical_decimal_text(value: Any) -> bool:
 
 
 def _parse_canonical_u32(value: Any, *, label: str) -> int:
-    if isinstance(value, bool):
+    if type(value) is bool:
         raise ValueError(f"{label} must be a u32")
-    if isinstance(value, int):
+    if type(value) is int:
         parsed = value
     elif _is_canonical_decimal_text(value):
         parsed = int(value)
@@ -1395,9 +1395,9 @@ def _check_optional_log_index_field(
 
 
 def _parse_protobuf_nonnegative_int(value: Any, *, label: str) -> int:
-    if isinstance(value, bool):
+    if type(value) is bool:
         raise RuntimeError(f"{label} must fit non-negative int64")
-    if isinstance(value, int):
+    if type(value) is int:
         parsed = value
     elif _is_canonical_decimal_text(value):
         parsed = int(value)
@@ -1414,9 +1414,9 @@ def _parse_transaction_enum(
     *,
     label: str,
 ) -> int:
-    if isinstance(value, bool):
+    if type(value) is bool:
         raise RuntimeError(f"{label} enum is unsupported")
-    if isinstance(value, int):
+    if type(value) is int:
         if value < 0 or value > PROTOBUF_INT64_MAX:
             raise RuntimeError(f"{label} enum is out of range")
         return value
@@ -1435,7 +1435,7 @@ def _tron_transaction_result_bytes(
     *,
     label: str,
 ) -> bytes:
-    if not isinstance(result, dict):
+    if type(result) is not dict:
         raise RuntimeError(f"{label} must be an object")
     supported_fields = {
         "fee",
@@ -1519,7 +1519,7 @@ def _tron_transaction_result_bytes(
         )
     if "orderDetails" in result:
         order_details = result["orderDetails"]
-        if not isinstance(order_details, list):
+        if type(order_details) is not list:
             raise RuntimeError(f"{label} orderDetails must be a list")
         for index, detail in enumerate(order_details):
             out.extend(
@@ -1546,7 +1546,7 @@ def _tron_transaction_result_bytes(
 
 
 def _tron_market_order_detail_bytes(detail: Any, *, label: str) -> bytes:
-    if not isinstance(detail, dict):
+    if type(detail) is not dict:
         raise RuntimeError(f"{label} must be an object")
     supported_fields = {
         "makerOrderId",
@@ -1617,11 +1617,11 @@ def _tron_cancel_unfreeze_v2_amount_bytes(
         return b""
     field_name = "cancel_unfreezeV2_amount" if has_snake else "cancelUnfreezeV2Amount"
     values = result[field_name]
-    if not isinstance(values, dict):
+    if type(values) is not dict:
         raise RuntimeError(f"{label} {field_name} must be an object")
     out = bytearray()
     for key, value in values.items():
-        if not isinstance(key, str):
+        if type(key) is not str:
             raise RuntimeError(f"{label} {field_name} keys must be strings")
         entry = _protobuf_string_field(1, key) + _protobuf_u64_field(
             2,
@@ -1693,13 +1693,13 @@ def _source_event_result_bytes_are_success(result_bytes: bytes) -> bool:
 
 
 def _source_event_ret_code_is_success(value: Any) -> bool:
-    if isinstance(value, bool):
+    if type(value) is bool:
         return False
     return value in (0, "0", "SUCESS")
 
 
 def _source_event_contract_ret_is_success(value: Any) -> bool:
-    if isinstance(value, bool):
+    if type(value) is bool:
         return False
     return value in (1, "1", "SUCCESS")
 
@@ -1717,7 +1717,7 @@ def _tron_transaction_bytes_from_json(
     signatures = transaction.get("signature", [])
     if signatures is None:
         signatures = []
-    if not isinstance(signatures, list):
+    if type(signatures) is not list:
         raise RuntimeError(f"{label} signature must be a list")
     for index, signature in enumerate(signatures):
         signature_bytes = _parse_exact_hex_blob(
@@ -1728,7 +1728,7 @@ def _tron_transaction_bytes_from_json(
     results = transaction.get("ret", [])
     if results is None:
         results = []
-    if not isinstance(results, list):
+    if type(results) is not list:
         raise RuntimeError(f"{label} ret must be a list")
     for index, result in enumerate(results):
         out.extend(
@@ -1887,10 +1887,10 @@ def _parse_solid_block_header(
         raise ValueError("TRON block header txTrieRoot nonzero must be a boolean")
     block_id = _parse_exact_hex32_blob(response.get("blockID"), label=f"{label} blockID")
     header = response.get("block_header")
-    if not isinstance(header, dict):
+    if type(header) is not dict:
         raise RuntimeError(f"{label} did not return block_header")
     raw_data = header.get("raw_data")
-    if not isinstance(raw_data, dict):
+    if type(raw_data) is not dict:
         raise RuntimeError(f"{label} did not return block_header.raw_data")
     number = _parse_protobuf_nonnegative_int(
         raw_data.get("number"),
@@ -1982,7 +1982,7 @@ def _source_event_solid_block_header_proof_summary(
 ) -> dict[str, Any]:
     child_account_state_root = child_header.get("account_state_root")
     parent_account_state_root = parent_header.get("account_state_root")
-    if not isinstance(child_account_state_root, bytes) or not any(
+    if type(child_account_state_root) is not bytes or not any(
         child_account_state_root
     ):
         return {
@@ -1991,7 +1991,7 @@ def _source_event_solid_block_header_proof_summary(
                 "child accountStateRoot missing or zero"
             ),
         }
-    if not isinstance(parent_account_state_root, bytes) or not any(
+    if type(parent_account_state_root) is not bytes or not any(
         parent_account_state_root
     ):
         return {
@@ -2183,9 +2183,9 @@ def _mapping_optional_value(value: dict[str, Any], *names: str) -> Any:
 
 
 def _witness_schedule_payload_from_value(value: Any, *, label: str) -> bytes:
-    if isinstance(value, str):
+    if type(value) is str:
         return _parse_exact_hex_blob(value, label=label)
-    if isinstance(value, (bytes, bytearray)):
+    if type(value) in (bytes, bytearray):
         payload = bytes(value)
         if not any(payload):
             raise RuntimeError(f"{label} must not be zero")
@@ -2267,7 +2267,7 @@ def _source_event_witness_schedule_transition_chain_summary(
     proof_summaries = []
 
     for index, raw_transition in enumerate(transition_inputs):
-        if not isinstance(raw_transition, dict):
+        if type(raw_transition) is not dict:
             raise RuntimeError(f"witness schedule transition {index} must be an object")
         parent_payload_value = _mapping_optional_value(
             raw_transition,
@@ -2466,7 +2466,7 @@ def _source_event_witness_schedule_transition_chain_summary(
             len(parent_witnesses),
         )
         raw_signatures = _mapping_value(raw_transition, "signatures", "signatures_hex")
-        if not isinstance(raw_signatures, list):
+        if type(raw_signatures) is not list:
             raise RuntimeError(
                 f"witness schedule transition {index} signatures must be a list"
             )
@@ -2780,7 +2780,7 @@ def _source_event_witness_seal_summary(
 
 def _signed_block_header_proof_input(header: dict[str, Any]) -> dict[str, Any]:
     account_state_root = header.get("account_state_root")
-    if not isinstance(account_state_root, bytes) or not any(account_state_root):
+    if type(account_state_root) is not bytes or not any(account_state_root):
         raise RuntimeError("signed block header accountStateRoot missing or zero")
     if not any(header["tx_trie_root"]):
         raise RuntimeError("signed block header txTrieRoot missing or zero")
@@ -2928,7 +2928,7 @@ def _source_event_transaction_production_readiness(
             return
         blocker_key = flag.removesuffix("_ready") + "_blocker"
         blocker = solid_block.get(blocker_key)
-        if isinstance(blocker, str) and blocker:
+        if type(blocker) is str and blocker:
             blockers.append(f"{label}: {blocker}")
         else:
             blockers.append(f"{label} required")
@@ -2970,11 +2970,11 @@ def _effective_expected_witness_schedule_hash(
 ) -> bytes | None:
     source_trust_anchor_hash = None
     source_record_inputs = summary.get("source_record_inputs")
-    if isinstance(source_record_inputs, dict):
+    if type(source_record_inputs) is dict:
         raw_source_trust_anchor_hash = source_record_inputs.get(
             "source_trust_anchor_hash"
         )
-        if isinstance(raw_source_trust_anchor_hash, str):
+        if type(raw_source_trust_anchor_hash) is str:
             source_trust_anchor_hash = _parse_hex32(
                 raw_source_trust_anchor_hash,
                 label="source record source_trust_anchor_hash",
@@ -3145,12 +3145,12 @@ def _source_event_solid_block_summary(
             witness_weights = None
     tx_trie_root = child_header["tx_trie_root"]
     transactions = response.get("transactions")
-    if not isinstance(transactions, list) or not transactions:
+    if type(transactions) is not list or not transactions:
         raise RuntimeError("source-event block did not include transactions")
     transaction_hashes = []
     transaction_index = None
     for index, transaction in enumerate(transactions):
-        if not isinstance(transaction, dict):
+        if type(transaction) is not dict:
             raise RuntimeError("source-event block transaction must be an object")
         tx_id = _parse_required_transaction_id_aliases(
             transaction,
@@ -3210,7 +3210,7 @@ def _source_event_solid_block_summary(
         "block_tx_trie_root": _hex(tx_trie_root),
         "block_account_state_root": (
             _hex(child_header["account_state_root"])
-            if isinstance(child_header.get("account_state_root"), bytes)
+            if type(child_header.get("account_state_root")) is bytes
             else None
         ),
         "block_witness_address": _hex(child_header["witness_address"]),
@@ -3227,7 +3227,7 @@ def _source_event_solid_block_summary(
         "parent_block_tx_trie_root": _hex(parent_header["tx_trie_root"]),
         "parent_block_account_state_root": (
             _hex(parent_header["account_state_root"])
-            if isinstance(parent_header.get("account_state_root"), bytes)
+            if type(parent_header.get("account_state_root")) is bytes
             else None
         ),
         "parent_block_witness_address": _hex(parent_header["witness_address"]),
@@ -3300,7 +3300,7 @@ def _source_event_solid_block_summary(
 
 
 def _parse_log_address20(value: Any, *, label: str) -> bytes:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise RuntimeError(f"{label} must be hex")
     raw_address = _parse_exact_hex_blob(value, label=label)
     if len(raw_address) == 21 and raw_address[0] == 0x41:
@@ -3315,7 +3315,7 @@ def _parse_log_address20(value: Any, *, label: str) -> bytes:
 
 
 def _parse_transaction_address_payload(value: Any, *, label: str) -> bytes:
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise RuntimeError(f"{label} must be a TRON address")
     try:
         return parse_tron_address_payload(value, label=label)
@@ -3354,7 +3354,7 @@ def _source_event_trigger_contract_summary(
         owner_payload=owner_payload,
     )
     ret = response.get("ret")
-    if not isinstance(ret, list) or len(ret) != 1 or not isinstance(ret[0], dict):
+    if type(ret) is not list or len(ret) != 1 or type(ret[0]) is not dict:
         raise RuntimeError("source-event transaction must contain one ret result")
     contract_ret = ret[0].get("contractRet")
     if not _source_event_contract_ret_is_success(contract_ret):
@@ -3366,24 +3366,24 @@ def _source_event_trigger_contract_summary(
         ret[0],
     )
     raw_data = response.get("raw_data")
-    if not isinstance(raw_data, dict):
+    if type(raw_data) is not dict:
         raise RuntimeError("TRON transaction did not return raw_data")
     contracts = raw_data.get("contract")
-    if not isinstance(contracts, list) or len(contracts) != 1:
+    if type(contracts) is not list or len(contracts) != 1:
         raise RuntimeError("source-event transaction must contain one contract")
     contract = contracts[0]
-    if not isinstance(contract, dict):
+    if type(contract) is not dict:
         raise RuntimeError("source-event transaction contract must be an object")
     if contract.get("type") != "TriggerSmartContract":
         raise RuntimeError("source-event transaction must be TriggerSmartContract")
     parameter = contract.get("parameter")
-    if not isinstance(parameter, dict):
+    if type(parameter) is not dict:
         raise RuntimeError("source-event transaction contract parameter is missing")
     type_url = parameter.get("type_url")
     if type_url != "type.googleapis.com/protocol.TriggerSmartContract":
         raise RuntimeError("source-event transaction TriggerSmartContract type_url mismatch")
     value = parameter.get("value")
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise RuntimeError("source-event transaction TriggerSmartContract value is missing")
     owner = _parse_transaction_address_payload(
         value.get("owner_address"),
@@ -3398,7 +3398,7 @@ def _source_event_trigger_contract_summary(
     if contract_address != source_bridge_payload:
         raise RuntimeError("source-event transaction contract_address does not match source bridge")
     data = value.get("data")
-    if not isinstance(data, str):
+    if type(data) is not str:
         raise RuntimeError("source-event transaction data must be hex")
     call_data = _parse_exact_hex_blob(data, label="source-event transaction data")
     if call_data != source_event_call_data:
@@ -3433,15 +3433,15 @@ def _source_event_transaction_summary(
         label="source-event transaction info",
     )
     receipt = response.get("receipt")
-    receipt_status = receipt.get("result") if isinstance(receipt, dict) else None
+    receipt_status = receipt.get("result") if type(receipt) is dict else None
     if receipt_status != "SUCCESS":
         raise RuntimeError("source-event transaction receipt status must be SUCCESS")
     logs = response.get("log")
-    if not isinstance(logs, list):
+    if type(logs) is not list:
         raise RuntimeError("source-event transaction info returned no log list")
     matching_summary: dict[str, Any] | None = None
     for index, log in enumerate(logs):
-        if not isinstance(log, dict):
+        if type(log) is not dict:
             continue
         try:
             log_address = _parse_log_address20(
@@ -3451,9 +3451,9 @@ def _source_event_transaction_summary(
         except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
             continue
         topics = log.get("topics")
-        if not isinstance(topics, list) or len(topics) != 2:
+        if type(topics) is not list or len(topics) != 2:
             continue
-        if not all(isinstance(topic, str) for topic in topics):
+        if not all(type(topic) is str for topic in topics):
             continue
         try:
             topic0 = _parse_exact_hex32(topics[0], label="source-event log topic0")
@@ -3461,7 +3461,7 @@ def _source_event_transaction_summary(
         except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
             continue
         data = log.get("data", "")
-        if not isinstance(data, str):
+        if type(data) is not str:
             continue
         if data != data.strip():
             continue
@@ -3526,8 +3526,8 @@ def _parse_abi_data_words(value: Any, *, label: str, word_count: int) -> tuple[b
 
 
 def _require_nonzero_bytes(value: bytes, *, label: str, byte_length: int) -> bytes:
-    if not isinstance(value, (bytes, bytearray)):
-        raise RuntimeError(f"{label} must be {byte_length} bytes")
+    if type(value) not in (bytes, bytearray):
+        raise RuntimeError(f"{label} must be bytes")
     raw = bytes(value)
     if len(raw) != byte_length:
         raise RuntimeError(f"{label} must be {byte_length} bytes")
@@ -3554,7 +3554,7 @@ def _word_u256(word: bytes, *, label: str) -> int:
 
 
 def _require_u32_value(value: int, *, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is bool or type(value) is not int:
         raise RuntimeError(f"{label} must be a u32")
     if value < 0 or value > 0xFFFF_FFFF:
         raise RuntimeError(f"{label} must be a u32")
@@ -3562,7 +3562,7 @@ def _require_u32_value(value: int, *, label: str) -> int:
 
 
 def _require_u64_value(value: int, *, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is bool or type(value) is not int:
         raise RuntimeError(f"{label} must be a u64")
     if value < 0 or value > 0xFFFF_FFFF_FFFF_FFFF:
         raise RuntimeError(f"{label} must be a u64")
@@ -3780,9 +3780,9 @@ def _route_canary_message_proof_event_summary(
     except (argparse.ArgumentTypeError, SystemExit, TypeError, RuntimeError, ValueError):
         return None
     topics = log.get("topics")
-    if not isinstance(topics, list) or not topics:
+    if type(topics) is not list or not topics:
         return None
-    if not all(isinstance(topic, str) for topic in topics):
+    if not all(type(topic) is str for topic in topics):
         return None
     try:
         topic0 = _parse_exact_hex32(topics[0], label="route-canary log topic0")
@@ -4394,24 +4394,24 @@ def _route_canary_trigger_contract_summary(
     )
     signature = _parse_route_canary_transaction_signature(response)
     ret = response.get("ret")
-    if not isinstance(ret, list) or len(ret) != 1 or not isinstance(ret[0], dict):
+    if type(ret) is not list or len(ret) != 1 or type(ret[0]) is not dict:
         raise RuntimeError("route-canary transaction must contain one ret result")
     contract_ret = ret[0].get("contractRet")
     if not _source_event_contract_ret_is_success(contract_ret):
         raise RuntimeError("route-canary transaction contractRet must be SUCCESS")
     raw_data_obj = response.get("raw_data")
-    if not isinstance(raw_data_obj, dict):
+    if type(raw_data_obj) is not dict:
         raise RuntimeError("TRON route-canary transaction did not return raw_data")
     contracts = raw_data_obj.get("contract")
-    if not isinstance(contracts, list) or len(contracts) != 1:
+    if type(contracts) is not list or len(contracts) != 1:
         raise RuntimeError("route-canary transaction must contain one contract")
     contract = contracts[0]
-    if not isinstance(contract, dict):
+    if type(contract) is not dict:
         raise RuntimeError("route-canary transaction contract must be an object")
     if contract.get("type") != "TriggerSmartContract":
         raise RuntimeError("route-canary transaction must be TriggerSmartContract")
     parameter = contract.get("parameter")
-    if not isinstance(parameter, dict):
+    if type(parameter) is not dict:
         raise RuntimeError("route-canary transaction contract parameter is missing")
     type_url = parameter.get("type_url")
     if type_url != "type.googleapis.com/protocol.TriggerSmartContract":
@@ -4419,7 +4419,7 @@ def _route_canary_trigger_contract_summary(
             "route-canary transaction TriggerSmartContract type_url mismatch"
         )
     value = parameter.get("value")
-    if not isinstance(value, dict):
+    if type(value) is not dict:
         raise RuntimeError(
             "route-canary transaction TriggerSmartContract value is missing"
         )
@@ -4436,7 +4436,7 @@ def _route_canary_trigger_contract_summary(
             "route-canary transaction contract_address does not match destination verifier"
         )
     data = value.get("data")
-    if not isinstance(data, str):
+    if type(data) is not str:
         raise RuntimeError("route-canary transaction data must be hex")
     call_data = _parse_exact_hex_blob(data, label="route-canary transaction data")
     call_summary = _route_canary_submit_call_data_summary(
@@ -4499,7 +4499,7 @@ def _route_canary_transaction_summary(
         label="route-canary transaction info",
     )
     receipt = response.get("receipt")
-    receipt_status = receipt.get("result") if isinstance(receipt, dict) else None
+    receipt_status = receipt.get("result") if type(receipt) is dict else None
     if receipt_status != "SUCCESS":
         raise RuntimeError("route-canary transaction receipt status must be SUCCESS")
     verifier_payload = _parse_summary_tron_address(
@@ -4533,11 +4533,11 @@ def _route_canary_transaction_summary(
         label="destination verifier network id",
     )
     logs = response.get("log")
-    if not isinstance(logs, list):
+    if type(logs) is not list:
         raise RuntimeError("route-canary transaction info returned no log list")
     matching_summary: dict[str, Any] | None = None
     for index, log in enumerate(logs):
-        if not isinstance(log, dict):
+        if type(log) is not dict:
             continue
         summary = _route_canary_message_proof_event_summary(
             log,
@@ -4646,7 +4646,7 @@ def _contract_metadata(
 
 def _metadata_runtime_bytecode(metadata: dict[str, Any], *, label: str) -> bytes | None:
     bytecode = metadata.get("bytecode")
-    if not isinstance(bytecode, str) or not bytecode.strip():
+    if type(bytecode) is not str or not bytecode.strip():
         return None
     try:
         return _parse_exact_hex_blob(
@@ -4666,7 +4666,7 @@ def _check_contract_metadata_address(
     label: str,
 ) -> None:
     value = metadata.get("contract_address")
-    if not isinstance(value, str) or not value.strip():
+    if type(value) is not str or not value.strip():
         raise RuntimeError(f"/wallet/getcontract did not return {label} contract_address")
     try:
         observed_payload = parse_tron_address_payload(
@@ -4802,7 +4802,7 @@ def collect_source_bridge_evidence(
         bytecode_hash = _hex(evidence.runtime_bytecode_hash(runtime_bytecode))
         output_bytecode_hex = _hex(runtime_bytecode)
         raw_code_hash = metadata.get("code_hash")
-        if isinstance(raw_code_hash, str) and raw_code_hash.strip():
+        if type(raw_code_hash) is str and raw_code_hash.strip():
             metadata_code_hash = raw_code_hash.strip()
 
     output = {
@@ -4999,7 +4999,7 @@ def collect_destination_verifier_evidence(
                 f"expected {_hex(verifier_code_hash)}, got {bytecode_hash}"
             )
         raw_code_hash = metadata.get("code_hash")
-        if isinstance(raw_code_hash, str) and raw_code_hash.strip():
+        if type(raw_code_hash) is str and raw_code_hash.strip():
             metadata_code_hash = raw_code_hash.strip()
 
     output = {
@@ -5094,7 +5094,7 @@ def _build_source_record_args(
     source_record_requested = _source_record_material_preflight_requested(args)
 
     observed_code_hash = source.get("source_bridge_emitter_code_hash")
-    if isinstance(observed_code_hash, str):
+    if type(observed_code_hash) is str:
         observed = _parse_hex32(
             observed_code_hash,
             label="source bridge getcontract bytecode hash",
@@ -5277,7 +5277,7 @@ def _check_expected_source_config_hash(
 def _check_source_destination_network_id_match(summary: dict[str, Any]) -> None:
     source = summary.get("source_bridge")
     destination = summary.get("destination_verifier")
-    if not isinstance(source, dict) or not isinstance(destination, dict):
+    if type(source) is not dict or type(destination) is not dict:
         return
     source_network_id = _parse_hex32(
         _exact_summary_string(
@@ -5343,9 +5343,9 @@ def _validate_route_allowlist_hash(
         raise ValueError(
             "TRON route allowlist destination_binding_pinned must be a boolean"
         )
-    if not isinstance(destination_verifier, dict):
+    if type(destination_verifier) is not dict:
         raise ValueError("--route-allowlist-hash requires --destination-verifier-address")
-    if not isinstance(source_records, dict):
+    if type(source_records) is not dict:
         raise ValueError(
             "--route-allowlist-hash requires complete source record preflight "
             "arguments"
@@ -5472,7 +5472,7 @@ def _extend_arg(args: list[str], flag: str, value: str | None) -> bool:
 def _offline_args(summary: dict[str, Any]) -> list[str]:
     args: list[str] = []
     source = summary.get("source_bridge")
-    if isinstance(source, dict):
+    if type(source) is dict:
         _extend_arg(
             args,
             "--bridge-address",
@@ -5529,7 +5529,7 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
             ),
         )
     source_record_inputs = summary.get("source_record_inputs")
-    if isinstance(source_record_inputs, dict):
+    if type(source_record_inputs) is dict:
         for key in (
             "source_trust_anchor_hash",
             "consensus_verifier_hash",
@@ -5551,7 +5551,7 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
                 ),
             )
     destination = summary.get("destination_verifier")
-    if isinstance(destination, dict):
+    if type(destination) is dict:
         _extend_arg(
             args,
             "--destination-verifier-address",
@@ -5605,12 +5605,12 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
     )
     if (
         route_allowlist_hash is not None
-        and isinstance(destination, dict)
+        and type(destination) is dict
         and destination.get("expected_destination_binding_hash_matches") is True
     ):
         args.extend(["--route-allowlist-hash", route_allowlist_hash])
         route_canary = summary.get("route_canary")
-        if isinstance(route_canary, dict):
+        if type(route_canary) is dict:
             _extend_arg(
                 args,
                 "--route-canary-evidence-hash",
@@ -5622,11 +5622,11 @@ def _offline_args(summary: dict[str, Any]) -> list[str]:
             )
         route_canary_transaction = summary.get("route_canary_transaction")
         if (
-            isinstance(route_canary_transaction, dict)
+            type(route_canary_transaction) is dict
             and _route_canary_transaction_verified(summary)
         ):
             trigger_contract = route_canary_transaction.get("trigger_contract")
-            if isinstance(trigger_contract, dict):
+            if type(trigger_contract) is dict:
                 block_number, block_timestamp = _summary_block_metadata(
                     route_canary_transaction,
                     label="route canary transaction",
@@ -5836,7 +5836,7 @@ def _offline_source_event_args(summary: dict[str, Any]) -> list[str] | None:
     if not _source_event_call_verified(summary):
         return None
     source_event_call = summary.get("source_event_call")
-    if not isinstance(source_event_call, dict):
+    if type(source_event_call) is not dict:
         return None
     try:
         source_event_digest = _exact_summary_string(
@@ -5911,10 +5911,10 @@ def _source_event_transaction_verified(
     source_event_call_data: bytes,
 ) -> bool:
     transaction = summary.get("source_event_transaction")
-    if not isinstance(transaction, dict):
+    if type(transaction) is not dict:
         return False
     trigger_contract = transaction.get("trigger_contract")
-    if not isinstance(trigger_contract, dict):
+    if type(trigger_contract) is not dict:
         return False
     try:
         transaction_id = _parse_hex32(
@@ -5930,7 +5930,7 @@ def _source_event_transaction_verified(
             label="source-event transaction",
         )
         solid_block = transaction.get("solid_block")
-        if not isinstance(solid_block, dict):
+        if type(solid_block) is not dict:
             return False
         solid_block_number, solid_block_timestamp = _summary_block_metadata(
             solid_block,
@@ -6022,7 +6022,7 @@ def _source_event_transaction_verified(
 def _source_event_call_verified(summary: dict[str, Any]) -> bool:
     source = summary.get("source_bridge")
     source_event_call = summary.get("source_event_call")
-    if not isinstance(source, dict) or not isinstance(source_event_call, dict):
+    if type(source) is not dict or type(source_event_call) is not dict:
         return False
     try:
         source_bridge_payload = parse_tron_address_payload(
@@ -6138,7 +6138,7 @@ def _source_event_call_verified(summary: dict[str, Any]) -> bool:
         return False
     trigger_request = source_event_call.get("trigger_request")
     if transaction_required:
-        return isinstance(trigger_request, dict) and _source_event_trigger_request_verified(
+        return type(trigger_request) is dict and _source_event_trigger_request_verified(
             trigger_request,
             source_bridge_payload=source_bridge_payload,
             owner_payload=owner_payload,
@@ -6159,13 +6159,13 @@ def _source_event_call_verified(summary: dict[str, Any]) -> bool:
 def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
     route_canary = summary.get("route_canary")
     transaction = summary.get("route_canary_transaction")
-    if not isinstance(route_canary, dict) or not isinstance(transaction, dict):
+    if type(route_canary) is not dict or type(transaction) is not dict:
         return False
     destination = summary.get("destination_verifier")
-    if not isinstance(destination, dict):
+    if type(destination) is not dict:
         return False
     trigger_contract = transaction.get("trigger_contract")
-    if not isinstance(trigger_contract, dict):
+    if type(trigger_contract) is not dict:
         return False
     try:
         route_allowlist_hash = _parse_summary_hex32(
@@ -6388,7 +6388,7 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
         and transaction_network_id == destination_network_id
         and transaction.get("used_message_proofs_checked") is True
         and transaction.get("message_proof_used") is True
-        and isinstance(route_canary.get("evidence_hash"), str)
+        and type(route_canary.get("evidence_hash")) is str
         and route_canary.get("evidence_hash")
         == transaction.get("route_canary_evidence_hash")
         and route_canary.get("evidence_hash") == recomputed_hash
@@ -6427,18 +6427,18 @@ def _route_canary_transaction_verified(summary: dict[str, Any]) -> bool:
 
 def _offline_full_toml_args(summary: dict[str, Any]) -> list[str] | None:
     source = summary.get("source_bridge")
-    if not isinstance(source, dict) or (
+    if type(source) is not dict or (
         source.get("expected_source_bridge_config_hash_matches") is not True
     ):
         return None
     if not (
         source.get("tron_getcontract_metadata_checked") is True
-        and isinstance(source.get("source_bridge_emitter_code_hash"), str)
-        and isinstance(source.get("source_bridge_runtime_bytecode_hex"), str)
+        and type(source.get("source_bridge_emitter_code_hash")) is str
+        and type(source.get("source_bridge_runtime_bytecode_hex")) is str
     ):
         return None
     source_records = summary.get("source_records")
-    if not isinstance(source_records, dict):
+    if type(source_records) is not dict:
         return None
     if (
         source_records.get("expected_source_verifier_material_hash_matches") is not True
@@ -6451,27 +6451,24 @@ def _offline_full_toml_args(summary: dict[str, Any]) -> list[str] | None:
     ):
         return None
     source_record_inputs = summary.get("source_record_inputs")
-    if not isinstance(source_record_inputs, dict):
+    if type(source_record_inputs) is not dict:
         return None
-    if not isinstance(
+    if type(
         source_record_inputs.get("expected_source_verifier_material_hash"),
-        str,
-    ) or not isinstance(
+    ) is not str or type(
         source_record_inputs.get("expected_source_adapter_engine_deployment_hash"),
-        str,
-    ) or not isinstance(
+    ) is not str or type(
         source_record_inputs.get("expected_tron_dpos_source_gate_hash"),
-        str,
-    ):
+    ) is not str:
         return None
-    if not isinstance(summary.get("destination_verifier"), dict):
+    if type(summary.get("destination_verifier")) is not dict:
         return None
     destination = summary["destination_verifier"]
     if _destination_bytecode_metadata_error(destination) is not None:
         return None
     if destination.get("expected_destination_binding_hash_matches") is not True:
         return None
-    if not isinstance(summary.get("route_allowlist_hash"), str):
+    if type(summary.get("route_allowlist_hash")) is not str:
         return None
     if not _route_canary_transaction_verified(summary):
         return None
@@ -6486,18 +6483,18 @@ def _full_toml_ready_except_destination_bytecode(
     destination: dict[str, Any],
 ) -> bool:
     source = summary.get("source_bridge")
-    if not isinstance(source, dict) or (
+    if type(source) is not dict or (
         source.get("expected_source_bridge_config_hash_matches") is not True
     ):
         return False
     if not (
         source.get("tron_getcontract_metadata_checked") is True
-        and isinstance(source.get("source_bridge_emitter_code_hash"), str)
-        and isinstance(source.get("source_bridge_runtime_bytecode_hex"), str)
+        and type(source.get("source_bridge_emitter_code_hash")) is str
+        and type(source.get("source_bridge_runtime_bytecode_hex")) is str
     ):
         return False
     source_records = summary.get("source_records")
-    if not isinstance(source_records, dict):
+    if type(source_records) is not dict:
         return False
     if (
         source_records.get("expected_source_verifier_material_hash_matches") is not True
@@ -6510,22 +6507,19 @@ def _full_toml_ready_except_destination_bytecode(
     ):
         return False
     source_record_inputs = summary.get("source_record_inputs")
-    if not isinstance(source_record_inputs, dict):
+    if type(source_record_inputs) is not dict:
         return False
-    if not isinstance(
+    if type(
         source_record_inputs.get("expected_source_verifier_material_hash"),
-        str,
-    ) or not isinstance(
+    ) is not str or type(
         source_record_inputs.get("expected_source_adapter_engine_deployment_hash"),
-        str,
-    ) or not isinstance(
+    ) is not str or type(
         source_record_inputs.get("expected_tron_dpos_source_gate_hash"),
-        str,
-    ):
+    ) is not str:
         return False
     if destination.get("expected_destination_binding_hash_matches") is not True:
         return False
-    if not isinstance(summary.get("route_allowlist_hash"), str):
+    if type(summary.get("route_allowlist_hash")) is not str:
         return False
     return _route_canary_transaction_verified(summary)
 
@@ -6576,12 +6570,12 @@ def _destination_bytecode_metadata_error(destination: dict[str, Any]) -> str | N
     destination_code_hash = destination.get("tron_getcontract_bytecode_hash")
     destination_view_code_hash = destination.get("destination_verifier_code_hash")
     destination_bytecode = destination.get("destination_verifier_runtime_bytecode_hex")
-    if not isinstance(destination_code_hash, str):
+    if type(destination_code_hash) is not str:
         return (
             "TRON full TOML requires live /wallet/getcontract bytecode metadata "
             "for the destination verifier"
         )
-    if not isinstance(destination_bytecode, str):
+    if type(destination_bytecode) is not str:
         return (
             "TRON full TOML requires live /wallet/getcontract runtime bytecode "
             "preimage for the destination verifier"
@@ -6591,7 +6585,7 @@ def _destination_bytecode_metadata_error(destination: dict[str, Any]) -> str | N
             "TRON full TOML requires destination /wallet/getcontract bytecode "
             "to match verifierCodeHash()"
         )
-    if not isinstance(destination_view_code_hash, str):
+    if type(destination_view_code_hash) is not str:
         return "TRON full TOML requires destination verifierCodeHash() evidence"
     try:
         runtime = evidence.parse_runtime_bytecode_hex(
@@ -6622,7 +6616,7 @@ def _annotate_full_toml_with_live_metadata(
 ) -> str:
     source = summary.get("source_bridge")
     destination = summary.get("destination_verifier")
-    if not isinstance(source, dict) or not isinstance(destination, dict):
+    if type(source) is not dict or type(destination) is not dict:
         raise ValueError("TRON full TOML requires source and destination evidence")
     if source.get("tron_getcontract_metadata_checked") is not True:
         raise ValueError(
@@ -6763,13 +6757,13 @@ def _annotate_full_toml_with_live_metadata(
         ],
     )
     route_canary_transaction = summary.get("route_canary_transaction")
-    if isinstance(route_canary_transaction, dict):
+    if type(route_canary_transaction) is dict:
         if not _route_canary_transaction_verified(summary):
             raise ValueError(
                 "TRON full TOML requires verified route-canary transaction metadata"
             )
         trigger_contract = route_canary_transaction.get("trigger_contract")
-        if not isinstance(trigger_contract, dict):
+        if type(trigger_contract) is not dict:
             raise ValueError(
                 "TRON full TOML requires route-canary trigger contract metadata"
             )
@@ -6989,9 +6983,10 @@ def render_offline_full_toml(summary: dict[str, Any]) -> str:
     args = _offline_full_toml_args(summary)
     if args is None:
         destination = summary.get("destination_verifier")
-        if isinstance(
-            destination, dict
-        ) and _full_toml_ready_except_destination_bytecode(summary, destination):
+        if (
+            type(destination) is dict
+            and _full_toml_ready_except_destination_bytecode(summary, destination)
+        ):
             destination_error = _destination_bytecode_metadata_error(destination)
             if destination_error is not None:
                 raise ValueError(destination_error) from None
@@ -7026,7 +7021,7 @@ def render_offline_full_toml(summary: dict[str, Any]) -> str:
 
 def _torii_destination_query_params(summary: dict[str, Any]) -> dict[str, str] | None:
     destination = summary.get("destination_verifier")
-    if not isinstance(destination, dict):
+    if type(destination) is not dict:
         return None
     if destination.get("expected_destination_binding_hash_matches") is not True:
         return None
@@ -7174,7 +7169,7 @@ def _runtime_witness_seal_signatures(args: argparse.Namespace) -> list[bytes]:
     values = getattr(args, "witness_seal_signature_hex", None)
     if values is None:
         return []
-    if not isinstance(values, (list, tuple)):
+    if type(values) not in (list, tuple):
         raise ValueError("--witness-seal-signature-hex must be a list of hex values")
     signatures = []
     for index, value in enumerate(values):
@@ -7194,7 +7189,7 @@ def _runtime_witness_schedule_transitions(
     values = getattr(args, "witness_schedule_transition_json", None)
     if values is None:
         return []
-    if not isinstance(values, (list, tuple)):
+    if type(values) not in (list, tuple):
         raise ValueError(
             "--witness-schedule-transition-json must be a list of JSON values"
         )
@@ -7225,7 +7220,7 @@ def _runtime_witness_schedule_transitions(
                 f"--witness-schedule-transition-json {index} must not contain "
                 "duplicate JSON keys"
             ) from None
-        if not isinstance(parsed, dict):
+        if type(parsed) is not dict:
             raise ValueError(
                 f"--witness-schedule-transition-json {index} must be a JSON object"
             )
@@ -7237,7 +7232,7 @@ def _runtime_hex32_list_arg(args: argparse.Namespace, name: str) -> list[bytes]:
     values = getattr(args, name, None)
     if values is None:
         return []
-    if not isinstance(values, (list, tuple)):
+    if type(values) not in (list, tuple):
         raise ValueError(f"--{name.replace('_', '-')} must be a list of hex32 values")
     return [
         _parse_exact_hex32_blob(
@@ -7700,7 +7695,7 @@ def collect_live_evidence(
         raise ValueError("--route-canary-transaction-id requires --route-allowlist-hash")
     if (
         route_canary_transaction_id is not None
-        and not isinstance(summary.get("destination_verifier"), dict)
+        and type(summary.get("destination_verifier")) is not dict
     ):
         raise ValueError(
             "--route-canary-transaction-id requires --destination-verifier-address"
@@ -7880,7 +7875,7 @@ def collect_live_evidence(
         )
         if (
             route_canary_transaction is not None
-            and isinstance(summary.get("route_canary"), dict)
+            and type(summary.get("route_canary")) is dict
         ):
             summary["route_canary"]["evidence_source"] = (
                 "tron_message_proof_accepted_transaction"

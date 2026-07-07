@@ -50,7 +50,7 @@ use std::{
     process::{Command, Stdio},
     ptr,
     sync::{
-        Condvar, Mutex, OnceLock,
+        Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU32, Ordering},
     },
     thread,
@@ -58,6 +58,7 @@ use std::{
     vec::Vec,
 };
 
+use block::ConcreteBlock;
 use fastpq_isi::poseidon::STATE_WIDTH;
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};
@@ -113,7 +114,7 @@ const FFT_TILE_STAGE_LIMIT: u32 = 32;
 /// Must match `FFT_TILE_STAGE_CAP` in `metal/kernels/ntt_stage.metal`.
 const LDE_TILE_STAGE_ENV: &str = "FASTPQ_METAL_LDE_TILE_STAGES";
 const POSEIDON_THREADGROUP_CAPACITY: u32 = 256;
-const POSEIDON_DISPATCH_PIPE_DEPTH: usize = 1;
+const POSEIDON_DISPATCH_PIPE_DEPTH: usize = 2;
 const BN254_POSEIDON_THREADGROUP_CAPACITY: u64 = 128;
 const POSEIDON_TARGET_THREADS: u32 = 8_192;
 const MIN_POSEIDON_STATES_PER_BATCH: u32 = 1;
@@ -3484,8 +3485,6 @@ pub fn poseidon_permute(states: &mut [u64]) -> MetalResult<()> {
     let poseidon_selection = select_poseidon_batch(state_count, tuning);
     let batch_states = poseidon_selection.columns();
     let batches = column_batch_ranges(state_count, batch_states);
-    // TODO: Restore deeper Poseidon staging once command permits are released by
-    // Metal completion handlers instead of only by explicit ticket waits.
     let pipe_depth = POSEIDON_DISPATCH_PIPE_DEPTH;
     let mut slots: Vec<Option<PoseidonBatchTicket>> = (0..pipe_depth).map(|_| None).collect();
 
@@ -3568,17 +3567,16 @@ pub fn poseidon_hash_columns(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64
     let padded_len_u32 = u32::try_from(padded_len)
         .map_err(|_| GpuError::InvalidInput("poseidon padded length exceeds u32::MAX"))?;
     let limits = pipeline_limits(&context.poseidon_trace_fused);
-    let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    // Cross-column command batching is parity-covered, but packed multiple
+    // sponge states per Metal lane diverges for non-leading lanes on current
+    // Apple drivers. Keep one state per lane and batch across lanes/commands.
+    tuning.states_per_lane = 1;
     let selection = select_poseidon_batch(column_count, tuning);
-    // TODO: Re-enable vectorized multi-state Metal Poseidon dispatch only after
-    // parity evidence covers multi-block column and Merkle-pair batches. The
-    // scalar sponge remains authoritative, so keep one state per dispatch for now.
-    let columns_per_batch = 1;
+    let columns_per_batch = selection.columns();
     let batches = column_batch_ranges(column_count, columns_per_batch);
     let mut result = vec![0u64; batch.columns()];
     let payloads = batch.payloads();
-    // TODO: Restore deeper Poseidon staging once command permits are released by
-    // Metal completion handlers instead of only by explicit ticket waits.
     let pipe_depth = POSEIDON_DISPATCH_PIPE_DEPTH;
     let mut slots: Vec<Option<PoseidonHashTicket>> = (0..pipe_depth).map(|_| None).collect();
 
@@ -3971,8 +3969,12 @@ pub(crate) fn bn254_poseidon_hash_words_async(
     })
 }
 
-// TODO: Keep this low-level fused entry point parked until its leaves and
-// parents are parity-checked against the scalar-equivalent batch path.
+/// Dispatch the low-level leaf-plus-parent kernel used by backend parity tests.
+///
+/// Production trace commitments use `trace::hash_columns_gpu_fused`, which
+/// composes the parity-checked column and Merkle-pair batch paths. This entry
+/// point stays available so the fused Metal kernels keep direct CPU parity
+/// coverage without becoming the default commitment path.
 #[allow(dead_code)]
 pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<Vec<u64>> {
     if batch.is_empty() {
@@ -3995,7 +3997,8 @@ pub fn poseidon_hash_columns_fused(batch: &PoseidonColumnBatch) -> MetalResult<V
     let padded_len_u32 = u32::try_from(padded_len)
         .map_err(|_| GpuError::InvalidInput("poseidon padded length exceeds u32::MAX"))?;
     let limits = pipeline_limits(&context.poseidon_hash);
-    let tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    let mut tuning = metal_config::poseidon_tuning(limits.exec_width, limits.max_threads);
+    tuning.states_per_lane = 1;
     let (threadgroups, threadgroup, logical_threads, states_per_lane) =
         poseidon_dispatch_geometry(column_count, tuning, &limits);
     let mut payload_chunk = clone_slice_with_stats(batch.payloads(), ColumnStagingPhase::Poseidon);
@@ -4179,8 +4182,14 @@ where
     encoder.dispatch_thread_groups(threadgroups, threadgroup);
     encoder.end_encoding();
 
-    command_buffer.commit();
+    let completion = permit.completion();
+    let completion_handler = ConcreteBlock::new(move |_| {
+        completion.complete();
+    })
+    .copy();
+    command_buffer.add_completed_handler(&completion_handler);
     permit.mark_launched();
+    command_buffer.commit();
     let trace_label = if trace_enabled {
         Some(pipeline.label().to_string())
     } else {
@@ -4883,6 +4892,11 @@ impl CommandSemaphore {
     fn limit(&self) -> usize {
         self.limit
     }
+
+    #[cfg(test)]
+    fn in_flight_for_tests(&self) -> usize {
+        *self.state.lock().expect("command semaphore poisoned")
+    }
 }
 
 fn resolved_queue_floor() -> usize {
@@ -4898,10 +4912,7 @@ fn context_queue_fanout() -> Option<usize> {
 }
 
 struct CommandPermit {
-    semaphore: &'static CommandSemaphore,
-    queue_index: usize,
-    released: bool,
-    launched: bool,
+    completion: Arc<CommandPermitCompletion>,
 }
 
 impl CommandPermit {
@@ -4922,36 +4933,62 @@ impl CommandPermit {
             });
         }
         Ok(Self {
-            semaphore,
-            queue_index,
-            released: false,
-            launched: false,
+            completion: Arc::new(CommandPermitCompletion::new(semaphore, queue_index)),
         })
     }
 
+    fn completion(&self) -> Arc<CommandPermitCompletion> {
+        Arc::clone(&self.completion)
+    }
+
     fn mark_launched(&mut self) {
-        if !self.launched {
-            record_queue_launch(self.queue_index);
-            self.launched = true;
-        }
+        self.completion.mark_launched();
     }
 
     fn complete(&mut self) {
-        if self.launched {
-            record_queue_completion(self.queue_index);
-            self.launched = false;
-        }
-        if !self.released {
-            self.semaphore.release();
-            self.released = true;
-        }
+        self.completion.complete();
     }
 }
 
 impl Drop for CommandPermit {
     fn drop(&mut self) {
-        if self.launched || !self.released {
-            self.complete();
+        self.complete();
+    }
+}
+
+struct CommandPermitCompletion {
+    semaphore: &'static CommandSemaphore,
+    queue_index: usize,
+    launched: AtomicBool,
+    released: AtomicBool,
+}
+
+impl CommandPermitCompletion {
+    fn new(semaphore: &'static CommandSemaphore, queue_index: usize) -> Self {
+        Self {
+            semaphore,
+            queue_index,
+            launched: AtomicBool::new(false),
+            released: AtomicBool::new(false),
+        }
+    }
+
+    fn mark_launched(&self) {
+        if self
+            .launched
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            record_queue_launch(self.queue_index);
+        }
+    }
+
+    fn complete(&self) {
+        if self.launched.swap(false, Ordering::AcqRel) {
+            record_queue_completion(self.queue_index);
+        }
+        if !self.released.swap(true, Ordering::AcqRel) {
+            self.semaphore.release();
         }
     }
 }
@@ -5589,9 +5626,12 @@ mod tests {
     use std::{thread, time::Duration};
 
     use fastpq_isi::{CANONICAL_PARAMETER_SETS, poseidon as cpu_poseidon};
+    use iroha_crypto::Hash;
 
     use super::{ensure_multi_queue_env, unwrap_or_skip, *};
     use crate::fft::Planner;
+
+    const TRACE_NODE_DOMAIN_FOR_TESTS: &[u8] = b"fastpq:v1:trace:node";
 
     fn sample_fft_columns(log_size: u32, column_count: usize) -> Vec<Vec<u64>> {
         let len = 1usize << log_size;
@@ -5606,6 +5646,22 @@ mod tests {
                     .collect::<Vec<u64>>()
             })
             .collect()
+    }
+
+    fn test_domain_seed(domain: &[u8]) -> u64 {
+        let digest = Hash::new(domain);
+        let bytes = digest.as_ref();
+        let mut chunk = [0u8; 8];
+        chunk.copy_from_slice(&bytes[..8]);
+        u64::try_from(u128::from(u64::from_le_bytes(chunk)) % u128::from(FIELD_MODULUS))
+            .expect("Goldilocks reduction fits u64")
+    }
+
+    fn hash_with_domain_for_tests(domain: &[u8], values: &[u64]) -> u64 {
+        let mut sponge = cpu_poseidon::PoseidonSponge::new();
+        sponge.absorb(test_domain_seed(domain));
+        sponge.absorb_slice(values);
+        sponge.squeeze()
     }
 
     #[test]
@@ -5754,6 +5810,101 @@ mod tests {
     }
 
     #[test]
+    fn poseidon_hash_columns_batches_multi_block_columns() {
+        ensure_multi_queue_env();
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
+        let domain_names = (0..8usize)
+            .map(|idx| format!("fastpq:v1:trace:column:vectorized:{idx}"))
+            .collect::<Vec<_>>();
+        let domains = domain_names.iter().map(String::as_str).collect::<Vec<_>>();
+        let columns = (0..domains.len())
+            .map(|column| {
+                (0..9usize)
+                    .map(|row| {
+                        ((column as u64 + 5) * 101 + (row as u64 * 17))
+                            % cpu_poseidon::FIELD_MODULUS
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let batch =
+            PoseidonColumnBatch::from_domains_and_columns(&domains, &columns).expect("batch");
+        assert!(
+            batch.block_count() > 1,
+            "test batch must exercise multi-block sponge absorption"
+        );
+        let expected =
+            crate::trace::hash_columns_cpu_batch_inputs(&domains, &columns).expect("cpu reference");
+
+        super::adaptive_scheduler()
+            .poseidon
+            .record_sample(4, domains.len() as u32, 0.0);
+        super::enable_kernel_stats(true);
+        let Some(actual) = unwrap_or_skip(
+            super::poseidon_hash_columns(&batch),
+            "poseidon_hash_columns vectorized",
+        ) else {
+            super::enable_kernel_stats(false);
+            return;
+        };
+        let stats = super::take_kernel_stats().expect("kernel stats enabled");
+        super::enable_kernel_stats(false);
+
+        assert_eq!(actual, expected);
+        assert!(
+            stats
+                .iter()
+                .any(|sample| sample.kind.as_str() == "poseidon" && sample.column_count > 1),
+            "expected a vectorized Poseidon dispatch, got {stats:?}"
+        );
+    }
+
+    #[test]
+    fn poseidon_hash_columns_batches_merkle_pairs() {
+        ensure_multi_queue_env();
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
+        let pairs = (0..16usize)
+            .map(|idx| {
+                let left =
+                    (idx as u64).wrapping_mul(0xd1b5_4a32_d192_ed03) % cpu_poseidon::FIELD_MODULUS;
+                let right = (idx as u64)
+                    .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                    .wrapping_add(7)
+                    % cpu_poseidon::FIELD_MODULUS;
+                [left, right]
+            })
+            .collect::<Vec<_>>();
+        let batch = PoseidonColumnBatch::from_domain_and_pairs(TRACE_NODE_DOMAIN_FOR_TESTS, &pairs)
+            .expect("batch");
+        let expected = pairs
+            .iter()
+            .map(|pair| hash_with_domain_for_tests(TRACE_NODE_DOMAIN_FOR_TESTS, pair))
+            .collect::<Vec<_>>();
+
+        super::adaptive_scheduler()
+            .poseidon
+            .record_sample(8, pairs.len() as u32, 0.0);
+        super::enable_kernel_stats(true);
+        let Some(actual) = unwrap_or_skip(
+            super::poseidon_hash_columns(&batch),
+            "poseidon_hash_columns merkle pairs",
+        ) else {
+            super::enable_kernel_stats(false);
+            return;
+        };
+        let stats = super::take_kernel_stats().expect("kernel stats enabled");
+        super::enable_kernel_stats(false);
+
+        assert_eq!(actual, expected);
+        assert!(
+            stats
+                .iter()
+                .any(|sample| sample.kind.as_str() == "poseidon" && sample.column_count > 1),
+            "expected Merkle pair hashing to use a vectorized dispatch, got {stats:?}"
+        );
+    }
+
+    #[test]
     fn poseidon_dispatch_geometry_meets_minimum_threads() {
         let limits = super::PipelineLimits {
             exec_width: 32,
@@ -5897,8 +6048,29 @@ mod tests {
     }
 
     #[test]
-    fn poseidon_dispatch_staging_does_not_chain_command_permits() {
-        assert_eq!(super::POSEIDON_DISPATCH_PIPE_DEPTH, 1);
+    fn command_completion_releases_permit_and_queue_stats_once() {
+        super::enable_queue_depth_stats(true);
+        let semaphore = Box::leak(Box::new(super::CommandSemaphore::new(1)));
+        assert!(semaphore.acquire_timeout(Duration::from_millis(1)));
+        assert_eq!(semaphore.in_flight_for_tests(), 1);
+
+        let completion = super::CommandPermitCompletion::new(semaphore, 0);
+        completion.mark_launched();
+        completion.mark_launched();
+        completion.complete();
+        completion.complete();
+
+        assert_eq!(semaphore.in_flight_for_tests(), 0);
+        let stats = super::take_queue_depth_stats().expect("stats captured");
+        super::enable_queue_depth_stats(false);
+        assert_eq!(stats.dispatch_count, 1);
+        assert_eq!(stats.queues[0].dispatch_count, 1);
+    }
+
+    #[test]
+    fn poseidon_dispatch_staging_uses_deeper_completion_backed_pipe() {
+        assert!(super::POSEIDON_DISPATCH_PIPE_DEPTH > 1);
+        assert!(super::POSEIDON_DISPATCH_PIPE_DEPTH <= super::DEFAULT_MAX_COMMAND_BUFFERS);
     }
 
     #[test]

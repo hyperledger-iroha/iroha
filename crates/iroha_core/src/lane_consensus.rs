@@ -179,6 +179,76 @@ impl LaneBlockSessionCache {
         self.sessions.get(key)
     }
 
+    /// Check whether a standalone lane-block proposal can be accepted without mutating the cache.
+    pub(crate) fn can_accept_proposal(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<(), LaneBlockSessionError> {
+        validate_lane_block_proposal(proposal).map_err(LaneBlockSessionError::InvalidProposal)?;
+        let key = LaneBlockSessionKey::from_proposal(proposal);
+        let slot_key = LaneBlockSlotKey::from_session_key(key);
+        if let Some(existing_hash) = self.slot_proposals.get(&slot_key).copied()
+            && existing_hash != key.proposal_hash
+        {
+            return Err(LaneBlockSessionError::ConflictingProposal);
+        }
+        if let Some(session) = self.sessions.get(&key)
+            && session
+                .proposal
+                .as_ref()
+                .is_some_and(|existing| existing != proposal)
+        {
+            return Err(LaneBlockSessionError::ConflictingProposal);
+        }
+        Ok(())
+    }
+
+    /// Check whether a standalone lane-block vote can be accepted without mutating the cache.
+    pub(crate) fn can_accept_vote(
+        &self,
+        vote: &LaneBlockVoteV1,
+        sender: Option<&PeerId>,
+    ) -> Result<(), LaneBlockSessionError> {
+        vote.validate_ingress(vote.body.phase, sender)
+            .map_err(LaneBlockSessionError::InvalidVote)?;
+        let phase = vote.body.phase;
+        let key = LaneBlockSessionKey::from_vote_body(&vote.body);
+        let Some(session) = self.sessions.get(&key) else {
+            return Ok(());
+        };
+        if let Some(proposal) = &session.proposal {
+            validate_vote_matches_proposal(vote, proposal)?;
+        }
+        let votes = votes_for_phase(session, phase).ok_or(LaneBlockSessionError::InvalidVote(
+            LaneBlockVoteIngressError::InvalidBody,
+        ))?;
+        if let Some(existing) = votes.get(&vote.signer)
+            && existing != vote
+        {
+            return Err(LaneBlockSessionError::ConflictingVote);
+        }
+        Ok(())
+    }
+
+    /// Return whether the exact proposal artifact is already cached.
+    pub(crate) fn contains_proposal(&self, proposal: &LaneBlockProposalV1) -> bool {
+        let key = LaneBlockSessionKey::from_proposal(proposal);
+        self.sessions
+            .get(&key)
+            .and_then(|session| session.proposal.as_ref())
+            == Some(proposal)
+    }
+
+    /// Return whether the exact vote artifact is already cached.
+    pub(crate) fn contains_vote(&self, vote: &LaneBlockVoteV1) -> bool {
+        let key = LaneBlockSessionKey::from_vote_body(&vote.body);
+        self.sessions
+            .get(&key)
+            .and_then(|session| votes_for_phase(session, vote.body.phase))
+            .and_then(|votes| votes.get(&vote.signer))
+            == Some(vote)
+    }
+
     /// Drain QCs sealed locally from cached votes and mark them as handed to transport.
     pub(crate) fn drain_newly_sealed_qcs(&mut self) -> Vec<LaneBlockQcV1> {
         let mut sealed = Vec::new();
@@ -275,16 +345,16 @@ impl LaneBlockSessionCache {
         self.drain_committed_sessions_up_to(usize::MAX)
     }
 
-    /// Remove cached sessions whose lane/dataspace pair no longer belongs to the active topology.
-    pub(crate) fn retain_sessions_for_active_lanes(
+    /// Remove cached sessions whose lane/dataspace/height no longer belongs to the active topology.
+    pub(crate) fn retain_sessions_for_admissible_lanes(
         &mut self,
-        active_lane: impl Fn(LaneId, DataSpaceId) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, u64) -> bool,
     ) -> usize {
         let before = self.sessions.len();
         self.sessions
-            .retain(|key, _| active_lane(key.lane_id, key.dataspace_id));
+            .retain(|key, _| admissible_lane(key.lane_id, key.dataspace_id, key.lane_block_height));
         self.slot_proposals
-            .retain(|key, _| active_lane(key.lane_id, key.dataspace_id));
+            .retain(|key, _| admissible_lane(key.lane_id, key.dataspace_id, key.lane_block_height));
         let retained_keys = self.sessions.keys().copied().collect::<BTreeSet<_>>();
         self.order.retain(|key| retained_keys.contains(key));
         before.saturating_sub(self.sessions.len())
@@ -462,6 +532,29 @@ impl Default for LaneBlockSessionCache {
     }
 }
 
+/// Validate a committed lane-block session recovered from durable certified sidecars.
+///
+/// This is the stateless restart/recovery counterpart to cache insertion:
+/// callers without live PoP material can still reject malformed proposals,
+/// malformed certificate bodies, wrong phase slots, missing aggregate
+/// signatures, and proposal/QC committee drift before queueing execution work.
+pub(crate) fn validate_committed_lane_block_session(
+    session: &CommittedLaneBlockSession,
+) -> Result<(), LaneBlockSessionError> {
+    validate_lane_block_proposal(&session.proposal)
+        .map_err(LaneBlockSessionError::InvalidProposal)?;
+    validate_lane_block_qc(&session.prepare_qc).map_err(LaneBlockSessionError::InvalidQc)?;
+    validate_lane_block_qc(&session.commit_qc).map_err(LaneBlockSessionError::InvalidQc)?;
+    if session.prepare_qc.body.phase != CertPhase::Prepare
+        || session.commit_qc.body.phase != CertPhase::Commit
+    {
+        return Err(LaneBlockSessionError::QcProposalMismatch);
+    }
+    validate_qc_matches_proposal(&session.prepare_qc, &session.proposal)?;
+    validate_qc_matches_proposal(&session.commit_qc, &session.proposal)?;
+    Ok(())
+}
+
 impl LaneBlockSessionKey {
     fn from_proposal(proposal: &LaneBlockProposalV1) -> Self {
         let descriptor = &proposal.descriptor;
@@ -503,6 +596,17 @@ fn votes_for_phase_mut(
     match phase {
         CertPhase::Prepare => Some(&mut session.prepare_votes),
         CertPhase::Commit => Some(&mut session.commit_votes),
+        CertPhase::NewView => None,
+    }
+}
+
+fn votes_for_phase(
+    session: &LaneBlockSession,
+    phase: CertPhase,
+) -> Option<&BTreeMap<PeerId, LaneBlockVoteV1>> {
+    match phase {
+        CertPhase::Prepare => Some(&session.prepare_votes),
+        CertPhase::Commit => Some(&session.commit_votes),
         CertPhase::NewView => None,
     }
 }
@@ -2204,6 +2308,136 @@ mod tests {
     }
 
     #[test]
+    fn lane_block_session_cache_preflight_rejects_conflicting_proposal_without_mutation() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let proposal = lane_block_proposal(&validator_set);
+        let conflicting = retag_lane_block_proposal_payload(proposal.clone(), 0x88);
+        assert_ne!(
+            conflicting.proposal_hash, proposal.proposal_hash,
+            "fixture must keep the lane slot while changing the proposal identity"
+        );
+        let key = LaneBlockSessionKey::from_proposal(&proposal);
+        let mut cache = LaneBlockSessionCache::new(4);
+
+        assert_eq!(
+            cache.can_accept_proposal(&proposal),
+            Ok(()),
+            "empty cache should preflight the canonical proposal"
+        );
+        assert_eq!(
+            cache.insert_proposal(proposal.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.can_accept_proposal(&proposal),
+            Ok(()),
+            "duplicate proposal should remain admissible for replay/broadcast"
+        );
+        assert_eq!(
+            cache.can_accept_proposal(&conflicting),
+            Err(LaneBlockSessionError::ConflictingProposal),
+            "same-slot conflicting proposal must fail preflight"
+        );
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache
+                .get(&key)
+                .expect("original session remains cached")
+                .proposal
+                .as_ref(),
+            Some(&proposal),
+            "failed preflight must not mutate the cached proposal"
+        );
+    }
+
+    #[test]
+    fn lane_block_session_cache_preflight_rejects_conflicting_vote_without_mutation() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let proposal = lane_block_proposal(&validator_set);
+        let key = LaneBlockSessionKey::from_proposal(&proposal);
+        let body = proposal.vote_body(CertPhase::Prepare);
+        let vote = signed_vote(&body, &keys[0]);
+        let mut drift_body = body;
+        drift_body.descriptor_hash = Hash::prehashed([0xE1; Hash::LENGTH]);
+        let drift_vote = signed_vote(&drift_body, &keys[0]);
+        assert_ne!(
+            drift_vote, vote,
+            "fixture must keep the same signer and session key while changing the vote body"
+        );
+        let mut cache = LaneBlockSessionCache::new(4);
+
+        assert_eq!(
+            cache.can_accept_vote(&drift_vote, Some(&drift_vote.signer)),
+            Ok(()),
+            "empty cache should preflight an orphan vote"
+        );
+        assert_eq!(
+            cache.insert_vote(drift_vote.clone(), Some(&drift_vote.signer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.can_accept_vote(&vote, Some(&vote.signer)),
+            Err(LaneBlockSessionError::ConflictingVote),
+            "same-signer conflicting vote must fail preflight"
+        );
+        let session = cache.get(&key).expect("orphan vote session remains cached");
+        assert_eq!(session.prepare_votes.len(), 1);
+        assert_eq!(
+            session.prepare_votes.get(&drift_vote.signer),
+            Some(&drift_vote),
+            "failed preflight must not overwrite the cached orphan vote"
+        );
+    }
+
+    #[test]
+    fn lane_block_session_cache_tracks_exact_duplicate_artifacts() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let proposal = lane_block_proposal(&validator_set);
+        let body = proposal.vote_body(CertPhase::Prepare);
+        let vote = signed_vote(&body, &keys[0]);
+        let mut cache = LaneBlockSessionCache::new(4);
+
+        assert!(!cache.contains_proposal(&proposal));
+        assert!(!cache.contains_vote(&vote));
+        assert_eq!(
+            cache.insert_proposal(proposal.clone()),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+        assert_eq!(
+            cache.insert_vote(vote.clone(), Some(&vote.signer)),
+            Ok(LaneBlockSessionInsertOutcome::Inserted)
+        );
+
+        assert!(cache.contains_proposal(&proposal));
+        assert!(cache.contains_vote(&vote));
+        assert!(
+            !cache.contains_proposal(&retag_lane_block_proposal_payload(proposal.clone(), 0x91))
+        );
+        let mut conflicting_body = body;
+        conflicting_body.descriptor_hash = Hash::prehashed([0x92; Hash::LENGTH]);
+        let conflicting_vote = signed_vote(&conflicting_body, &keys[0]);
+        assert!(!cache.contains_vote(&conflicting_vote));
+    }
+
+    #[test]
     fn lane_block_session_cache_does_not_drain_inbound_qc() {
         let keys = [
             checked_bls_keypair(1),
@@ -2385,7 +2619,7 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_session_cache_prunes_inactive_lane_sessions_and_slot_claims() {
+    fn lane_block_session_cache_prunes_inadmissible_lane_sessions_and_slot_claims() {
         let keys = [
             checked_bls_keypair(1),
             checked_bls_keypair(2),
@@ -2430,9 +2664,13 @@ mod tests {
         assert_eq!(cache.len(), 2);
 
         assert_eq!(
-            cache.retain_sessions_for_active_lanes(|lane_id, dataspace_id| {
-                lane_id == active_lane && dataspace_id == active_dataspace
-            }),
+            cache.retain_sessions_for_admissible_lanes(
+                |lane_id, dataspace_id, lane_block_height| {
+                    lane_id == active_lane
+                        && dataspace_id == active_dataspace
+                        && lane_block_height > 12
+                },
+            ),
             1
         );
 

@@ -660,13 +660,13 @@ public final class KagemushaRecursiveSpendProver {
     return call(
         "top-up",
         requestArchive,
-        KagemushaRecursiveSpendProver::nativeTopUpSpend,
+        KagemushaRecursiveSpendProver::nativeTopUpInstruction,
         TOP_UP_NATIVE_AVAILABLE);
   }
 
   public static byte[] topUpSpend(
-      final KagemushaRecursiveSpendRequestCodecs.InitSpendRequest request) {
-    return topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request));
+      final KagemushaRecursiveSpendRequestCodecs.TopUpSpendRequest request) {
+    return topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(request));
   }
 
   public static byte[] appendSpend(final byte[] requestArchive) {
@@ -906,7 +906,7 @@ public final class KagemushaRecursiveSpendProver {
 
   private static boolean probeTopUpNativeSymbol() {
     return expectIllegalArgumentProbe(
-        () -> nativeTopUpSpend(MALFORMED_NATIVE_PROBE_ARCHIVE));
+        () -> nativeTopUpInstruction(MALFORMED_NATIVE_PROBE_ARCHIVE));
   }
 
   static boolean expectIllegalArgumentProbe(final NativeProbe probe) {
@@ -989,7 +989,7 @@ public final class KagemushaRecursiveSpendProver {
 
   private static native byte[] nativeInitSpend(byte[] requestArchive);
 
-  private static native byte[] nativeTopUpSpend(byte[] requestArchive);
+  private static native byte[] nativeTopUpInstruction(byte[] requestArchive);
 
   private static native byte[] nativeAppendSpend(byte[] requestArchive);
 

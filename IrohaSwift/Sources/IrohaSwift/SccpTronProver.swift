@@ -690,9 +690,28 @@ private func normalizeTronRouteCanaryEvidence(
         "payloadHash": payloadHash,
         "statementHash": statementHash,
         "commitmentRoot": commitmentRoot,
+        "finalityHeight": finalityHeight,
         "finalityBlockHash": finalityBlockHash,
         "signatureSha256": signatureSha256,
     ])
+    try requireTronHashRolesDistinct(
+        field: "routeCanaryGovernedHashes",
+        [
+            ("routeAllowlistHash", routeAllowlistHash),
+            ("destinationBindingHash", destinationBindingHash),
+            ("sourceVerifierMaterialHash", sourceVerifierMaterialHash),
+            ("sourceAdapterEngineDeploymentHash", sourceAdapterEngineDeploymentHash),
+            ("transactionId", transactionId),
+            ("messageId", messageId),
+            ("callDataSha256", callDataSha256),
+            ("payloadHash", payloadHash),
+            ("statementHash", statementHash),
+            ("commitmentRoot", commitmentRoot),
+            ("finalityHeight", finalityHeight),
+            ("finalityBlockHash", finalityBlockHash),
+            ("signatureSha256", signatureSha256),
+        ]
+    )
     let networkId = try tronNonZeroBytesFromHex32(destinationBinding.networkId, field: "networkId")
 
     var out = Data()
@@ -1402,7 +1421,7 @@ private func requireTronRouteCanaryHashesDistinct(_ fields: [String: Data]) thro
     var seen: [Data: String] = [:]
     for (field, bytes) in fields where bytes.contains(where: { $0 != 0 }) {
         if let previous = seen[bytes] {
-            throw TronSccpProverError.invalidPublicInputs("\(field):\(previous)")
+            throw TronSccpProverError.invalidPublicInputs("routeCanaryTranscriptHashes:\(field):\(previous)")
         }
         seen[bytes] = field
     }

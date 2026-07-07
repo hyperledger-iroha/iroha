@@ -142,6 +142,10 @@ def _strip_0x(value: str) -> str:
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        ) from None
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
     if not value.startswith("0x"):
@@ -166,6 +170,10 @@ def parse_hex_bytes(
     if type(nonzero) is not bool:
         raise ValueError("TRON source bridge fixed hex nonzero must be a boolean")
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        ) from None
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -193,6 +201,10 @@ def _parse_runtime_bytecode_text(
             "TRON source bridge runtime bytecode allow_whitespace must be a boolean"
         )
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(
+            f"{label} must be canonical lowercase 0x hex"
+        ) from None
     if allow_whitespace:
         text = "".join(value.strip().split())
     else:
@@ -348,10 +360,37 @@ def _base58check_encode(payload: bytes) -> str:
 
 
 def _require_unpadded_text(value: str, *, label: str) -> str:
-    if not isinstance(value, str) or not value:
+    if type(value) is not str or not value:
         raise argparse.ArgumentTypeError(f"{label} must not be empty")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain surrounding whitespace")
+    return value
+
+
+SOURCE_BRIDGE_RUNTIME_BYTECODE_METADATA_ERROR = (
+    "source bridge runtime bytecode metadata is inconsistent"
+)
+DESTINATION_VERIFIER_RUNTIME_BYTECODE_METADATA_ERROR = (
+    "destination verifier runtime bytecode metadata is inconsistent"
+)
+_RUNTIME_SUMMARY_METADATA_ERRORS = {
+    "source bridge runtime bytecode": SOURCE_BRIDGE_RUNTIME_BYTECODE_METADATA_ERROR,
+    "destination verifier runtime bytecode": (
+        DESTINATION_VERIFIER_RUNTIME_BYTECODE_METADATA_ERROR
+    ),
+}
+
+
+def _runtime_summary_text(value: object, *, label: str) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str or not value or value != value.strip():
+        raise ValueError(
+            _RUNTIME_SUMMARY_METADATA_ERRORS.get(
+                label,
+                f"{label} metadata is inconsistent",
+            )
+        )
     return value
 
 
@@ -456,8 +495,8 @@ def _require_fixed_bytes(
     if type(nonzero) is not bool:
         raise ValueError("TRON source bridge fixed bytes nonzero must be a boolean")
 
-    if not isinstance(value, (bytes, bytearray)):
-        raise ValueError(f"{label} must be {byte_length} bytes")
+    if type(value) not in (bytes, bytearray):
+        raise ValueError(f"{label} must be bytes")
     raw = bytes(value)
     if len(raw) != byte_length:
         raise ValueError(f"{label} must be {byte_length} bytes")
@@ -617,6 +656,12 @@ def apply_source_adapter_verifier_vk_hash(args: argparse.Namespace) -> None:
         target_domain=args.target_domain,
     )
     supplied_hash = getattr(args, "adapter_verifier_vk_hash", None)
+    if supplied_hash is not None:
+        supplied_hash = _require_fixed_bytes(
+            supplied_hash,
+            label="adapter_verifier_vk_hash",
+            byte_length=32,
+        )
     if supplied_hash is not None and supplied_hash != expected_hash:
         raise ValueError(
             "--adapter-verifier-vk-hash does not match the canonical "
@@ -1131,6 +1176,11 @@ def _require_live_source_component_hashes(args: argparse.Namespace) -> None:
         supplied = getattr(args, field, None)
         if supplied is None:
             continue
+        supplied = _require_fixed_bytes(
+            supplied,
+            label=field,
+            byte_length=32,
+        )
         if supplied == template_hash:
             label = field.replace("_", " ")
             raise ValueError(
@@ -1150,6 +1200,11 @@ def _require_live_source_component_hashes(args: argparse.Namespace) -> None:
         supplied_hash = getattr(args, field, None)
         if supplied_hash is None:
             continue
+        supplied_hash = _require_fixed_bytes(
+            supplied_hash,
+            label=field,
+            byte_length=32,
+        )
         match = sccp_source_template_hash_match(
             supplied_hash,
             local_template_hashes=template_hashes,
@@ -1188,6 +1243,7 @@ def _require_source_role_hash_separation(
     for field, value in role_hashes:
         if value is None:
             continue
+        value = _require_fixed_bytes(value, label=field, byte_length=32)
         previous_field = seen.get(value)
         if previous_field is not None:
             raise ValueError(
@@ -1200,6 +1256,9 @@ def _require_source_role_hash_separation(
 def runtime_bytecode_hash(runtime_bytecode: bytes) -> bytes:
     """Compute the deployed TVM/EVM runtime bytecode hash used in SCCP evidence."""
 
+    if type(runtime_bytecode) not in (bytes, bytearray):
+        raise ValueError("runtime bytecode must be bytes")
+    runtime_bytecode = bytes(runtime_bytecode)
     if not runtime_bytecode or not any(runtime_bytecode):
         raise ValueError("runtime bytecode must not be empty or all zero")
     return _keccak_256(runtime_bytecode)
@@ -1563,7 +1622,7 @@ def _require_route_canary_transcript_hashes_distinct(values: dict[str, object]) 
     seen: dict[bytes, str] = {}
     for field in _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS:
         value = values[field]
-        if not isinstance(value, (bytes, bytearray)):
+        if type(value) not in (bytes, bytearray):
             continue
         raw = bytes(value)
         if not any(raw):
@@ -1771,6 +1830,10 @@ def _route_canary_transaction_evidence_hash(
         (
             ("route_allowlist_hash", route_allowlist_hash),
             ("destination_binding_hash", destination_binding_hash),
+            *(
+                (field, values[field])
+                for field in _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS
+            ),
         ),
         label="TRON route canary governed hashes",
     )
@@ -2016,6 +2079,24 @@ def _route_canary_evidence_hash(
             "route_allowlist_hash does not match canonical source, deployment, "
             "and destination evidence"
         )
+    values = _route_canary_transaction_values(args)
+    if values is not None:
+        _require_distinct_hash_roles(
+            (
+                ("route_allowlist_hash", route_allowlist_hash),
+                ("destination_binding_hash", destination_binding_hash),
+                ("source_verifier_material_hash", source_verifier_material_hash),
+                (
+                    "source_adapter_engine_deployment_hash",
+                    source_adapter_engine_deployment_hash,
+                ),
+                *(
+                    (field, values[field])
+                    for field in _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS
+                ),
+            ),
+            label="TRON route canary governed hashes",
+        )
     canary_hash = getattr(args, "route_canary_evidence_hash", None)
     derived_canary_hash = _route_canary_transaction_evidence_hash(
         args,
@@ -2107,18 +2188,16 @@ def _required_full_toml_args() -> tuple[str, ...]:
 
 def _missing_full_toml_runtime_preimages(args: argparse.Namespace) -> list[str]:
     missing: list[str] = []
-    if not isinstance(
+    if type(
         getattr(args, "source_bridge_runtime_bytecode_hex_text", None),
-        str,
-    ):
+    ) is not str:
         missing.append(
             "--source-bridge-runtime-bytecode-hex or "
             "--source-bridge-runtime-bytecode-file"
         )
-    if not isinstance(
+    if type(
         getattr(args, "destination_verifier_runtime_bytecode_hex_text", None),
-        str,
-    ):
+    ) is not str:
         missing.append(
             "--destination-verifier-runtime-bytecode-hex or "
             "--destination-verifier-runtime-bytecode-file"
@@ -3250,7 +3329,11 @@ def main(argv: list[str] | None = None) -> int:
                 "source_bridge_runtime_bytecode_hex_text",
                 None,
             )
-            if isinstance(source_runtime_bytecode, str):
+            source_runtime_bytecode = _runtime_summary_text(
+                source_runtime_bytecode,
+                label="source bridge runtime bytecode",
+            )
+            if source_runtime_bytecode is not None:
                 summary["source_bridge_runtime_bytecode_hex"] = (
                     source_runtime_bytecode
                 )
@@ -3318,7 +3401,11 @@ def main(argv: list[str] | None = None) -> int:
                     "destination_verifier_runtime_bytecode_hex_text",
                     None,
                 )
-                if isinstance(destination_runtime_bytecode, str):
+                destination_runtime_bytecode = _runtime_summary_text(
+                    destination_runtime_bytecode,
+                    label="destination verifier runtime bytecode",
+                )
+                if destination_runtime_bytecode is not None:
                     summary["destination_verifier_runtime_bytecode_hex"] = (
                         destination_runtime_bytecode
                     )

@@ -4604,7 +4604,15 @@ fn plan_missing_block_fetch_with_mode(
             MissingBlockFetchTargetKind::Topology,
         ),
     };
+    let count_targetless_strict_attempt = targets.is_empty()
+        && matches!(mode, MissingBlockFetchMode::StrictSigners)
+        && signer_fallback_attempts > 0
+        && !topology.as_ref().is_empty();
     if targets.is_empty() {
+        if count_targetless_strict_attempt && let Some(stats) = requests.get_mut(&block_hash) {
+            stats.attempts = stats.attempts.saturating_add(1);
+            stats.last_requested = now;
+        }
         MissingBlockFetchDecision::NoTargets
     } else {
         if let Some(stats) = requests.get_mut(&block_hash) {
@@ -13601,6 +13609,20 @@ impl CommittedLaneBlockQueue {
             if self.remaining_capacity() == 0 {
                 break;
             }
+            if let Err(err) = crate::lane_consensus::validate_committed_lane_block_session(&session)
+            {
+                let descriptor = &session.proposal.descriptor;
+                warn!(
+                    ?err,
+                    lane_id = ?descriptor.lane_id,
+                    dataspace_id = ?descriptor.dataspace_id,
+                    lane_block_height = descriptor.lane_block_height,
+                    lane_block_view = descriptor.lane_block_view,
+                    proposal_hash = ?session.proposal.proposal_hash,
+                    "skipping malformed committed lane-block session during queue hydration"
+                );
+                continue;
+            }
             if self.contains_session(&session) {
                 continue;
             }
@@ -13632,14 +13654,18 @@ impl CommittedLaneBlockQueue {
         before.saturating_sub(self.pending.len())
     }
 
-    fn retain_sessions_for_active_lanes(
+    fn retain_sessions_for_admissible_lanes(
         &mut self,
-        active_lane: impl Fn(LaneId, DataSpaceId) -> bool,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, u64) -> bool,
     ) -> usize {
         let before = self.pending.len();
         self.pending.retain(|session| {
             let descriptor = &session.proposal.descriptor;
-            active_lane(descriptor.lane_id, descriptor.dataspace_id)
+            admissible_lane(
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_block_height,
+            )
         });
         before.saturating_sub(self.pending.len())
     }
@@ -14353,17 +14379,25 @@ impl CommittedLaneBlockQueue {
         recorded
     }
 
-    fn lane_block_tips_snapshot(&self) -> Vec<lane_scheduler::LaneBlockTip> {
+    fn lane_block_tips_snapshot_for_admissible_lanes(
+        &self,
+        admissible_lane: impl Fn(LaneId, DataSpaceId, u64) -> bool,
+    ) -> Vec<lane_scheduler::LaneBlockTip> {
         self.pending
             .iter()
-            .map(|session| {
+            .filter_map(|session| {
                 let descriptor = &session.proposal.descriptor;
-                lane_scheduler::LaneBlockTip {
+                admissible_lane(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_block_height,
+                )
+                .then_some(lane_scheduler::LaneBlockTip {
                     lane_id: descriptor.lane_id,
                     dataspace_id: descriptor.dataspace_id,
                     latest_lane_block_height: descriptor.lane_block_height,
                     latest_lane_block_descriptor_hash: Some(descriptor.descriptor_hash),
-                }
+                })
             })
             .collect()
     }

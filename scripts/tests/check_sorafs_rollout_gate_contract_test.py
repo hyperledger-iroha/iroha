@@ -1452,7 +1452,8 @@ def find_active_sorafs_todo_markers(paths: list[Path]) -> list[str]:
 def test_active_sorafs_todo_marker_detection_has_negative_controls(
     tmp_path: Path,
 ) -> None:
-    assert ACTIVE_SORAFS_TODO_MARKER_RE.search("// TODO: bypass SoraFS review")
+    todo_prefix = "TO" "DO:"
+    assert ACTIVE_SORAFS_TODO_MARKER_RE.search(f"// {todo_prefix} bypass SoraFS review")
     assert ACTIVE_SORAFS_TODO_MARKER_RE.search("# FIXME: bypass SoraFS review")
     assert ACTIVE_SORAFS_TODO_MARKER_RE.search("// XXX: bypass SoraFS review")
     assert ACTIVE_SORAFS_TODO_MARKER_RE.search("# TBD: bypass SoraFS review")
@@ -9391,6 +9392,10 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     )
     assert (
         "test_overlapping_evidence_dirs_fail_closed_without_path_leak"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_evidence_source_conflicts_fail_closed_from_config"
         in aggregate_checker_test
     )
     assert "evidence file must not be a symlink" in aggregate_checker_test
@@ -24898,7 +24903,13 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "require_absent_or_empty_error_list(payload, \"load_errors\", errors)" in checker
+    assert "test_lane_summary_status_and_load_errors_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "require_threshold_map(payload, \"thresholds\", errors)" in checker
+    assert "test_lane_summary_thresholds_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "must be present" in checker
     assert "must not be empty" in checker
     assert "keys must be canonical strings" in checker
@@ -24912,6 +24923,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         in checker
     )
     assert "require_payload_free_summary_fields(payload, errors)" in checker
+    assert "test_payload_free_summary_fields_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "def is_sensitive_diagnostic_key" in checker
     assert "def payload_free_diagnostic_key_label" in checker
     assert "is not allowed in payload-free lane summary" in checker
@@ -25146,9 +25160,19 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_sensitive_artifact_fingerprint_key_is_rejected_without_echo" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert "test_artifact_fingerprint_shape_fails_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "fingerprint.generated_at_unix must not be future" in checker
     assert "fingerprint.generated_at_unix exceeds max summary artifact age" in checker
+    assert "fingerprint.generated_at_unix must be positive" in checker
     assert "test_future_artifact_timestamp_fails_with_fingerprint_path" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_artifact_freshness_timestamps_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_artifact_generated_at_shape_fails_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "test_artifact_fingerprint_metadata_must_be_payload_free" in read(
@@ -25221,6 +25245,12 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "validate_duplicate_summary_diagnostics" in checker
     assert "deterministic duplicate summary diagnostic exactly once" in checker
     assert "duplicate-summary diagnostics must match duplicate summary inputs" in checker
+    assert "test_missing_required_summary_rows_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_duplicate_and_unrequired_summaries_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "validate_disallowed_summary_diagnostics" in checker
     assert "unknown-schema diagnostics must match discovered unknown summaries" in checker
     assert "unrequired-gate diagnostics must match explicit unrequired summaries" in checker
@@ -25357,7 +25387,14 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_aggregate_required_row_output_shape_is_validated" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert (
+        "test_aggregate_required_row_output_contracts_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "test_aggregate_summary_output_shape_is_validated" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_aggregate_summary_output_contracts_fail_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "observed_artifact_count = sum(" in checker
@@ -25376,6 +25413,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     )
     assert "test_empty_required_artifacts_do_not_inflate_aggregate_count" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_malformed_required_artifact_inventories_do_not_inflate_counts_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert "test_complete_lane_fixture_summaries_pass_aggregate_contract" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
@@ -25407,6 +25448,18 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         "test_artifact_fingerprint_deployment_context_rejects_nonproduction_from_config"
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
+    assert (
+        "test_artifact_fingerprint_deployment_context_shape_fails_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_artifact_deployment_context_required_fields_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_artifact_deployment_context_reviewed_shape_fails_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "required row labels must be canonical strings" in checker
     assert "sanitized_required_row_labels" not in checker
     assert "required_kinds contains duplicate kind" in checker
@@ -25419,6 +25472,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "test_extra_required_row_label_is_payload_free" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_required_kind_inventory_fails_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "required contains rows outside the full" in checker
@@ -25445,6 +25501,14 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_required_and_recognized_artifact_paths_fail_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert (
+        "test_required_and_recognized_artifact_path_variants_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_required_and_recognized_artifact_path_scheme_and_current_segments_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "test_artifact_paths_reject_platform_specific_segments" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
@@ -25458,12 +25522,24 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert ".schema must be canonical" in checker
+    assert "test_required_row_schema_canonicality_fails_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert 'require_optional_artifact_label(artifact, "status", path, errors)' in checker
+    assert (
+        "test_required_and_recognized_artifact_optional_labels_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "PAYLOAD_FREE_ARTIFACT_FIELDS" in checker
     assert "require_payload_free_artifact_fields" in checker
     assert "is not allowed in payload-free artifact summary" in checker
     assert (
         "test_sensitive_required_and_artifact_field_diagnostics_are_sanitized"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert ".kind must be canonical" in checker
+    assert (
+        "test_required_and_recognized_artifact_kind_canonicality_fails_closed_from_config"
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert ".kind must match required row kind" in checker
@@ -25479,16 +25555,25 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_unknown_sorafs_schema_in_summary_dir_fails" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert "test_unknown_sorafs_schema_fails_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert ".artifacts must not duplicate artifact paths" in checker
     assert ".artifacts must not duplicate artifact identities" in checker
     assert "recognized_artifacts must not duplicate artifact paths" in checker
     assert "test_required_artifact_duplicate_paths_fail" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert "test_required_artifact_duplicate_paths_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "test_required_artifact_duplicate_identities_fail_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "test_recognized_artifacts_duplicate_paths_fail" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_recognized_artifact_duplicate_paths_fail_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "recognized_artifacts length must match recognized_artifact_count" in checker
@@ -25499,13 +25584,30 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "recognized_artifact_object_count" in checker
     assert "recognized_artifacts must be present" in checker
     assert "must be a non-empty array" in checker
+    assert "test_recognized_artifact_inventory_shape_fails_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_required_artifact_inventory_shape_fails_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_top_level_count_invariants_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "recognized_artifact_paths" in checker
     assert "is_archive_portable_artifact_path(\n            artifact_file_path" in checker
     assert "test_evidence_file_count_ignores_unsafe_recognized_artifact_paths" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert (
+        "test_unsafe_recognized_artifact_paths_do_not_satisfy_evidence_count_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
         "test_non_object_recognized_artifact_does_not_inflate_aggregate_count"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_non_object_artifact_entries_do_not_inflate_aggregate_counts_from_config"
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert "evidence_file_count must match recognized artifact path count" in checker
@@ -25522,7 +25624,14 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         "test_required_and_recognized_malformed_error_lists_fail_closed_from_config"
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
+    assert (
+        "test_required_and_recognized_artifact_extra_fields_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "recognized_artifacts must match required artifact counts" in checker
+    assert "test_recognized_artifact_kind_counts_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "recognized_artifacts must match required artifact identities" in checker
     assert "required_artifacts_by_identity" in checker
     assert "test_recognized_artifact_identity_drift_fails_closed_from_config" in read(

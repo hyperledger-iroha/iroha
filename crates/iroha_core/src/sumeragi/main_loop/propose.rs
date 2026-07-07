@@ -195,6 +195,9 @@ fn previous_roster_evidence_for_hash_only_parent(
 }
 
 fn known_lane_block_tips_for_proposal(state: &State) -> Vec<super::lane_scheduler::LaneBlockTip> {
+    let nexus = state.nexus_snapshot();
+    let state_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+    let reset_heights = state.da_shard_reset_heights_snapshot_cached();
     let mut tips = state
         .lane_block_artifact_tips_snapshot_cached()
         .into_iter()
@@ -214,14 +217,28 @@ fn known_lane_block_tips_for_proposal(state: &State) -> Vec<super::lane_schedule
             },
         )
         .collect::<Vec<_>>();
-    tips.extend(state.lane_relay_snapshot().into_iter().map(|relay| {
-        super::lane_scheduler::LaneBlockTip {
-            lane_id: relay.lane_id,
-            dataspace_id: relay.dataspace_id,
-            latest_lane_block_height: relay.block_height,
-            latest_lane_block_descriptor_hash: relay_tip_descriptor_hash_for_proposal(&relay),
-        }
-    }));
+    tips.extend(
+        state
+            .lane_relay_snapshot()
+            .into_iter()
+            .filter(|relay| {
+                (!nexus.enabled
+                    || (crate::state::nexus_active_lane_dataspace_at_height(
+                        relay.lane_id,
+                        &nexus,
+                        state_height,
+                    ) == Some(relay.dataspace_id)))
+                    && reset_heights
+                        .get(&relay.lane_id)
+                        .is_none_or(|reset_height| relay.block_height > *reset_height)
+            })
+            .map(|relay| super::lane_scheduler::LaneBlockTip {
+                lane_id: relay.lane_id,
+                dataspace_id: relay.dataspace_id,
+                latest_lane_block_height: relay.block_height,
+                latest_lane_block_descriptor_hash: relay_tip_descriptor_hash_for_proposal(&relay),
+            }),
+    );
     tips.extend(
         state
             .certified_lane_block_tips_snapshot_cached()
@@ -1975,7 +1992,15 @@ impl Actor {
         tips.extend(
             self.subsystems
                 .committed_lane_blocks
-                .lane_block_tips_snapshot(),
+                .lane_block_tips_snapshot_for_admissible_lanes(
+                    |lane_id, dataspace_id, lane_block_height| {
+                        self.lane_block_artifact_targets_active_route(
+                            lane_id,
+                            dataspace_id,
+                            lane_block_height,
+                        )
+                    },
+                ),
         );
         tips
     }
@@ -2043,6 +2068,19 @@ impl Actor {
             return None;
         }
 
+        if !self.lane_block_vote_body_targets_authorized_local_signer(&vote.body, local_peer) {
+            warn!(
+                lane = vote.lane_id.as_u32(),
+                dataspace_id = vote.dataspace_id.as_u64(),
+                lane_block_height = vote.lane_block_height,
+                lane_block_view = vote.lane_block_view,
+                validator_count = vote.body.validator_count,
+                min_quorum = vote.body.min_quorum,
+                "skipping local lane-block prepare vote for non-authoritative route or committee"
+            );
+            return None;
+        }
+
         let signature = match Signature::try_new(
             self.common_config.key_pair.private_key(),
             &vote.body.signature_preimage(),
@@ -2075,21 +2113,38 @@ impl Actor {
         let mut scheduled = 0_usize;
 
         for proposal in proposals {
-            self.schedule_background(BackgroundRequest::Broadcast {
-                msg: BlockMessageWire::new(BlockMessage::LaneBlockProposal(proposal.clone())),
-            });
-            scheduled = scheduled.saturating_add(1);
+            let accepted_for_broadcast = self.lane_block_proposal_accepts_local_broadcast(proposal);
+            if accepted_for_broadcast {
+                self.schedule_background(BackgroundRequest::Broadcast {
+                    msg: BlockMessageWire::new(BlockMessage::LaneBlockProposal(proposal.clone())),
+                });
+                scheduled = scheduled.saturating_add(1);
+            }
+            if let Err(err) = self.handle_lane_block_proposal(proposal.clone()) {
+                warn!(?err, "failed to cache locally produced lane-block proposal");
+            }
         }
 
         let local_prepare_votes = prepare_vote_plans
             .iter()
             .filter_map(|plan| self.local_lane_block_prepare_vote(plan))
             .collect::<Vec<_>>();
+        let local_peer = self.common_config.peer.id().clone();
         for vote in local_prepare_votes {
-            self.schedule_background(BackgroundRequest::Broadcast {
-                msg: BlockMessageWire::new(BlockMessage::LaneBlockVote(vote)),
-            });
-            scheduled = scheduled.saturating_add(1);
+            let accepted_for_broadcast =
+                self.lane_block_vote_accepts_local_broadcast(&vote, &local_peer);
+            if accepted_for_broadcast {
+                self.schedule_background(BackgroundRequest::Broadcast {
+                    msg: BlockMessageWire::new(BlockMessage::LaneBlockVote(vote.clone())),
+                });
+                scheduled = scheduled.saturating_add(1);
+            }
+            if let Err(err) = self.handle_lane_block_vote(vote, Some(&local_peer)) {
+                warn!(
+                    ?err,
+                    "failed to cache locally produced lane-block prepare vote"
+                );
+            }
         }
 
         if scheduled > 0 {
@@ -8528,7 +8583,7 @@ mod tests {
             nonce,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
-            asset_id: b"xor#universal".to_vec(),
+            asset_id: b"xor".to_vec(),
             amount: 77,
             sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
@@ -8683,7 +8738,8 @@ mod tests {
 
     #[test]
     fn proposal_sccp_collection_ignores_records_when_nexus_disabled() {
-        let state = blank_state();
+        let mut state = blank_state();
+        state.nexus.get_mut().enabled = false;
         let tx = accepted_sccp_record_transaction(1);
         let routing = vec![RoutingDecision::default()];
         let nexus = state.nexus_snapshot();

@@ -941,6 +941,43 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         _ = try Self.optionSomePayload(initWithoutBlockHeightFields[4])
         try Self.assertOptionNone(initWithoutBlockHeightFields[5])
 
+        var assetBytes = Data(repeating: 0x21, count: 16)
+        assetBytes[6] = 0x42
+        assetBytes[8] = 0x82
+        let assetDefinitionId = try XCTUnwrap(AssetDefinitionAddress.encode(uuidBytes: assetBytes))
+        let topUpArchive = try KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(
+            KagemushaRecursiveSpendTopUpRequest(
+                accountId: try Self.sampleRecipient(),
+                assetDefinitionId: assetDefinitionId,
+                amount: "13",
+                initRequestArchive: initArchive
+            )
+        )
+        try Self.assertArchiveSchema(
+            topUpArchive,
+            KagemushaRecursiveSpendRequestCodecs.topUpRequestWireName
+        )
+        let topUpFields = try Self.requestFields(
+            topUpArchive,
+            schema: KagemushaRecursiveSpendRequestCodecs.topUpRequestWireName
+        )
+        XCTAssertEqual(topUpFields.count, 3)
+        let assetIdFields = try Self.fieldPayloads(topUpFields[0])
+        XCTAssertEqual(assetIdFields.count, 3)
+        XCTAssertFalse(assetIdFields[0].isEmpty)
+        XCTAssertEqual(assetBytes, assetIdFields[1])
+        XCTAssertEqual(Data([0, 0, 0, 0]), assetIdFields[2])
+        let numericFields = try Self.fieldPayloads(topUpFields[1])
+        XCTAssertEqual(numericFields.count, 2)
+        XCTAssertEqual(UInt32(0), try Self.readUInt32Payload(numericFields[1]))
+        XCTAssertEqual(
+            try Self.compactPayload(
+                initArchive,
+                schema: KagemushaRecursiveSpendRequestCodecs.initRequestWireName
+            ),
+            topUpFields[2]
+        )
+
         try Self.assertArchiveSchema(
             KagemushaRecursiveSpendRequestCodecs.encodeAppendRequest(
                 KagemushaRecursiveSpendAppendRequest(
@@ -2757,6 +2794,18 @@ final class KagemushaRecursiveSpendRequestCodecsTests: XCTestCase {
         let value = try reader.readUInt64LE()
         XCTAssertEqual(reader.remaining, 0)
         return value
+    }
+
+    private static func readUInt32Payload(_ payload: Data) throws -> UInt32 {
+        var reader = TestCompactReader(data: payload)
+        let bytes = try reader.readBytes(4)
+        var value: UInt32 = 0
+        bytes.withUnsafeBytes { buffer in
+            guard let base = buffer.baseAddress else { return }
+            memcpy(&value, base, 4)
+        }
+        XCTAssertEqual(reader.remaining, 0)
+        return UInt32(littleEndian: value)
     }
 
     private static func optionSomePayload(_ payload: Data) throws -> Data {

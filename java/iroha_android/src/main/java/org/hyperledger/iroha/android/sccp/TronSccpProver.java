@@ -278,6 +278,7 @@ public final class TronSccpProver {
           "payloadHash",
           "statementHash",
           "commitmentRoot",
+          "finalityHeight",
           "finalityBlockHash",
           "signatureSha256"
         },
@@ -288,6 +289,39 @@ public final class TronSccpProver {
           payloadHash,
           statementHash,
           commitmentRoot,
+          finalityHeight,
+          finalityBlockHash,
+          signatureSha256
+        });
+    requireHashRolesDistinct(
+        "TRON route canary governed hashes",
+        new String[] {
+          "routeAllowlistHash",
+          "destinationBindingHash",
+          "sourceVerifierMaterialHash",
+          "sourceAdapterEngineDeploymentHash",
+          "transactionId",
+          "messageId",
+          "callDataSha256",
+          "payloadHash",
+          "statementHash",
+          "commitmentRoot",
+          "finalityHeight",
+          "finalityBlockHash",
+          "signatureSha256"
+        },
+        new byte[][] {
+          routeAllowlistHash,
+          destinationBindingHash,
+          sourceVerifierMaterialHash,
+          sourceAdapterEngineDeploymentHash,
+          transactionId,
+          messageId,
+          callDataSha256,
+          payloadHash,
+          statementHash,
+          commitmentRoot,
+          finalityHeight,
           finalityBlockHash,
           signatureSha256
         });

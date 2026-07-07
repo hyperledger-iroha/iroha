@@ -77,6 +77,20 @@ class TronSccpProverTest {
             }
             assertTrue(failure.message?.contains("TRON route canary governed hashes") == true)
         }
+        listOf(
+            evidence.copy(payloadHash = evidence.routeAllowlistHash),
+            evidence.copy(payloadHash = evidence.sourceVerifierMaterialHash),
+            evidence.copy(finalityHeight = evidence.sourceAdapterEngineDeploymentHash),
+        ).forEach { replay ->
+            val failure = assertFailsWith<IllegalArgumentException> {
+                SccpTron.routeCanaryEvidenceHash(replay)
+            }
+            assertTrue(failure.message?.contains("TRON route canary governed hashes") == true)
+        }
+        val transcriptFailure = assertFailsWith<IllegalArgumentException> {
+            SccpTron.routeCanaryEvidenceHash(evidence.copy(finalityHeight = evidence.transactionId))
+        }
+        assertTrue(transcriptFailure.message?.contains("TRON route canary transcript hashes") == true)
     }
 
     @Test

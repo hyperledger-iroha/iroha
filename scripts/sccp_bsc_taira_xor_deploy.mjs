@@ -740,7 +740,7 @@ function usage() {
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs compile [--out ${DEFAULT_ARTIFACTS_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs deploy --bsc-network testnet|mainnet --verifier <verifier-key.json> --broadcast true --confirm-network ${ROUTE_ID}:testnet|${ROUTE_ID}:mainnet [--confirm-mainnet true] [--private-key-env ${DEFAULT_PRIVATE_KEY_ENV}] [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs evidence --bsc-network testnet|mainnet --token <addr> --bridge <addr> --source-bridge <addr> --verifier <addr> [--rpc-url ${DEFAULT_BSC_RPC_URL}] [--out ${DEFAULT_EVIDENCE_OUT}]
-	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--destination-browser-prover-manifest <destination-sidecar.json> --source-browser-prover-manifest <source-sidecar.json>] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+	  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--destination-browser-prover-manifest <destination-sidecar.json> --source-browser-prover-manifest <source-sidecar.json>] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-network ${ROUTE_ID}:testnet|${ROUTE_ID}:mainnet [--confirm-mainnet true]] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs source-parity-attestation [--bsc-network testnet|mainnet] [--out ${DEFAULT_NATIVE_EVM_SOURCE_PARITY_ATTESTATION_OUT}]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material generate --bsc-network testnet --ptau <phase2.ptau> [--out-dir output/sccp-bsc-production/groth16-material/testnet] [--circom-bin circom2] [--snarkjs-bin snarkjs]
 	  node scripts/sccp_bsc_taira_xor_deploy.mjs groth16-material toolchain-fingerprint [--transcript <reproducible-build-transcript.json>] [--circom-bin circom2] [--snarkjs-bin snarkjs] [--out <json>]
@@ -792,7 +792,7 @@ Reads deployed BSC contracts and writes public deployment evidence. The
 readback must bind the token, bridge, source bridge, verifier, network id,
 verifier key hash, and destination binding hash to the selected BSC profile.`,
   "route-manifest": `Usage:
-  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--destination-browser-prover-manifest <destination-sidecar.json> --source-browser-prover-manifest <source-sidecar.json>] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-testnet ${ROUTE_ID}|--confirm-mainnet true --confirm-network ${ROUTE_ID}] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
+  node scripts/sccp_bsc_taira_xor_deploy.mjs route-manifest --evidence ${DEFAULT_EVIDENCE_OUT} --taira-contract ${DEFAULT_TAIRA_BURN_RECORD_CONTRACT_OUT} --settlement-asset-definition-id <asset-id> [--proof-artifact-hash <0x...> --proving-key-hash <0x...>] [--native-prover-bundle ${DEFAULT_NATIVE_EVM_PROVER_BUNDLE_OUT}] [--destination-browser-prover-manifest <destination-sidecar.json> --source-browser-prover-manifest <source-sidecar.json>] [--source-bridge-config-hash <0x...> --source-event-transaction-id <0x...> --source-event-explorer-url <url> --route-canary-evidence-hash <0x...> --route-canary-transaction-id <0x...> --route-canary-explorer-url <url> --full-toml-ready true --offline-full-toml-sha256 <0x...>|--offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}] [--production-ready true --offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT} --live-readback-checked true --confirm-network ${ROUTE_ID}:testnet|${ROUTE_ID}:mainnet [--confirm-mainnet true]] [--out ${DEFAULT_ROUTE_MANIFEST_OUT}]
 
 Builds the TAIRA/BSC SCCP route manifest from public deployment evidence,
 TAIRA burn-record contract material, production proof hashes, native prover
@@ -858,7 +858,7 @@ be emitted from blocked material.`,
   "route-config": `Usage:
   node scripts/sccp_bsc_taira_xor_deploy.mjs route-config [--manifest ${DEFAULT_ROUTE_MANIFEST_OUT}] [--base-config configs/soranexus/taira/config.toml] [--out ${DEFAULT_ROUTE_CONFIG_OUT}] [--write-offline-full-toml-evidence ${DEFAULT_ROUTE_FULL_CONFIG_EVIDENCE_OUT}]
 
-Renders a legacy/offline TAIRA route TOML overlay or merged full config for
+Renders an offline TAIRA route TOML overlay or merged full config for
 evidence hashing only. Production route material is published on-chain with
 publish-route-manifest; peer configs should not carry a local BSC SCCP route
 stanza. Route-config output requires production-ready manifests.`,
@@ -914,7 +914,6 @@ const optionsFromCommandHelp = (command) =>
 
 const EXTRA_COMMAND_OPTIONS = Object.freeze({
   deploy: Object.freeze([
-    "confirm-testnet",
     "allow-local-rpc",
     "allow-diagnostic-verifier",
   ]),
@@ -1091,8 +1090,8 @@ export function bscProductionRequirements(options = {}) {
     profile.key === "mainnet" ? " --confirm-mainnet true" : "";
   const routeManifestConfirmation =
     profile.key === "mainnet"
-      ? `--confirm-mainnet true --confirm-network ${ROUTE_ID}`
-      : `--confirm-testnet ${ROUTE_ID}`;
+      ? `--confirm-mainnet true --confirm-network ${profile.confirmNetwork}`
+      : `--confirm-network ${profile.confirmNetwork}`;
   const deploymentEvidenceOut = defaultDeploymentEvidenceOut(profile);
   const routeManifestOut = defaultRouteManifestOut(profile);
   const nativeBundleOut = defaultNativeEvmProverBundleOut(profile);
@@ -1365,7 +1364,7 @@ export function bscProductionRequirements(options = {}) {
         placeholder: "<deployed-taira-config.toml>",
         requiredBy: ["route-config"],
         description:
-          "Deployed TAIRA base config used only to render legacy/offline full-TOML evidence; production SCCP BSC route material is published on-chain.",
+          "Deployed TAIRA base config used only to render offline full-TOML evidence; production SCCP BSC route material is published on-chain.",
       }),
       productionRequirementInput({
         id: "offline-full-toml-evidence",
@@ -1619,20 +1618,7 @@ export function bscProductionRequirements(options = {}) {
 
 function requireBscNetworkConfirmation(options, profile, action) {
   const modern = trim(ownValue(options, "confirm-network"));
-  const legacyTestnet = trim(ownValue(options, "confirm-testnet"));
   if (modern !== profile.confirmNetwork) {
-    if (
-      profile.key === "testnet" &&
-      !modern &&
-      legacyTestnet === CONFIRMATION_TEXT
-    ) {
-      return;
-    }
-    if (profile.key === "testnet" && !modern) {
-      throw new Error(
-        `${action} requires --confirm-testnet ${CONFIRMATION_TEXT} or --confirm-network ${profile.confirmNetwork}.`,
-      );
-    }
     throw new Error(
       `${action} requires --confirm-network ${profile.confirmNetwork}.`,
     );
@@ -2083,6 +2069,16 @@ function readStringArray(record, keys, label) {
     }
     selected = normalized;
     selectedKey = key;
+  }
+  if (
+    selectedKey &&
+    keys.length > 1 &&
+    selectedKey !== keys[0] &&
+    (isRouteManifestPath(label) || isBscBrowserProverManifestPath(label))
+  ) {
+    throw new Error(
+      `${label}.${keys[0]} must not use retired alias ${selectedKey} in ${label}; use ${keys[0]}.`,
+    );
   }
   return selected ?? [];
 }
@@ -6636,7 +6632,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
       ]),
       "Groth16 material manifest",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       manifest,
       [
         ["generatedAt", ["generatedAt", "generated_at"]],
@@ -6695,7 +6691,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
       ]),
       "Groth16 material manifest artifacts",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       artifacts,
       [
         ["circuitSource", ["circuitSource", "circuit_source"]],
@@ -6748,7 +6744,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
           new Set(["path", "sha256", "hash", "artifactHash", "artifact_hash"]),
           `Groth16 material manifest ${label}`,
         ),
-        ...groth16ProofSelfTestAliasProblems(
+        ...groth16ProofSelfTestCanonicalAliasProblems(
           artifact,
           [["sha256", ["sha256", "hash", "artifactHash", "artifact_hash"]]],
           `Groth16 material manifest ${label}`,
@@ -6775,7 +6771,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
       ]),
       "Groth16 material manifest trustedSetup",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       trustedSetup,
       [
         ["localPowersOfTau", ["localPowersOfTau", "local_powers_of_tau"]],
@@ -6799,7 +6795,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
       new Set(["snarkjs", "snark_js", "circuitSource", "circuit_source"]),
       "Groth16 material manifest selfChecks",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       selfChecks,
       [
         ["snarkjs", ["snarkjs", "snark_js"]],
@@ -6844,7 +6840,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
       ]),
       "Groth16 material manifest selfChecks.snarkjs",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       snarkjs,
       [
         ["snarkjsBinary", ["snarkjsBinary", "snarkjs_binary"]],
@@ -6899,7 +6895,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
       ]),
       "Groth16 material manifest selfChecks.circuitSource",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       circuitSource,
       [
         ["fullMessageCircuit", ["fullMessageCircuit", "full_message_circuit"]],
@@ -6954,7 +6950,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
       ]),
       "Groth16 material manifest attestationTrustPolicy",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       trustPolicy,
       [
         ["signatureSchema", ["signatureSchema", "signature_schema"]],
@@ -7004,7 +7000,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
           ]),
           `Groth16 material manifest ${label}`,
         ),
-        ...groth16ProofSelfTestAliasProblems(
+        ...groth16ProofSelfTestCanonicalAliasProblems(
           reference,
           [
             ["sha256", ["sha256", "attestationHash", "attestation_hash"]],
@@ -7029,7 +7025,7 @@ function bscGroth16MaterialManifestShapeProblems(manifest) {
           ]),
           `Groth16 material manifest ${label} signature`,
         ),
-        ...groth16ProofSelfTestAliasProblems(
+        ...groth16ProofSelfTestCanonicalAliasProblems(
           signature,
           [
             [
@@ -9326,6 +9322,29 @@ function groth16ProofSelfTestAliasProblems(record, groups, label) {
   return problems;
 }
 
+function groth16ProofSelfTestRetiredAliasProblems(record, groups, label) {
+  if (!isRecord(record)) {
+    return [];
+  }
+  const problems = [];
+  for (const [fieldLabel, keys] of groups) {
+    const presentKeys = keys.filter((key) => hasOwn(record, key));
+    if (presentKeys.length === 1 && presentKeys[0] !== keys[0]) {
+      problems.push(
+        `${label} ${fieldLabel} must not use retired alias ${presentKeys[0]}; use ${keys[0]}`,
+      );
+    }
+  }
+  return problems;
+}
+
+function groth16ProofSelfTestCanonicalAliasProblems(record, groups, label) {
+  return [
+    ...groth16ProofSelfTestAliasProblems(record, groups, label),
+    ...groth16ProofSelfTestRetiredAliasProblems(record, groups, label),
+  ];
+}
+
 function bscGroth16ProofSelfTestShapeProblems(report) {
   const problems = [
     ...bscNetworkAliasProblems(report, "Groth16 proof self-test report"),
@@ -9370,7 +9389,7 @@ function bscGroth16ProofSelfTestShapeProblems(report) {
       ]),
       "Groth16 proof self-test report",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       report,
       [
         ["routeId", ["routeId", "route_id"]],
@@ -9407,7 +9426,7 @@ function bscGroth16ProofSelfTestShapeProblems(report) {
       ]),
       "Groth16 proof self-test manifest",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       manifest,
       [
         ["sha256", ["sha256", "manifestSha256", "manifest_sha256"]],
@@ -9436,7 +9455,7 @@ function bscGroth16ProofSelfTestShapeProblems(report) {
       ]),
       "Groth16 proof self-test artifacts",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       artifacts,
       [
         ["circuitSource", ["circuitSource", "circuit_source"]],
@@ -9469,7 +9488,7 @@ function bscGroth16ProofSelfTestShapeProblems(report) {
           new Set(["path", "sha256", "hash", "artifactHash", "artifact_hash"]),
           `Groth16 proof self-test ${label}`,
         ),
-        ...groth16ProofSelfTestAliasProblems(
+        ...groth16ProofSelfTestCanonicalAliasProblems(
           readFirstValue(artifacts, ...keys),
           [["sha256", ["sha256", "hash", "artifactHash", "artifact_hash"]]],
           `Groth16 proof self-test ${label}`,
@@ -9494,7 +9513,7 @@ function bscGroth16ProofSelfTestShapeProblems(report) {
       ]),
       "Groth16 proof self-test sample",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       sample,
       [
         [
@@ -9542,7 +9561,7 @@ function bscGroth16ProofSelfTestShapeProblems(report) {
       ]),
       "Groth16 proof self-test adversarialChecks",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       adversarialChecks,
       [
         [
@@ -9617,7 +9636,7 @@ function bscGroth16ProofSelfTestShapeProblems(report) {
       ]),
       "Groth16 proof self-test adversarialChecks.nonBooleanValueBit.case",
     ),
-    ...groth16ProofSelfTestAliasProblems(
+    ...groth16ProofSelfTestCanonicalAliasProblems(
       nonBooleanCase,
       [
         ["signalName", ["signalName", "signal_name"]],
@@ -11364,10 +11383,30 @@ function normalizeBscTairaBurnRecordContract(contract, options = {}) {
       `TAIRA burn-record contract schema must be ${TAIRA_BURN_RECORD_CONTRACT_SCHEMA}.`,
     );
   }
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: contract,
+        keys: ["routeId", "route_id"],
+        pathName: "TAIRA burn-record contract",
+      },
+    ],
+    "TAIRA burn-record contract routeId",
+  );
   const routeId = readFirstString(contract, "routeId", "route_id");
   if (routeId && routeId !== ROUTE_ID) {
     throw new Error(`TAIRA burn-record contract routeId must be ${ROUTE_ID}.`);
   }
+  assertSingleStringAliasPerSource(
+    [
+      {
+        record: contract,
+        keys: ["assetKey", "asset_key"],
+        pathName: "TAIRA burn-record contract",
+      },
+    ],
+    "TAIRA burn-record contract assetKey",
+  );
   const assetKey = readFirstString(contract, "assetKey", "asset_key");
   if (assetKey && assetKey !== ASSET_KEY) {
     throw new Error(
@@ -11415,6 +11454,12 @@ function normalizeBscTairaBurnRecordContract(contract, options = {}) {
       "TAIRA burn-record contract artifactSha256 does not match artifact bytes.",
     );
   }
+  assertSingleRecordAlias(
+    contract,
+    ["vkRef", "vk_ref", "verifierKeyRef", "verifier_key_ref"],
+    "TAIRA burn-record contract",
+    "TAIRA burn-record contract vkRef",
+  );
   const vkRef =
     readFirstRecord(contract, "vkRef", "vk_ref") ??
     readFirstRecord(contract, "verifierKeyRef", "verifier_key_ref") ??
@@ -12080,15 +12125,14 @@ export async function buildBscTairaXorRouteManifestDraft(input = {}) {
   const productionReady = optionEnabled(options, "production-ready", false);
   if (productionReady) {
     const confirmed =
-      profile.key === "testnet"
-        ? ownValue(options, "confirm-testnet") === ROUTE_ID
-        : optionEnabled(options, "confirm-mainnet", false) &&
-          ownValue(options, "confirm-network") === ROUTE_ID;
+      ownValue(options, "confirm-network") === profile.confirmNetwork &&
+      (profile.key !== "mainnet" ||
+        optionEnabled(options, "confirm-mainnet", false));
     if (!confirmed) {
       throw new Error(
         profile.key === "testnet"
-          ? `production-ready BSC testnet route manifests require --confirm-testnet ${ROUTE_ID}.`
-          : `production-ready BSC mainnet route manifests require --confirm-mainnet true --confirm-network ${ROUTE_ID}.`,
+          ? `production-ready BSC testnet route manifests require --confirm-network ${profile.confirmNetwork}.`
+          : `production-ready BSC mainnet route manifests require --confirm-mainnet true --confirm-network ${profile.confirmNetwork}.`,
       );
     }
     if (!optionEnabled(options, "live-readback-checked", false)) {
@@ -12472,6 +12516,39 @@ function isRouteManifestPath(pathName) {
   return typeof pathName === "string" && pathName.startsWith("route manifest");
 }
 
+function isBscDeploymentEvidencePath(pathName) {
+  return (
+    typeof pathName === "string" &&
+    pathName.startsWith("BSC deployment evidence")
+  );
+}
+
+function isBscOfflineFullTomlEvidencePath(pathName) {
+  return (
+    typeof pathName === "string" &&
+    pathName.startsWith("BSC offline full TOML evidence")
+  );
+}
+
+function isBscLiveEvidencePath(pathName) {
+  return typeof pathName === "string" && pathName.startsWith("BSC live evidence");
+}
+
+function isBscTairaBurnRecordContractPath(pathName) {
+  return (
+    typeof pathName === "string" &&
+    pathName.startsWith("TAIRA burn-record contract")
+  );
+}
+
+function isBscBrowserProverManifestPath(pathName) {
+  return (
+    typeof pathName === "string" &&
+    (pathName.startsWith("destination browser prover manifest") ||
+      pathName.startsWith("source browser prover manifest"))
+  );
+}
+
 function isGeneratedBscAddressLabel(label) {
   return [
     "route manifest BSC token address",
@@ -12486,7 +12563,12 @@ function assertNoRetiredRouteManifestAlias(entries, keys, pathName, label) {
     entries.length === 1 &&
     keys.length > 1 &&
     entries[0].key !== keys[0] &&
-    isRouteManifestPath(pathName) &&
+    (isRouteManifestPath(pathName) ||
+      isBscDeploymentEvidencePath(pathName) ||
+      isBscOfflineFullTomlEvidencePath(pathName) ||
+      isBscLiveEvidencePath(pathName) ||
+      isBscTairaBurnRecordContractPath(pathName) ||
+      isBscBrowserProverManifestPath(pathName)) &&
     !isGeneratedBscAddressLabel(label)
   ) {
     throw new Error(
@@ -12596,7 +12678,12 @@ function assertSingleValueAlias(record, keys, pathName, label) {
     presentKeys.length === 1 &&
     keys.length > 1 &&
     presentKeys[0] !== keys[0] &&
-    isRouteManifestPath(pathName)
+    (isRouteManifestPath(pathName) ||
+      isBscDeploymentEvidencePath(pathName) ||
+      isBscOfflineFullTomlEvidencePath(pathName) ||
+      isBscLiveEvidencePath(pathName) ||
+      isBscTairaBurnRecordContractPath(pathName) ||
+      isBscBrowserProverManifestPath(pathName))
   ) {
     throw new Error(
       `${label} must not use retired alias ${presentKeys[0]} in ${pathName}; use ${keys[0]}.`,
@@ -13916,7 +14003,7 @@ function normalizeRouteManifestForConfig(manifest) {
     routeId,
     assetKey,
     bscNetwork,
-    legacyTronNetwork: chain,
+    network: chain,
     chain,
     chainIdHex,
     explorerUrl,
@@ -14035,7 +14122,7 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
     `version = ${route.version}`,
     `route_id = ${tomlString(route.routeId, "route_id")}`,
     `asset_key = ${tomlString(route.assetKey, "asset_key")}`,
-    `tron_network = ${tomlString(route.legacyTronNetwork, "tron_network")}`,
+    `network = ${tomlString(route.network, "network")}`,
     `chain = ${tomlString(route.chain, "chain")}`,
     `chain_id_hex = ${tomlString(route.chainIdHex, "chain_id_hex")}`,
     `explorer_url = ${tomlString(route.explorerUrl, "explorer_url")}`,
@@ -14051,8 +14138,8 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
     `network_id_hex = ${tomlString(route.networkIdHex, "network_id_hex")}`,
     `taira_xor_token_address = ${tomlString(route.tokenAddress, "taira_xor_token_address")}`,
     `taira_xor_bridge_address = ${tomlString(route.bridgeAddress, "taira_xor_bridge_address")}`,
-    `sccp_bsc_source_bridge_address = ${tomlString(route.sourceBridgeAddress, "sccp_bsc_source_bridge_address")}`,
-    `sccp_bsc_destination_verifier_address = ${tomlString(route.verifierAddress, "sccp_bsc_destination_verifier_address")}`,
+    `source_bridge_address = ${tomlString(route.sourceBridgeAddress, "source_bridge_address")}`,
+    `destination_verifier_address = ${tomlString(route.verifierAddress, "destination_verifier_address")}`,
     `verifier_code_hash = ${tomlString(route.verifierCodeHash, "verifier_code_hash")}`,
     `verifier_key_hash = ${tomlString(route.verifierKeyHash, "verifier_key_hash")}`,
     ...tomlOptionalStringLine(
@@ -14763,8 +14850,8 @@ async function commandRouteConfig(options) {
     productionReady:
       readFirstValue(manifest, "productionReady", "production_ready") ?? null,
     nextStep: baseConfigPath
-      ? "Use this merged TAIRA node config only as legacy/offline evidence. Publish production BSC route material on-chain with publish-route-manifest, and keep peer configs free of local BSC SCCP route stanzas."
-      : "Use this TOML only as legacy/offline evidence. Publish production BSC route material on-chain with publish-route-manifest, and keep peer configs free of local BSC SCCP route stanzas.",
+      ? "Use this merged TAIRA node config only as offline evidence. Publish production BSC route material on-chain with publish-route-manifest, and keep peer configs free of local BSC SCCP route stanzas."
+      : "Use this TOML only as offline evidence. Publish production BSC route material on-chain with publish-route-manifest, and keep peer configs free of local BSC SCCP route stanzas.",
   };
 }
 
@@ -14829,7 +14916,7 @@ export function buildUpsertSccpRouteManifestInstruction(manifest) {
     version: route.version,
     route_id: route.routeId,
     asset_key: route.assetKey,
-    tron_network: route.legacyTronNetwork,
+    network: route.network,
     chain: route.chain,
     chain_id_hex: route.chainIdHex,
     explorer_url: route.explorerUrl,
@@ -14843,8 +14930,8 @@ export function buildUpsertSccpRouteManifestInstruction(manifest) {
     network_id_hex: route.networkIdHex,
     taira_xor_token_address: route.tokenAddress,
     taira_xor_bridge_address: route.bridgeAddress,
-    sccp_tron_source_bridge_address: route.sourceBridgeAddress,
-    tron_verifier_address: route.verifierAddress,
+    source_bridge_address: route.sourceBridgeAddress,
+    destination_verifier_address: route.verifierAddress,
     verifier_code_hash: route.verifierCodeHash,
     verifier_key_hash: route.verifierKeyHash,
     proof_artifact_hash: route.proofArtifactHash ?? null,

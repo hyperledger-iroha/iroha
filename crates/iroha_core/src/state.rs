@@ -26011,7 +26011,8 @@ impl State {
     ///
     /// Each tuple is `(lane_id, dataspace_id, latest_lane_block_height, descriptor_hash)`.
     /// Artifacts whose persisted dataspace no longer matches the active lane
-    /// catalog are skipped so proposal planning cannot cross lane incarnations.
+    /// catalog, or whose lane-local height is not above the lane reset
+    /// watermark, are skipped so proposal planning cannot cross lane incarnations.
     #[must_use]
     pub(crate) fn lane_block_artifact_tips_snapshot_cached(
         &self,
@@ -26020,6 +26021,7 @@ impl State {
         if !nexus.enabled {
             return Vec::new();
         }
+        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
 
         nexus
             .lane_catalog
@@ -26029,10 +26031,18 @@ impl State {
                 let artifact = self
                     .kura
                     .latest_lane_block_artifact_for_dataspace(lane.id, lane.dataspace_id)?;
+                let lane_block_height = artifact.ownership.lane_block_height;
+                if !Self::lane_block_height_visible_after_reset(
+                    &reset_heights,
+                    lane.id,
+                    lane_block_height,
+                ) {
+                    return None;
+                }
                 Some((
                     lane.id,
                     lane.dataspace_id,
-                    artifact.ownership.lane_block_height,
+                    lane_block_height,
                     artifact.ownership.lane_block_descriptor_hash,
                 ))
             })
@@ -31529,7 +31539,7 @@ fn zk_policy_put_sccp_route_manifests(
             .cmp(&right.version)
             .then_with(|| left.route_id.cmp(&right.route_id))
             .then_with(|| left.asset_key.cmp(&right.asset_key))
-            .then_with(|| left.tron_network.cmp(&right.tron_network))
+            .then_with(|| left.network.cmp(&right.network))
             .then_with(|| left.chain.cmp(&right.chain))
             .then_with(|| left.chain_id_hex.cmp(&right.chain_id_hex))
             .then_with(|| left.counterparty_domain.cmp(&right.counterparty_domain))
@@ -31545,11 +31555,11 @@ fn zk_policy_put_sccp_route_manifests(
                 left.taira_xor_bridge_address
                     .cmp(&right.taira_xor_bridge_address)
             })
+            .then_with(|| left.source_bridge_address.cmp(&right.source_bridge_address))
             .then_with(|| {
-                left.sccp_tron_source_bridge_address
-                    .cmp(&right.sccp_tron_source_bridge_address)
+                left.destination_verifier_address
+                    .cmp(&right.destination_verifier_address)
             })
-            .then_with(|| left.tron_verifier_address.cmp(&right.tron_verifier_address))
             .then_with(|| left.verifier_code_hash.cmp(&right.verifier_code_hash))
             .then_with(|| left.verifier_key_hash.cmp(&right.verifier_key_hash))
             .then_with(|| {
@@ -31641,7 +31651,7 @@ fn zk_policy_put_sccp_route_manifests(
         zk_policy_put_u8(hasher, "version", manifest.version);
         zk_policy_put_str(hasher, "route_id", &manifest.route_id);
         zk_policy_put_str(hasher, "asset_key", &manifest.asset_key);
-        zk_policy_put_str(hasher, "tron_network", &manifest.tron_network);
+        zk_policy_put_str(hasher, "network", &manifest.network);
         zk_policy_put_str(hasher, "chain", &manifest.chain);
         zk_policy_put_str(hasher, "chain_id_hex", &manifest.chain_id_hex);
         zk_policy_put_u32(hasher, "counterparty_domain", manifest.counterparty_domain);
@@ -31665,13 +31675,13 @@ fn zk_policy_put_sccp_route_manifests(
         );
         zk_policy_put_str(
             hasher,
-            "sccp_tron_source_bridge_address",
-            &manifest.sccp_tron_source_bridge_address,
+            "source_bridge_address",
+            &manifest.source_bridge_address,
         );
         zk_policy_put_str(
             hasher,
-            "tron_verifier_address",
-            &manifest.tron_verifier_address,
+            "destination_verifier_address",
+            &manifest.destination_verifier_address,
         );
         zk_policy_put_str(hasher, "verifier_code_hash", &manifest.verifier_code_hash);
         zk_policy_put_str(hasher, "verifier_key_hash", &manifest.verifier_key_hash);
@@ -44344,7 +44354,7 @@ mod tests {
             version: 1,
             route_id: route_id.to_owned(),
             asset_key: "xor".to_owned(),
-            tron_network: "nile".to_owned(),
+            network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
             explorer_url: None,
@@ -44359,8 +44369,8 @@ mod tests {
                 .to_owned(),
             taira_xor_token_address: "TT1DaQcqzoJEzEaHDU8nsmiKtiyhXHaSKD".to_owned(),
             taira_xor_bridge_address: "TWvqVD8cuSTqisoDrPKfwkkrpAsziL3XFh".to_owned(),
-            sccp_tron_source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
-            tron_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
+            source_bridge_address: "TJk5a8Y1bWkUxqLeBEKiyLEJD2ytoBrsa9".to_owned(),
+            destination_verifier_address: "TKJtY3UFssmhUSg1FPdXyxWcHKS9SWVtCJ".to_owned(),
             ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", "11".repeat(32)),
             verifier_key_hash: format!("0x{}", "22".repeat(32)),
@@ -56513,12 +56523,10 @@ mod tests {
                 ))
                 .expect("default lane relay stored");
             relays
-                .insert(sample_lane_relay_envelope(
-                    1,
-                    retired_lane_id,
-                    &signers,
-                    vec![0b0000_0001],
-                ))
+                .insert(
+                    sample_lane_relay_envelope(1, retired_lane_id, &signers, vec![0b0000_0001])
+                        .with_fastpq_proof_material(None),
+                )
                 .expect("retired lane relay stored");
         }
         seed_da_runtime_record_for_lane(&state, retired_lane_id, "retired-lane-pin", 0xB0);
@@ -67334,8 +67342,12 @@ mod tests {
             spoofed_map_key.clone(),
             encode_verified_lane_relay_record_contract_map_state_for_test(&old_record),
         );
+        state.merge_entry_candidates_from_lane_relays();
         assert!(
-            !state.merge_entry_candidates_from_lane_relays().is_empty(),
+            state
+                .lane_relay_snapshot()
+                .iter()
+                .any(|relay| relay == &old_envelope),
             "test setup should prove the old verified record can hydrate before set_nexus reset"
         );
 
@@ -70590,18 +70602,18 @@ mod tests {
     #[test]
     fn committed_verified_lane_relay_record_fills_cached_gap_before_newer_relay() {
         let (state, validator_keypairs) = setup_lane_relay_burn_state();
-        let signers: Vec<&KeyPair> = validator_keypairs.iter().collect();
-        let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
 
-        let newer = sample_lane_relay_envelope(3, LaneId::new(0), &signers, signers_bitmap.clone())
-            .with_manifest_root(Some([0x44; 32]));
+        let newer =
+            sample_lane_relay_envelope_for_state(&state, 3, LaneId::new(0), &validator_keypairs)
+                .with_manifest_root(Some([0x44; 32]));
         state
             .lane_relays
             .write()
             .insert(newer.clone())
             .expect("seed newer cached relay");
-        let older = sample_lane_relay_envelope(2, LaneId::new(0), &signers, signers_bitmap)
-            .with_manifest_root(Some([0x44; 32]));
+        let older =
+            sample_lane_relay_envelope_for_state(&state, 2, LaneId::new(0), &validator_keypairs)
+                .with_manifest_root(Some([0x44; 32]));
         let record = sample_verified_lane_relay_record(&older);
 
         commit_staged_verified_lane_relay_record(&state, record);
@@ -81622,7 +81634,31 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::with_telemetry(world, kura, query_handle, telemetry);
+        let mut state = State::with_telemetry(world, kura, query_handle, telemetry);
+        let lane_catalog = LaneCatalog::new(
+            nonzero!(5_u32),
+            vec![LaneConfig {
+                id: policy.target_lane,
+                dataspace_id: dsid,
+                alias: "axt-cache-hit".to_owned(),
+                description: None,
+                visibility: LaneVisibility::Public,
+                lane_type: None,
+                governance: None,
+                settlement: None,
+                storage: LaneStorageProfile::FullReplica,
+                proof_scheme: DaProofScheme::default(),
+                metadata: BTreeMap::new(),
+            }],
+        )
+        .expect("AXT cache-hit test lane catalog");
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        install_test_nexus_lane_catalog(&mut nexus, lane_catalog);
+        nexus.routing_policy.default_lane = policy.target_lane;
+        nexus.routing_policy.default_dataspace = dsid;
+        state
+            .set_nexus(nexus)
+            .expect("AXT cache-hit test Nexus catalog");
         let snapshot = state.view().axt_policy_snapshot();
 
         let expected = if snapshot.version != 0 {
@@ -85158,7 +85194,7 @@ mod tests {
             version: 1,
             route_id: "taira_tron_xor".to_owned(),
             asset_key: "xor".to_owned(),
-            tron_network: "nile".to_owned(),
+            network: "nile".to_owned(),
             chain: "tron-nile".to_owned(),
             chain_id_hex: "0xcd8690dc".to_owned(),
             explorer_url: None,
@@ -85172,8 +85208,8 @@ mod tests {
             network_id_hex: format!("0x{}", hex::encode([0x51; 32])),
             taira_xor_token_address: "TT1111111111111111111111111111111111".to_owned(),
             taira_xor_bridge_address: "TT2222222222222222222222222222222222".to_owned(),
-            sccp_tron_source_bridge_address: "TT3333333333333333333333333333333333".to_owned(),
-            tron_verifier_address: "TT4444444444444444444444444444444444".to_owned(),
+            source_bridge_address: "TT3333333333333333333333333333333333".to_owned(),
+            destination_verifier_address: "TT4444444444444444444444444444444444".to_owned(),
             ton_finalize_message_value_nano: None,
             verifier_code_hash: format!("0x{}", hex::encode([0x52; 32])),
             verifier_key_hash: format!("0x{}", hex::encode([0x53; 32])),
@@ -85303,7 +85339,7 @@ mod tests {
         );
 
         let mut route_manifest_changed = changed.clone();
-        route_manifest_changed.sccp_route_manifests[0].tron_verifier_address =
+        route_manifest_changed.sccp_route_manifests[0].destination_verifier_address =
             "TT5555555555555555555555555555555555".to_owned();
         assert_eq!(
             changed_hash,

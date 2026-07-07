@@ -51,6 +51,74 @@ class HostileExpectedRecordHash:
         raise AssertionError("secret-token BSC expected record hash was compared")
 
 
+class HostileBscSourceBridgeBytes(bytes):
+    """Bytes subclass that source-bridge evidence must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token BSC source bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token BSC source bytes repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token BSC source bytes stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token BSC source bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token BSC source bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token BSC source bytes indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token BSC source bytes compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token BSC source bytes compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token BSC source bytes hashed")
+
+
+class HostileBscSourceBridgeBytearray(bytearray):
+    """Bytearray subclass that source-bridge evidence must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token BSC source bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token BSC source bytearray repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token BSC source bytearray stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token BSC source bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token BSC source bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token BSC source bytearray indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token BSC source bytearray compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token BSC source bytearray compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token BSC source bytearray hashed")
+
+
 class HostileDeploymentBlockNumber:
     def __str__(self):
         raise AssertionError("secret-token BSC deployment block number was stringified")
@@ -361,6 +429,93 @@ def test_bsc_hash_parser_rejects_zero_and_wrong_width():
         assert "must be 32 bytes" in str(exc)
     else:
         raise AssertionError("short BSC component hash was accepted")
+
+
+def test_bsc_source_bridge_fixed_bytes_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    raw = b"\x44" * 32
+
+    assert (
+        module._require_fixed_bytes(
+            bytearray(raw),
+            label="source_trust_anchor_hash",
+            byte_length=32,
+        )
+        == raw
+    )
+    exact_bytearray_args = bsc_args(module)
+    exact_bytearray_args.source_trust_anchor_hash = bytearray(raw)
+    assert type(module.bsc_source_verifier_material_record_hash(exact_bytearray_args)) is bytes
+
+    hostile_values = (
+        HostileBscSourceBridgeBytes(raw),
+        HostileBscSourceBridgeBytearray(raw),
+    )
+    for hostile in hostile_values:
+        cases = (
+            (
+                lambda hostile=hostile: module._require_fixed_bytes(
+                    hostile,
+                    label="source_trust_anchor_hash",
+                    byte_length=32,
+                ),
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._require_nonzero_fixed_bytes(
+                    hostile,
+                    label="source_trust_anchor_hash",
+                    byte_length=32,
+                ),
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._optional_expected_record_hash(
+                    SimpleNamespace(expected_source_verifier_material_hash=hostile),
+                    "expected_source_verifier_material_hash",
+                    label="--expected-source-verifier-material-hash",
+                ),
+                "--expected-source-verifier-material-hash must be bytes",
+            ),
+        )
+        for call, expected_message in cases:
+            try:
+                call()
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "BSC source-bridge byte subclass value was accepted"
+                )
+
+        material_args = bsc_args(module)
+        material_args.source_trust_anchor_hash = hostile
+        try:
+            module.bsc_source_verifier_material_record_hash(material_args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "source_trust_anchor_hash must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("BSC source material accepted hostile source hash")
+
+        adapter_args = bsc_args(module)
+        adapter_args.adapter_verifier_vk_hash = hostile
+        try:
+            module._require_canonical_adapter_verifier_vk_hash(adapter_args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "adapter_verifier_vk_hash must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "BSC source adapter accepted hostile verifier hash"
+            )
 
 
 def test_bsc_source_bridge_direct_parsers_redact_parser_causes(tmp_path):

@@ -2423,6 +2423,21 @@ mod model {
         pub block_height: Option<u64>,
     }
 
+    /// Chain-facing online-to-offline Kagemusha top-up request.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendTopUpRequestV1 {
+        /// Public asset balance to charge for the top-up.
+        pub asset: AssetId,
+        /// Positive public amount reserved into offline escrow.
+        pub amount: Numeric,
+        /// First-hop recursive Kagemusha spend init request.
+        pub init_request: KagemushaRecursiveSpendInitRequestV1,
+    }
+
     /// Bridge request for appending one offline hop to recursive Kagemusha cash.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -7757,6 +7772,50 @@ impl KagemushaRecursiveSpendInitRequestV1 {
             .first()
             .ok_or(KagemushaFoldError::Empty)?;
         validate_kagemusha_recursive_spend_request_note_for_step(step, &self.current_note)
+    }
+}
+
+impl KagemushaRecursiveSpendTopUpRequestV1 {
+    /// Build and validate a chain-facing Kagemusha top-up request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the init request is malformed or
+    /// the charged asset/amount does not match the proof-bound first hop.
+    pub fn new(
+        asset: AssetId,
+        amount: Numeric,
+        init_request: KagemushaRecursiveSpendInitRequestV1,
+    ) -> Result<Self, KagemushaFoldError> {
+        let request = Self {
+            asset,
+            amount,
+            init_request,
+        };
+        request.validate_public_binding()?;
+        Ok(request)
+    }
+
+    /// Validate the request fields that are publicly bound before chain execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the init request, asset, or amount is
+    /// inconsistent.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
+        if self.init_request.record_bundle.bundle.steps.len() != 1 {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "init_request.steps",
+            });
+        }
+        self.init_request.validate_public_binding()?;
+        if self.asset.definition() != &self.init_request.record_bundle.bundle.asset {
+            return Err(KagemushaFoldError::RecursiveSpendAssetMismatch);
+        }
+        if self.amount != self.init_request.current_note.amount {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendNote { field: "amount" });
+        }
+        Ok(())
     }
 }
 
@@ -16383,6 +16442,43 @@ mod offline_note_tests {
             note0.clone(),
         )
         .expect("init request validates before proving");
+        let topup_asset = AssetId::new(asset.clone(), sample_account(0xB0, "offline"));
+        let topup_request = KagemushaRecursiveSpendTopUpRequestV1::new(
+            topup_asset.clone(),
+            note0.amount.clone(),
+            init_request.clone(),
+        )
+        .expect("top-up request validates");
+        assert_eq!(topup_request.asset, topup_asset);
+        let mut wrong_topup_asset = topup_request.clone();
+        wrong_topup_asset.asset = AssetId::new(
+            kagemusha_asset("kgm-recursive-spend-lineage-other"),
+            sample_account(0xB1, "offline"),
+        );
+        assert!(matches!(
+            wrong_topup_asset.validate_public_binding(),
+            Err(KagemushaFoldError::RecursiveSpendAssetMismatch)
+        ));
+        let mut wrong_topup_amount = topup_request.clone();
+        wrong_topup_amount.amount = Numeric::new(43, 0);
+        assert!(matches!(
+            wrong_topup_amount.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendNote { field: "amount" })
+        ));
+        let mut multi_hop_topup = topup_request.clone();
+        let step1 = multi_hop_topup.init_request.record_bundle.bundle.steps[0].clone();
+        multi_hop_topup
+            .init_request
+            .record_bundle
+            .bundle
+            .steps
+            .push(step1);
+        assert!(matches!(
+            multi_hop_topup.validate_public_binding(),
+            Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "init_request.steps"
+            })
+        ));
         let mut missing_init_current_note = init_request.clone();
         missing_init_current_note.current_note.note_commitment =
             fixed_hash(b"recursive-lineage-missing-init-note");
@@ -16828,7 +16924,7 @@ mod offline_note_tests {
         ));
         assert!(matches!(
             KagemushaRecursiveSpendAppendRequestV1::new_with_previous_proof_witness_and_output_circuit(
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 append_request_with_enveloped_previous.previous_bundle.clone(),
                 None,
                 over_count_previous_proof_open_envelopes_archive,
@@ -16891,13 +16987,13 @@ mod offline_note_tests {
         let mut reserved_previous_reserved_output_append =
             reserved_append_with_previous_proof_open_envelopes.clone();
         reserved_previous_reserved_output_append.output_proof_circuit_id =
-            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1.to_owned();
+            KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1.to_owned();
         reserved_previous_reserved_output_append
             .validate_public_binding()
             .expect("reserved previous append request accepts structurally valid reserved output");
         let reserved_output_append_from_builder =
             KagemushaRecursiveSpendAppendRequestV1::new_with_previous_proof_witness_and_output_circuit(
-                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
                 reserved_append_with_lineage_record.previous_bundle.clone(),
                 reserved_append_with_lineage_record
                     .previous_lineage_verifier_record

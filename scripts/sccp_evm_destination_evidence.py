@@ -84,6 +84,8 @@ EVM_BLOCK_TAGS = ("finalized", "safe", "latest")
 
 
 def _strip_lower_0x_hex(value: str, *, label: str) -> str:
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value.startswith("0X"):
         raise argparse.ArgumentTypeError(f"{label} must use lowercase 0x prefix")
     if not value.startswith("0x"):
@@ -106,6 +108,8 @@ def parse_hex_bytes(
     if type(nonzero) is not bool:
         raise ValueError("EVM destination fixed hex nonzero must be a boolean")
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be canonical lowercase 0x hex")
     if value != value.strip():
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -129,6 +133,8 @@ def parse_evm_address(value: str, *, label: str) -> bytes:
 def parse_runtime_bytecode_hex(value: str, *, label: str) -> bytes:
     """Parse non-empty runtime bytecode from hex text."""
 
+    if type(value) is not str:
+        raise argparse.ArgumentTypeError(f"{label} must be hex")
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise argparse.ArgumentTypeError(f"{label} must not contain whitespace")
     text = _strip_lower_0x_hex(value, label=label)
@@ -368,7 +374,7 @@ def _require_fixed_bytes(
     if type(nonzero) is not bool:
         raise ValueError("EVM destination fixed bytes nonzero must be a boolean")
 
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"{label} must be {byte_length} bytes")
     raw = bytes(value)
     if len(raw) != byte_length:
@@ -411,9 +417,11 @@ def _require_distinct_hash_roles(
 def runtime_bytecode_hash(runtime_bytecode: bytes) -> bytes:
     """Compute the deployed EVM runtime bytecode hash used in SCCP evidence."""
 
+    if type(runtime_bytecode) not in (bytes, bytearray):
+        raise ValueError("runtime bytecode must be bytes")
     if not runtime_bytecode or not any(runtime_bytecode):
         raise ValueError("runtime bytecode must not be empty or all zero")
-    return _keccak_256(runtime_bytecode)
+    return _keccak_256(bytes(runtime_bytecode))
 
 
 def evm_verifier_backend_hash() -> bytes:
@@ -445,6 +453,8 @@ def apply_runtime_bytecode_hash(args: argparse.Namespace) -> None:
                 "--verifier-code-hash or --verifier-runtime-bytecode-hex is required"
             )
         return
+    if type(runtime_bytecode) not in (bytes, bytearray):
+        raise ValueError("runtime bytecode must be bytes")
     runtime_bytecode = bytes(runtime_bytecode)
     derived_hash = runtime_bytecode_hash(runtime_bytecode)
     verifier_code_hash = getattr(args, "verifier_code_hash", None)
@@ -471,6 +481,8 @@ def apply_bridge_runtime_bytecode_hash(args: argparse.Namespace) -> None:
     runtime_bytecode = runtime_hex if runtime_hex is not None else runtime_file
     if runtime_bytecode is None:
         return
+    if type(runtime_bytecode) not in (bytes, bytearray):
+        raise ValueError("runtime bytecode must be bytes")
     runtime_bytecode = bytes(runtime_bytecode)
     derived_hash = runtime_bytecode_hash(runtime_bytecode)
     bridge_code_hash = getattr(args, "bridge_code_hash", None)
@@ -507,9 +519,11 @@ def _require_runtime_bytecode_evidence(args: argparse.Namespace, *, output: str)
         ),
     ):
         runtime_bytecode = getattr(args, bytecode_attr, None)
-        if not isinstance(runtime_bytecode, (bytes, bytearray)):
+        if runtime_bytecode is None:
             runtime_text = getattr(args, text_attr, None)
-            if isinstance(runtime_text, str) and runtime_text.strip():
+            if runtime_text is not None:
+                if type(runtime_text) is not str or not runtime_text.strip():
+                    raise invalid_runtime_bytecode_evidence_error(label) from None
                 try:
                     runtime_bytecode = parse_runtime_bytecode_hex(
                         runtime_text,
@@ -525,7 +539,7 @@ def _require_runtime_bytecode_evidence(args: argparse.Namespace, *, output: str)
                     raise invalid_runtime_bytecode_evidence_error(label) from None
                 setattr(args, bytecode_attr, runtime_bytecode)
                 setattr(args, text_attr, "0x" + bytes(runtime_bytecode).hex())
-        if not isinstance(runtime_bytecode, (bytes, bytearray)):
+        if type(runtime_bytecode) not in (bytes, bytearray):
             raise ValueError(f"--{output} requires {flag}")
         derived_hash = runtime_bytecode_hash(bytes(runtime_bytecode))
         code_hash = getattr(args, code_hash_attr, None)
@@ -903,6 +917,23 @@ def evm_route_canary_transaction_evidence_hash(
         ),
         label="EVM route canary transcript hashes",
     )
+    _require_distinct_hash_roles(
+        (
+            ("route_allowlist_hash", route_allowlist_hash),
+            ("destination_binding_hash", destination_binding_hash),
+            ("transaction_hash", transaction_hash),
+            ("receipt_block_hash", receipt_block_hash),
+            ("block_receipts_root", block_receipts_root),
+            ("call_data_sha256", call_data_sha256),
+            ("message_id", message_id),
+            ("payload_hash", payload_hash),
+            ("commitment_root", commitment_root),
+            ("finality_height", finality_height),
+            ("finality_block_hash", finality_block_hash),
+            ("statement_hash", statement_hash),
+        ),
+        label="EVM route canary governed hashes",
+    )
 
     payload = bytearray()
     _push_u8(payload, 4)
@@ -1058,6 +1089,7 @@ _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS = (
     "payload_hash",
     "statement_hash",
     "commitment_root",
+    "finality_height",
     "finality_block_hash",
 )
 
@@ -1278,7 +1310,7 @@ def _route_canary_transaction_values(args: argparse.Namespace) -> dict[str, obje
         tuple(
             (field, values[field])
             for field in _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS
-            if isinstance(values[field], bytes)
+            if type(values[field]) is bytes
         ),
         label="EVM route canary transcript hashes",
     )
@@ -1493,6 +1525,24 @@ def _route_canary_evidence_hash(
             "destination_binding_hash, source_verifier_material_hash, and "
             "source_adapter_engine_deployment_hash"
         )
+    values = _route_canary_transaction_values(args)
+    if values is not None:
+        _require_distinct_hash_roles(
+            (
+                ("route_allowlist_hash", route_allowlist_hash),
+                ("destination_binding_hash", destination_binding_hash),
+                ("source_verifier_material_hash", source_verifier_material_hash),
+                (
+                    "source_adapter_engine_deployment_hash",
+                    source_adapter_engine_deployment_hash,
+                ),
+                *(
+                    (field, values[field])
+                    for field in _ROUTE_CANARY_TRANSCRIPT_HASH_FIELDS
+                ),
+            ),
+            label="EVM route canary governed hashes",
+        )
     return canary_hash
 
 
@@ -1661,7 +1711,9 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
         + json.dumps(_hex(args.bridge_code_hash)),
     ]
     bridge_bytecode = getattr(args, "bridge_runtime_bytecode_hex_text", None)
-    if isinstance(bridge_bytecode, str) and bridge_bytecode.strip():
+    if bridge_bytecode is not None:
+        if type(bridge_bytecode) is not str or not bridge_bytecode.strip():
+            raise ValueError("bridge runtime bytecode metadata is inconsistent")
         sections.append(
             "# sccp_evm_bridge_runtime_bytecode_hex = " + json.dumps(bridge_bytecode)
         )
@@ -1670,7 +1722,9 @@ def render_toml(args: argparse.Namespace, destination_binding_hash: bytes) -> st
         + json.dumps(_hex(args.verifier_code_hash))
     )
     verifier_bytecode = getattr(args, "verifier_runtime_bytecode_hex_text", None)
-    if isinstance(verifier_bytecode, str) and verifier_bytecode.strip():
+    if verifier_bytecode is not None:
+        if type(verifier_bytecode) is not str or not verifier_bytecode.strip():
+            raise ValueError("verifier runtime bytecode metadata is inconsistent")
         sections.append(
             "# sccp_evm_verifier_runtime_bytecode_hex = "
             + json.dumps(verifier_bytecode)
@@ -1766,10 +1820,14 @@ def _json_summary(
     if getattr(args, "bridge_code_hash", None) is not None:
         summary["bridge_code_hash"] = _hex(args.bridge_code_hash)
     bridge_bytecode = getattr(args, "bridge_runtime_bytecode_hex_text", None)
-    if isinstance(bridge_bytecode, str) and bridge_bytecode.strip():
+    if bridge_bytecode is not None:
+        if type(bridge_bytecode) is not str or not bridge_bytecode.strip():
+            raise ValueError("bridge runtime bytecode metadata is inconsistent")
         summary["bridge_runtime_bytecode_hex"] = bridge_bytecode
     verifier_bytecode = getattr(args, "verifier_runtime_bytecode_hex_text", None)
-    if isinstance(verifier_bytecode, str) and verifier_bytecode.strip():
+    if verifier_bytecode is not None:
+        if type(verifier_bytecode) is not str or not verifier_bytecode.strip():
+            raise ValueError("verifier runtime bytecode metadata is inconsistent")
         summary["verifier_runtime_bytecode_hex"] = verifier_bytecode
     if route_requested:
         if expected_pin is None:

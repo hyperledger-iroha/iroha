@@ -7,6 +7,37 @@ impl Actor {
         &mut self,
         proposal: crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Result<()> {
+        if !self.lane_block_route_accepts_ingress(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.lane_block_height,
+        ) {
+            self.record_inactive_lane_block_route_drop(
+                super::status::ConsensusMessageKind::LaneBlockProposal,
+                proposal.descriptor.lane_id,
+                proposal.descriptor.dataspace_id,
+            );
+            return Ok(());
+        }
+        if !self.lane_block_authority_accepts_ingress(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.validator_count,
+            proposal.descriptor.min_quorum,
+            proposal.descriptor.validator_set_hash,
+            Some(proposal.descriptor.validator_set.as_slice()),
+            None,
+        ) {
+            self.record_unauthorized_lane_block_committee_drop(
+                super::status::ConsensusMessageKind::LaneBlockProposal,
+                proposal.descriptor.lane_id,
+                proposal.descriptor.dataspace_id,
+                proposal.descriptor.validator_count,
+                proposal.descriptor.min_quorum,
+            );
+            return Ok(());
+        }
+
         match self.subsystems.lane_blocks.insert_proposal(proposal) {
             Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted) => {
                 self.record_consensus_message_handling(
@@ -43,7 +74,52 @@ impl Actor {
         vote: crate::lane_consensus::LaneBlockVoteV1,
         sender: Option<&PeerId>,
     ) -> Result<()> {
-        match self.subsystems.lane_blocks.insert_vote(vote, sender) {
+        if !self.lane_block_route_accepts_ingress(
+            vote.body.lane_id,
+            vote.body.dataspace_id,
+            vote.body.lane_block_height,
+        ) {
+            self.record_inactive_lane_block_route_drop(
+                super::status::ConsensusMessageKind::LaneBlockVote,
+                vote.body.lane_id,
+                vote.body.dataspace_id,
+            );
+            return Ok(());
+        }
+        let Some(sender) = sender else {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::LaneBlockVote,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidSignature,
+            );
+            warn!(
+                signer = %vote.signer,
+                lane_id = vote.body.lane_id.as_u32(),
+                dataspace_id = vote.body.dataspace_id.as_u64(),
+                "dropping lane-block vote without authenticated sender"
+            );
+            return Ok(());
+        };
+        if !self.lane_block_authority_accepts_ingress(
+            vote.body.lane_id,
+            vote.body.dataspace_id,
+            vote.body.validator_count,
+            vote.body.min_quorum,
+            vote.body.validator_set_hash,
+            None,
+            Some(&vote.signer),
+        ) {
+            self.record_unauthorized_lane_block_committee_drop(
+                super::status::ConsensusMessageKind::LaneBlockVote,
+                vote.body.lane_id,
+                vote.body.dataspace_id,
+                vote.body.validator_count,
+                vote.body.min_quorum,
+            );
+            return Ok(());
+        }
+
+        match self.subsystems.lane_blocks.insert_vote(vote, Some(sender)) {
             Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted) => {
                 self.record_consensus_message_handling(
                     super::status::ConsensusMessageKind::LaneBlockVote,
@@ -78,6 +154,37 @@ impl Actor {
         &mut self,
         qc: crate::sumeragi::consensus::LaneBlockQcV1,
     ) -> Result<()> {
+        if !self.lane_block_route_accepts_ingress(
+            qc.body.lane_id,
+            qc.body.dataspace_id,
+            qc.body.lane_block_height,
+        ) {
+            self.record_inactive_lane_block_route_drop(
+                super::status::ConsensusMessageKind::LaneBlockQc,
+                qc.body.lane_id,
+                qc.body.dataspace_id,
+            );
+            return Ok(());
+        }
+        if !self.lane_block_authority_accepts_ingress(
+            qc.body.lane_id,
+            qc.body.dataspace_id,
+            qc.body.validator_count,
+            qc.body.min_quorum,
+            qc.body.validator_set_hash,
+            Some(qc.validator_set.as_slice()),
+            None,
+        ) {
+            self.record_unauthorized_lane_block_committee_drop(
+                super::status::ConsensusMessageKind::LaneBlockQc,
+                qc.body.lane_id,
+                qc.body.dataspace_id,
+                qc.body.validator_count,
+                qc.body.min_quorum,
+            );
+            return Ok(());
+        }
+
         let pops = self.lane_block_qc_signer_pops(&qc);
         match self.subsystems.lane_blocks.insert_qc_with_pops(qc, &pops) {
             Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted) => {
@@ -109,12 +216,234 @@ impl Actor {
         Ok(())
     }
 
+    pub(super) fn lane_block_artifact_targets_active_route(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+    ) -> bool {
+        let nexus = self.state.nexus_snapshot();
+        if !nexus.enabled {
+            return true;
+        }
+        let state_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        crate::state::nexus_active_lane_dataspace_at_height(lane_id, &nexus, state_height)
+            == Some(dataspace_id)
+            && self
+                .state
+                .da_shard_reset_heights_snapshot_cached()
+                .get(&lane_id)
+                .is_none_or(|reset_height| lane_block_height > *reset_height)
+    }
+
+    fn lane_block_route_accepts_ingress(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+    ) -> bool {
+        self.lane_block_artifact_targets_active_route(lane_id, dataspace_id, lane_block_height)
+    }
+
+    fn lane_block_authority_accepts_ingress(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        validator_count: u32,
+        min_quorum: u32,
+        validator_set_hash: HashOf<Vec<PeerId>>,
+        validator_set: Option<&[PeerId]>,
+        signer: Option<&PeerId>,
+    ) -> bool {
+        let nexus = self.state.nexus_snapshot();
+        if !nexus.enabled {
+            return true;
+        }
+        let state_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if crate::state::nexus_active_lane_dataspace_at_height(lane_id, &nexus, state_height)
+            != Some(dataspace_id)
+        {
+            return false;
+        }
+        let mut expected =
+            if super::lane_scheduler::proposal_lookahead_enabled(&nexus, state_height) {
+                self.state.authoritative_lane_peer_ids(lane_id)
+            } else {
+                self.shared_lane_block_authority_for_ingress(state_height)
+            };
+        expected.sort();
+        expected.dedup();
+        if expected.is_empty() {
+            return false;
+        }
+        let Ok(expected_count) = u32::try_from(expected.len()) else {
+            return false;
+        };
+        let Ok(expected_quorum) = u32::try_from(
+            crate::sumeragi::network_topology::commit_quorum_from_len(expected.len()).max(1),
+        ) else {
+            return false;
+        };
+        if validator_count != expected_count
+            || min_quorum != expected_quorum
+            || validator_set_hash != HashOf::new(&expected)
+        {
+            return false;
+        }
+        if signer.is_some_and(|signer| !expected.contains(signer)) {
+            return false;
+        }
+        validator_set.is_none_or(|validator_set| validator_set == expected.as_slice())
+    }
+
+    pub(super) fn lane_block_proposal_accepts_local_broadcast(
+        &self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
+        self.lane_block_route_accepts_ingress(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.lane_block_height,
+        ) && self.lane_block_authority_accepts_ingress(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.validator_count,
+            proposal.descriptor.min_quorum,
+            proposal.descriptor.validator_set_hash,
+            Some(proposal.descriptor.validator_set.as_slice()),
+            None,
+        ) && self
+            .subsystems
+            .lane_blocks
+            .can_accept_proposal(proposal)
+            .is_ok()
+            && !self.subsystems.lane_blocks.contains_proposal(proposal)
+    }
+
+    pub(super) fn lane_block_vote_accepts_local_broadcast(
+        &self,
+        vote: &crate::lane_consensus::LaneBlockVoteV1,
+        sender: &PeerId,
+    ) -> bool {
+        self.lane_block_vote_body_targets_authorized_local_signer(&vote.body, &vote.signer)
+            && self
+                .subsystems
+                .lane_blocks
+                .can_accept_vote(vote, Some(sender))
+                .is_ok()
+            && !self.subsystems.lane_blocks.contains_vote(vote)
+    }
+
+    pub(super) fn lane_block_vote_body_targets_authorized_local_signer(
+        &self,
+        body: &crate::sumeragi::consensus::LaneBlockVoteBodyV1,
+        signer: &PeerId,
+    ) -> bool {
+        self.lane_block_route_accepts_ingress(
+            body.lane_id,
+            body.dataspace_id,
+            body.lane_block_height,
+        ) && self.lane_block_authority_accepts_ingress(
+            body.lane_id,
+            body.dataspace_id,
+            body.validator_count,
+            body.min_quorum,
+            body.validator_set_hash,
+            None,
+            Some(signer),
+        )
+    }
+
+    fn shared_lane_block_authority_for_ingress(&self, state_height: u64) -> Vec<PeerId> {
+        let target_height = state_height.saturating_add(1);
+        let (consensus_mode, _mode_tag, _prf_seed) =
+            self.consensus_context_for_height(target_height);
+        let mut validators = self.roster_for_live_vote_with_mode(target_height, consensus_mode);
+        if validators.is_empty() {
+            validators = self.effective_commit_topology();
+        }
+        validators
+    }
+
+    fn record_inactive_lane_block_route_drop(
+        &mut self,
+        kind: super::status::ConsensusMessageKind,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) {
+        self.record_consensus_message_handling(
+            kind,
+            super::status::ConsensusMessageOutcome::Dropped,
+            super::status::ConsensusMessageReason::InvalidPayload,
+        );
+        warn!(
+            lane_id = lane_id.as_u32(),
+            dataspace_id = dataspace_id.as_u64(),
+            "dropping lane-block message for inactive Nexus lane route"
+        );
+    }
+
+    fn record_unauthorized_lane_block_committee_drop(
+        &mut self,
+        kind: super::status::ConsensusMessageKind,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        validator_count: u32,
+        min_quorum: u32,
+    ) {
+        self.record_consensus_message_handling(
+            kind,
+            super::status::ConsensusMessageOutcome::Dropped,
+            super::status::ConsensusMessageReason::InvalidPayload,
+        );
+        warn!(
+            lane_id = lane_id.as_u32(),
+            dataspace_id = dataspace_id.as_u64(),
+            validator_count,
+            min_quorum,
+            "dropping lane-block message for non-authoritative Nexus lane committee"
+        );
+    }
+
     fn local_lane_block_commit_vote(
         &self,
         proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
     ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
         let local_peer = self.common_config.peer.id();
         if !proposal.descriptor.validator_set.contains(local_peer) {
+            return None;
+        }
+        if let Err(err) = crate::lane_consensus::validate_lane_block_proposal(proposal) {
+            warn!(
+                ?err,
+                lane_id = proposal.descriptor.lane_id.as_u32(),
+                dataspace_id = proposal.descriptor.dataspace_id.as_u64(),
+                lane_block_height = proposal.descriptor.lane_block_height,
+                lane_block_view = proposal.descriptor.lane_block_view,
+                "skipping local lane-block commit vote for invalid proposal"
+            );
+            return None;
+        }
+        if !self.lane_block_route_accepts_ingress(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.lane_block_height,
+        ) || !self.lane_block_authority_accepts_ingress(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.dataspace_id,
+            proposal.descriptor.validator_count,
+            proposal.descriptor.min_quorum,
+            proposal.descriptor.validator_set_hash,
+            Some(proposal.descriptor.validator_set.as_slice()),
+            Some(local_peer),
+        ) {
+            warn!(
+                lane_id = proposal.descriptor.lane_id.as_u32(),
+                dataspace_id = proposal.descriptor.dataspace_id.as_u64(),
+                validator_count = proposal.descriptor.validator_count,
+                min_quorum = proposal.descriptor.min_quorum,
+                "skipping local lane-block commit vote for non-authoritative route or committee"
+            );
             return None;
         }
         match self.common_config.key_pair.public_key().try_algorithm() {
@@ -164,7 +493,7 @@ impl Actor {
         })
     }
 
-    fn broadcast_lane_block_commit_votes_for_prepared_sessions(&mut self) {
+    pub(super) fn broadcast_lane_block_commit_votes_for_prepared_sessions(&mut self) {
         let local_peer = self.common_config.peer.id().clone();
         let requests = self
             .subsystems
@@ -175,16 +504,18 @@ impl Actor {
             let Some(vote) = self.local_lane_block_commit_vote(&request.proposal) else {
                 continue;
             };
-            debug!(
-                lane_id = ?request.prepare_qc.body.lane_id,
-                dataspace_id = ?request.prepare_qc.body.dataspace_id,
-                lane_block_height = request.prepare_qc.body.lane_block_height,
-                lane_block_view = request.prepare_qc.body.lane_block_view,
-                "broadcasting local lane-block commit vote after prepare QC"
-            );
-            self.schedule_background(BackgroundRequest::Broadcast {
-                msg: BlockMessageWire::new(BlockMessage::LaneBlockVote(vote.clone())),
-            });
+            if self.lane_block_vote_accepts_local_broadcast(&vote, &local_peer) {
+                debug!(
+                    lane_id = ?request.prepare_qc.body.lane_id,
+                    dataspace_id = ?request.prepare_qc.body.dataspace_id,
+                    lane_block_height = request.prepare_qc.body.lane_block_height,
+                    lane_block_view = request.prepare_qc.body.lane_block_view,
+                    "broadcasting local lane-block commit vote after prepare QC"
+                );
+                self.schedule_background(BackgroundRequest::Broadcast {
+                    msg: BlockMessageWire::new(BlockMessage::LaneBlockVote(vote.clone())),
+                });
+            }
             if let Err(err) = self.handle_lane_block_vote(vote, Some(&local_peer)) {
                 warn!(
                     ?err,
@@ -194,8 +525,38 @@ impl Actor {
         }
     }
 
-    fn broadcast_newly_sealed_lane_block_qcs(&mut self) {
+    pub(super) fn broadcast_newly_sealed_lane_block_qcs(&mut self) {
         for qc in self.subsystems.lane_blocks.drain_newly_sealed_qcs() {
+            if !self.lane_block_route_accepts_ingress(
+                qc.body.lane_id,
+                qc.body.dataspace_id,
+                qc.body.lane_block_height,
+            ) {
+                self.record_inactive_lane_block_route_drop(
+                    super::status::ConsensusMessageKind::LaneBlockQc,
+                    qc.body.lane_id,
+                    qc.body.dataspace_id,
+                );
+                continue;
+            }
+            if !self.lane_block_authority_accepts_ingress(
+                qc.body.lane_id,
+                qc.body.dataspace_id,
+                qc.body.validator_count,
+                qc.body.min_quorum,
+                qc.body.validator_set_hash,
+                Some(qc.validator_set.as_slice()),
+                None,
+            ) {
+                self.record_unauthorized_lane_block_committee_drop(
+                    super::status::ConsensusMessageKind::LaneBlockQc,
+                    qc.body.lane_id,
+                    qc.body.dataspace_id,
+                    qc.body.validator_count,
+                    qc.body.min_quorum,
+                );
+                continue;
+            }
             debug!(
                 lane_id = ?qc.body.lane_id,
                 dataspace_id = ?qc.body.dataspace_id,
@@ -215,24 +576,24 @@ impl Actor {
         if !nexus.enabled {
             return 0;
         }
-        let active_lanes = nexus
-            .lane_config
-            .entries()
-            .iter()
-            .map(|entry| (entry.lane_id, entry.dataspace_id))
-            .collect::<BTreeSet<_>>();
+        let state_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        let reset_heights = self.state.da_shard_reset_heights_snapshot_cached();
+        let admissible_lane =
+            |lane_id: LaneId, dataspace_id: DataSpaceId, lane_block_height: u64| {
+                crate::state::nexus_active_lane_dataspace_at_height(lane_id, &nexus, state_height)
+                    == Some(dataspace_id)
+                    && reset_heights
+                        .get(&lane_id)
+                        .is_none_or(|reset_height| lane_block_height > *reset_height)
+            };
         let pruned_lane_sessions = self
             .subsystems
             .lane_blocks
-            .retain_sessions_for_active_lanes(|lane_id, dataspace_id| {
-                active_lanes.contains(&(lane_id, dataspace_id))
-            });
+            .retain_sessions_for_admissible_lanes(&admissible_lane);
         let pruned_committed_sessions = self
             .subsystems
             .committed_lane_blocks
-            .retain_sessions_for_active_lanes(|lane_id, dataspace_id| {
-                active_lanes.contains(&(lane_id, dataspace_id))
-            });
+            .retain_sessions_for_admissible_lanes(&admissible_lane);
         let pruned = pruned_lane_sessions.saturating_add(pruned_committed_sessions);
         if pruned > 0 {
             debug!(

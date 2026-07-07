@@ -13,15 +13,91 @@ docs/source/references/ios_metrics.md so CI can catch drift early.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 def load(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def parse_generated_at(value: Any, path: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{path}.generated_at must be a non-empty ISO-8601 timestamp")
+    raw = value.strip()
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"{path}.generated_at must be a valid ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"{path}.generated_at must include a timezone")
+    return parsed.astimezone(timezone.utc)
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def checksum_sidecar_path(path: Path) -> Path:
+    return path.with_name(path.name + ".sha256")
+
+
+def read_checksum_sidecar(path: Path) -> str:
+    sidecar = checksum_sidecar_path(path)
+    try:
+        raw = sidecar.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as exc:
+        raise ValueError(f"{path}: checksum sidecar missing at {sidecar}") from exc
+    if not raw:
+        raise ValueError(f"{sidecar}: checksum sidecar is empty")
+    parts = raw.split()
+    digest = parts[0].lower()
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise ValueError(f"{sidecar}: first field must be a SHA-256 hex digest")
+    if len(parts) > 1:
+        labelled = parts[-1].lstrip("*")
+        if Path(labelled).name != path.name:
+            raise ValueError(
+                f"{sidecar}: checksum label {labelled!r} does not match {path.name!r}"
+            )
+    return digest
+
+
+def verify_checksum_sidecar(path: Path) -> str:
+    expected = read_checksum_sidecar(path)
+    actual = sha256_file(path)
+    if actual != expected:
+        raise ValueError(
+            f"{path}: SHA-256 mismatch against {checksum_sidecar_path(path)} "
+            f"(expected {expected}, got {actual})"
+        )
+    return actual
+
+
+def validate_feed_freshness(
+    generated_at: datetime,
+    path: str,
+    max_age_seconds: Optional[float],
+    now: datetime,
+) -> float:
+    age_seconds = (now - generated_at).total_seconds()
+    if age_seconds < 0:
+        raise ValueError(f"{path}.generated_at is in the future")
+    if max_age_seconds is not None and age_seconds > max_age_seconds:
+        raise ValueError(
+            f"{path}: feed age {age_seconds:.0f}s exceeds maximum {max_age_seconds:.0f}s"
+        )
+    return age_seconds
 
 
 def expect_keys(obj: Dict[str, Any], keys: List[str], path: str) -> None:
@@ -110,6 +186,7 @@ def _validate_fixture_details(details: Any, path: str) -> None:
 
 def validate_parity(data: Dict[str, Any], path: str) -> None:
     expect_keys(data, ["generated_at", "fixtures", "pipeline", "regen_sla", "alerts"], path)
+    parse_generated_at(data["generated_at"], path)
 
     fixtures = data["fixtures"]
     expect_keys(fixtures, ["outstanding_diffs", "oldest_diff_hours", "details"], f"{path}.fixtures")
@@ -230,6 +307,7 @@ def validate_parity(data: Dict[str, Any], path: str) -> None:
 
 def validate_ci(data: Dict[str, Any], path: str) -> None:
     expect_keys(data, ["generated_at", "buildkite", "devices", "alert_state"], path)
+    parse_generated_at(data["generated_at"], path)
 
     buildkite = data["buildkite"]
     expect_keys(buildkite, ["lanes", "queue_depth", "average_runtime_minutes"], f"{path}.buildkite")
@@ -480,6 +558,45 @@ def detect_schema(data: Dict[str, Any], path: str) -> str:
     )
 
 
+def build_health_entry(
+    *,
+    path: Path,
+    schema: str,
+    payload: Dict[str, Any],
+    now: datetime,
+    max_feed_age_seconds: Optional[float],
+    checksum_verified: bool,
+    sha256_hex: str,
+) -> Dict[str, Any]:
+    generated_at = parse_generated_at(payload.get("generated_at"), str(path))
+    age_seconds = validate_feed_freshness(
+        generated_at,
+        str(path),
+        max_feed_age_seconds,
+        now,
+    )
+    return {
+        "path": str(path),
+        "schema": schema,
+        "generated_at": generated_at.isoformat().replace("+00:00", "Z"),
+        "age_seconds": age_seconds,
+        "fresh": max_feed_age_seconds is None or age_seconds <= max_feed_age_seconds,
+        "sha256": sha256_hex,
+        "checksum_sidecar": str(checksum_sidecar_path(path)),
+        "checksum_verified": checksum_verified,
+    }
+
+
+def write_health_output(path: Path, entries: Sequence[Dict[str, Any]]) -> None:
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "healthy": all(entry["fresh"] and entry["checksum_verified"] for entry in entries),
+        "feeds": list(entries),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate Swift dashboard JSON feeds and optional SLAs.")
     parser.add_argument("files", nargs="+", type=Path, help="JSON files to validate")
@@ -503,9 +620,17 @@ def main() -> int:
                         help="Minimum Metal vs CPU speedup (x) required when acceleration benchmarks are present.")
     parser.add_argument("--ci-neon-min-throughput", type=float, default=None,
                         help="Minimum NEON CRC64 throughput (MB/s) required when acceleration benchmarks are present.")
+    parser.add_argument("--require-checksum-sidecars", action="store_true",
+                        help="Require and verify a sibling .sha256 sidecar for every feed.")
+    parser.add_argument("--max-feed-age-seconds", type=float, default=None,
+                        help="Maximum generated_at age for each feed. Also used in --health-output.")
+    parser.add_argument("--health-output", type=Path,
+                        help="Write a health JSON document containing freshness and checksum status.")
     args = parser.parse_args()
 
     has_error = False
+    health_entries: List[Dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
     lane_thresholds: List[Tuple[str, float]] = []
     try:
         lane_thresholds = parse_lane_thresholds(args.ci_lane_threshold)
@@ -525,6 +650,12 @@ def main() -> int:
             schema = detect_schema(data, str(file_path))
             if schema == "parity":
                 validate_parity(data, str(file_path))
+                validate_feed_freshness(
+                    parse_generated_at(data["generated_at"], str(file_path)),
+                    str(file_path),
+                    args.max_feed_age_seconds,
+                    now,
+                )
                 enforce_parity_sla(
                     data,
                     str(file_path),
@@ -541,6 +672,12 @@ def main() -> int:
                 )
             else:
                 validate_ci(data, str(file_path))
+                validate_feed_freshness(
+                    parse_generated_at(data["generated_at"], str(file_path)),
+                    str(file_path),
+                    args.max_feed_age_seconds,
+                    now,
+                )
                 enforce_ci_sla(
                     data,
                     str(file_path),
@@ -553,10 +690,34 @@ def main() -> int:
                     args.ci_metal_min_speedup,
                     args.ci_neon_min_throughput,
                 )
+            checksum_verified = False
+            if args.require_checksum_sidecars:
+                sha256_hex = verify_checksum_sidecar(file_path)
+                checksum_verified = True
+            else:
+                sha256_hex = sha256_file(file_path)
+                if checksum_sidecar_path(file_path).exists():
+                    sha256_hex = verify_checksum_sidecar(file_path)
+                    checksum_verified = True
+            if args.health_output:
+                health_entries.append(
+                    build_health_entry(
+                        path=file_path,
+                        schema=schema,
+                        payload=data,
+                        now=now,
+                        max_feed_age_seconds=args.max_feed_age_seconds,
+                        checksum_verified=checksum_verified,
+                        sha256_hex=sha256_hex,
+                    )
+                )
             print(f"[ok] {file_path}")
         except Exception as exc:  # pylint: disable=broad-except
             has_error = True
             print(f"[error] {file_path}: {exc}", file=sys.stderr)
+
+    if args.health_output and not has_error:
+        write_health_output(args.health_output, health_entries)
 
     return 1 if has_error else 0
 

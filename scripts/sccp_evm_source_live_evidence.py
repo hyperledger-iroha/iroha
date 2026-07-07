@@ -150,7 +150,7 @@ def _summary_hex_bytes(
     byte_length: int,
 ) -> bytes:
     value = record.get(field)
-    if not isinstance(value, str):
+    if type(value) is not str:
         raise ValueError(f"{label} must be an exact hex string") from None
     try:
         raw = _parse_hex_bytes(value, label=label, byte_length=byte_length)
@@ -177,7 +177,7 @@ def _summary_runtime_bytes(
     label: str,
 ) -> bytes:
     value = record.get(field)
-    if not isinstance(value, str) or not value.startswith("0x"):
+    if type(value) is not str or not value.startswith("0x"):
         raise ValueError(f"{label} must be exact 0x-prefixed hex") from None
     if value != value.strip() or any(symbol.isspace() for symbol in value):
         raise ValueError(f"{label} must not contain whitespace") from None
@@ -293,7 +293,7 @@ def _source_arg_bytes(
     byte_length: int,
 ) -> bytes:
     value = getattr(args, field, None)
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"{label} must be bytes")
     raw = bytes(value)
     if len(raw) != byte_length:
@@ -323,7 +323,7 @@ def _optional_namespace_bytes32_arg(
     value = getattr(args, name, None)
     if value is None:
         return None
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError(f"--{name.replace('_', '-')} must be bytes")
     raw = bytes(value)
     if len(raw) != 32:
@@ -335,7 +335,7 @@ def _optional_namespace_bytes32_arg(
 
 def _source_arg_runtime_bytes(args: Any) -> bytes:
     value = getattr(args, "source_bridge_runtime_bytecode_hex", None)
-    if not isinstance(value, (bytes, bytearray)):
+    if type(value) not in (bytes, bytearray):
         raise ValueError("source bridge runtime bytecode argument must be bytes")
     raw = bytes(value)
     if not raw or not any(raw):
@@ -454,7 +454,7 @@ def _json_rpc(
         if str(exc) == "JSON-RPC returned duplicate JSON keys":
             raise RuntimeError(f"JSON-RPC {method} returned duplicate JSON keys") from None
         raise RuntimeError(f"JSON-RPC {method} returned invalid JSON") from None
-    if not isinstance(decoded, dict):
+    if type(decoded) is not dict:
         raise RuntimeError(f"JSON-RPC {method} returned a non-object response")
     if decoded.get("jsonrpc") != "2.0":
         raise RuntimeError(f"JSON-RPC {method} returned an invalid protocol version")
@@ -470,7 +470,7 @@ def _json_rpc(
 
 
 def _rpc_quantity(result: Any, *, method: str) -> int:
-    if not isinstance(result, str) or not result.startswith("0x"):
+    if type(result) is not str or not result.startswith("0x"):
         raise RuntimeError(f"{method} returned non-quantity data")
     if result != result.strip():
         raise RuntimeError(f"{method} returned non-canonical quantity")
@@ -485,7 +485,7 @@ def _rpc_quantity(result: Any, *, method: str) -> int:
 
 
 def _rpc_hex_data(result: Any, *, method: str) -> bytes:
-    if not isinstance(result, str):
+    if type(result) is not str:
         raise RuntimeError(f"{method} returned non-string data")
     if result != result.strip():
         raise RuntimeError(f"{method} returned non-canonical hex data")
@@ -578,7 +578,7 @@ def _receipt_summary(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(result, dict):
+    if type(result) is not dict:
         raise RuntimeError("eth_getTransactionReceipt returned a non-object receipt")
     receipt_transaction_hash = result.get("transactionHash")
     parsed_receipt_transaction_hash = _guarded_rpc_fixed_hex_data(
@@ -627,7 +627,7 @@ def _receipt_summary(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(transaction, dict):
+    if type(transaction) is not dict:
         raise RuntimeError("eth_getTransactionByHash returned a non-object transaction")
     parsed_transaction_hash = _guarded_rpc_fixed_hex_data(
         transaction.get("hash"),
@@ -696,7 +696,7 @@ def _verify_receipt_block_header(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(result, dict):
+    if type(result) is not dict:
         raise RuntimeError("eth_getBlockByNumber returned a non-object block")
     header_number = _rpc_quantity(
         result.get("number"),
@@ -739,7 +739,7 @@ def _deployment_receipt_finalized_block_summary(
         opener=opener,
         timeout=timeout,
     )
-    if not isinstance(finalized, dict):
+    if type(finalized) is not dict:
         raise RuntimeError("deployment receipt finalized block was not found")
     finalized_block_number = _rpc_quantity(
         finalized.get("number"),
@@ -1236,7 +1236,7 @@ def _source_bridge_deployment_receipt_is_verified(source_bridge: dict[str, Any])
 
 def _validate_source_summary(summary: dict[str, Any]) -> None:
     source_bridge = summary.get("source_bridge")
-    if not isinstance(source_bridge, dict):
+    if type(source_bridge) is not dict:
         raise ValueError("source bridge evidence is required")
     domain = source_bridge.get("domain")
     if type(domain) is not int or domain not in EXPECTED_RPC_CHAIN_IDS:
@@ -1457,7 +1457,7 @@ def _validate_source_summary(summary: dict[str, Any]) -> None:
         )
 
     source_records = summary.get("source_records")
-    if not isinstance(source_records, dict):
+    if type(source_records) is not dict:
         raise ValueError("source record evidence is required")
     material_hash = _summary_hex32(
         source_records,
@@ -1536,7 +1536,7 @@ def _validate_copied_source_summary_metadata(summary: dict[str, Any]) -> None:
     if "block_tag" in summary:
         _summary_block_tag(summary)
     source_bridge = summary.get("source_bridge")
-    if isinstance(source_bridge, dict):
+    if type(source_bridge) is dict:
         domain = source_bridge.get("domain")
         evidence = (
             _load_evidence_module(domain)
@@ -1626,7 +1626,7 @@ def _validate_copied_source_summary_metadata(summary: dict[str, Any]) -> None:
             if field in source_bridge:
                 _require_exact_positive_u64(source_bridge.get(field), label=label)
     source_records = summary.get("source_records")
-    if isinstance(source_records, dict):
+    if type(source_records) is dict:
         for field, label in (
             ("source_verifier_material_hash", "source verifier material hash"),
             (
@@ -1648,7 +1648,7 @@ def _validate_copied_source_summary_metadata(summary: dict[str, Any]) -> None:
 
 def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     source_bridge = summary.get("source_bridge")
-    if not isinstance(source_bridge, dict):
+    if type(source_bridge) is not dict:
         return ["source bridge evidence"]
     missing: list[str] = []
     source_domain = source_bridge.get("domain")
@@ -1695,7 +1695,7 @@ def _toml_prerequisites(summary: dict[str, Any]) -> list[str]:
     elif not _source_bridge_deployment_receipt_is_verified(source_bridge):
         missing.append("--deployment-transaction-hash")
     source_records = summary.get("source_records")
-    if not isinstance(source_records, dict):
+    if type(source_records) is not dict:
         missing.append("source component hashes")
     elif source_records.get("expected_source_verifier_material_hash_matches") is not True:
         missing.append("--expected-source-verifier-material-hash")

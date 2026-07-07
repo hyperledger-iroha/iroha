@@ -26,6 +26,7 @@ public enum KagemushaInstructionTransactionError: Error, Equatable, LocalizedErr
 public enum KagemushaInstructionType: String, Equatable, Sendable {
     case transfer = "KagemushaTransfer"
     case redeemRecursive = "RedeemKagemushaRecursive"
+    case topUpRecursive = "TopUpKagemushaRecursive"
 
     public static func validatedArchiveType(for archive: Data) throws -> KagemushaInstructionType {
         try KagemushaInstructionTransactionEncoder.validateInstructionArchive(archive)
@@ -37,6 +38,8 @@ public enum KagemushaInstructionType: String, Equatable, Sendable {
             return KagemushaWireNames.transferInstruction
         case .redeemRecursive:
             return KagemushaWireNames.redeemRecursiveInstruction
+        case .topUpRecursive:
+            return KagemushaWireNames.topUpRecursiveInstruction
         }
     }
 }
@@ -44,7 +47,8 @@ public enum KagemushaInstructionType: String, Equatable, Sendable {
 public enum KagemushaWireNames {
     public static let transferInstruction = "iroha_data_model::isi::offline::KagemushaTransfer"
     public static let redeemRecursiveInstruction = "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
-    public static let recursiveTopUpRequest = "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
+    public static let topUpRecursiveInstruction = "iroha_data_model::isi::offline::TopUpKagemushaRecursive"
+    public static let recursiveTopUpRequest = "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1"
     public static let recursiveRedeemRequest = "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
 }
 
@@ -120,7 +124,7 @@ public struct KagemushaRecursiveTopUpTransactionRequest: Sendable {
     public let ttlMs: UInt64?
     public let nonce: UInt32?
     public let metadata: [String: ToriiJSONValue]
-    public let initRequestArchive: Data
+    public let topUpRequestArchive: Data
 
     public init(
         chainId: String,
@@ -128,14 +132,14 @@ public struct KagemushaRecursiveTopUpTransactionRequest: Sendable {
         ttlMs: UInt64? = nil,
         nonce: UInt32? = nil,
         metadata: [String: ToriiJSONValue] = [:],
-        initRequestArchive: Data
+        topUpRequestArchive: Data
     ) {
         self.chainId = chainId
         self.authority = authority
         self.ttlMs = ttlMs
         self.nonce = nonce
         self.metadata = metadata
-        self.initRequestArchive = initRequestArchive
+        self.topUpRequestArchive = topUpRequestArchive
     }
 
     public static func validateInputs(chainId: String, authority: String) throws {
@@ -176,13 +180,13 @@ public enum KagemushaRecursiveTopUpRequestArchiveError: Error, Equatable, Locali
     public var errorDescription: String? {
         switch self {
         case .emptyRequestArchive:
-            return "Kagemusha recursive top-up init request archive must not be empty."
+            return "Kagemusha recursive top-up request archive must not be empty."
         case .oversizedRequestArchive:
-            return "Kagemusha recursive top-up init request archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha recursive top-up request archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
         case .invalidRequestArchive:
-            return "Kagemusha recursive top-up init request archive must be a valid Norito archive."
+            return "Kagemusha recursive top-up request archive must be a valid Norito archive."
         case .unsupportedRequestArchiveType:
-            return "Kagemusha recursive top-up init request archive type is not supported by ABI-15 admission."
+            return "Kagemusha recursive top-up request archive type is not supported by ABI-15 admission."
         }
     }
 }
@@ -262,12 +266,12 @@ enum KagemushaInstructionTransactionEncoder {
             chainId: request.chainId,
             authorityId: request.authority
         )
-        try KagemushaRecursiveTopUpRequestArchive.validate(request.initRequestArchive)
-        let instructionArchive = try topUp(request.initRequestArchive)
+        try KagemushaRecursiveTopUpRequestArchive.validate(request.topUpRequestArchive)
+        let instructionArchive = try topUp(request.topUpRequestArchive)
         let instructionType = try validateInstructionArchive(instructionArchive)
-        guard instructionType == .transfer else {
+        guard instructionType == .topUpRecursive else {
             throw KagemushaInstructionTransactionError.unexpectedInstructionArchiveType(
-                expected: .transfer,
+                expected: .topUpRecursive,
                 actual: instructionType
             )
         }
@@ -300,7 +304,7 @@ enum KagemushaInstructionTransactionEncoder {
               frame.paddingLength <= maxNoritoHeaderPaddingBytes else {
             throw KagemushaInstructionTransactionError.invalidInstructionArchive
         }
-        for type in [KagemushaInstructionType.transfer, .redeemRecursive] {
+        for type in [KagemushaInstructionType.transfer, .redeemRecursive, .topUpRecursive] {
             if frame.header.schema == noritoSchemaHash(forTypeName: type.wireName) {
                 return type
             }
@@ -427,7 +431,7 @@ public enum KagemushaRecursiveRedeemRequestArchive {
 }
 
 public enum KagemushaRecursiveTopUpRequestArchive {
-    public static let typeName = "KagemushaRecursiveSpendInitRequestV1"
+    public static let typeName = "KagemushaRecursiveSpendTopUpRequestV1"
     public static let schemaName = KagemushaWireNames.recursiveTopUpRequest
 
     public static func validate(_ archive: Data) throws {

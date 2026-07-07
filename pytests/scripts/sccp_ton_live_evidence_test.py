@@ -128,6 +128,43 @@ class HostileExpectedPinScalar:
         raise AssertionError("secret-token TON expected pin was compared")
 
 
+class HostileTonLiveString(str):
+    """String subclass that TON live exact parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TON live exact string was compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TON live exact string was iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TON live exact string was indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token TON live exact string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token TON live exact string startswith ran")
+
+    def split(self, _sep=None):
+        raise AssertionError("secret-token TON live exact string split ran")
+
+    def lower(self):
+        raise AssertionError("secret-token TON live exact string lower ran")
+
+    def isascii(self):
+        raise AssertionError("secret-token TON live exact string isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token TON live exact string isdecimal ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token TON live exact string encoded")
+
+
 def fake_ton_opener(
     module,
     *,
@@ -660,6 +697,217 @@ def test_ton_live_cli_parsers_reject_non_string_values_without_stringification()
             assert str(exc) == expected_message
         else:
             raise AssertionError("non-string TON live parser value was accepted")
+
+
+def test_ton_live_exact_string_parsers_reject_string_subclasses_without_hooks(
+    monkeypatch,
+):
+    module = load_live_module()
+    hostile_hex = HostileTonLiveString("0x" + "11" * 32)
+    hostile_address = HostileTonLiveString(TON_VERIFIER_CONTRACT_ADDRESS)
+    hostile_decimal = HostileTonLiveString("123456")
+    hostile_token = HostileTonLiveString("secret-token")
+    hostile_boc = HostileTonLiveString(
+        base64.b64encode(bytes.fromhex(TON_CODE_BOC_HEX)).decode("ascii")
+    )
+
+    direct_cases = (
+        (
+            lambda: module._decode_hash_text(hostile_hex, label="code_hash"),
+            RuntimeError,
+            "code_hash must be a string",
+        ),
+        (
+            lambda: module._api_key_token(hostile_token, label="--api-key"),
+            ValueError,
+            "--api-key must contain a non-empty token",
+        ),
+        (
+            lambda: module._positive_decimal(
+                hostile_decimal,
+                label="last_transaction_lt",
+            ),
+            RuntimeError,
+            "last_transaction_lt must be a decimal string",
+        ),
+        (
+            lambda: module._exact_live_string(
+                {"account_state_hash": hostile_hex},
+                "account_state_hash",
+                label="account_state_hash",
+            ),
+            ValueError,
+            "account_state_hash must be an exact non-empty string",
+        ),
+    )
+    for parser, exception_type, expected_message in direct_cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+        else:
+            raise AssertionError("string-subclass TON live parser value was accepted")
+
+    valid_account = {
+        "address": TON_VERIFIER_CONTRACT_ADDRESS,
+        "status": "active",
+        "code_hash": "0x" + TON_CODE_BOC_ROOT_HASH,
+        "code_boc": base64.b64encode(bytes.fromhex(TON_CODE_BOC_HEX)).decode("ascii"),
+        "account_state_hash": "0x" + "55" * 32,
+        "last_transaction_lt": "123456",
+        "last_transaction_hash": "0x" + "66" * 32,
+    }
+
+    def opener(_request, timeout):
+        assert timeout == 3.0
+        return FakeResponse({"accounts": []})
+
+    live_response_cases = (
+        (
+            "address",
+            hostile_address,
+            "TON accountStates account address must be present",
+        ),
+        ("code_boc", hostile_boc, "TON verifier account code_boc must be present"),
+    )
+    for field, hostile_value, expected_message in live_response_cases:
+        account = dict(valid_account)
+        account[field] = hostile_value
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "_account_from_response", lambda _decoded: account)
+            try:
+                module.collect_live_evidence(
+                    "https://toncenter.example",
+                    verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+                    opener=opener,
+                    timeout=3.0,
+                )
+            except RuntimeError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+            else:
+                raise AssertionError(
+                    f"string-subclass TON live account {field} was accepted"
+                )
+
+
+def test_ton_live_container_and_bytes_boundaries_reject_subclasses_without_hooks():
+    module = load_live_module()
+
+    class HostileTonLiveDict(dict):
+        def __contains__(self, key):
+            raise AssertionError("secret-token TON live dict contains ran")
+
+        def __getitem__(self, key):
+            raise AssertionError("secret-token TON live dict getitem ran")
+
+        def __iter__(self):
+            raise AssertionError("secret-token TON live dict iter ran")
+
+        def get(self, key, default=None):
+            raise AssertionError("secret-token TON live dict get ran")
+
+        def items(self):
+            raise AssertionError("secret-token TON live dict items ran")
+
+        def __repr__(self):
+            return "secret-token-hostile-ton-live-dict"
+
+    class HostileTonLiveList(list):
+        def __len__(self):
+            raise AssertionError("secret-token TON live list len ran")
+
+        def __getitem__(self, key):
+            raise AssertionError("secret-token TON live list getitem ran")
+
+        def __iter__(self):
+            raise AssertionError("secret-token TON live list iter ran")
+
+        def __repr__(self):
+            return "secret-token-hostile-ton-live-list"
+
+    class HostileTonLiveBytes(bytes):
+        def __new__(cls, value):
+            return bytes.__new__(cls, value)
+
+        def __bytes__(self):
+            raise AssertionError("secret-token TON live bytes conversion ran")
+
+        def __repr__(self):
+            return "secret-token-hostile-ton-live-bytes"
+
+    def expect_error(call, exception_type, expected_message):
+        try:
+            call()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                f"hostile TON live value was accepted: {expected_message}"
+            )
+
+    expect_error(
+        lambda: module._optional_live_bytes32_arg(
+            SimpleNamespace(value=HostileTonLiveBytes(b"\x11" * 32)),
+            "value",
+            label="optional TON hash",
+        ),
+        ValueError,
+        "optional TON hash must be bytes",
+    )
+    expect_error(
+        lambda: module._account_from_response(
+            {"result": HostileTonLiveDict({"accounts": []})}
+        ),
+        RuntimeError,
+        "TON accountStates result must be an object",
+    )
+    expect_error(
+        lambda: module._account_from_response(
+            {"accounts": HostileTonLiveList([{}])}
+        ),
+        RuntimeError,
+        "TON accountStates response must contain accounts",
+    )
+    expect_error(
+        lambda: module._account_from_response(
+            {"accounts": [HostileTonLiveDict({"status": "active"})]}
+        ),
+        RuntimeError,
+        "TON accountStates account must be an object",
+    )
+    expect_error(
+        lambda: module._validate_live_evidence(HostileTonLiveDict()),
+        ValueError,
+        "TON live evidence must be an object",
+    )
+
+    fake = fake_ton_opener(module)
+    live = module.collect_live_evidence(
+        "https://toncenter.example",
+        verifier_contract_address=TON_VERIFIER_CONTRACT_ADDRESS,
+        opener=fake.opener,
+        timeout=3.0,
+    )
+    args = live_args(
+        module,
+        code_hash=fake.code_hash,
+        account_state_hash=fake.account_state_hash,
+    )
+    summary = module._summary(args, live)
+    summary["route_canary"] = HostileTonLiveDict(
+        {"evidence_hash": "0x" + TON_ROUTE_CANARY_EVIDENCE_HASH}
+    )
+
+    offline_args = module._offline_args_from_summary(args, live, summary)
+
+    assert "--route-canary-evidence-hash" not in offline_args
 
 
 def live_args(module, *, code_hash, account_state_hash):

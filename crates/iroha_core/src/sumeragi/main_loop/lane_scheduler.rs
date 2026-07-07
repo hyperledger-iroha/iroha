@@ -156,7 +156,8 @@ pub(super) struct LaneConsensusCommittee {
     /// Validator peers eligible to sign lane-local votes.
     pub(super) validators: Vec<PeerId>,
     /// Optional explicit quorum threshold. When omitted, the standard commit
-    /// quorum for the validator set length is used.
+    /// quorum for the validator set length is used. When supplied, it must
+    /// match that deterministic threshold.
     pub(super) min_quorum: Option<u32>,
 }
 
@@ -775,7 +776,7 @@ pub(super) enum LaneConsensusDomainError {
         /// Lane whose validator set is too large.
         lane_id: LaneId,
     },
-    /// Committee quorum is zero or larger than the validator set.
+    /// Committee quorum does not match the deterministic validator-set quorum.
     InvalidQuorum {
         /// Lane with the invalid quorum.
         lane_id: LaneId,
@@ -972,6 +973,13 @@ struct LaneBlockProposalVoteContext {
     min_quorum: u32,
 }
 
+fn canonical_lane_commit_quorum(validator_set_len: usize) -> Option<u32> {
+    u32::try_from(
+        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set_len).max(1),
+    )
+    .ok()
+}
+
 /// Derive lane-local vote/QC domains for accepted work in a scheduled batch.
 ///
 /// The returned domains are sorted by lane id, include only accepted candidates,
@@ -1008,12 +1016,16 @@ pub(super) fn plan_lane_consensus_domains(
         let validator_set = canonical_validator_set(lane_id, &committee.validators)?;
         let validator_count = u32::try_from(validator_set.len())
             .map_err(|_| LaneConsensusDomainError::ValidatorCountOverflow { lane_id })?;
-        let min_quorum = committee.min_quorum.unwrap_or_else(|| {
-            u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-                validator_set.len(),
-            ))
-            .expect("commit quorum for u32-sized validator set fits u32")
-        });
+        let expected_min_quorum = canonical_lane_commit_quorum(validator_set.len())
+            .ok_or(LaneConsensusDomainError::ValidatorCountOverflow { lane_id })?;
+        let min_quorum = committee.min_quorum.unwrap_or(expected_min_quorum);
+        if min_quorum != expected_min_quorum {
+            return Err(LaneConsensusDomainError::InvalidQuorum {
+                lane_id,
+                validator_count,
+                min_quorum,
+            });
+        }
         let quorum = LaneRelayQuorumContext::new(validator_count, min_quorum).map_err(|_| {
             LaneConsensusDomainError::InvalidQuorum {
                 lane_id,
@@ -1083,9 +1095,10 @@ where
 /// the existing global-height anchor, while lanes with relay history can
 /// advance independently.
 /// A reset watermark is treated as the latest height of the previous lane
-/// incarnation. Planning floors both known and compatibility tips at that
-/// watermark so recreated lanes resume at `reset_height + 1` and never reuse
-/// old lane-local block coordinates.
+/// incarnation. Planning floors known tips at that watermark and uses the
+/// watermark as the missing-tip baseline for reset lanes, so recreated lanes
+/// resume at `reset_height + 1` instead of inheriting global-height
+/// compatibility coordinates from the old incarnation.
 pub(super) fn plan_latest_lane_block_tips_with_reset_heights(
     domains: &[LaneConsensusDomain],
     known_tips: &[LaneBlockTip],
@@ -1166,8 +1179,10 @@ pub(super) fn plan_latest_lane_block_tips_with_reset_heights(
     Ok(domains_by_lane
         .into_iter()
         .map(|(lane_id, domain)| {
-            let baseline = compatibility_latest_lane_block_height
-                .max(reset_heights.get(&lane_id).copied().unwrap_or(0));
+            let baseline = reset_heights
+                .get(&lane_id)
+                .copied()
+                .unwrap_or(compatibility_latest_lane_block_height);
             latest_by_lane
                 .get(&lane_id)
                 .copied()
@@ -2018,9 +2033,10 @@ fn validate_lane_block_proposal_for_vote(
             return Err(LaneBlockVotePlanError::DuplicateValidator { lane_id });
         }
     }
+    let expected_min_quorum = canonical_lane_commit_quorum(descriptor.validator_set.len())
+        .ok_or(LaneBlockVotePlanError::ValidatorCountOverflow { lane_id })?;
     if descriptor.quorum.validator_count != validator_count
-        || descriptor.quorum.min_quorum == 0
-        || descriptor.quorum.min_quorum > validator_count
+        || descriptor.quorum.min_quorum != expected_min_quorum
     {
         return Err(LaneBlockVotePlanError::InvalidQuorum {
             lane_id,
@@ -2487,6 +2503,15 @@ mod tests {
         )
         .expect("lane payload plan");
         plan.entries[0].lane_block_proposal.clone()
+    }
+
+    fn refresh_lane_block_proposal_hashes(proposal: &mut LaneBlockProposal) {
+        proposal.block_descriptor.descriptor_hash =
+            lane_block_descriptor_artifact(&proposal.block_descriptor).computed_descriptor_hash();
+        proposal.artifact.descriptor = lane_block_descriptor_artifact(&proposal.block_descriptor);
+        let proposal_hash = proposal.artifact.computed_proposal_hash();
+        proposal.artifact.proposal_hash = proposal_hash;
+        proposal.proposal_hash = proposal_hash;
     }
 
     #[test]
@@ -3847,14 +3872,18 @@ mod tests {
     #[test]
     fn lane_block_vote_plan_sorts_signers_and_uses_common_signing_hash() {
         let proposal = lane_block_proposal_with_committee(
-            vec![test_peer(3), test_peer(1), test_peer(2)],
-            Some(2),
+            vec![test_peer(3), test_peer(1), test_peer(4), test_peer(2)],
+            Some(3),
         );
         let validators = proposal.block_descriptor.validator_set.clone();
         let vote_plan = plan_lane_block_vote_quorum(
             &proposal,
             CertPhase::Prepare,
-            &[validators[2].clone(), validators[0].clone()],
+            &[
+                validators[2].clone(),
+                validators[0].clone(),
+                validators[1].clone(),
+            ],
         )
         .expect("prepare vote quorum");
 
@@ -3864,14 +3893,14 @@ mod tests {
             vote_plan.descriptor_hash,
             proposal.block_descriptor.descriptor_hash
         );
-        assert_eq!(vote_plan.min_quorum, 2);
+        assert_eq!(vote_plan.min_quorum, 3);
         assert_eq!(
             vote_plan
                 .votes
                 .iter()
                 .map(|vote| vote.signer_index)
                 .collect::<Vec<_>>(),
-            vec![0, 2],
+            vec![0, 1, 2],
             "votes must be sorted by descriptor signer index, not input order"
         );
         assert_eq!(
@@ -3910,7 +3939,7 @@ mod tests {
     fn lane_block_vote_plan_rejects_invalid_phase_and_under_quorum() {
         let proposal = lane_block_proposal_with_committee(
             vec![test_peer(1), test_peer(2), test_peer(3)],
-            Some(2),
+            Some(3),
         );
         let validators = proposal.block_descriptor.validator_set.clone();
 
@@ -3929,16 +3958,39 @@ mod tests {
             Err(LaneBlockVotePlanError::InsufficientVoteQuorum {
                 lane_id: LaneId::new(1),
                 observed: 1,
-                min_quorum: 2,
+                min_quorum: 3,
             })
         );
+    }
+
+    #[test]
+    fn lane_block_vote_plan_rejects_noncanonical_descriptor_quorum() {
+        for min_quorum in [2, 4] {
+            let mut proposal = lane_block_proposal_with_committee(
+                vec![test_peer(1), test_peer(2), test_peer(3), test_peer(4)],
+                Some(3),
+            );
+            proposal.block_descriptor.quorum.min_quorum = min_quorum;
+            refresh_lane_block_proposal_hashes(&mut proposal);
+            let signer = proposal.block_descriptor.validator_set[0].clone();
+
+            assert_eq!(
+                plan_lane_block_vote(&proposal, CertPhase::Prepare, &signer),
+                Err(LaneBlockVotePlanError::InvalidQuorum {
+                    lane_id: LaneId::new(1),
+                    validator_count: 4,
+                    min_quorum,
+                }),
+                "lane validators must not sign descriptors whose quorum diverges from canonical 3-of-4"
+            );
+        }
     }
 
     #[test]
     fn lane_block_vote_plan_rejects_duplicate_and_unknown_signers() {
         let proposal = lane_block_proposal_with_committee(
             vec![test_peer(1), test_peer(2), test_peer(3)],
-            Some(2),
+            Some(3),
         );
         let validators = proposal.block_descriptor.validator_set.clone();
 
@@ -3964,7 +4016,7 @@ mod tests {
     fn lane_block_vote_plan_rejects_tampered_descriptor_and_proposal_hashes() {
         let proposal = lane_block_proposal_with_committee(
             vec![test_peer(1), test_peer(2), test_peer(3)],
-            Some(2),
+            Some(3),
         );
         let signer = proposal.block_descriptor.validator_set[0].clone();
 
@@ -4002,7 +4054,7 @@ mod tests {
     fn lane_block_vote_plan_rejects_tampered_public_artifact() {
         let proposal = lane_block_proposal_with_committee(
             vec![test_peer(1), test_peer(2), test_peer(3)],
-            Some(2),
+            Some(3),
         );
         let signer = proposal.block_descriptor.validator_set[0].clone();
 
@@ -4036,7 +4088,7 @@ mod tests {
     fn lane_block_vote_plan_rejects_noncanonical_descriptor_validator_set() {
         let mut proposal = lane_block_proposal_with_committee(
             vec![test_peer(1), test_peer(2), test_peer(3)],
-            Some(2),
+            Some(3),
         );
         let signer = proposal.block_descriptor.validator_set[0].clone();
         proposal.block_descriptor.validator_set.swap(0, 1);
@@ -4238,6 +4290,33 @@ mod tests {
                 (LaneId::new(3), 13),
             ],
             "recreated lanes must resume after the reset watermark"
+        );
+    }
+
+    #[test]
+    fn latest_lane_block_tips_use_reset_watermark_for_missing_recreated_lane_tip() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11), (2, 22)]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0, 1]),
+            &[
+                committee(1, 11, validators.clone(), None),
+                committee(2, 22, validators, None),
+            ],
+            "permissioned",
+        )
+        .expect("lane consensus domains");
+        let reset_heights = BTreeMap::from([(LaneId::new(1), 9)]);
+
+        let tips =
+            plan_latest_lane_block_tips_with_reset_heights(&domains, &[], 41, &reset_heights)
+                .expect("reset-aware latest lane block tips");
+
+        assert_eq!(
+            tips,
+            vec![lane_tip(1, 11, 9), lane_tip(2, 22, 41)],
+            "missing tips for reset lanes resume from the reset watermark, while non-reset lanes keep the compatibility baseline"
         );
     }
 
@@ -4746,22 +4825,45 @@ mod tests {
     #[test]
     fn lane_consensus_domains_use_explicit_quorum() {
         let routing = routing_for_lane_dataspaces(&[(7, 70)]);
-        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3), test_peer(4)];
 
         let domains = plan_lane_consensus_domains(
             &routing,
             &accepted_schedule(&[0]),
-            &[committee(7, 70, validators, Some(2))],
+            &[committee(7, 70, validators, Some(3))],
             "npos",
         )
         .expect("lane consensus domains");
 
-        assert_eq!(domains[0].quorum.validator_count, 3);
-        assert_eq!(domains[0].quorum.min_quorum, 2);
+        assert_eq!(domains[0].quorum.validator_count, 4);
+        assert_eq!(domains[0].quorum.min_quorum, 3);
         assert_eq!(
             domains[0].qc_mode_tag,
             "npos::lane-relay:v1:70:7".to_string()
         );
+    }
+
+    #[test]
+    fn lane_consensus_domains_reject_noncanonical_explicit_quorum() {
+        let routing = routing_for_lane_dataspaces(&[(7, 70)]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3), test_peer(4)];
+
+        for min_quorum in [1, 2, 4] {
+            assert_eq!(
+                plan_lane_consensus_domains(
+                    &routing,
+                    &accepted_schedule(&[0]),
+                    &[committee(7, 70, validators.clone(), Some(min_quorum))],
+                    "npos",
+                ),
+                Err(LaneConsensusDomainError::InvalidQuorum {
+                    lane_id: LaneId::new(7),
+                    validator_count: 4,
+                    min_quorum,
+                }),
+                "four-validator lane committees must use canonical 3-of-4 commit quorum"
+            );
+        }
     }
 
     #[test]

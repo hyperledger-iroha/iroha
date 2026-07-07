@@ -1,15 +1,17 @@
 # Proving System Optimizations
 
-This document outlines internal optimizations used by the mock Halo2 proving components.
+This document outlines internal optimizations used by IVM's Halo2 circuit
+gadgets and trace-verification helpers. Runtime consensus paths verify
+OpenVerify IPA/Pasta envelopes; these optimizations apply to local circuit tests
+and off-chain proving flows.
 
 ## Custom Gates
 
 Certain arithmetic operations are grouped into dedicated circuits to minimise
 constraint usage.  A notable example is `AddCarryCircuit` which verifies a
-32‑bit addition with an incoming carry and outputs the carry bit in a single
-check.  In a real Halo2 circuit this would be expressed as a custom gate so the
-operation only requires one constraint instead of separate range checks for each
-bit.
+32-bit addition with an incoming carry and outputs the carry bit in a single
+check. The Halo2 gadget expresses this as a compact custom-gate shape so the
+operation avoids separate range checks for each bit.
 
 ## Parallel Verification
 

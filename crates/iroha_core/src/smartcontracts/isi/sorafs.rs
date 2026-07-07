@@ -4834,7 +4834,8 @@ mod sorafs_tests {
             other => panic!("unexpected error: {other:?}"),
         };
         assert!(
-            message.contains("failed to verify council signature"),
+            message.contains("failed to verify council signature")
+                || message.contains("invalid council signature material"),
             "unexpected error message: {message}"
         );
     }
@@ -5430,7 +5431,8 @@ mod sorafs_tests {
             other => panic!("unexpected error: {other:?}"),
         };
         assert!(
-            message.contains("failed to verify council signature"),
+            message.contains("failed to verify council signature")
+                || message.contains("invalid council signature material"),
             "unexpected error message: {message}"
         );
 

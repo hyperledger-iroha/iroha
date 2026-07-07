@@ -26,7 +26,7 @@ use iroha::{
             committed_lane_block_status_counts_as_progress,
         },
         isi::Log,
-        nexus::LaneId,
+        nexus::{DataSpaceId, LaneId},
         prelude::{HashOf, SignedTransaction},
     },
 };
@@ -1042,6 +1042,20 @@ fn elastic_lane_storage_progressed(
     }
 }
 
+fn peers_with_elastic_storage_progress(
+    current: &[Option<ElasticLaneStorageStats>],
+    baseline: &[Option<ElasticLaneStorageStats>],
+) -> usize {
+    if current.len() != TOTAL_PEERS || baseline.len() != current.len() {
+        return 0;
+    }
+    current
+        .iter()
+        .zip(baseline.iter())
+        .filter(|(current, baseline)| elastic_lane_storage_progressed(**current, **baseline))
+        .count()
+}
+
 fn peer_run_stdout_log_path(peer: &NetworkPeer) -> Result<Option<PathBuf>> {
     let peer_dir = peer
         .kura_store_dir()
@@ -1479,6 +1493,10 @@ fn peers_with_scale_out_transition(
     current: &[AutoscaleTransitionStats],
     baseline: &[AutoscaleTransitionStats],
 ) -> usize {
+    if current.len() != baseline.len() {
+        return 0;
+    }
+
     current
         .iter()
         .enumerate()
@@ -1496,6 +1514,10 @@ fn peers_with_scale_in_transition(
     current: &[AutoscaleTransitionStats],
     baseline: &[AutoscaleTransitionStats],
 ) -> usize {
+    if current.len() != baseline.len() {
+        return 0;
+    }
+
     current
         .iter()
         .enumerate()
@@ -1553,6 +1575,7 @@ struct LaneCommitmentSnapshot {
 #[derive(Clone, Debug)]
 struct LaneRelaySnapshot {
     lane_id: u32,
+    dataspace_id: u64,
     block_height: u64,
 }
 
@@ -1880,6 +1903,7 @@ fn status_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<PeerStatu
                         .iter()
                         .map(|lane| LaneRelaySnapshot {
                             lane_id: lane.lane_id.as_u32(),
+                            dataspace_id: lane.dataspace_id.as_u64(),
                             block_height: lane.block_height,
                         })
                         .collect::<Vec<_>>()
@@ -2035,6 +2059,9 @@ fn all_peers_have_storage_lane_count(
     snapshot: &[(usize, Vec<String>)],
     expected_count: usize,
 ) -> bool {
+    if snapshot.len() != TOTAL_PEERS {
+        return false;
+    }
     snapshot
         .iter()
         .all(|(_, lanes)| lanes.len() == expected_count)
@@ -2074,6 +2101,9 @@ fn all_peers_have_storage_lane_profile(
     expected_count: usize,
     required_lane_id: u32,
 ) -> bool {
+    if snapshot.len() != TOTAL_PEERS {
+        return false;
+    }
     let Some(expected_count_u32) = u32::try_from(expected_count).ok() else {
         return false;
     };
@@ -2199,16 +2229,44 @@ fn peer_lane_commitment_evidence(
 fn peer_lane_relay_height(peer: &PeerStatusSnapshot, lane_id: u32) -> Option<u64> {
     peer.lane_relay
         .iter()
-        .filter(|relay| relay.lane_id == lane_id)
+        .filter(|relay| {
+            relay.lane_id == lane_id && relay.dataspace_id == DataSpaceId::UNIVERSAL.as_u64()
+        })
         .map(|relay| relay.block_height)
         .max()
 }
 
+fn committed_lane_block_targets_default_dataspace(block: &CommittedLaneBlockSnapshot) -> bool {
+    block.dataspace_id == DataSpaceId::UNIVERSAL.as_u64()
+}
+
+fn committed_lane_block_has_canonical_quorum_metadata(block: &CommittedLaneBlockSnapshot) -> bool {
+    let Ok(validator_count) = usize::try_from(block.validator_count) else {
+        return false;
+    };
+    let Ok(min_quorum) = usize::try_from(block.min_quorum) else {
+        return false;
+    };
+    let Ok(prepare_qc_signer_count) = usize::try_from(block.prepare_qc_signer_count) else {
+        return false;
+    };
+    let Ok(commit_qc_signer_count) = usize::try_from(block.commit_qc_signer_count) else {
+        return false;
+    };
+    if validator_count == 0 || validator_count > TOTAL_PEERS || min_quorum == 0 {
+        return false;
+    }
+    let expected_quorum = commit_quorum_from_len(validator_count).max(1);
+    min_quorum == expected_quorum
+        && prepare_qc_signer_count >= min_quorum
+        && prepare_qc_signer_count <= validator_count
+        && commit_qc_signer_count >= min_quorum
+        && commit_qc_signer_count <= validator_count
+}
+
 fn committed_lane_block_is_certified(block: &CommittedLaneBlockSnapshot) -> bool {
-    block.min_quorum > 0
-        && block.validator_count >= block.min_quorum
-        && block.prepare_qc_signer_count >= block.min_quorum
-        && block.commit_qc_signer_count >= block.min_quorum
+    committed_lane_block_targets_default_dataspace(block)
+        && committed_lane_block_has_canonical_quorum_metadata(block)
         && committed_lane_block_status_counts_as_progress(
             block.execution_status.as_str(),
             block.executable_payload_available,
@@ -2250,11 +2308,9 @@ fn latest_committed_lane_block_evidence<'a>(
     let mut latest = None::<&CommittedLaneBlockSnapshot>;
     let mut latest_is_ambiguous = false;
 
-    for block in peer
-        .committed_lane_blocks
-        .iter()
-        .filter(|block| block.lane_id == lane_id && predicate(block))
-    {
+    for block in peer.committed_lane_blocks.iter().filter(|block| {
+        block.lane_id == lane_id && committed_lane_block_targets_default_dataspace(block)
+    }) {
         let block_key = (block.lane_block_height, block.lane_block_view);
         let Some(current) = latest else {
             latest = Some(block);
@@ -2280,7 +2336,10 @@ fn latest_committed_lane_block_evidence<'a>(
         CommittedLaneBlockEvidence::Ambiguous
     } else {
         match latest {
-            Some(snapshot) => CommittedLaneBlockEvidence::Unambiguous(snapshot),
+            Some(snapshot) if predicate(snapshot) => {
+                CommittedLaneBlockEvidence::Unambiguous(snapshot)
+            }
+            Some(_) => CommittedLaneBlockEvidence::Ambiguous,
             None => CommittedLaneBlockEvidence::Missing,
         }
     }
@@ -2518,10 +2577,14 @@ fn peers_with_expanded_lane_signal(
     baseline_snapshot: Option<&[PeerStatusSnapshot]>,
     lane_id: u32,
 ) -> usize {
+    if baseline_snapshot.is_some_and(|baseline| baseline.len() != snapshot.len()) {
+        return 0;
+    }
+
     let mut peers_with_signal = 0_usize;
     for (index, peer) in snapshot.iter().enumerate() {
         let baseline_peer = baseline_snapshot.and_then(|baseline| baseline.get(index));
-        let current_state_counts_without_baseline = baseline_peer.is_none()
+        let current_state_counts_without_baseline = baseline_snapshot.is_none()
             && (peer_has_active_lane_capacity(peer, lane_id)
                 || peer_has_lane_commitment_activity(peer, lane_id)
                 || peer_committed_lane_block_snapshot(peer, lane_id).is_some());
@@ -2850,6 +2913,195 @@ fn tx_confirmation_status_counts_as_post_cycle_progress(status: &TxConfirmationS
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommitQuorumSource {
+    RequiredStatus,
+    ValidatorSetLen,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CommitQuorumObservation {
+    Ready {
+        quorum_required: usize,
+        source: CommitQuorumSource,
+    },
+    NoEvidence,
+    ConflictingRequired {
+        observed: Vec<u64>,
+    },
+    InvalidRequired {
+        quorum_required: u64,
+        peer_count: usize,
+        observed: Vec<u64>,
+    },
+    ConflictingValidatorSetLen {
+        observed: Vec<u64>,
+    },
+    InvalidValidatorSetLen {
+        validator_set_len: u64,
+        derived_quorum: Option<usize>,
+        peer_count: usize,
+    },
+}
+
+impl CommitQuorumObservation {
+    fn quorum_required(&self) -> Option<usize> {
+        match self {
+            Self::Ready {
+                quorum_required, ..
+            } => Some(*quorum_required),
+            Self::NoEvidence
+            | Self::ConflictingRequired { .. }
+            | Self::InvalidRequired { .. }
+            | Self::ConflictingValidatorSetLen { .. }
+            | Self::InvalidValidatorSetLen { .. } => None,
+        }
+    }
+
+    fn timeout_error(&self, context: &str) -> Option<String> {
+        match self {
+            Self::Ready { .. } | Self::NoEvidence => None,
+            Self::ConflictingRequired { observed } => Some(format!(
+                "{context}: conflicting commit quorum values after timeout; observed values: {observed:?}"
+            )),
+            Self::InvalidRequired {
+                quorum_required,
+                peer_count,
+                observed,
+            } => Some(format!(
+                "{context}: invalid commit quorum value {quorum_required} for peer count {peer_count} after timeout; observed values: {observed:?}"
+            )),
+            Self::ConflictingValidatorSetLen { observed } => Some(format!(
+                "{context}: conflicting commit-QC validator-set lengths after timeout; observed values: {observed:?}"
+            )),
+            Self::InvalidValidatorSetLen {
+                validator_set_len,
+                derived_quorum,
+                peer_count,
+            } => Some(format!(
+                "{context}: invalid derived quorum {derived_quorum:?} from validator set len {validator_set_len} for peer count {peer_count} after timeout"
+            )),
+        }
+    }
+}
+
+fn commit_quorum_observation(
+    snapshot: &[PeerStatusSnapshot],
+    peer_count: usize,
+) -> CommitQuorumObservation {
+    let observed_required = snapshot
+        .iter()
+        .map(|status| status.commit_signatures_required)
+        .filter(|value| *value > 0)
+        .collect::<Vec<_>>();
+    let observed_validator_set_len = snapshot
+        .iter()
+        .map(|status| status.commit_qc_validator_set_len)
+        .filter(|value| *value > 0)
+        .collect::<Vec<_>>();
+
+    if !observed_required.is_empty() {
+        let min_required = *observed_required.iter().min().unwrap_or(&0);
+        let max_required = *observed_required.iter().max().unwrap_or(&0);
+        if min_required != max_required {
+            return CommitQuorumObservation::ConflictingRequired {
+                observed: observed_required,
+            };
+        }
+
+        let Ok(quorum_required) = usize::try_from(max_required) else {
+            return CommitQuorumObservation::InvalidRequired {
+                quorum_required: max_required,
+                peer_count,
+                observed: observed_required,
+            };
+        };
+        if !(1..=peer_count).contains(&quorum_required) {
+            return CommitQuorumObservation::InvalidRequired {
+                quorum_required: max_required,
+                peer_count,
+                observed: observed_required,
+            };
+        }
+        let expected_quorum = match expected_commit_quorum_from_validator_set_len_observation(
+            &observed_validator_set_len,
+            peer_count,
+        ) {
+            Ok(Some((_validator_set_len, expected_quorum))) => expected_quorum,
+            Ok(None) => commit_quorum_from_len(peer_count).max(1),
+            Err(observation) => return observation,
+        };
+        if quorum_required != expected_quorum {
+            return CommitQuorumObservation::InvalidRequired {
+                quorum_required: max_required,
+                peer_count,
+                observed: observed_required,
+            };
+        }
+        return CommitQuorumObservation::Ready {
+            quorum_required,
+            source: CommitQuorumSource::RequiredStatus,
+        };
+    }
+
+    if let Some((_validator_set_len, quorum_required)) =
+        match expected_commit_quorum_from_validator_set_len_observation(
+            &observed_validator_set_len,
+            peer_count,
+        ) {
+            Ok(observation) => observation,
+            Err(observation) => return observation,
+        }
+    {
+        return CommitQuorumObservation::Ready {
+            quorum_required,
+            source: CommitQuorumSource::ValidatorSetLen,
+        };
+    }
+
+    CommitQuorumObservation::NoEvidence
+}
+
+fn expected_commit_quorum_from_validator_set_len_observation(
+    observed_validator_set_len: &[u64],
+    peer_count: usize,
+) -> Result<Option<(usize, usize)>, CommitQuorumObservation> {
+    if observed_validator_set_len.is_empty() {
+        return Ok(None);
+    }
+    let min_len = *observed_validator_set_len.iter().min().unwrap_or(&0);
+    let max_len = *observed_validator_set_len.iter().max().unwrap_or(&0);
+    if min_len != max_len {
+        return Err(CommitQuorumObservation::ConflictingValidatorSetLen {
+            observed: observed_validator_set_len.to_vec(),
+        });
+    }
+
+    let Ok(validator_set_len) = usize::try_from(max_len) else {
+        return Err(CommitQuorumObservation::InvalidValidatorSetLen {
+            validator_set_len: max_len,
+            derived_quorum: None,
+            peer_count,
+        });
+    };
+    let quorum_required = commit_quorum_from_len(validator_set_len);
+    if validator_set_len > peer_count {
+        return Err(CommitQuorumObservation::InvalidValidatorSetLen {
+            validator_set_len: max_len,
+            derived_quorum: Some(quorum_required),
+            peer_count,
+        });
+    }
+    if !(1..=peer_count).contains(&quorum_required) {
+        return Err(CommitQuorumObservation::InvalidValidatorSetLen {
+            validator_set_len: max_len,
+            derived_quorum: Some(quorum_required),
+            peer_count,
+        });
+    }
+    Ok(Some((validator_set_len, quorum_required)))
+}
+
 fn wait_for_commit_quorum_required(
     network: &sandbox::SerializedNetwork,
     timeout: Duration,
@@ -2857,59 +3109,18 @@ fn wait_for_commit_quorum_required(
 ) -> Result<usize> {
     let started = Instant::now();
     let mut last_error = None::<String>;
-    let mut last_observed_required = Vec::<u64>::new();
-    let mut last_observed_validator_set_len = Vec::<u64>::new();
+    let mut last_observation = CommitQuorumObservation::NoEvidence;
     let mut consecutive_failures = 0_u32;
 
     while started.elapsed() <= timeout {
         match status_snapshot(network) {
             Ok(snapshot) => {
                 consecutive_failures = 0;
-                let observed_required = snapshot
-                    .iter()
-                    .map(|status| status.commit_signatures_required)
-                    .filter(|value| *value > 0)
-                    .collect::<Vec<_>>();
-                last_observed_required = observed_required.clone();
-
-                if !observed_required.is_empty() {
-                    let min_required = *observed_required.iter().min().unwrap_or(&0);
-                    let max_required = *observed_required.iter().max().unwrap_or(&0);
-                    if min_required == max_required {
-                        let quorum_required = usize::try_from(max_required).map_err(|_| {
-                            eyre!("{context}: quorum value does not fit usize: {max_required}")
-                        })?;
-                        ensure!(
-                            (1..=network.peers().len()).contains(&quorum_required),
-                            "{context}: invalid commit quorum value {quorum_required} for peer count {}; observed values: {observed_required:?}",
-                            network.peers().len()
-                        );
-                        return Ok(quorum_required);
-                    }
+                let observation = commit_quorum_observation(&snapshot, network.peers().len());
+                if let Some(quorum_required) = observation.quorum_required() {
+                    return Ok(quorum_required);
                 }
-
-                let observed_validator_set_len = snapshot
-                    .iter()
-                    .map(|status| status.commit_qc_validator_set_len)
-                    .filter(|value| *value > 0)
-                    .collect::<Vec<_>>();
-                last_observed_validator_set_len = observed_validator_set_len.clone();
-                if !observed_validator_set_len.is_empty() {
-                    let min_len = *observed_validator_set_len.iter().min().unwrap_or(&0);
-                    let max_len = *observed_validator_set_len.iter().max().unwrap_or(&0);
-                    if min_len == max_len {
-                        let validator_set_len = usize::try_from(max_len).map_err(|_| {
-                            eyre!("{context}: validator set length does not fit usize: {max_len}")
-                        })?;
-                        let quorum_required = commit_quorum_from_len(validator_set_len);
-                        ensure!(
-                            (1..=network.peers().len()).contains(&quorum_required),
-                            "{context}: invalid derived quorum {quorum_required} from validator set len {validator_set_len} for peer count {}",
-                            network.peers().len()
-                        );
-                        return Ok(quorum_required);
-                    }
-                }
+                last_observation = observation;
 
                 thread::sleep(STATUS_SNAPSHOT_RETRY_BACKOFF);
             }
@@ -2927,9 +3138,13 @@ fn wait_for_commit_quorum_required(
         }
     }
 
+    if let Some(error) = last_observation.timeout_error(context) {
+        return Err(eyre!("{error}"));
+    }
+
     let fallback_quorum = commit_quorum_from_len(network.peers().len());
     eprintln!(
-        "[autoscale-localnet] commit quorum fallback from peer count: {} (context: {context}; last required={last_observed_required:?}; last validator_set_len={last_observed_validator_set_len:?}; last error={last_error:?})",
+        "[autoscale-localnet] commit quorum fallback from peer count: {} (context: {context}; last observation={last_observation:?}; last error={last_error:?})",
         fallback_quorum
     );
     Ok(fallback_quorum)
@@ -3233,17 +3448,10 @@ fn wait_for_expanded_lanes_with_heartbeat(
     while started.elapsed() <= timeout {
         let storage_snapshot = lane_snapshot(network)?;
         let elastic_storage_snapshot = elastic_lane_storage_snapshot(network, elastic_lane_id)?;
-        let peers_with_storage_progress = elastic_storage_snapshot
-            .iter()
-            .enumerate()
-            .filter(|(index, current)| {
-                let baseline = baseline_elastic_storage_snapshot
-                    .get(*index)
-                    .copied()
-                    .flatten();
-                elastic_lane_storage_progressed(**current, baseline)
-            })
-            .count();
+        let peers_with_storage_progress = peers_with_elastic_storage_progress(
+            &elastic_storage_snapshot,
+            baseline_elastic_storage_snapshot,
+        );
         let storage_progressed_on_quorum = peers_with_storage_progress >= quorum_required;
         let storage_expanded = expansion_observed_on_storage_for_lane_count(
             &storage_snapshot,
@@ -4610,16 +4818,19 @@ mod tests {
     use eyre::Result;
     use iroha::{
         client::TxConfirmationStatus,
-        data_model::block::consensus::{
-            COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
-            COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
-            COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
-            COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
-            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
-            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
-            COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
-            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+        data_model::{
+            block::consensus::{
+                COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
+                COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
+                COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+                COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
+                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
+                COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            },
+            nexus::DataSpaceId,
         },
     };
     use tempfile::tempdir;
@@ -4627,14 +4838,15 @@ mod tests {
     use super::{
         AUTOSCALE_SCALE_IN_TRANSITION_LOG_MARKER, AUTOSCALE_SCALE_OUT_TRANSITION_LOG_MARKER,
         AutoscaleSoakCycleEvent, AutoscaleSoakReporter, AutoscaleSoakRunSummary,
-        AutoscaleTransitionStats, CommittedLaneBlockSnapshot, ElasticLaneStorageStats,
-        ExpandContractCycleOutcome, LaneCommitmentSnapshot, LaneRelaySnapshot, LaneStatusSnapshot,
-        LaneValidatorSnapshot, PUBLIC_PROFILE_ELASTIC_LANE_ID,
-        PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES, PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
-        PeerStatusSnapshot, SoakTimingSummary, autoscale_soak_duration_from_env_value,
-        committed_lane_block_is_certified, contraction_observed_on_quorum_peers,
-        contraction_observed_on_quorum_peers_for_profile, elastic_lane_storage_progressed,
-        expansion_observed_on_quorum_or_scale_out_transition,
+        AutoscaleTransitionStats, CommitQuorumObservation, CommitQuorumSource,
+        CommittedLaneBlockSnapshot, ElasticLaneStorageStats, ExpandContractCycleOutcome,
+        LaneCommitmentSnapshot, LaneRelaySnapshot, LaneStatusSnapshot, LaneValidatorSnapshot,
+        PUBLIC_PROFILE_ELASTIC_LANE_ID, PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+        PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES, PeerStatusSnapshot, SoakTimingSummary,
+        autoscale_soak_duration_from_env_value, commit_quorum_observation,
+        committed_lane_block_has_canonical_quorum_metadata, committed_lane_block_is_certified,
+        contraction_observed_on_quorum_peers, contraction_observed_on_quorum_peers_for_profile,
+        elastic_lane_storage_progressed, expansion_observed_on_quorum_or_scale_out_transition,
         expansion_observed_on_quorum_or_scale_out_transition_for_lane,
         expansion_observed_on_quorum_peers, expansion_observed_on_quorum_peers_for_lane,
         expansion_observed_on_storage, expansion_observed_on_storage_for_count,
@@ -4644,7 +4856,8 @@ mod tests {
         parse_autoscale_transition_stats_for_lane, peer_committed_lane_block_snapshot,
         peer_direct_applied_committed_lane_block_snapshot, peer_lane_commitment_snapshot,
         peer_lane_status, peer_lane_validator_snapshot,
-        peers_with_direct_applied_committed_lane_block_for_lane, peers_with_expanded_lane_signal,
+        peers_with_direct_applied_committed_lane_block_for_lane,
+        peers_with_elastic_storage_progress, peers_with_expanded_lane_signal,
         peers_with_scale_in_transition, peers_with_scale_out_transition,
         scale_in_transition_counts, scale_in_transition_quorum_satisfied,
         scale_out_transition_observed_on_quorum_peers, should_require_scale_in_transition,
@@ -4675,6 +4888,233 @@ mod tests {
             blocks_non_empty: 10,
             ..PeerStatusSnapshot::default()
         }
+    }
+
+    fn status_with_commit_quorum(
+        commit_signatures_required: u64,
+        commit_qc_validator_set_len: u64,
+    ) -> PeerStatusSnapshot {
+        PeerStatusSnapshot {
+            commit_signatures_required,
+            commit_qc_validator_set_len,
+            ..PeerStatusSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn commit_quorum_observation_requires_consistent_explicit_quorum() {
+        let consistent = vec![
+            status_with_commit_quorum(3, 4),
+            status_with_commit_quorum(3, 4),
+            status_with_commit_quorum(3, 4),
+            status_with_commit_quorum(3, 4),
+        ];
+        assert_eq!(
+            commit_quorum_observation(&consistent, 4),
+            CommitQuorumObservation::Ready {
+                quorum_required: 3,
+                source: CommitQuorumSource::RequiredStatus
+            }
+        );
+
+        let conflicting_required = vec![
+            status_with_commit_quorum(2, 4),
+            status_with_commit_quorum(3, 4),
+            status_with_commit_quorum(3, 4),
+            status_with_commit_quorum(0, 4),
+        ];
+        let observation = commit_quorum_observation(&conflicting_required, 4);
+        assert_eq!(
+            observation,
+            CommitQuorumObservation::ConflictingRequired {
+                observed: vec![2, 3, 3]
+            }
+        );
+        assert!(
+            observation
+                .timeout_error("quorum unit")
+                .expect("conflicting required quorum should be terminal after timeout")
+                .contains("conflicting commit quorum values"),
+            "conflicting explicit quorum evidence must not fall back to validator-set length"
+        );
+
+        let explicit_with_conflicting_validator_len = vec![
+            status_with_commit_quorum(3, 4),
+            status_with_commit_quorum(3, 5),
+            status_with_commit_quorum(3, 4),
+            status_with_commit_quorum(3, 0),
+        ];
+        let observation = commit_quorum_observation(&explicit_with_conflicting_validator_len, 4);
+        assert_eq!(
+            observation,
+            CommitQuorumObservation::ConflictingValidatorSetLen {
+                observed: vec![4, 5, 4]
+            }
+        );
+        assert!(
+            observation
+                .timeout_error("quorum unit")
+                .expect(
+                    "conflicting validator-set length should remain terminal with explicit quorum"
+                )
+                .contains("conflicting commit-QC validator-set lengths"),
+            "clean explicit quorum must not mask split-brain validator-set length evidence"
+        );
+    }
+
+    #[test]
+    fn commit_quorum_observation_rejects_invalid_explicit_quorum() {
+        let invalid_required = vec![
+            status_with_commit_quorum(5, 4),
+            status_with_commit_quorum(5, 4),
+            status_with_commit_quorum(5, 4),
+            status_with_commit_quorum(5, 4),
+        ];
+        let observation = commit_quorum_observation(&invalid_required, 4);
+        assert_eq!(
+            observation,
+            CommitQuorumObservation::InvalidRequired {
+                quorum_required: 5,
+                peer_count: 4,
+                observed: vec![5, 5, 5, 5]
+            }
+        );
+        assert!(
+            observation
+                .timeout_error("quorum unit")
+                .expect("invalid explicit quorum should be terminal after timeout")
+                .contains("invalid commit quorum value")
+        );
+    }
+
+    #[test]
+    fn commit_quorum_observation_rejects_downgraded_explicit_quorum() {
+        let downgraded_against_validator_set = vec![
+            status_with_commit_quorum(2, 4),
+            status_with_commit_quorum(2, 4),
+            status_with_commit_quorum(2, 4),
+            status_with_commit_quorum(2, 4),
+        ];
+        let observation = commit_quorum_observation(&downgraded_against_validator_set, 4);
+        assert_eq!(
+            observation,
+            CommitQuorumObservation::InvalidRequired {
+                quorum_required: 2,
+                peer_count: 4,
+                observed: vec![2, 2, 2, 2]
+            }
+        );
+        assert!(
+            observation
+                .timeout_error("quorum unit")
+                .expect("downgraded explicit quorum should be terminal after timeout")
+                .contains("invalid commit quorum value")
+        );
+
+        let downgraded_without_validator_set = vec![
+            status_with_commit_quorum(2, 0),
+            status_with_commit_quorum(2, 0),
+            status_with_commit_quorum(2, 0),
+            status_with_commit_quorum(2, 0),
+        ];
+        assert_eq!(
+            commit_quorum_observation(&downgraded_without_validator_set, 4),
+            CommitQuorumObservation::InvalidRequired {
+                quorum_required: 2,
+                peer_count: 4,
+                observed: vec![2, 2, 2, 2]
+            },
+            "explicit quorum without validator-set evidence must not downgrade below peer-count quorum"
+        );
+
+        let smaller_validator_set = vec![
+            status_with_commit_quorum(2, 2),
+            status_with_commit_quorum(2, 2),
+            status_with_commit_quorum(2, 2),
+            status_with_commit_quorum(2, 2),
+        ];
+        assert_eq!(
+            commit_quorum_observation(&smaller_validator_set, 4),
+            CommitQuorumObservation::Ready {
+                quorum_required: 2,
+                source: CommitQuorumSource::RequiredStatus
+            },
+            "explicit quorum may be below peer-count quorum only when consistent validator-set evidence explains it"
+        );
+    }
+
+    #[test]
+    fn commit_quorum_observation_derives_only_from_consistent_validator_set_len() {
+        let derived = vec![
+            status_with_commit_quorum(0, 4),
+            status_with_commit_quorum(0, 4),
+            status_with_commit_quorum(0, 4),
+            status_with_commit_quorum(0, 4),
+        ];
+        assert_eq!(
+            commit_quorum_observation(&derived, 4),
+            CommitQuorumObservation::Ready {
+                quorum_required: 3,
+                source: CommitQuorumSource::ValidatorSetLen
+            }
+        );
+
+        let conflicting_validator_len = vec![
+            status_with_commit_quorum(0, 4),
+            status_with_commit_quorum(0, 5),
+            status_with_commit_quorum(0, 4),
+            status_with_commit_quorum(0, 0),
+        ];
+        let observation = commit_quorum_observation(&conflicting_validator_len, 4);
+        assert_eq!(
+            observation,
+            CommitQuorumObservation::ConflictingValidatorSetLen {
+                observed: vec![4, 5, 4]
+            }
+        );
+        assert!(
+            observation
+                .timeout_error("quorum unit")
+                .expect("conflicting validator-set length should be terminal after timeout")
+                .contains("conflicting commit-QC validator-set lengths")
+        );
+
+        let invalid_validator_len = vec![
+            status_with_commit_quorum(0, 5),
+            status_with_commit_quorum(0, 5),
+            status_with_commit_quorum(0, 5),
+            status_with_commit_quorum(0, 5),
+        ];
+        let observation = commit_quorum_observation(&invalid_validator_len, 4);
+        assert!(
+            matches!(
+                observation,
+                CommitQuorumObservation::InvalidValidatorSetLen {
+                    validator_set_len: 5,
+                    derived_quorum: Some(_),
+                    peer_count: 4
+                }
+            ),
+            "validator-set length larger than the observed peer set must fail closed"
+        );
+        assert!(
+            observation
+                .timeout_error("quorum unit")
+                .expect("invalid validator-set length should be terminal after timeout")
+                .contains("invalid derived quorum")
+        );
+
+        let no_evidence = vec![PeerStatusSnapshot::default(); 4];
+        assert_eq!(
+            commit_quorum_observation(&no_evidence, 4),
+            CommitQuorumObservation::NoEvidence
+        );
+        assert!(
+            CommitQuorumObservation::NoEvidence
+                .timeout_error("quorum unit")
+                .is_none(),
+            "peer-count fallback is reserved for the no-evidence case"
+        );
     }
 
     fn certified_lane_block_status(
@@ -4762,6 +5202,27 @@ mod tests {
             !expansion_observed_on_quorum_peers_for_lane(&under_quorum_commit, None, 1, 3),
             "commit under-quorum committed lane-block status must not fake expansion"
         );
+
+        let mut wrong_dataspace = vec![
+            status_with_committed_lane_block(1, 1, 3, 3),
+            status_with_committed_lane_block(1, 1, 3, 3),
+            status_with_committed_lane_block(1, 1, 3, 3),
+            PeerStatusSnapshot::default(),
+        ];
+        for peer in wrong_dataspace.iter_mut().take(3) {
+            peer.committed_lane_blocks
+                .first_mut()
+                .expect("committed lane-block fixture")
+                .dataspace_id = 42;
+        }
+        assert!(
+            peer_committed_lane_block_snapshot(&wrong_dataspace[0], 1).is_none(),
+            "wrong-dataspace committed lane-block status must not match the default autoscale route"
+        );
+        assert!(
+            !expansion_observed_on_quorum_peers_for_lane(&wrong_dataspace, None, 1, 3),
+            "wrong-dataspace committed lane-block status must not fake expansion"
+        );
     }
 
     #[test]
@@ -4838,10 +5299,9 @@ mod tests {
 
     #[test]
     fn committed_lane_block_status_rejects_ambiguous_latest_rows() {
-        let mut certified_a = certified_lane_block_status(1, 2, 3, 3);
-        certified_a.dataspace_id = 11;
+        let certified_a = certified_lane_block_status(1, 2, 3, 3);
         let mut certified_b = certified_lane_block_status(1, 2, 3, 3);
-        certified_b.dataspace_id = 12;
+        certified_b.commit_qc_signer_count = 4;
         let stale = certified_lane_block_status(1, 1, 3, 3);
         let conflicting_peer = PeerStatusSnapshot {
             committed_lane_blocks: vec![stale, certified_a.clone(), certified_b],
@@ -4881,20 +5341,19 @@ mod tests {
             "exact duplicate committed lane-block rows should not hide valid expansion evidence"
         );
 
-        let mut direct_a = committed_lane_block_status_with_execution(
+        let direct_a = committed_lane_block_status_with_execution(
             1,
             3,
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
             true,
         );
-        direct_a.dataspace_id = 21;
         let mut direct_b = committed_lane_block_status_with_execution(
             1,
             3,
             COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
             true,
         );
-        direct_b.dataspace_id = 22;
+        direct_b.commit_qc_signer_count = 4;
         let direct_conflicting_peer = PeerStatusSnapshot {
             committed_lane_blocks: vec![direct_a, direct_b],
             ..PeerStatusSnapshot::default()
@@ -4917,6 +5376,22 @@ mod tests {
             ),
             0,
             "ambiguous direct-applied rows must not inflate direct-execution evidence"
+        );
+
+        let mut wrong_dataspace_direct = committed_lane_block_status_with_execution(
+            1,
+            4,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION,
+            true,
+        );
+        wrong_dataspace_direct.dataspace_id = 99;
+        let wrong_dataspace_peer = PeerStatusSnapshot {
+            committed_lane_blocks: vec![wrong_dataspace_direct],
+            ..PeerStatusSnapshot::default()
+        };
+        assert!(
+            peer_direct_applied_committed_lane_block_snapshot(&wrong_dataspace_peer, 1).is_none(),
+            "wrong-dataspace direct-applied rows must not inflate direct-execution evidence"
         );
     }
 
@@ -5364,6 +5839,36 @@ mod tests {
     }
 
     #[test]
+    fn elastic_lane_storage_progress_requires_aligned_peer_snapshots() {
+        let baseline = ElasticLaneStorageStats {
+            file_count: 1,
+            total_bytes: 100,
+            newest_modified_unix_ms: 1,
+        };
+        let progressed = ElasticLaneStorageStats {
+            file_count: 2,
+            total_bytes: 120,
+            newest_modified_unix_ms: 2,
+        };
+        let current = vec![Some(progressed); super::TOTAL_PEERS];
+        let aligned_baseline = vec![Some(baseline); super::TOTAL_PEERS];
+
+        assert_eq!(
+            peers_with_elastic_storage_progress(&current, &aligned_baseline),
+            super::TOTAL_PEERS
+        );
+        assert_eq!(
+            peers_with_elastic_storage_progress(&current[..3], &aligned_baseline),
+            0
+        );
+        assert_eq!(
+            peers_with_elastic_storage_progress(&current, &aligned_baseline[..3]),
+            0
+        );
+        assert_eq!(peers_with_elastic_storage_progress(&current, &[]), 0);
+    }
+
+    #[test]
     fn storage_lane_id_rejects_prefix_spoofed_segments() {
         assert_eq!(storage_lane_id("lane_003_elastic_lane_3"), Some(3));
         assert_eq!(storage_lane_id("lane_003_elastic3"), Some(3));
@@ -5641,12 +6146,44 @@ mod tests {
             "same-height duplicate rows must not manufacture fresh scale-out quorum"
         );
 
-        let progressed_snapshot = vec![progressed_current; 3];
+        let partial_progressed_snapshot = vec![progressed_current; 3];
+        assert!(!scale_out_transition_observed_on_quorum_peers(
+            &partial_progressed_snapshot,
+            &baseline_snapshot,
+            3,
+        ));
+        assert_eq!(
+            peers_with_scale_out_transition(&partial_progressed_snapshot, &baseline_snapshot),
+            0,
+            "transition deltas must fail closed when current and baseline peer counts differ"
+        );
+
+        let progressed_snapshot = vec![progressed_current; 4];
         assert!(scale_out_transition_observed_on_quorum_peers(
             &progressed_snapshot,
             &baseline_snapshot,
             3,
         ));
+        assert_eq!(
+            peers_with_scale_out_transition(&progressed_snapshot, &baseline_snapshot[..3]),
+            0,
+            "transition deltas must fail closed when baseline peer rows are missing"
+        );
+        let scale_in_progressed_current = AutoscaleTransitionStats {
+            scale_in_transitions: baseline.scale_in_transitions + 1,
+            ..AutoscaleTransitionStats::default()
+        };
+        let scale_in_progressed_snapshot = vec![scale_in_progressed_current; 4];
+        assert_eq!(
+            peers_with_scale_in_transition(&scale_in_progressed_snapshot, &baseline_snapshot),
+            4,
+            "clean scale-in deltas should count when peer rows align"
+        );
+        assert_eq!(
+            peers_with_scale_in_transition(&scale_in_progressed_snapshot, &baseline_snapshot[..3]),
+            0,
+            "scale-in transition deltas must fail closed when baseline peer rows are missing"
+        );
 
         let ambiguous_baseline = AutoscaleTransitionStats {
             scale_out_transitions: 1,
@@ -6475,6 +7012,50 @@ mod tests {
     }
 
     #[test]
+    fn public_profile_expansion_rejects_missing_baseline_peer_rows() {
+        let full_baseline = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        let partial_baseline = full_baseline[..2].to_vec();
+        let mut expanded_snapshot = full_baseline.clone();
+        for peer in expanded_snapshot.iter_mut().take(3) {
+            peer.lanes.push(LaneStatusSnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                capacity: 1_000,
+                committed: 1,
+            });
+            peer.lane_governance_ids
+                .push(PUBLIC_PROFILE_ELASTIC_LANE_ID);
+        }
+
+        assert!(expansion_observed_on_quorum_peers_for_lane(
+            &expanded_snapshot,
+            None,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &expanded_snapshot,
+                Some(&partial_baseline),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID
+            ),
+            0,
+            "partial baseline snapshots must not contribute expansion status evidence"
+        );
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &expanded_snapshot,
+            Some(&partial_baseline),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &expanded_snapshot,
+            Some(&partial_baseline),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            2
+        ));
+    }
+
+    #[test]
     fn public_profile_expansion_rejects_duplicate_elastic_status_rows() {
         let pre_cycle_snapshot = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         let mut duplicate_elastic_status = pre_cycle_snapshot.clone();
@@ -6829,12 +7410,10 @@ mod tests {
             .zip(repaired_committed_blocks.iter_mut())
             .take(3)
         {
-            let mut certified_a =
-                certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
-            certified_a.dataspace_id = 11;
+            let certified_a = certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
             let mut certified_b =
                 certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
-            certified_b.dataspace_id = 12;
+            certified_b.commit_qc_signer_count = 4;
             baseline_peer.committed_lane_blocks.push(certified_a);
             baseline_peer.committed_lane_blocks.push(certified_b);
             repaired_peer
@@ -6912,6 +7491,7 @@ mod tests {
         for peer in wrong_lane_relay.iter_mut().take(3) {
             peer.lane_relay.push(LaneRelaySnapshot {
                 lane_id: 1,
+                dataspace_id: DataSpaceId::UNIVERSAL.as_u64(),
                 block_height: 42,
             });
         }
@@ -6929,10 +7509,35 @@ mod tests {
             3
         ));
 
+        let mut wrong_dataspace_relay = pre_cycle_snapshot.clone();
+        for peer in wrong_dataspace_relay.iter_mut().take(3) {
+            peer.lane_relay.push(LaneRelaySnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                dataspace_id: DataSpaceId::new(42).as_u64(),
+                block_height: 42,
+            });
+        }
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &wrong_dataspace_relay,
+                Some(&pre_cycle_snapshot),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "wrong-dataspace relay rows must not fake default-dataspace expansion"
+        );
+        assert!(!expansion_observed_on_quorum_peers_for_lane(
+            &wrong_dataspace_relay,
+            Some(&pre_cycle_snapshot),
+            PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            3
+        ));
+
         let mut stale_relay = pre_cycle_snapshot.clone();
         for peer in stale_relay.iter_mut().take(3) {
             peer.lane_relay.push(LaneRelaySnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                dataspace_id: DataSpaceId::UNIVERSAL.as_u64(),
                 block_height: 42,
             });
         }
@@ -7009,6 +7614,7 @@ mod tests {
         for peer in elastic_relay.iter_mut().take(3) {
             peer.lane_relay.push(LaneRelaySnapshot {
                 lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                dataspace_id: DataSpaceId::UNIVERSAL.as_u64(),
                 block_height: 42,
             });
         }
@@ -7018,6 +7624,24 @@ mod tests {
             PUBLIC_PROFILE_ELASTIC_LANE_ID,
             3
         ));
+
+        let mut wrong_dataspace_relay = contracted_public_profile.clone();
+        for peer in wrong_dataspace_relay.iter_mut().take(3) {
+            peer.lane_relay.push(LaneRelaySnapshot {
+                lane_id: PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                dataspace_id: DataSpaceId::new(42).as_u64(),
+                block_height: 42,
+            });
+        }
+        assert!(
+            contraction_observed_on_quorum_peers_for_profile(
+                &wrong_dataspace_relay,
+                PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3
+            ),
+            "wrong-dataspace relay rows must not block default-dataspace contraction"
+        );
 
         let mut elastic_validator = contracted_public_profile.clone();
         for peer in elastic_validator.iter_mut().take(3) {
@@ -7045,12 +7669,10 @@ mod tests {
         let contracted_public_profile = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
         let mut ambiguous_committed_lane_blocks = contracted_public_profile.clone();
         for peer in ambiguous_committed_lane_blocks.iter_mut().take(3) {
-            let mut certified_a =
-                certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
-            certified_a.dataspace_id = 11;
+            let certified_a = certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
             let mut certified_b =
                 certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
-            certified_b.dataspace_id = 12;
+            certified_b.commit_qc_signer_count = 4;
             peer.committed_lane_blocks.push(certified_a);
             peer.committed_lane_blocks.push(certified_b);
         }
@@ -7103,6 +7725,153 @@ mod tests {
                 3,
             ),
             "certified committed lane-block evidence must block lane destruction"
+        );
+    }
+
+    #[test]
+    fn public_profile_contraction_ignores_wrong_dataspace_committed_lane_blocks() {
+        let contracted_public_profile = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        let mut wrong_dataspace_committed_lane_blocks = contracted_public_profile.clone();
+        for peer in wrong_dataspace_committed_lane_blocks.iter_mut().take(3) {
+            let mut certified =
+                certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 3, 3);
+            certified.dataspace_id = 42;
+            peer.committed_lane_blocks.push(certified);
+        }
+
+        assert!(
+            peer_committed_lane_block_snapshot(
+                &wrong_dataspace_committed_lane_blocks[0],
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            )
+            .is_none(),
+            "wrong-dataspace committed lane-block rows must not match the retired public-profile route"
+        );
+        assert!(
+            contraction_observed_on_quorum_peers_for_profile(
+                &wrong_dataspace_committed_lane_blocks,
+                PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3,
+            ),
+            "wrong-dataspace committed lane-block rows should not block destruction of the default-dataspace elastic lane"
+        );
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &wrong_dataspace_committed_lane_blocks,
+                Some(&contracted_public_profile),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "wrong-dataspace committed lane-block rows must not fake expansion either"
+        );
+    }
+
+    #[test]
+    fn public_profile_committed_lane_blocks_require_canonical_quorum_metadata() {
+        let contracted_public_profile = vec![status_with_declared_lanes(&[0, 1, 2]); 4];
+        let mut quorum_downgraded = contracted_public_profile.clone();
+        for peer in quorum_downgraded.iter_mut().take(3) {
+            let mut downgraded =
+                certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 1, 1);
+            downgraded.validator_count = 4;
+            downgraded.min_quorum = 1;
+            peer.committed_lane_blocks.push(downgraded);
+        }
+        assert!(
+            !committed_lane_block_has_canonical_quorum_metadata(
+                &quorum_downgraded[0].committed_lane_blocks[0],
+            ),
+            "fixture must carry downgraded quorum metadata"
+        );
+        assert!(
+            peer_committed_lane_block_snapshot(
+                &quorum_downgraded[0],
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            )
+            .is_none(),
+            "quorum-downgraded committed lane-block rows must not be certified progress"
+        );
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &quorum_downgraded,
+                Some(&contracted_public_profile),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "quorum-downgraded committed lane-block rows must not fake expansion"
+        );
+        assert!(
+            !contraction_observed_on_quorum_peers_for_profile(
+                &quorum_downgraded,
+                PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3,
+            ),
+            "malformed default-dataspace committed lane-block rows must block safe destruction"
+        );
+
+        let mut overclaimed_signers = contracted_public_profile.clone();
+        for peer in overclaimed_signers.iter_mut().take(3) {
+            let overclaimed = certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 5, 5);
+            peer.committed_lane_blocks.push(overclaimed);
+        }
+        assert!(
+            !committed_lane_block_has_canonical_quorum_metadata(
+                &overclaimed_signers[0].committed_lane_blocks[0],
+            ),
+            "fixture must carry impossible signer counts"
+        );
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &overclaimed_signers,
+                Some(&contracted_public_profile),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "over-claimed committed lane-block signer counts must not fake expansion"
+        );
+        assert!(
+            !contraction_observed_on_quorum_peers_for_profile(
+                &overclaimed_signers,
+                PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3,
+            ),
+            "impossible signer-count committed lane-block rows must block safe destruction"
+        );
+
+        let mut impossible_validator_set = contracted_public_profile.clone();
+        for peer in impossible_validator_set.iter_mut().take(3) {
+            let mut impossible =
+                certified_lane_block_status(PUBLIC_PROFILE_ELASTIC_LANE_ID, 42, 67, 67);
+            impossible.validator_count = 100;
+            impossible.min_quorum = 67;
+            peer.committed_lane_blocks.push(impossible);
+        }
+        assert!(
+            !committed_lane_block_has_canonical_quorum_metadata(
+                &impossible_validator_set[0].committed_lane_blocks[0],
+            ),
+            "fixture must carry a validator set larger than the four-peer localnet"
+        );
+        assert_eq!(
+            peers_with_expanded_lane_signal(
+                &impossible_validator_set,
+                Some(&contracted_public_profile),
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+            ),
+            0,
+            "self-consistent but impossible validator-set sizes must not fake expansion"
+        );
+        assert!(
+            !contraction_observed_on_quorum_peers_for_profile(
+                &impossible_validator_set,
+                PUBLIC_PROFILE_INITIAL_PROVISIONED_LANES,
+                PUBLIC_PROFILE_ELASTIC_LANE_ID,
+                3,
+            ),
+            "impossible validator-set committed lane-block rows must block safe destruction"
         );
     }
 
@@ -7569,6 +8338,16 @@ mod tests {
 
     #[test]
     fn public_profile_storage_fallback_requires_four_lanes_on_all_peers() {
+        assert!(!expansion_observed_on_storage_for_count(
+            &[],
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES
+        ));
+        assert!(!expansion_observed_on_storage_for_lane_count(
+            &[],
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID
+        ));
+
         let three_lane_storage = vec![
             (
                 0,
@@ -7614,6 +8393,16 @@ mod tests {
         ];
         assert!(expansion_observed_on_storage_for_lane_count(
             &expanded_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
+            PUBLIC_PROFILE_ELASTIC_LANE_ID
+        ));
+        let partial_expanded_storage = expanded_storage[..3].to_vec();
+        assert!(!expansion_observed_on_storage_for_count(
+            &partial_expanded_storage,
+            PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES
+        ));
+        assert!(!expansion_observed_on_storage_for_lane_count(
+            &partial_expanded_storage,
             PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES,
             PUBLIC_PROFILE_ELASTIC_LANE_ID
         ));

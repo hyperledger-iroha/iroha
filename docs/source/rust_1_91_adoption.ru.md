@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/rust_1_91_adoption.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: db492130c10562ba61a4d30fbc132679cb6d3122436e5095600d191d982ffbf0
+source_hash: ddb57da0813bf7352d7e96de3bdb1628c9b2dad131d8abbd7f3615cb0f72a358
 source_last_modified: "2026-01-04T10:50:53.647206+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -63,13 +63,13 @@ entries.
 
 ## Next steps
 
-1. **Lint sweep** (`TODO: lint sweep`): ✅ Completed — `ci/check_rust_1_91_lints.sh` now runs clean under the stricter lints, and the settlement router tests import `VolatilityBucket` so the sweep covers every crate.
-2. **Strict arithmetic rollout** (`TODO: crypto strict math`): ✅ Completed —
+1. **Lint sweep** (`tracking label: lint sweep`): ✅ Completed — `ci/check_rust_1_91_lints.sh` now runs clean under the stricter lints, and the settlement router tests import `VolatilityBucket` so the sweep covers every crate.
+2. **Strict arithmetic rollout** (`tracking label: crypto strict math`): ✅ Completed —
    executor/trigger/cursor paths were already using `strict_*`, and the relay’s
    adaptive PoW controller now swaps the remaining saturating counters for
    `strict_add`/`strict_sub` so invalid windows or difficulty steps panic
    instead of silently clamping (`tools/soranet-relay/src/dos.rs`).
-3. **Path helpers sweep** (`TODO: path extension helper sweep`): ✅ Completed —
+3. **Path helpers sweep** (`tracking label: path extension helper sweep`): ✅ Completed —
    DA replay cursors, PoR persistence, streaming snapshots, RBC stores, Soranet
    spool files, and the governance publisher atomics now rely on
    `PathBuf::with_added_extension` with regression tests; keep this pattern in

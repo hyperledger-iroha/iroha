@@ -524,6 +524,22 @@ test("native multisig proposal DTO rejects malformed validation-fee metadata", (
     ],
   };
 
+  for (const [fieldName, value] of Object.entries({
+    validationFeePolicyVersion: "7",
+    validationFeePolicyHash: "ab".repeat(32),
+    validationFeeInstructionIndex: "1",
+    validationFeeTransferEntryIndex: "2",
+  })) {
+    assert.throws(
+      () =>
+        noritoEncodeMultisigProposeRequest({
+          ...request,
+          [fieldName]: value,
+        }),
+      /unsupported camelCase validation fee field/,
+    );
+  }
+
   assert.throws(
     () =>
       noritoEncodeMultisigProposeRequest({

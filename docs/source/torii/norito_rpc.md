@@ -196,11 +196,18 @@ The catalogue above captures every handler that extracts or emits `NoritoJson`/`
   binary responses by setting the `Accept` header. Native Norito encoding helpers
   will land with NRPC-3.
 
-### 13. Future Work
+### 13. Delivered Follow-Ups
 
-- Document streaming (`norito-stream`) and relay encapsulation (SNNet-11).
-- Automate OpenAPI-to-Norito fixture generation (`cargo xtask openapi`) to keep
-  the schema catalogue in sync with Torii releases.
+- Norito streaming and relay encapsulation are documented in
+  `docs/source/norito_streaming.md`,
+  `docs/source/norito_streaming_transport_design.md`, and
+  `docs/source/soranet/spec.md`.
+- OpenAPI and Norito fixture automation is available through
+  `cargo xtask openapi`, `cargo xtask norito-rpc-fixtures`, and
+  `cargo xtask norito-rpc-verify`. The canonical payloads and schema hashes
+  live under `fixtures/norito_rpc/`, and
+  `scripts/run_norito_rpc_fixtures.sh` records SDK cadence evidence under
+  `artifacts/norito_rpc/`.
 
 ### 14. Stakeholder Brief & Distribution
 

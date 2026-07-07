@@ -2,6 +2,8 @@ export const KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME =
   "iroha_data_model::isi::offline::KagemushaTransfer";
 export const KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME =
   "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
+export const KAGEMUSHA_TOP_UP_RECURSIVE_INSTRUCTION_WIRE_NAME =
+  "iroha_data_model::isi::offline::TopUpKagemushaRecursive";
 export const KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
 

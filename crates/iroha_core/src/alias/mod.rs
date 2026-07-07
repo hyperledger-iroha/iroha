@@ -11,7 +11,7 @@ use std::{
 };
 
 use iroha_crypto::{
-    HashOf, Signature,
+    HashOf, KeyPair, Signature,
     blake2::{Blake2b512, Digest as _},
 };
 use iroha_data_model::{
@@ -33,12 +33,87 @@ use tracing::{Level, event, instrument};
 use crate::state::WorldReadOnly;
 
 const MOCK_VOPRF_DOMAIN: &[u8] = b"iroha.alias.voprf.mock.v1";
+const ALIAS_ATTESTATION_SIGNATURE_DOMAIN: &[u8] = b"iroha:alias:attestation:v1";
 const MAX_VOPRF_INPUT_BYTES: usize = 4096;
-const PLACEHOLDER_ALIAS_ATTESTATION_SIGNATURE: [u8; 64] = [0xA5; 64];
 
-fn placeholder_alias_attestation_signature() -> Signature {
-    Signature::try_from_bytes(&PLACEHOLDER_ALIAS_ATTESTATION_SIGNATURE)
-        .expect("placeholder alias attestation signature is non-empty and nonzero")
+fn alias_attestation_signature_preimage(record: &AliasRecord, attester: &AccountId) -> Vec<u8> {
+    let attester_bytes = norito::to_bytes(attester).expect("AccountId must encode");
+    let record_hash = HashOf::<AliasRecord>::new(record);
+    let attester_len = u64::try_from(attester_bytes.len()).expect("attester encoding length fits");
+    let mut preimage = Vec::with_capacity(
+        ALIAS_ATTESTATION_SIGNATURE_DOMAIN.len()
+            + std::mem::size_of::<u64>()
+            + attester_bytes.len()
+            + record_hash.as_ref().len(),
+    );
+    preimage.extend_from_slice(ALIAS_ATTESTATION_SIGNATURE_DOMAIN);
+    preimage.extend_from_slice(&attester_len.to_be_bytes());
+    preimage.extend_from_slice(&attester_bytes);
+    preimage.extend_from_slice(record_hash.as_ref());
+    preimage
+}
+
+/// Signer used to attest alias storage updates.
+#[derive(Clone, Debug)]
+pub struct AliasAttester {
+    account_id: AccountId,
+    key_pair: KeyPair,
+}
+
+impl AliasAttester {
+    /// Build an alias attester from a checked key pair.
+    #[must_use]
+    pub fn new(key_pair: KeyPair) -> Self {
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        Self {
+            account_id,
+            key_pair,
+        }
+    }
+
+    /// Account identity that will be recorded as the attester.
+    pub fn account_id(&self) -> &AccountId {
+        &self.account_id
+    }
+
+    fn sign_record(&self, record: &AliasRecord) -> Result<AliasAttestation, AliasError> {
+        let preimage = alias_attestation_signature_preimage(record, &self.account_id);
+        let signature = Signature::try_new(self.key_pair.private_key(), &preimage)
+            .map_err(|err| AliasError::Signing(err.to_string()))?;
+        Ok(AliasAttestation::new(
+            record.alias.clone(),
+            self.account_id.clone(),
+            signature,
+            ALIAS_ATTESTATION_SIGNATURE_DOMAIN.to_vec(),
+        ))
+    }
+}
+
+/// Verify that `attestation` signs the canonical alias-record preimage.
+///
+/// # Errors
+/// Returns [`AliasError::InvalidAttestation`] for mismatched fields, unsupported
+/// attester identities, or signature verification failures.
+pub fn verify_alias_attestation(
+    record: &AliasRecord,
+    attestation: &AliasAttestation,
+) -> Result<(), AliasError> {
+    if attestation.alias != record.alias {
+        return Err(AliasError::InvalidAttestation("alias mismatch"));
+    }
+    if attestation.context != ALIAS_ATTESTATION_SIGNATURE_DOMAIN {
+        return Err(AliasError::InvalidAttestation("unsupported context"));
+    }
+    let Some(public_key) = attestation.attester.try_signatory() else {
+        return Err(AliasError::InvalidAttestation(
+            "attester must use a single signatory",
+        ));
+    };
+    let preimage = alias_attestation_signature_preimage(record, &attestation.attester);
+    attestation
+        .signature
+        .verify(public_key, &preimage)
+        .map_err(|_| AliasError::InvalidAttestation("signature verification failed"))
 }
 
 fn authority_has_permission(
@@ -263,10 +338,11 @@ impl AliasMetricKind {
 }
 
 /// Alias storage backed by a Merkle-friendly map.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct AliasStorage {
     inner: Arc<RwLock<BTreeMap<Name, AliasRecord>>>,
     index: Arc<RwLock<BTreeMap<AliasIndex, Name>>>,
+    attester: AliasAttester,
     metrics: Option<Arc<Metrics>>,
 }
 
@@ -277,22 +353,28 @@ impl fmt::Debug for AliasStorage {
         f.debug_struct("AliasStorage")
             .field("alias_count", &alias_count)
             .field("index_count", &index_count)
+            .field("attester", &self.attester.account_id)
             .field("metrics_attached", &self.metrics.is_some())
             .finish()
     }
 }
 
 impl AliasStorage {
-    /// Create an empty storage instance.
+    /// Create an empty storage instance backed by `attester`.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(attester: AliasAttester) -> Self {
+        Self {
+            inner: Arc::default(),
+            index: Arc::default(),
+            attester,
+            metrics: None,
+        }
     }
 
     /// Create storage wired to the shared telemetry metrics registry.
     #[must_use]
-    pub fn with_metrics(metrics: Arc<Metrics>) -> Self {
-        let mut storage = Self::new();
+    pub fn with_metrics(attester: AliasAttester, metrics: Arc<Metrics>) -> Self {
+        let mut storage = Self::new(attester);
         storage.metrics = Some(metrics);
         storage
     }
@@ -308,9 +390,9 @@ impl AliasStorage {
     /// Returns [`AliasError::Poison`] when the alias or index map lock is poisoned.
     #[instrument(skip(self))]
     pub fn put(&self, record: AliasRecord) -> Result<AliasEvent, AliasError> {
+        let attestation = self.attester.sign_record(&record)?;
         let index = record.index;
         let alias = record.alias.clone();
-        let owner = record.owner.clone();
         {
             let mut by_alias = self
                 .inner
@@ -327,14 +409,7 @@ impl AliasStorage {
         }
         Ok(AliasEvent::Recorded(AliasRecordedEvent {
             record,
-            attestation: AliasAttestation::new(
-                alias,
-                owner,
-                // TODO: Replace this marker with a real signed alias attestation
-                // once the alias attester integration is wired into storage.
-                placeholder_alias_attestation_signature(),
-                Vec::new(),
-            ),
+            attestation,
         }))
     }
 
@@ -434,28 +509,34 @@ pub enum AliasError {
     /// Alias VOPRF input failed validation.
     #[error("alias voprf error: {0}")]
     Voprf(&'static str),
+    /// Alias attestation signing failed.
+    #[error("alias attestation signing failed: {0}")]
+    Signing(String),
+    /// Alias attestation failed verification.
+    #[error("alias attestation invalid: {0}")]
+    InvalidAttestation(&'static str),
 }
 
 /// Helper builder for CLI/SDK wiring. Keeps operations explicit.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AliasService {
     storage: AliasStorage,
 }
 
 impl AliasService {
-    /// Construct service with empty storage.
+    /// Construct service with empty storage backed by `attester`.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(attester: AliasAttester) -> Self {
         Self {
-            storage: AliasStorage::new(),
+            storage: AliasStorage::new(attester),
         }
     }
 
     /// Construct service with metrics instrumentation attached.
     #[must_use]
-    pub fn with_metrics(metrics: Arc<Metrics>) -> Self {
+    pub fn with_metrics(attester: AliasAttester, metrics: Arc<Metrics>) -> Self {
         Self {
-            storage: AliasStorage::with_metrics(metrics),
+            storage: AliasStorage::with_metrics(attester, metrics),
         }
     }
 
@@ -494,6 +575,7 @@ mod tests {
         sync::Arc,
     };
 
+    use iroha_crypto::Algorithm;
     use iroha_data_model::{account::AccountId, alias::AliasIndex, name::Name};
 
     use super::*;
@@ -504,9 +586,24 @@ mod tests {
         AccountId::new(SIGNATORY.parse().expect("public key"))
     }
 
+    fn alias_attester(seed: u8) -> AliasAttester {
+        AliasAttester::new(
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive checked alias attester fixture key"),
+        )
+    }
+
+    fn alias_service() -> AliasService {
+        AliasService::new(alias_attester(0xA1))
+    }
+
+    fn alias_storage() -> AliasStorage {
+        AliasStorage::new(alias_attester(0xA2))
+    }
+
     #[test]
     fn storage_roundtrip() {
-        let service = AliasService::new();
+        let service = alias_service();
         let alias = Name::from_str("alias").expect("valid");
         let record = AliasRecord::new(
             alias.clone(),
@@ -524,6 +621,8 @@ mod tests {
                 let signature = payload.attestation.signature.payload();
                 assert!(!signature.is_empty());
                 assert!(!signature.iter().all(|byte| *byte == 0));
+                verify_alias_attestation(&payload.record, &payload.attestation)
+                    .expect("storage event attestation verifies");
             }
             _ => panic!("unexpected event"),
         }
@@ -543,7 +642,7 @@ mod tests {
 
     #[test]
     fn service_resolve_success() {
-        let service = AliasService::new();
+        let service = alias_service();
         let alias = Name::from_str("alice").expect("valid");
         let target = AliasTarget::Custom(vec![4, 5, 6]);
         let record = AliasRecord::new(alias.clone(), owner(), target.clone(), AliasIndex(2));
@@ -557,7 +656,7 @@ mod tests {
 
     #[test]
     fn put_returns_error_when_alias_lock_poisoned() {
-        let storage = AliasStorage::new();
+        let storage = alias_storage();
         let alias = Name::from_str("alias").expect("valid");
         let record = AliasRecord::new(
             alias.clone(),
@@ -583,7 +682,7 @@ mod tests {
 
     #[test]
     fn put_returns_error_when_index_lock_poisoned() {
-        let storage = AliasStorage::new();
+        let storage = alias_storage();
         let alias = Name::from_str("alias").expect("valid");
         let record = AliasRecord::new(
             alias.clone(),
@@ -616,7 +715,7 @@ mod tests {
 
     #[test]
     fn service_resolve_poisoned_lock() {
-        let service = AliasService::new();
+        let service = alias_service();
         let alias = Name::from_str("bob").expect("valid");
 
         let _ = catch_unwind(AssertUnwindSafe(|| {
@@ -634,7 +733,7 @@ mod tests {
 
     #[test]
     fn voprf_evaluate_matches_helper() {
-        let storage = AliasStorage::new();
+        let storage = alias_storage();
         let blinded = b"deadbeef";
         let expected = evaluate_alias_voprf(blinded).expect("evaluates");
         assert_eq!(
@@ -645,7 +744,7 @@ mod tests {
     #[test]
     fn emit_metrics_records_usage_counter() {
         let metrics = Arc::new(Metrics::default());
-        let storage = AliasStorage::with_metrics(Arc::clone(&metrics));
+        let storage = AliasStorage::with_metrics(alias_attester(0xA3), Arc::clone(&metrics));
         let alias = Name::from_str("usage").expect("valid");
 
         storage.emit_metrics(&alias, "global", AliasMetricKind::Resolve);
@@ -655,5 +754,30 @@ mod tests {
             .with_label_values(&["global", AliasMetricKind::Resolve.as_label()])
             .get();
         assert_eq!(counter, 1);
+    }
+
+    #[test]
+    fn verify_alias_attestation_rejects_tampered_record() {
+        let storage = alias_storage();
+        let alias = Name::from_str("signedalias").expect("valid");
+        let record = AliasRecord::new(
+            alias,
+            owner(),
+            AliasTarget::Custom(vec![1, 2, 3]),
+            AliasIndex(9),
+        );
+        let AliasEvent::Recorded(event) = storage.put(record).expect("put signs") else {
+            panic!("unexpected event");
+        };
+        verify_alias_attestation(&event.record, &event.attestation).expect("valid attestation");
+
+        let mut tampered = event.record.clone();
+        tampered.index = AliasIndex(10);
+        let err = verify_alias_attestation(&tampered, &event.attestation)
+            .expect_err("tampered record must not verify");
+        assert!(matches!(
+            err,
+            AliasError::InvalidAttestation("signature verification failed")
+        ));
     }
 }

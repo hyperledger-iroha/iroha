@@ -8376,8 +8376,8 @@ pub struct SccpRouteManifest {
     pub route_id: String,
     /// Stable asset key within the route.
     pub asset_key: String,
-    /// TRON network key, for example `mainnet` or `nile`.
-    pub tron_network: String,
+    /// Route network key, for example `mainnet`, `testnet`, or `bsc-testnet`.
+    pub network: String,
     /// Canonical counterparty chain key.
     pub chain: String,
     /// CAIP-compatible TRON chain id hex.
@@ -8398,16 +8398,16 @@ pub struct SccpRouteManifest {
     pub production_ready: bool,
     /// Disabled reason surfaced when the route is not production-ready.
     pub disabled_reason: Option<String>,
-    /// Hex-encoded TRON destination network id used in destination binding evidence.
+    /// Hex-encoded destination network id used in destination binding evidence.
     pub network_id_hex: String,
-    /// TRON TairaXOR token contract address.
+    /// Counterparty TairaXOR token contract address.
     pub taira_xor_token_address: String,
-    /// TRON TairaXOR bridge contract address.
+    /// Counterparty TairaXOR bridge contract address.
     pub taira_xor_bridge_address: String,
-    /// SCCP source bridge contract address. The field name is legacy-compatible.
-    pub sccp_tron_source_bridge_address: String,
-    /// Destination verifier contract address. The field name is legacy-compatible.
-    pub tron_verifier_address: String,
+    /// SCCP source bridge contract address.
+    pub source_bridge_address: String,
+    /// Destination verifier contract address.
+    pub destination_verifier_address: String,
     /// TON verifier internal message value in nanoTON.
     pub ton_finalize_message_value_nano: Option<String>,
     /// Hex-encoded verifier code digest.

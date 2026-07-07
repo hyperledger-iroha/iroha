@@ -235,8 +235,8 @@ default phases trigger separate policy thresholds (`dashboards/alerts/soranet_ha
 ### Guardrail reminders
 
 - Reference `docs/source/ops/soranet_transport_rollback.md` whenever a demotion
-  occurs and log any temporary mitigation as a `TODO:` item in the rollout
-  tracker for follow-up work.
+  occurs and log any temporary mitigation as a follow-up item in the rollout
+  tracker.
 - Keep `dashboards/alerts/soranet_handshake_rules.yml` and
   `dashboards/alerts/soranet_privacy_rules.yml` under `promtool test rules`
   coverage before and after a rollback so alert drift is documented alongside

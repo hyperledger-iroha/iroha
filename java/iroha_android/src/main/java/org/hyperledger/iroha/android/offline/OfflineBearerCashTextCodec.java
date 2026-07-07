@@ -69,7 +69,11 @@ public final class OfflineBearerCashTextCodec {
     if (!text.startsWith(prefix)) {
       return false;
     }
-    final String payload = text.substring(prefix.length());
+    String payload = text.substring(prefix.length());
+    if (PAYMENT_TEXT_PREFIX.equals(prefix)
+        && payload.startsWith(OfflineNotePaymentTokenCodec.COMPACT_TEXT_MARKER)) {
+      payload = payload.substring(OfflineNotePaymentTokenCodec.COMPACT_TEXT_MARKER.length());
+    }
     if (payload.isEmpty() || !payload.trim().equals(payload) || payload.indexOf('=') >= 0) {
       return false;
     }

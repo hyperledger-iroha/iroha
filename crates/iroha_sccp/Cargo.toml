@@ -9,8 +9,7 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["std", "bls"]
-std = []
+default = ["bls"]
 bls = ["iroha_crypto/bls"]
 test-fixtures = []
 

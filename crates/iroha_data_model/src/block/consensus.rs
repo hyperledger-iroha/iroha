@@ -947,6 +947,8 @@ struct LaneBlockProposalPreimage {
     rbc_instance_hash: Hash,
     candidate_indices: Vec<u64>,
     candidate_hashes: Vec<Hash>,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<PeerId>>,
     validator_set: Vec<PeerId>,
     validator_count: u32,
     min_quorum: u32,
@@ -1019,6 +1021,8 @@ impl LaneBlockDescriptorV1 {
                 rbc_instance_hash: self.rbc_instance_hash,
                 candidate_indices: self.accepted_candidate_indices.clone(),
                 candidate_hashes: self.accepted_transaction_hashes.clone(),
+                validator_set_hash_version: self.validator_set_hash_version,
+                validator_set_hash: self.validator_set_hash,
                 validator_set: self.validator_set.clone(),
                 validator_count: self.validator_count,
                 min_quorum: self.min_quorum,
@@ -1067,6 +1071,8 @@ impl LaneBlockProposalV1 {
                 rbc_instance_hash: descriptor.rbc_instance_hash,
                 candidate_indices: descriptor.accepted_candidate_indices.clone(),
                 candidate_hashes: descriptor.accepted_transaction_hashes.clone(),
+                validator_set_hash_version: descriptor.validator_set_hash_version,
+                validator_set_hash: descriptor.validator_set_hash,
                 validator_set: descriptor.validator_set.clone(),
                 validator_count: descriptor.validator_count,
                 min_quorum: descriptor.min_quorum,
@@ -1230,6 +1236,8 @@ struct LaneBlockDescriptorPreimage {
     rbc_instance_hash: Hash,
     candidate_indices: Vec<u64>,
     candidate_hashes: Vec<Hash>,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<PeerId>>,
     validator_set: Vec<PeerId>,
     validator_count: u32,
     min_quorum: u32,
@@ -1461,6 +1469,8 @@ impl SumeragiLanePayloadOwnership {
                 rbc_instance_hash,
                 candidate_indices: self.accepted_candidate_indices.clone(),
                 candidate_hashes: self.accepted_transaction_hashes.clone(),
+                validator_set_hash_version: crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&self.lane_block_descriptor_validator_set),
                 validator_set: self.lane_block_descriptor_validator_set.clone(),
                 validator_count: self.lane_block_descriptor_validator_count,
                 min_quorum: self.lane_block_descriptor_min_quorum,
@@ -4287,6 +4297,10 @@ mod tests {
         proposal
     }
 
+    fn refresh_lane_block_descriptor_hash(proposal: &mut LaneBlockProposalV1) {
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+    }
+
     #[test]
     fn lane_block_vote_body_signature_preimage_binds_phase_and_descriptor() {
         let body = sample_lane_block_vote_body(CertPhase::Prepare);
@@ -4310,6 +4324,88 @@ mod tests {
             descriptor_drift.signature_preimage(),
             "descriptor drift must change the lane vote preimage"
         );
+    }
+
+    #[test]
+    fn lane_block_vote_body_signature_preimage_binds_replay_and_quorum_fields() {
+        let body = sample_lane_block_vote_body(CertPhase::Prepare);
+        let preimage = body.signature_preimage();
+
+        let mut cases = Vec::<(&str, LaneBlockVoteBodyV1)>::new();
+
+        let mut lane_drift = body.clone();
+        lane_drift.lane_id = LaneId::new(8);
+        cases.push(("lane id", lane_drift));
+
+        let mut dataspace_drift = body.clone();
+        dataspace_drift.dataspace_id = DataSpaceId::new(12);
+        cases.push(("dataspace id", dataspace_drift));
+
+        let mut height_drift = body.clone();
+        height_drift.lane_block_height = height_drift.lane_block_height.saturating_add(1);
+        cases.push(("lane block height", height_drift));
+
+        let mut view_drift = body.clone();
+        view_drift.lane_block_view = view_drift.lane_block_view.saturating_add(1);
+        cases.push(("lane block view", view_drift));
+
+        let mut proposal_drift = body.clone();
+        proposal_drift.proposal_hash = Hash::prehashed([0x31; Hash::LENGTH]);
+        cases.push(("proposal hash", proposal_drift));
+
+        let mut subject_drift = body.clone();
+        subject_drift.subject_hash = Hash::prehashed([0x32; Hash::LENGTH]);
+        cases.push(("subject hash", subject_drift));
+
+        let mut ownership_drift = body.clone();
+        ownership_drift.payload_ownership_hash = Hash::prehashed([0x33; Hash::LENGTH]);
+        cases.push(("payload ownership hash", ownership_drift));
+
+        let mut rbc_drift = body.clone();
+        rbc_drift.rbc_instance_hash = Hash::prehashed([0x34; Hash::LENGTH]);
+        cases.push(("rbc instance hash", rbc_drift));
+
+        let mut candidate_indices_drift = body.clone();
+        candidate_indices_drift.accepted_candidate_indices.reverse();
+        cases.push(("accepted candidate indices", candidate_indices_drift));
+
+        let mut transaction_hashes_drift = body.clone();
+        transaction_hashes_drift
+            .accepted_transaction_hashes
+            .reverse();
+        cases.push(("accepted transaction hashes", transaction_hashes_drift));
+
+        let mut validator_hash_version_drift = body.clone();
+        validator_hash_version_drift.validator_set_hash_version = validator_hash_version_drift
+            .validator_set_hash_version
+            .saturating_add(1);
+        cases.push(("validator set hash version", validator_hash_version_drift));
+
+        let mut validator_hash_drift = body.clone();
+        validator_hash_drift.validator_set_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x35; Hash::LENGTH]));
+        cases.push(("validator set hash", validator_hash_drift));
+
+        let mut validator_count_drift = body.clone();
+        validator_count_drift.validator_count =
+            validator_count_drift.validator_count.saturating_add(1);
+        cases.push(("validator count", validator_count_drift));
+
+        let mut quorum_drift = body.clone();
+        quorum_drift.min_quorum = quorum_drift.min_quorum.saturating_sub(1);
+        cases.push(("minimum quorum", quorum_drift));
+
+        let mut qc_mode_drift = body.clone();
+        qc_mode_drift.qc_mode_tag.push_str(":drift");
+        cases.push(("qc mode tag", qc_mode_drift));
+
+        for (label, drifted) in cases {
+            assert_ne!(
+                preimage,
+                drifted.signature_preimage(),
+                "{label} drift must change the lane vote preimage"
+            );
+        }
     }
 
     #[test]
@@ -4339,6 +4435,221 @@ mod tests {
             proposal.descriptor.descriptor_hash,
             "committee order drift must change descriptor identity"
         );
+    }
+
+    #[test]
+    fn lane_block_descriptor_hash_binds_replay_and_quorum_fields() {
+        let descriptor = sample_lane_block_proposal().descriptor;
+        let mut cases = Vec::<(&str, LaneBlockDescriptorV1)>::new();
+
+        let mut lane_drift = descriptor.clone();
+        lane_drift.lane_id = LaneId::new(8);
+        cases.push(("lane id", lane_drift));
+
+        let mut dataspace_drift = descriptor.clone();
+        dataspace_drift.dataspace_id = DataSpaceId::new(12);
+        cases.push(("dataspace id", dataspace_drift));
+
+        let mut previous_height_drift = descriptor.clone();
+        previous_height_drift.previous_lane_block_height = previous_height_drift
+            .previous_lane_block_height
+            .saturating_sub(1);
+        cases.push(("previous lane block height", previous_height_drift));
+
+        let mut predecessor_drift = descriptor.clone();
+        predecessor_drift.previous_lane_block_descriptor_hash = None;
+        cases.push(("previous descriptor hash", predecessor_drift));
+
+        let mut height_drift = descriptor.clone();
+        height_drift.lane_block_height = height_drift.lane_block_height.saturating_add(1);
+        cases.push(("lane block height", height_drift));
+
+        let mut view_drift = descriptor.clone();
+        view_drift.lane_block_view = view_drift.lane_block_view.saturating_add(1);
+        cases.push(("lane block view", view_drift));
+
+        let mut subject_drift = descriptor.clone();
+        subject_drift.subject_hash = Hash::prehashed([0x31; Hash::LENGTH]);
+        cases.push(("subject hash", subject_drift));
+
+        let mut ownership_drift = descriptor.clone();
+        ownership_drift.payload_ownership_hash = Hash::prehashed([0x32; Hash::LENGTH]);
+        cases.push(("payload ownership hash", ownership_drift));
+
+        let mut rbc_drift = descriptor.clone();
+        rbc_drift.rbc_instance_hash = Hash::prehashed([0x33; Hash::LENGTH]);
+        cases.push(("rbc instance hash", rbc_drift));
+
+        let mut candidate_indices_drift = descriptor.clone();
+        candidate_indices_drift.accepted_candidate_indices.reverse();
+        cases.push(("accepted candidate indices", candidate_indices_drift));
+
+        let mut transaction_hashes_drift = descriptor.clone();
+        transaction_hashes_drift
+            .accepted_transaction_hashes
+            .reverse();
+        cases.push(("accepted transaction hashes", transaction_hashes_drift));
+
+        let mut validator_hash_version_drift = descriptor.clone();
+        validator_hash_version_drift.validator_set_hash_version = validator_hash_version_drift
+            .validator_set_hash_version
+            .saturating_add(1);
+        cases.push(("validator set hash version", validator_hash_version_drift));
+
+        let mut validator_hash_drift = descriptor.clone();
+        validator_hash_drift.validator_set_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x34; Hash::LENGTH]));
+        cases.push(("validator set hash", validator_hash_drift));
+
+        let mut validator_set_drift = descriptor.clone();
+        validator_set_drift.validator_set.reverse();
+        cases.push(("validator set order", validator_set_drift));
+
+        let mut validator_count_drift = descriptor.clone();
+        validator_count_drift.validator_count =
+            validator_count_drift.validator_count.saturating_add(1);
+        cases.push(("validator count", validator_count_drift));
+
+        let mut quorum_drift = descriptor.clone();
+        quorum_drift.min_quorum = quorum_drift.min_quorum.saturating_sub(1);
+        cases.push(("minimum quorum", quorum_drift));
+
+        let mut qc_mode_drift = descriptor.clone();
+        qc_mode_drift.qc_mode_tag.push_str(":drift");
+        cases.push(("qc mode tag", qc_mode_drift));
+
+        for (label, drifted) in cases {
+            assert_ne!(
+                drifted.computed_descriptor_hash(),
+                descriptor.descriptor_hash,
+                "{label} drift must change descriptor identity"
+            );
+        }
+    }
+
+    #[test]
+    fn lane_block_proposal_hash_binds_descriptor_replay_and_quorum_fields() {
+        let proposal = sample_lane_block_proposal();
+        let mut cases = Vec::<(&str, LaneBlockProposalV1)>::new();
+
+        let mut descriptor_hash_drift = proposal.clone();
+        descriptor_hash_drift.descriptor.descriptor_hash = Hash::prehashed([0x31; Hash::LENGTH]);
+        cases.push(("descriptor hash", descriptor_hash_drift));
+
+        let mut lane_drift = proposal.clone();
+        lane_drift.descriptor.lane_id = LaneId::new(8);
+        refresh_lane_block_descriptor_hash(&mut lane_drift);
+        cases.push(("lane id", lane_drift));
+
+        let mut dataspace_drift = proposal.clone();
+        dataspace_drift.descriptor.dataspace_id = DataSpaceId::new(12);
+        refresh_lane_block_descriptor_hash(&mut dataspace_drift);
+        cases.push(("dataspace id", dataspace_drift));
+
+        let mut previous_height_drift = proposal.clone();
+        previous_height_drift.descriptor.previous_lane_block_height = previous_height_drift
+            .descriptor
+            .previous_lane_block_height
+            .saturating_sub(1);
+        refresh_lane_block_descriptor_hash(&mut previous_height_drift);
+        cases.push(("previous lane block height", previous_height_drift));
+
+        let mut predecessor_drift = proposal.clone();
+        predecessor_drift
+            .descriptor
+            .previous_lane_block_descriptor_hash = None;
+        refresh_lane_block_descriptor_hash(&mut predecessor_drift);
+        cases.push(("previous descriptor hash", predecessor_drift));
+
+        let mut height_drift = proposal.clone();
+        height_drift.descriptor.lane_block_height =
+            height_drift.descriptor.lane_block_height.saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut height_drift);
+        cases.push(("lane block height", height_drift));
+
+        let mut view_drift = proposal.clone();
+        view_drift.descriptor.lane_block_view =
+            view_drift.descriptor.lane_block_view.saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut view_drift);
+        cases.push(("lane block view", view_drift));
+
+        let mut subject_drift = proposal.clone();
+        subject_drift.descriptor.subject_hash = Hash::prehashed([0x32; Hash::LENGTH]);
+        refresh_lane_block_descriptor_hash(&mut subject_drift);
+        cases.push(("subject hash", subject_drift));
+
+        let mut ownership_drift = proposal.clone();
+        ownership_drift.descriptor.payload_ownership_hash = Hash::prehashed([0x33; Hash::LENGTH]);
+        refresh_lane_block_descriptor_hash(&mut ownership_drift);
+        cases.push(("payload ownership hash", ownership_drift));
+
+        let mut rbc_drift = proposal.clone();
+        rbc_drift.descriptor.rbc_instance_hash = Hash::prehashed([0x34; Hash::LENGTH]);
+        refresh_lane_block_descriptor_hash(&mut rbc_drift);
+        cases.push(("rbc instance hash", rbc_drift));
+
+        let mut candidate_indices_drift = proposal.clone();
+        candidate_indices_drift
+            .descriptor
+            .accepted_candidate_indices
+            .reverse();
+        refresh_lane_block_descriptor_hash(&mut candidate_indices_drift);
+        cases.push(("accepted candidate indices", candidate_indices_drift));
+
+        let mut transaction_hashes_drift = proposal.clone();
+        transaction_hashes_drift
+            .descriptor
+            .accepted_transaction_hashes
+            .reverse();
+        refresh_lane_block_descriptor_hash(&mut transaction_hashes_drift);
+        cases.push(("accepted transaction hashes", transaction_hashes_drift));
+
+        let mut validator_hash_version_drift = proposal.clone();
+        validator_hash_version_drift
+            .descriptor
+            .validator_set_hash_version = validator_hash_version_drift
+            .descriptor
+            .validator_set_hash_version
+            .saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut validator_hash_version_drift);
+        cases.push(("validator set hash version", validator_hash_version_drift));
+
+        let mut validator_hash_drift = proposal.clone();
+        validator_hash_drift.descriptor.validator_set_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0x35; Hash::LENGTH]));
+        refresh_lane_block_descriptor_hash(&mut validator_hash_drift);
+        cases.push(("validator set hash", validator_hash_drift));
+
+        let mut validator_set_drift = proposal.clone();
+        validator_set_drift.descriptor.validator_set.reverse();
+        refresh_lane_block_descriptor_hash(&mut validator_set_drift);
+        cases.push(("validator set order", validator_set_drift));
+
+        let mut validator_count_drift = proposal.clone();
+        validator_count_drift.descriptor.validator_count = validator_count_drift
+            .descriptor
+            .validator_count
+            .saturating_add(1);
+        refresh_lane_block_descriptor_hash(&mut validator_count_drift);
+        cases.push(("validator count", validator_count_drift));
+
+        let mut quorum_drift = proposal.clone();
+        quorum_drift.descriptor.min_quorum = quorum_drift.descriptor.min_quorum.saturating_sub(1);
+        refresh_lane_block_descriptor_hash(&mut quorum_drift);
+        cases.push(("minimum quorum", quorum_drift));
+
+        let mut qc_mode_drift = proposal.clone();
+        qc_mode_drift.descriptor.qc_mode_tag.push_str(":drift");
+        refresh_lane_block_descriptor_hash(&mut qc_mode_drift);
+        cases.push(("qc mode tag", qc_mode_drift));
+
+        for (label, drifted) in cases {
+            assert_ne!(
+                drifted.computed_proposal_hash(),
+                proposal.proposal_hash,
+                "{label} drift must change proposal identity"
+            );
+        }
     }
 
     #[test]

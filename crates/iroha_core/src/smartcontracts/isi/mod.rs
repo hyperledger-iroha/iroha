@@ -203,6 +203,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemOfflineNote>,
     dispatch_instruction::<iroha_data_model::isi::offline::AuditOfflineNote>,
     dispatch_instruction::<iroha_data_model::isi::offline::KagemushaTransfer>,
+    dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>,
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>,
     dispatch_instruction::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>,
@@ -1469,6 +1470,7 @@ mod tests {
         let block_header = valid_block.as_ref().header().clone();
         let mut state_block = state.block(block_header.clone());
         let mut state_transaction = state_block.transaction();
+        state_transaction.nexus.enabled = false;
 
         let manifest_root = [0x42; 32];
         let envelope = sample_lane_relay_envelope(

@@ -6079,37 +6079,44 @@ fn kagemusha_recursive_spend_init_py(
     )
 }
 
-fn kagemusha_recursive_spend_topup_instruction_from_init_request(
-    request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1,
-) -> Result<iroha_data_model::isi::offline::KagemushaTransfer, String> {
+fn kagemusha_recursive_spend_topup_instruction_from_request(
+    request: iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV1,
+) -> Result<iroha_data_model::isi::offline::TopUpKagemushaRecursive, String> {
     use iroha_core::zk::{
         kagemusha_verified_folded_public_inputs_from_record_bundle,
         kagemusha_verified_folded_public_inputs_from_record_bundle_at_height,
     };
 
-    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)
-        .map_err(|err| err.to_string())?;
+    ensure_kagemusha_recursive_spend_pallas_archive(
+        &request.init_request.pallas_open_envelopes_archive,
+    )
+    .map_err(|err| err.to_string())?;
     request
         .validate_public_binding()
         .map_err(|err| err.to_string())?;
-    let _public_inputs = match request.block_height {
+    let _public_inputs = match request.init_request.block_height {
         Some(block_height) => kagemusha_verified_folded_public_inputs_from_record_bundle_at_height(
-            &request.record_bundle,
+            &request.init_request.record_bundle,
             block_height,
         ),
-        None => kagemusha_verified_folded_public_inputs_from_record_bundle(&request.record_bundle),
+        None => kagemusha_verified_folded_public_inputs_from_record_bundle(
+            &request.init_request.record_bundle,
+        ),
     }
     .map_err(|err| err.to_string())?;
-    let step = request.record_bundle.bundle.steps.first().ok_or_else(|| {
-        "Kagemusha recursive spend top-up init request has no fold steps".to_owned()
-    })?;
-    Ok(iroha_data_model::isi::offline::KagemushaTransfer::new(
-        request.record_bundle.bundle.asset.clone(),
-        step.input_nullifiers.clone(),
-        step.output_commitments.clone(),
-        step.attachment.clone(),
-        Some(step.root_before),
-    ))
+    if request.init_request.record_bundle.bundle.steps.len() != 1 {
+        return Err(
+            "Kagemusha recursive top-up init request must contain exactly one checked hop"
+                .to_owned(),
+        );
+    }
+    Ok(
+        iroha_data_model::isi::offline::TopUpKagemushaRecursive::new(
+            request.asset,
+            request.amount,
+            request.init_request,
+        ),
+    )
 }
 
 #[pyfunction]
@@ -6118,10 +6125,10 @@ fn kagemusha_recursive_spend_topup_py(
     py: Python<'_>,
     request_archive: &[u8],
 ) -> PyResult<Py<PyBytes>> {
-    let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
+    let request: iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV1 =
         decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend top-up")?;
-    let instruction = kagemusha_recursive_spend_topup_instruction_from_init_request(request)
-        .map_err(|err| {
+    let instruction =
+        kagemusha_recursive_spend_topup_instruction_from_request(request).map_err(|err| {
             PyValueError::new_err(format!(
                 "invalid Kagemusha recursive spend top-up request: {err}"
             ))
@@ -18811,8 +18818,17 @@ fn kagemusha_instruction_archive_box(
                 })?;
             Ok(InstructionBox::from(instruction))
         }
+        "TopUpKagemushaRecursive" => {
+            let instruction: iroha_data_model::isi::offline::TopUpKagemushaRecursive =
+                decode_from_bytes(instruction_archive).map_err(|err| {
+                    PyValueError::new_err(format!(
+                        "invalid TopUpKagemushaRecursive instruction archive: {err}"
+                    ))
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
         other => Err(PyValueError::new_err(format!(
-            "unsupported Kagemusha instruction archive type `{other}`; expected KagemushaTransfer or RedeemKagemushaRecursive"
+            "unsupported Kagemusha instruction archive type `{other}`; expected KagemushaTransfer, RedeemKagemushaRecursive, or TopUpKagemushaRecursive"
         ))),
     }
 }
