@@ -1117,32 +1117,44 @@ const immutableTonProofResult = ({
 
 const writeU8 = (target, value) => {
   const out = new Uint8Array(1);
-  out[0] = value;
+  out[0] = Number(normalizeUnsignedBigIntMax(value, "u8", 255n, "u8"));
   return concatBytes(target, out);
 };
 
 const writeU16Le = (target, value) => {
   const out = new Uint8Array(2);
-  new DataView(out.buffer).setUint16(0, Number(value), true);
+  new DataView(out.buffer).setUint16(
+    0,
+    Number(normalizeUnsignedBigIntMax(value, "u16", 65535n, "u16")),
+    true,
+  );
   return concatBytes(target, out);
 };
 
 const writeU32Le = (target, value) => {
   const out = new Uint8Array(4);
-  new DataView(out.buffer).setUint32(0, Number(value), true);
+  new DataView(out.buffer).setUint32(
+    0,
+    Number(normalizeUnsignedBigIntMax(value, "u32", 4294967295n, "u32")),
+    true,
+  );
   return concatBytes(target, out);
 };
 
 const writeI32Le = (target, value) => {
   const out = new Uint8Array(4);
-  new DataView(out.buffer).setInt32(0, Number(value), true);
+  new DataView(out.buffer).setInt32(0, normalizeSignedI32(value, "i32"), true);
   return concatBytes(target, out);
 };
 
 const writeU64Le = (target, value) => {
   const out = new Uint8Array(8);
   const view = new DataView(out.buffer);
-  view.setBigUint64(0, normalizeUnsignedBigInt(value, "u64"), true);
+  view.setBigUint64(
+    0,
+    normalizeUnsignedBigIntMax(value, "u64", SCCP_U64_MAX, "u64"),
+    true,
+  );
   return concatBytes(target, out);
 };
 
@@ -1185,13 +1197,21 @@ const readU64LeAt = (bytes, offset, label) => {
 
 const writeU16Be = (target, value) => {
   const out = new Uint8Array(2);
-  new DataView(out.buffer).setUint16(0, Number(value), false);
+  new DataView(out.buffer).setUint16(
+    0,
+    Number(normalizeUnsignedBigIntMax(value, "u16", 65535n, "u16")),
+    false,
+  );
   return concatBytes(target, out);
 };
 
 const writeU32Be = (target, value) => {
   const out = new Uint8Array(4);
-  new DataView(out.buffer).setUint32(0, Number(value), false);
+  new DataView(out.buffer).setUint32(
+    0,
+    Number(normalizeUnsignedBigIntMax(value, "u32", 4294967295n, "u32")),
+    false,
+  );
   return concatBytes(target, out);
 };
 
@@ -1199,7 +1219,7 @@ const writeU64Be = (target, value) => {
   const out = new Uint8Array(8);
   new DataView(out.buffer).setBigUint64(
     0,
-    normalizeUnsignedBigInt(value, "u64"),
+    normalizeUnsignedBigIntMax(value, "u64", SCCP_U64_MAX, "u64"),
     false,
   );
   return concatBytes(target, out);
@@ -1237,7 +1257,7 @@ const abiWordU64 = (value, label = "u64") => {
   const out = new Uint8Array(32);
   new DataView(out.buffer).setBigUint64(
     24,
-    normalizeUnsignedBigInt(value, label),
+    normalizeUnsignedBigIntMax(value, label, SCCP_U64_MAX, "u64"),
     false,
   );
   return out;
@@ -6094,7 +6114,7 @@ const normalizeSccpMessageTransparentPublicInputs = (input) => {
     ),
     "publicInputs.targetDomain",
   );
-  const finalityHeight = normalizeUnsignedBigInt(
+  const finalityHeight = normalizeUnsignedBigIntMax(
     strictResultField(
       input,
       "publicInputs.finalityHeight",
@@ -6102,6 +6122,8 @@ const normalizeSccpMessageTransparentPublicInputs = (input) => {
       "finality_height",
     ),
     "publicInputs.finalityHeight",
+    SCCP_U64_MAX,
+    "u64",
   );
   if (finalityHeight === 0n) {
     throw new RangeError("publicInputs.finalityHeight must not be zero");
@@ -22659,7 +22681,7 @@ const sszU64Chunk = (value, label = "u64") => {
   const out = new Uint8Array(32);
   new DataView(out.buffer).setBigUint64(
     0,
-    normalizeUnsignedBigInt(value, label),
+    normalizeUnsignedBigIntMax(value, label, SCCP_U64_MAX, "u64"),
     true,
   );
   return out;
@@ -23895,9 +23917,11 @@ export function canonicalBscValidatorSetPayloadBytes(input) {
       throw new RangeError(`validatorAddresses[${index}] must be unique`);
     }
     seenAddresses.add(addressHex);
-    const power = normalizeUnsignedBigInt(
+    const power = normalizeUnsignedBigIntMax(
       validatorPowers[index],
       `validatorPowers[${index}]`,
+      SCCP_U64_MAX,
+      "u64",
     );
     if (power === 0n) {
       throw new RangeError(`validatorPowers[${index}] must not be zero`);
@@ -24126,7 +24150,12 @@ const canonicalBscValidatorSetPayloadBytesFromAddressPowerBytes = (
       throw new RangeError(`validatorAddresses[${index}] must be unique`);
     }
     seenAddresses.add(addressHex);
-    const power = validatorPowers[index];
+    const power = normalizeUnsignedBigIntMax(
+      validatorPowers[index],
+      `validatorPowers[${index}]`,
+      SCCP_U64_MAX,
+      "u64",
+    );
     if (power === 0n) {
       throw new RangeError(`validatorPowers[${index}] must not be zero`);
     }
@@ -24171,13 +24200,17 @@ export function canonicalBscCommitSealBytes(input) {
     RangeError,
     "version",
   );
-  const totalPower = normalizeUnsignedBigInt(
+  const totalPower = normalizeUnsignedBigIntMax(
     strictResultField(input, "totalPower", "totalPower", "total_power"),
     "totalPower",
+    SCCP_U64_MAX,
+    "u64",
   );
-  const signedPower = normalizeUnsignedBigInt(
+  const signedPower = normalizeUnsignedBigIntMax(
     strictResultField(input, "signedPower", "signedPower", "signed_power"),
     "signedPower",
+    SCCP_U64_MAX,
+    "u64",
   );
   const commitMessageHash = nonZeroHex32Bytes(
     strictResultField(
@@ -24233,9 +24266,11 @@ export function canonicalBscCommitSealBytes(input) {
     seenAddresses.add(addressHex);
     validatorAddresses.push(address);
     validatorPowers.push(
-      normalizeUnsignedBigInt(
+      normalizeUnsignedBigIntMax(
         validatorPowersInput[index],
         `validatorPowers[${index}]`,
+        SCCP_U64_MAX,
+        "u64",
       ),
     );
   });
@@ -37001,9 +37036,11 @@ const readBscSourceValidatorPowers = (input, validatorCount, fallbackPower) => {
   }
   return Object.freeze(
     selected.map((power, index) => {
-      const normalized = normalizeUnsignedBigInt(
+      const normalized = normalizeUnsignedBigIntMax(
         power,
         `sourceValidatorPowers[${index}]`,
+        SCCP_U64_MAX,
+        "u64",
       );
       if (normalized === 0n) {
         throw new RangeError(`sourceValidatorPowers[${index}] must not be zero`);
@@ -37024,10 +37061,18 @@ const bscAllSignersBitmap = (validatorCount) => {
 const bscValidatorSetFromPrivateKeys = (privateKeys, validatorPowers) => {
   const validatorPublicKeys = [];
   const validatorAddresses = [];
+  const seenValidatorAddresses = new Set();
   for (const [index, privateKey] of privateKeys.entries()) {
     const publicKey = secp256k1.getPublicKey(privateKey, true);
     const fullPublicKey = secp256k1.getPublicKey(privateKey, false);
     const validatorAddress = keccak_256(fullPublicKey.slice(1)).slice(12);
+    const validatorAddressHex = bytesToHex(validatorAddress);
+    if (seenValidatorAddresses.has(validatorAddressHex)) {
+      throw new TypeError(
+        "sourceValidatorPrivateKeys must not contain duplicate validator addresses",
+      );
+    }
+    seenValidatorAddresses.add(validatorAddressHex);
     validatorPublicKeys.push(publicKey);
     validatorAddresses.push(validatorAddress);
     if (!secp256k1.utils.isValidPrivateKey(privateKey)) {
@@ -37059,6 +37104,9 @@ const bscCommitSealFromPrivateKeys = ({
     (sum, power) => sum + power,
     0n,
   );
+  if (totalPower > SCCP_U64_MAX) {
+    throw new RangeError("sourceValidatorPowers total must fit u64");
+  }
   const signedPower = totalPower;
   return Object.freeze({
     version: 1,
@@ -37096,10 +37144,16 @@ export function buildBscSourceChainProofEnvelope(input) {
     throw new TypeError("BSC source-chain proof input must be an object");
   }
   const privateKeys = readBscSourceValidatorPrivateKeys(input, true);
-  return buildBscSourceChainProofEnvelopeWithValidators({
+  const normalizedPrivateKeyInput = {
     ...input,
     sourceValidatorPrivateKeys: privateKeys,
-  });
+  };
+  delete normalizedPrivateKeyInput.source_validator_private_keys;
+  delete normalizedPrivateKeyInput.validatorPrivateKeys;
+  delete normalizedPrivateKeyInput.validator_private_keys;
+  delete normalizedPrivateKeyInput.privateKeys;
+  delete normalizedPrivateKeyInput.private_keys;
+  return buildBscSourceChainProofEnvelopeWithValidators(normalizedPrivateKeyInput);
 }
 
 function buildBscSourceChainProofEnvelopeWithValidators(input) {

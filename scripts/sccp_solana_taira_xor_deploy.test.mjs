@@ -940,6 +940,39 @@ test("Solana route-manifest CLI rejects output path collisions with inputs", asy
       /--output must not be the same path as --evidence/u,
     );
     assert.equal(await readFile(evidencePath, "utf8"), evidenceText);
+
+    const linkedInputDir = join(dir, "linked-inputs");
+    await symlink(dir, linkedInputDir);
+
+    await assert.rejects(
+      () =>
+        main([
+          "route-manifest",
+          "--template",
+          templatePath,
+          "--evidence",
+          evidencePath,
+          "--output",
+          join(linkedInputDir, "template.json"),
+        ]),
+      /--output must not be the same path as --template/u,
+    );
+    assert.equal(await readFile(templatePath, "utf8"), templateText);
+
+    await assert.rejects(
+      () =>
+        main([
+          "route-manifest",
+          "--template",
+          templatePath,
+          "--evidence",
+          evidencePath,
+          "--output",
+          join(linkedInputDir, "evidence.json"),
+        ]),
+      /--output must not be the same path as --evidence/u,
+    );
+    assert.equal(await readFile(evidencePath, "utf8"), evidenceText);
   });
 });
 
@@ -1182,6 +1215,22 @@ test("Solana propose-route-manifest CLI rejects output path collisions with mani
       /--output must not be the same path as --manifest/u,
     );
     assert.equal(await readFile(manifestPath, "utf8"), manifestText);
+
+    const linkedInputDir = join(dir, "linked-proposal-inputs");
+    await symlink(dir, linkedInputDir);
+
+    await assert.rejects(
+      () =>
+        main([
+          "propose-route-manifest",
+          "--manifest",
+          manifestPath,
+          "--output",
+          join(linkedInputDir, "manifest.json"),
+        ]),
+      /--output must not be the same path as --manifest/u,
+    );
+    assert.equal(await readFile(manifestPath, "utf8"), manifestText);
   });
 });
 
@@ -1351,6 +1400,83 @@ test("Solana propose-route-manifest CLI accepts loopback HTTP Torii URLs", async
   });
 });
 
+test("Solana propose-route-manifest CLI replaces output symlinks and skips temp symlink collisions", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalNow = Date.now;
+  const originalRandom = Math.random;
+  await withTempDir(async (dir) => {
+    try {
+      const manifestPath = join(dir, "manifest.json");
+      await writeJson(manifestPath, validTemplate());
+      let proposals = 0;
+      globalThis.fetch = async () => {
+        proposals += 1;
+        return {
+          ok: true,
+          text: async () => JSON.stringify({ proposal_id: `draft-${proposals}` }),
+        };
+      };
+
+      const outputPath = join(dir, "proposal.json");
+      const targetPath = join(dir, "proposal-target.json");
+      const outputSentinel = "sentinel:solana-proposal-output-target\n";
+      await writeFile(targetPath, outputSentinel);
+      await symlink(targetPath, outputPath);
+
+      await main([
+        "propose-route-manifest",
+        "--manifest",
+        manifestPath,
+        "--torii-url",
+        "http://localhost:8080/",
+        "--output",
+        outputPath,
+      ]);
+
+      assert.equal(await readFile(targetPath, "utf8"), outputSentinel);
+      assert.equal((await lstat(outputPath)).isSymbolicLink(), false);
+      assert.equal(
+        JSON.parse(await readFile(outputPath, "utf8")).proposal_id,
+        "draft-1",
+      );
+
+      const tempOutput = join(dir, "proposal-temp.json");
+      const trapTarget = join(dir, "proposal-temp-target.json");
+      const tempSentinel = "sentinel:solana-proposal-temp-target\n";
+      await writeFile(trapTarget, tempSentinel);
+      const tempOne = `${tempOutput}.tmp-${process.pid}.424242.8`;
+      const tempTwo = `${tempOutput}.tmp-${process.pid}.424242.c`;
+      await symlink(trapTarget, tempOne);
+      await symlink(trapTarget, tempTwo);
+      const forcedRandoms = [0.5, 0.75, 0.875];
+      Date.now = () => 424242;
+      Math.random = () => forcedRandoms.shift() ?? 0.875;
+
+      await main([
+        "propose-route-manifest",
+        "--manifest",
+        manifestPath,
+        "--torii-url",
+        "http://localhost:8080/",
+        "--output",
+        tempOutput,
+      ]);
+
+      assert.equal(await readFile(trapTarget, "utf8"), tempSentinel);
+      await assert.rejects(() => stat(tempOne), /ENOENT/u);
+      await assert.rejects(() => stat(tempTwo), /ENOENT/u);
+      assert.equal(
+        JSON.parse(await readFile(tempOutput, "utf8")).proposal_id,
+        "draft-2",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      Date.now = originalNow;
+      Math.random = originalRandom;
+    }
+  });
+});
+
 test("Solana route-manifest CLI replaces output symlinks instead of following them", async () => {
   await withTempDir(async (dir) => {
     const templatePath = join(dir, "template.json");
@@ -1377,5 +1503,48 @@ test("Solana route-manifest CLI replaces output symlinks instead of following th
     assert.equal((await lstat(outputPath)).isSymbolicLink(), false);
     const manifest = JSON.parse(await readFile(outputPath, "utf8"));
     assert.equal(manifest.production_ready, true);
+  });
+});
+
+test("Solana route-manifest CLI skips hostile temp symlink collisions", async () => {
+  const originalNow = Date.now;
+  const originalRandom = Math.random;
+  await withTempDir(async (dir) => {
+    try {
+      const templatePath = join(dir, "template.json");
+      const evidencePath = join(dir, "evidence.json");
+      const outputPath = join(dir, "manifest.json");
+      const trapTarget = join(dir, "temp-target.json");
+      const sentinel = "sentinel:solana-route-temp-target\n";
+      await writeJson(templatePath, validTemplate());
+      await writeJson(evidencePath, validEvidence());
+      await writeFile(trapTarget, sentinel);
+      const tempOne = `${outputPath}.tmp-${process.pid}.424242.8`;
+      const tempTwo = `${outputPath}.tmp-${process.pid}.424242.c`;
+      await symlink(trapTarget, tempOne);
+      await symlink(trapTarget, tempTwo);
+      const forcedRandoms = [0.5, 0.75, 0.875];
+      Date.now = () => 424242;
+      Math.random = () => forcedRandoms.shift() ?? 0.875;
+
+      await main([
+        "route-manifest",
+        "--template",
+        templatePath,
+        "--evidence",
+        evidencePath,
+        "--output",
+        outputPath,
+      ]);
+
+      assert.equal(await readFile(trapTarget, "utf8"), sentinel);
+      await assert.rejects(() => stat(tempOne), /ENOENT/u);
+      await assert.rejects(() => stat(tempTwo), /ENOENT/u);
+      const manifest = JSON.parse(await readFile(outputPath, "utf8"));
+      assert.equal(manifest.production_ready, true);
+    } finally {
+      Date.now = originalNow;
+      Math.random = originalRandom;
+    }
   });
 });

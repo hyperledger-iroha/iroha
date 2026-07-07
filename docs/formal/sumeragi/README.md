@@ -31641,85 +31641,164 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Progress specs must resolve Init as a defined zero-arity operator, so a
   liveness spec cannot bind the documented initial-state predicate to a missing
   or parameterized helper.
+  Source and top-level progress specs must reject missing or parameterized Init operators,
+  so source and top-level liveness wrappers cannot bypass the shared
+  initial-state proof boundary.
   Progress Init operators must stay initial-state predicates, so direct specs
   and projection aliases cannot replace the initial-state boundary with
   next-state actions, fairness clauses, or temporal eventualities, including
   through onward init aliases.
+  Source and top-level progress Init operators must stay initial-state predicates,
+  so source and top-level liveness wrappers cannot replace the shared
+  initial-state proof boundary with action or temporal formulas.
+  Source and top-level progress Init operators must be inspectable initial-state predicates,
+  so empty or otherwise unparseable `Init` roots cannot satisfy source or
+  top-level progress wrappers.
   Progress Init local aliases must resolve to initial-state predicates, so
   local helper names cannot hide action-only or temporal syntax from the
   initial-state boundary check.
+  Source and top-level progress Init local aliases must resolve to initial-state predicates,
+  so local helper names cannot hide action or temporal syntax from source or
+  top-level liveness wrappers.
   Progress Init local aliases must resolve to defined zero-arity initial-state predicates,
   so local helper names cannot point at missing or parameterized initial
   predicates.
+  Source and top-level progress Init local aliases must resolve to defined zero-arity initial-state predicates,
+  so source and top-level liveness wrappers cannot point local `Init` aliases
+  at missing or parameterized initial predicates.
   Progress Init local aliases must resolve to inspectable initial-state predicates,
   so local helper names cannot point at empty or otherwise uninspectable
   predicate definitions.
+  Source and top-level progress Init local aliases must resolve to inspectable initial-state predicates,
+  so source and top-level liveness wrappers cannot point local `Init` aliases
+  at empty or otherwise uninspectable predicate definitions.
   Progress Init local aliases must inherit recursive resolution for onward local aliases,
   so local helper names cannot hide a missing, undefined, parameterized, or
   uninspectable inner initial-state predicate behind another local helper.
+  Source and top-level progress Init local aliases must inherit recursive resolution for onward local aliases,
+  so source and top-level liveness wrappers cannot hide bad initial predicates
+  behind local helper-to-helper chains.
   Progress Init aliases must be acyclic, so recursive local or imported
   aliases cannot satisfy the initial-state predicate boundary without
   resolving to an inspectable predicate.
+  Source and top-level progress Init aliases must be acyclic, so source and
+  top-level liveness wrappers cannot satisfy the initial-state boundary through
+  recursive local `Init` alias cycles.
   Progress Init aliases must resolve through named local INSTANCE declarations,
   so imported Init aliases cannot rely on implicit or misspelled module
   aliases.
+  Source and top-level progress Init aliases must resolve through named local INSTANCE declarations,
+  so source and top-level liveness wrappers cannot import `Init` through
+  undeclared module aliases.
   Progress Init aliases must inherit recursive resolution for onward aliases inside imported Init targets,
   so imported Init aliases cannot hide a missing, undefined, parameterized,
   recursive, or uninspectable inner initial-state predicate.
+  Source and top-level progress Init aliases must inherit recursive resolution for onward aliases inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` targets that
+  hide bad inner initial predicates behind local helper aliases.
   Progress Init aliases must inherit helper target guards inside imported Init targets,
   so imported Init aliases cannot hide action-shaped, parameterized, or
   uninspectable helper operands inside the imported initial-state predicate.
+  Source and top-level progress Init aliases must inherit helper target guards inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that bury action-shaped, parameterized, or uninspectable helper operands.
   Progress Init aliases must inherit helper acyclicity inside imported Init targets,
   so imported Init aliases cannot hide recursive helper operands inside the
   imported initial-state predicate.
+  Source and top-level progress Init aliases must inherit helper acyclicity inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that satisfy the initial-state boundary through recursive helper operands.
   Progress Init aliases must inherit module-alias helper target guards inside imported Init targets,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   or uninspectable targets behind imported helper operands.
+  Source and top-level progress Init aliases must inherit module-alias helper target guards inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that bury missing instance aliases, missing modules, action-shaped targets,
+  parameterized targets, or uninspectable targets behind module-alias helper
+  operands.
   Progress Init aliases must inherit module-alias helper acyclicity inside imported Init targets,
   so imported Init aliases cannot hide recursive module-alias helper operands
   inside the imported initial-state predicate.
+  Source and top-level progress Init aliases must inherit module-alias helper acyclicity inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that satisfy the initial-state boundary through recursive module-alias
+  helper operands.
   Progress Init aliases must inherit recursive module-alias helper resolution inside imported Init targets,
   so imported Init aliases cannot hide missing, undefined, action-shaped,
   parameterized, recursive, or uninspectable onward aliases behind imported
   helper operands.
+  Source and top-level progress Init aliases must inherit recursive module-alias helper resolution inside imported Init targets,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind module-alias helper operands.
   Progress Init aliases must inherit nested helper guards behind imported module-alias helpers,
   so imported Init aliases cannot hide action-shaped, parameterized,
   recursive, or uninspectable local helper operands inside imported helper
+  targets.
+  Source and top-level progress Init aliases must inherit nested helper guards behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad local helper operands inside imported module-alias helper
   targets.
   Progress Init aliases must inherit nested helper alias resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive aliases, or uninspectable targets behind local helper aliases
   inside imported helper targets.
+  Source and top-level progress Init aliases must inherit nested helper alias resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind local helper aliases inside imported
+  module-alias helper targets.
   Progress Init aliases must inherit nested module-alias helper guards behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive module-alias helper operands, or uninspectable targets inside
   imported helper targets.
+  Source and top-level progress Init aliases must inherit nested module-alias helper guards behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad module-alias helper operands inside imported module-alias
+  helper targets.
   Progress Init aliases must inherit nested module-alias helper onward resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive onward aliases, or uninspectable targets behind nested
   module-alias helper operands.
+  Source and top-level progress Init aliases must inherit nested module-alias helper onward resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind nested module-alias helper operands.
   Progress Init aliases must inherit nested module-alias target helper guards behind imported module-alias helpers,
   so imported Init aliases cannot hide action-shaped, parameterized,
   recursive, or uninspectable local helper operands inside nested module-alias
   helper targets.
+  Source and top-level progress Init aliases must inherit nested module-alias target helper guards behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad local helper operands inside nested module-alias helper
+  targets.
   Progress Init aliases must inherit nested module-alias target helper alias resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive aliases, or uninspectable targets behind local helper aliases
   inside nested module-alias helper targets.
+  Source and top-level progress Init aliases must inherit nested module-alias target helper alias resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind local helper aliases inside nested
+  module-alias helper targets.
   Progress Init aliases must inherit nested module-alias target helper alias onward resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
   recursive onward aliases, or uninspectable targets behind local helper
   alias targets inside nested module-alias helper targets.
+  Source and top-level progress Init aliases must inherit nested module-alias target helper alias onward resolution behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad onward aliases behind local helper alias targets inside
+  nested module-alias helper targets.
   Progress Init aliases must inherit nested module-alias target helper alias onward target helper guards behind imported module-alias helpers,
   so imported Init aliases cannot hide action-shaped, parameterized,
   recursive, or uninspectable local helper operands inside onward alias
   targets reached from nested module-alias helper targets.
+  Source and top-level progress Init aliases must inherit nested module-alias target helper alias onward target helper guards behind imported module-alias helpers,
+  so source and top-level liveness wrappers cannot import `Init` predicates
+  that hide bad local helper operands inside onward alias targets reached
+  from nested module-alias helper targets.
   Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias resolution behind imported module-alias helpers,
   so imported Init aliases cannot hide missing instance aliases, missing
   modules, undefined operators, action-shaped targets, parameterized targets,
@@ -31737,9 +31816,15 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Progress Init aliases must resolve to local modules with defined zero-arity initial-state predicates,
   so imported Init aliases cannot point at missing modules, undefined
   operators, or parameterized helpers.
+  Source and top-level progress Init aliases must resolve to local modules with defined zero-arity initial-state predicates,
+  so source and top-level liveness wrappers cannot import missing modules,
+  undefined operators, or parameterized initial predicates as `Init`.
   Progress Init aliases must resolve to inspectable initial-state predicates,
   so imported Init aliases cannot point at empty or otherwise uninspectable
   helper predicates.
+  Source and top-level progress Init aliases must resolve to inspectable initial-state predicates,
+  so source and top-level liveness wrappers cannot import empty or otherwise
+  uninspectable initial-state predicate definitions as `Init`.
   Progress Init helper conjuncts must resolve to initial-state predicates, so
   composed Init formulas cannot bury action-only or temporal syntax in named
   helper operands.

@@ -2390,6 +2390,48 @@ test("derives BSC commit seal hash and rejects non-EVM recovery ids", () => {
   }
 });
 
+test("BSC validator-set helpers reject power overflows before canonical encoding", () => {
+  const u64OverflowDecimal = "18446744073709551616";
+  const commitSeal = {
+    totalPower: 4n,
+    signedPower: 3n,
+    commitMessageHash: BSC_COMMIT_MESSAGE_HASH,
+    validatorPublicKeys: BSC_COMMIT_VALIDATOR_PUBLIC_KEYS,
+    validatorPowers: BSC_COMMIT_VALIDATOR_POWERS,
+    signersBitmap: "0x07",
+    signatures: BSC_COMMIT_SIGNATURES,
+    validatorSetHash: BSC_COMMIT_VALIDATOR_SET_HASH,
+  };
+
+  assert.throws(
+    () =>
+      canonicalBscValidatorSetPayloadBytes({
+        validatorAddresses: [`0x${"11".repeat(20)}`],
+        validatorPowers: [u64OverflowDecimal],
+      }),
+    /validatorPowers\[0\] must fit u64/u,
+  );
+  assert.throws(
+    () =>
+      canonicalBscCommitSealBytes({
+        ...commitSeal,
+        totalPower: u64OverflowDecimal,
+      }),
+    /totalPower must fit u64/u,
+  );
+  assert.throws(
+    () =>
+      canonicalBscCommitSealBytes({
+        ...commitSeal,
+        validatorPowers: [
+          u64OverflowDecimal,
+          ...BSC_COMMIT_VALIDATOR_POWERS.slice(1),
+        ],
+      }),
+    /validatorPowers\[0\] must fit u64/u,
+  );
+});
+
 test("rejects boolean SCCP domains in web portal payload helpers", () => {
   const assetId = `0x${"11".repeat(32)}`;
   const messageId = `0x${"22".repeat(32)}`;
@@ -7349,6 +7391,22 @@ test("binds EVM-family Groth16 proof requests to public signals and relay contex
         destinationBindingHash: HEX32_H,
       }),
     /publicInputs\.finalityHeight must not be zero/,
+  );
+  assert.throws(
+    () =>
+      sccpMessageTransparentPublicInputAbiWords({
+        ...sampleEvmPublicInputs,
+        finalityHeight: "18446744073709551616",
+      }),
+    /publicInputs\.finalityHeight must fit u64/,
+  );
+  assert.throws(
+    () =>
+      sccpMessageTransparentPublicInputAbiWords({
+        ...sampleEvmPublicInputs,
+        targetDomain: "4294967296",
+      }),
+    /publicInputs\.targetDomain must be a u32 domain id/,
   );
   assert.throws(
     () =>
