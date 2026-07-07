@@ -58,8 +58,8 @@ offline process and how developers interact with it.
   ```
 
   Pass `--manifest` if the manifest lives at a different URL or path. The
-  command refuses unsigned envelopes unless `--allow-unsigned` is provided for
-  local smoke runs.
+  command refuses unsigned envelopes; use the Parliament-published envelope or a
+  locally generated council-signed envelope for smoke runs.
   When validating the published manifest against a staging gateway, point
   `sorafs-fetch` at the Torii host instead of local payloads:
 

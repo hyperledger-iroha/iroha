@@ -32,6 +32,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -343,7 +344,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -423,11 +424,7 @@ def require_provider_label(record: dict[str, Any], errors: list[str]) -> str:
     if PROVIDER_LABEL_PATTERN.fullmatch(provider) is None:
         errors.append(PROVIDER_LABEL_ERROR)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
-        if marker in provider.split("-")
-    )
+    forbidden = forbidden_non_production_markers(provider, FORBIDDEN_PROVIDER_LABEL_MARKERS)
     if forbidden:
         errors.append(
             f"providers[].name must not contain non-production markers {forbidden}"
@@ -445,11 +442,7 @@ def require_challenge_label(record: dict[str, Any], errors: list[str]) -> str:
     if CHALLENGE_LABEL_PATTERN.fullmatch(challenge) is None:
         errors.append(CHALLENGE_LABEL_ERROR)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_CHALLENGE_LABEL_MARKERS
-        if marker in challenge.split("-")
-    )
+    forbidden = forbidden_non_production_markers(challenge, FORBIDDEN_CHALLENGE_LABEL_MARKERS)
     if forbidden:
         errors.append(
             f"challenges[].name must not contain non-production markers {forbidden}"
@@ -670,6 +663,20 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -738,20 +745,36 @@ def build_summary(
                 )
                 if isinstance(handoff_digest, str):
                     valid_governance_archive_handoff_digests.add(
-                        handoff_digest.lower()
+                        handoff_digest
                     )
             digest = fingerprint.get("seed_replay_digest_hex")
             if kind_name == "randomness" and isinstance(digest, str):
-                valid_seed_replay_digests.add(digest.lower())
+                valid_seed_replay_digests.add(digest)
             elif kind_name in SEED_REPLAY_BOUND_KINDS:
                 valid_seed_replay_bound_artifacts.append((kind_name, artifact))
             policy_digest = fingerprint.get("policy_digest_hex")
             if kind_name == "randomness" and isinstance(policy_digest, str):
-                valid_policy_digests.add(policy_digest.lower())
+                valid_policy_digests.add(policy_digest)
             elif kind_name in POLICY_BOUND_KINDS:
                 valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_seed_replay_digests = require_single_active_digest(
+        valid_seed_replay_digests,
+        errors,
+        label="valid_seed_replay_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
+    valid_governance_archive_handoff_digests = require_single_active_digest(
+        valid_governance_archive_handoff_digests,
+        errors,
+        label="valid_governance_archive_handoff_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,

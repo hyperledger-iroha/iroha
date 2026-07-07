@@ -105,6 +105,8 @@ pub mod jurisdiction;
 pub mod kiso;
 /// Persistent block storage (Kura) backend.
 pub mod kura;
+/// Lane-local block vote validation and QC aggregation helpers.
+pub mod lane_consensus;
 /// Merge-ledger reduction helpers.
 pub mod merge;
 /// Minimal Merkle Mountain Range for bridge commitments.
@@ -322,8 +324,11 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::ExecWitness(_)
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)
+                | BlockMessage::LaneBlockProposal(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::QcVote(_)
+                | BlockMessage::LaneBlockVote(_)
+                | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
                 BlockMessage::BlockCreated(_)

@@ -419,7 +419,7 @@ def test_deployment_context_is_required(tmp_path: Path) -> None:
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["feed_collector"]["artifacts"][0]
-    assert "deployment_id must be a non-empty string" in artifact["errors"]
+    assert "deployment_id must be a non-empty canonical string" in artifact["errors"]
 
 
 def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
@@ -1078,6 +1078,23 @@ def test_all_policy_bound_artifacts_reject_billing_cycle_policy_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("billing-cycle-2", 2)
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "billing-cycle-2.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_policy_bound_subset_requires_billing_cycle_anchor(tmp_path: Path) -> None:
     write_json(tmp_path / "governance-approval.json", governance_approval())
     summary = tmp_path / "summary.json"
@@ -1157,6 +1174,24 @@ def test_all_cycle_bound_artifacts_reject_billing_cycle_tuple_mismatch(
             f"{kind_name} statement_bundle_digest_hex and reconciliation_digest_hex "
             "must match a valid billing_cycle artifact"
         ) in artifact["errors"]
+
+
+def test_multiple_valid_cycle_binding_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = billing_cycle("billing-cycle-2", 2)
+    payload["statement_bundle_digest_hex"] = DIGEST_2
+    payload["reconciliation_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "billing-cycle-2.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_cycle_bindings"] == []
+    assert (
+        "valid_cycle_bindings must contain exactly one active binding"
+        in result["errors"]
+    )
 
 
 def test_cycle_bound_subset_requires_billing_cycle_anchor(tmp_path: Path) -> None:

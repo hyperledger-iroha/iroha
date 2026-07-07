@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T18:50:10.586502+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ translator: machine-google-reviewed
 зарегистрирован по адресу `WARN`, но узлы консенсуса должны сохранять настройки по умолчанию включенными, чтобы предотвратить случайное
 расхождение между узлами, поддерживающими и не поддерживающими SM.
 CLI отображает эти переключатели через обновление рукопожатия `iroha_cli app sorafs
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
+--require-sm-handshake-match` and `--require-sm-openssl-preview-match`, or the matching `--require-*`
 флаги для восстановления строгого соблюдения.#### Предварительная версия OpenSSL/Tongsuo (`sm-ffi-openssl`)
 - **Область.** Создает прошивку поставщика, доступную только для предварительной версии (`OpenSslProvider`), которая проверяет доступность среды выполнения OpenSSL и обеспечивает хеширование SM3 на основе OpenSSL, проверку SM2 и шифрование/дешифрование SM4-GCM, сохраняя при этом согласие. Консенсусные двоичные файлы должны продолжать использовать путь RustCrypto; Серверная часть FFI строго поддерживает пилотные проекты проверки/подписания границ.
 - **Предварительные требования для сборки.** Скомпилируйте с помощью `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` и убедитесь, что цепочка инструментов связана с OpenSSL/Tongsuo 3.0+ (`libcrypto` с поддержкой SM2/SM3/SM4). Статическое связывание не рекомендуется; предпочитают динамические библиотеки, управляемые оператором.

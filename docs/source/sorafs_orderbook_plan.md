@@ -108,7 +108,10 @@ recorded on the offending artifact in the JSON summary before required-kind
 validity is reported. Contract-surface evidence must also carry
 `policy_digest_hex`, the checker publishes valid contract-surface policies as
 `valid_policy_digests`, and governance approval `policy_digest_hex` must match
-one of those valid contract-surface policy digests.
+one of those valid contract-surface policy digests. Promotion summaries must
+expose exactly one active contract digest and exactly one active policy digest;
+mixed valid contract or policy anchors fail closed before binding checks can
+satisfy final promotion.
 
 Other foundations that this work can build on include generic settlement and
 deal payloads, SoraFS pricing/reserve helpers, repair/PoR governance evidence,

@@ -1012,6 +1012,9 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::CertifiedBlockFetch(_)
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)
+                | BlockMessage::LaneBlockProposal(_)
+                | BlockMessage::LaneBlockVote(_)
+                | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcInitRequest(_)
@@ -2223,6 +2226,35 @@ impl NetworkRelayShared {
                 Some(proposal.header.height),
                 Some(proposal.header.view),
             ),
+            LaneBlockProposal(proposal) => (
+                "LaneBlockProposal",
+                Some(proposal.descriptor.lane_block_height),
+                Some(proposal.descriptor.lane_block_view),
+            ),
+            LaneBlockVote(vote) => {
+                let label = match vote.body.phase {
+                    iroha_core::sumeragi::consensus::Phase::Prepare => "LaneBlockPrepareVote",
+                    iroha_core::sumeragi::consensus::Phase::Commit => "LaneBlockVote",
+                    iroha_core::sumeragi::consensus::Phase::NewView => "LaneBlockNewViewVote",
+                };
+                (
+                    label,
+                    Some(vote.body.lane_block_height),
+                    Some(vote.body.lane_block_view),
+                )
+            }
+            LaneBlockQc(qc) => {
+                let label = match qc.body.phase {
+                    iroha_core::sumeragi::consensus::Phase::Prepare => "LaneBlockPrepareCert",
+                    iroha_core::sumeragi::consensus::Phase::Commit => "LaneBlockCert",
+                    iroha_core::sumeragi::consensus::Phase::NewView => "LaneBlockNewViewCert",
+                };
+                (
+                    label,
+                    Some(qc.body.lane_block_height),
+                    Some(qc.body.lane_block_view),
+                )
+            }
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
         }
     }
@@ -2424,6 +2456,9 @@ fn sumeragi_block_message_requires_blocking(
                 commit_qc_only: Some(true),
                 ..
             })
+            | BlockMessage::LaneBlockProposal(_)
+            | BlockMessage::LaneBlockVote(_)
+            | BlockMessage::LaneBlockQc(_)
             | BlockMessage::QcVote(_)
             | BlockMessage::Qc(_)
             | BlockMessage::CertifiedBlockFetch(_)
@@ -2452,7 +2487,8 @@ mod network_relay_tests {
         sumeragi::{
             consensus::{
                 ConsensusBlockHeader, Evidence, EvidenceKind, EvidencePayload, ExecWitness,
-                ExecWitnessMsg, Phase, Proposal, QcHeaderRef, RbcInit,
+                ExecWitnessMsg, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, Phase,
+                Proposal, QcHeaderRef, RbcInit,
             },
             message::{
                 BlockMessage, BlockMessageWire, BlockSyncUpdate, ConsensusParamsAdvert,
@@ -2471,6 +2507,7 @@ mod network_relay_tests {
     use iroha_data_model::{
         AccountId, ChainId, Level,
         block::{BlockHeader, BlockSignature, SignedBlock},
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
         isi::Log,
         nexus::{DataSpaceId, LaneId},
         peer::{Peer, PeerId},
@@ -2526,6 +2563,16 @@ mod network_relay_tests {
         let created =
             BlockMessage::BlockCreated(iroha_core::sumeragi::message::BlockCreated::from(&signed));
         assert!(sumeragi_block_message_requires_blocking(&created));
+
+        assert!(sumeragi_block_message_requires_blocking(
+            &BlockMessage::LaneBlockProposal(sample_lane_block_proposal())
+        ));
+        assert!(sumeragi_block_message_requires_blocking(
+            &BlockMessage::LaneBlockVote(sample_lane_block_vote(Phase::Prepare))
+        ));
+        assert!(sumeragi_block_message_requires_blocking(
+            &BlockMessage::LaneBlockQc(sample_lane_block_qc(Phase::Commit))
+        ));
 
         let init = BlockMessage::RbcInit(RbcInit {
             block_hash: signed.hash(),
@@ -2786,6 +2833,74 @@ mod network_relay_tests {
     fn proposal_msg() -> iroha_core::NetworkMessage {
         let proposal = sample_proposal();
         sumeragi_msg(BlockMessage::Proposal(proposal))
+    }
+
+    fn sample_lane_block_proposal() -> LaneBlockProposalV1 {
+        let validator_set = vec![PeerId::new(KeyPair::random().public_key().clone())];
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            previous_lane_block_height: 4,
+            previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x50; 32])),
+            lane_block_height: 5,
+            lane_block_view: 7,
+            subject_hash: Hash::prehashed([0x51; 32]),
+            payload_ownership_hash: Hash::prehashed([0x52; 32]),
+            rbc_instance_hash: Hash::prehashed([0x53; 32]),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::prehashed([0x54; 32])],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: "nexus:lane-block:test".to_owned(),
+            descriptor_hash: Hash::prehashed([0x55; 32]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0x56; 32]),
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        proposal
+    }
+
+    fn sample_lane_block_vote(
+        phase: Phase,
+    ) -> iroha_core::lane_consensus::LaneBlockVoteV1 {
+        let proposal = sample_lane_block_proposal();
+        iroha_core::lane_consensus::LaneBlockVoteV1 {
+            body: proposal.vote_body(phase),
+            signer: proposal.descriptor.validator_set[0].clone(),
+            bls_signature: vec![0xAA],
+        }
+    }
+
+    fn sample_lane_block_qc(phase: Phase) -> LaneBlockQcV1 {
+        let proposal = sample_lane_block_proposal();
+        LaneBlockQcV1 {
+            body: proposal.vote_body(phase),
+            validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+            validator_set_hash: proposal.descriptor.validator_set_hash.clone(),
+            validator_set: proposal.descriptor.validator_set.clone(),
+            signers_bitmap: vec![0b1],
+            bls_aggregate_signature: vec![0xBB],
+        }
+    }
+
+    fn lane_block_proposal_msg() -> iroha_core::NetworkMessage {
+        sumeragi_msg(BlockMessage::LaneBlockProposal(
+            sample_lane_block_proposal(),
+        ))
+    }
+
+    fn lane_block_vote_msg(phase: Phase) -> iroha_core::NetworkMessage {
+        sumeragi_msg(BlockMessage::LaneBlockVote(sample_lane_block_vote(phase)))
+    }
+
+    fn lane_block_qc_msg(phase: Phase) -> iroha_core::NetworkMessage {
+        sumeragi_msg(BlockMessage::LaneBlockQc(sample_lane_block_qc(phase)))
     }
 
     fn exec_witness_msg() -> iroha_core::NetworkMessage {
@@ -3115,6 +3230,9 @@ mod network_relay_tests {
         let reveal = vrf_reveal_msg();
         let hint = proposal_hint_msg();
         let proposal = proposal_msg();
+        let lane_proposal = lane_block_proposal_msg();
+        let lane_vote = lane_block_vote_msg(Phase::Prepare);
+        let lane_qc = lane_block_qc_msg(Phase::Commit);
         let control_flow = control_flow_msg();
         let init = rbc_init_msg(0x01, 2, 0);
         let chunk = rbc_chunk_msg(0x01, 2, 0);
@@ -3153,6 +3271,9 @@ mod network_relay_tests {
         assert_eq!(limiter.should_drop(&peer, &reveal, 1), None);
         assert_eq!(limiter.should_drop(&peer, &hint, 1), None);
         assert_eq!(limiter.should_drop(&peer, &proposal, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &lane_proposal, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &lane_vote, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &lane_qc, 1), None);
         assert_eq!(limiter.should_drop(&peer, &control_flow, 1), None);
         assert_eq!(limiter.should_drop(&peer, &init, 1), None);
         assert_eq!(limiter.should_drop(&peer, &chunk, 1), None);
@@ -3167,6 +3288,7 @@ mod network_relay_tests {
         let hint = proposal_hint_msg();
         let proposal = proposal_msg();
         let created = block_created_msg();
+        let lane_proposal = lane_block_proposal_msg();
         let mut limiter = ConsensusIngressLimiter::new(
             Some(BucketConfig {
                 rate_per_sec: nz_u32(1),
@@ -3197,6 +3319,41 @@ mod network_relay_tests {
         assert_eq!(limiter.should_drop(&peer, &hint, 1), None);
         assert_eq!(limiter.should_drop(&peer, &proposal, 1), None);
         assert_eq!(limiter.should_drop(&peer, &created, 1), None);
+        assert_eq!(limiter.should_drop(&peer, &lane_proposal, 1), None);
+    }
+
+    #[test]
+    fn block_message_meta_labels_lane_block_messages() {
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockProposal(
+                sample_lane_block_proposal()
+            )),
+            ("LaneBlockProposal", Some(5), Some(7))
+        );
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockVote(
+                sample_lane_block_vote(Phase::Prepare)
+            )),
+            ("LaneBlockPrepareVote", Some(5), Some(7))
+        );
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockVote(
+                sample_lane_block_vote(Phase::Commit)
+            )),
+            ("LaneBlockVote", Some(5), Some(7))
+        );
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockQc(
+                sample_lane_block_qc(Phase::Prepare)
+            )),
+            ("LaneBlockPrepareCert", Some(5), Some(7))
+        );
+        assert_eq!(
+            NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockQc(
+                sample_lane_block_qc(Phase::Commit)
+            )),
+            ("LaneBlockCert", Some(5), Some(7))
+        );
     }
 
     #[test]

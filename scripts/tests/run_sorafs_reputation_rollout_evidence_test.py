@@ -421,6 +421,45 @@ def test_malformed_provider_proof_does_not_echo_spec(tmp_path: Path) -> None:
     assert bad_spec not in diagnostics
 
 
+def test_provider_proof_rejects_padded_or_unicode_components_without_trimming(
+    tmp_path: Path,
+) -> None:
+    parsed_args = MODULE.parse_args(complete_args(tmp_path))
+    proof_path = tmp_path / "payloads" / "provider-a-proof.to"
+    cases = (
+        f" provider-a={proof_path}",
+        f"provider-a={proof_path} ",
+        f"provider-a\u200d={proof_path}",
+        f"provider-a={proof_path}\u202e",
+    )
+
+    for spec in cases:
+        parsed_args.provider_proof = [spec]
+        errors = MODULE.validate_inputs(parsed_args)
+        diagnostics = "\n".join(errors)
+        escaped_spec = spec.encode("unicode_escape").decode("ascii")
+
+        assert "--provider-proof must use PROVIDER_ID=PATH form" in diagnostics
+        assert spec not in diagnostics
+        assert escaped_spec not in diagnostics
+
+
+def test_provider_id_rejects_padded_or_unicode_values_before_plan(
+    tmp_path: Path,
+) -> None:
+    parsed_args = MODULE.parse_args(complete_args(tmp_path))
+
+    for provider_id in (" provider-a", "provider-a ", "provider-a\u200d", "provider-a\u202e"):
+        parsed_args.provider_id = [provider_id]
+        errors = MODULE.validate_inputs(parsed_args)
+        diagnostics = "\n".join(errors)
+        escaped_provider_id = provider_id.encode("unicode_escape").decode("ascii")
+
+        assert "--provider-id must be canonical" in diagnostics
+        assert provider_id not in diagnostics
+        assert escaped_provider_id not in diagnostics
+
+
 def test_missing_external_evidence_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
     missing = tmp_path / "missing-metrics.json"

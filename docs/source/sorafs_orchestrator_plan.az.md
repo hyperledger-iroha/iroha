@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_orchestrator_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8584e9225df6ce386ba1ab8ac08362e22379a275fbb4c4e513ccff10d8b7d353
+source_hash: 73ea19ad24375dc0a299a2197640f5edefa06fb7853c75e0ba7f4727cc159340
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS Multi-Source Fetch Orchestrator Specification

@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Passe `--manifest` se o manifest estiver em outra URL. Envelopes sem assinatura
-sao recusados, a menos que `--allow-unsigned` seja definido para smoke runs locais.
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - Ao validar um manifest via gateway de staging, aponte para Torii em vez de
   payloads locais:

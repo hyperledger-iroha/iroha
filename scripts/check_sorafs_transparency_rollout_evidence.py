@@ -31,6 +31,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -282,7 +283,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -307,11 +308,7 @@ def require_inventory_label(
     label_tokens = frozenset(
         token for token in re.split(r"[^a-z0-9]+", label) if token
     )
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in label_tokens
-    )
+    forbidden = forbidden_non_production_markers(label_tokens, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -450,7 +447,6 @@ def validate_route_inventory(
         required_routes,
         errors,
         allow_scalar_items=False,
-        trim_values=False,
     )
     require_only_required_values(payload, "routes", "name", required_routes, errors)
     require_string_inventory_count_match(
@@ -480,7 +476,6 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             DEFAULT_REQUIRED_SOURCE_KINDS,
             errors,
             allow_scalar_items=False,
-            trim_values=False,
         )
         require_only_required_values(
             payload,
@@ -522,7 +517,6 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES,
             errors,
             allow_scalar_items=False,
-            trim_values=False,
         )
         require_only_required_values(
             payload,
@@ -607,7 +601,6 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             REQUIRED_PRIVACY_AGGREGATE_ACTIONS,
             errors,
             allow_scalar_items=False,
-            trim_values=False,
         )
         require_only_required_values(
             payload,
@@ -667,7 +660,6 @@ def validate_kind_specific(kind: EvidenceKind, payload: dict[str, Any], errors: 
             REQUIRED_PROOF_TOKEN_ISSUANCE_ACTIONS,
             errors,
             allow_scalar_items=False,
-            trim_values=False,
         )
         require_only_required_values(
             payload,
@@ -733,6 +725,33 @@ def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list
     return kind_name, errors
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
+def require_single_active_binding(
+    bindings: set[Any],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[Any]:
+    """Return one active rollout binding or fail closed on mixed anchors."""
+
+    if len(bindings) <= 1:
+        return bindings
+    errors.append(f"{label} must contain exactly one active binding")
+    return set()
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -781,7 +800,7 @@ def build_summary(
             source_batch = fingerprint.get("source_batch_digest_hex")
             cycle_digest = fingerprint.get("cycle_digest_hex")
             if kind_name == "source_entry" and isinstance(source_batch, str):
-                valid_source_batch_digests.add(source_batch.lower())
+                valid_source_batch_digests.add(source_batch)
             elif kind_name in SOURCE_BOUND_KINDS:
                 source_bound_artifacts.append((kind_name, artifact))
             if kind_name == "publication" and isinstance(cycle_digest, str):
@@ -791,7 +810,11 @@ def build_summary(
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
 
-
+    valid_source_batch_digests = require_single_active_digest(
+        valid_source_batch_digests,
+        errors,
+        label="valid_source_batch_digests",
+    )
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=tuple(KIND_BY_NAME),
@@ -815,13 +838,23 @@ def build_summary(
             source_batch = fingerprint.get("source_batch_digest_hex")
             cycle_digest = fingerprint.get("cycle_digest_hex")
             if isinstance(source_batch, str) and isinstance(cycle_digest, str):
-                source_batch_digest = source_batch.lower()
-                cycle_digest_value = cycle_digest.lower()
+                source_batch_digest = source_batch
+                cycle_digest_value = cycle_digest
                 valid_cycle_digests.add(cycle_digest_value)
                 valid_publication_bindings.add(
                     (source_batch_digest, cycle_digest_value)
                 )
 
+    valid_cycle_digests = require_single_active_digest(
+        valid_cycle_digests,
+        errors,
+        label="valid_cycle_digests",
+    )
+    valid_publication_bindings = require_single_active_binding(
+        valid_publication_bindings,
+        errors,
+        label="valid_publication_bindings",
+    )
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
         missing_anchor_required_kinds=tuple(KIND_BY_NAME),

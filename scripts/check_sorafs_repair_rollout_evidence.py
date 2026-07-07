@@ -32,6 +32,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -369,7 +370,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -450,11 +451,7 @@ def require_inventory_label(
     if pattern.fullmatch(value) is None:
         errors.append(label_error)
         return value
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
     return value
@@ -719,6 +716,20 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -779,23 +790,44 @@ def build_summary(
             failure_digest = fingerprint.get("evidence_bundle_digest_hex")
             handoff_digest = fingerprint.get("handoff_digest_hex")
             if kind_name == "auditor_roster" and isinstance(roster_digest, str):
-                valid_roster_digests.add(roster_digest.lower())
+                valid_roster_digests.add(roster_digest)
             elif kind_name in ROSTER_BOUND_KINDS:
                 valid_roster_bound_artifacts.append((kind_name, artifact))
             if kind_name == "failure_capture" and isinstance(failure_digest, str):
-                valid_failure_bundle_digests.add(failure_digest.lower())
+                valid_failure_bundle_digests.add(failure_digest)
             elif kind_name in FAILURE_BOUND_KINDS:
                 valid_failure_bound_artifacts.append((kind_name, artifact))
             if kind_name == "governance_handoff" and isinstance(handoff_digest, str):
-                valid_handoff_digests.add(handoff_digest.lower())
+                valid_handoff_digests.add(handoff_digest)
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
-                    valid_policy_digests.add(policy_digest.lower())
+                    valid_policy_digests.add(policy_digest)
             if kind_name in HANDOFF_BOUND_KINDS:
                 valid_handoff_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_roster_digests = require_single_active_digest(
+        valid_roster_digests,
+        errors,
+        label="valid_roster_digests",
+    )
+    valid_failure_bundle_digests = require_single_active_digest(
+        valid_failure_bundle_digests,
+        errors,
+        label="valid_failure_bundle_digests",
+    )
+    valid_handoff_digests = require_single_active_digest(
+        valid_handoff_digests,
+        errors,
+        label="valid_handoff_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,

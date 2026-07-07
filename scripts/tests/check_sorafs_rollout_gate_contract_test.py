@@ -8,6 +8,7 @@ import inspect
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from contextlib import redirect_stderr
 from io import StringIO
@@ -17,6 +18,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = SCRIPTS_DIR.parent
 DOCS_SOURCE_DIR = REPO_ROOT / "docs" / "source"
+XTASK_MAIN_RS = REPO_ROOT / "xtask" / "src" / "main.rs"
 SORAFS_NODE_PLAN = DOCS_SOURCE_DIR / "sorafs" / "sorafs_node_plan.md"
 SORAFS_NODE_STORAGE = DOCS_SOURCE_DIR / "sorafs" / "sorafs_node_storage.md"
 SORAFS_NODE_PORTAL_DIR = REPO_ROOT / "docs" / "portal" / "docs" / "sorafs"
@@ -27,6 +29,7 @@ SORAFS_CLI_SDK_PLAN = DOCS_SOURCE_DIR / "sorafs_cli_sdk_plan.md"
 SORAFS_EVIDENCE_VIEWER_PLAN = DOCS_SOURCE_DIR / "sorafs_evidence_viewer_plan.md"
 SORAFS_GATEWAY_COMPLIANCE_PLAN = DOCS_SOURCE_DIR / "sorafs_gateway_compliance_plan.md"
 SORAFS_GATEWAY_LOAD_PLAN = DOCS_SOURCE_DIR / "sorafs_gateway_load_tests.md"
+SORAFS_GATEWAY_DNS_OWNER_RUNBOOK = DOCS_SOURCE_DIR / "sorafs_gateway_dns_owner_runbook.md"
 SORAFS_GOVERNANCE_DAG_PLAN = DOCS_SOURCE_DIR / "sorafs_governance_dag_plan.md"
 SORAFS_HEDGING_PLAN = DOCS_SOURCE_DIR / "sorafs_hedging_plan.md"
 SORAFS_MODERATION_PANEL_PLAN = DOCS_SOURCE_DIR / "sorafs_moderation_panel_plan.md"
@@ -59,11 +62,44 @@ HEDGING_FIXTURE_GENERATOR_RS = (
 )
 POP_CREDENTIALS_RS = REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "pop_credentials.rs"
 SORAFS_NODE_LIB_RS = REPO_ROOT / "crates" / "sorafs_node" / "src" / "lib.rs"
+SORAFS_ORCHESTRATOR_LIB_RS = (
+    REPO_ROOT / "crates" / "sorafs_orchestrator" / "src" / "lib.rs"
+)
+SORAFS_ORCHESTRATOR_SORANET_RS = (
+    REPO_ROOT / "crates" / "sorafs_orchestrator" / "src" / "soranet.rs"
+)
+SORAFS_ORCHESTRATOR_INCENTIVES_RS = (
+    REPO_ROOT / "crates" / "sorafs_orchestrator" / "src" / "incentives.rs"
+)
+SORAFS_CHUNKER_EXPORT_VECTORS_RS = (
+    REPO_ROOT / "crates" / "sorafs_chunker" / "src" / "bin" / "export_vectors.rs"
+)
+SORAFS_CAR_FETCH_RS = (
+    REPO_ROOT / "crates" / "sorafs_car" / "src" / "bin" / "sorafs_fetch.rs"
+)
+SORAFS_CAR_LOCAL_FETCH_RS = REPO_ROOT / "crates" / "sorafs_car" / "src" / "local_fetch.rs"
+SORAFS_REFERENCE_FFI_RS = (
+    REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "reference_ffi.rs"
+)
+SORAFS_VALIDATE_RS = (
+    REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "bin" / "sorafs-validate.rs"
+)
+SORAFS_VALIDATE_CLI_TEST_RS = (
+    REPO_ROOT / "crates" / "sorafs_manifest" / "tests" / "sorafs_validate_cli.rs"
+)
 IROHA_CLIENT_RS = REPO_ROOT / "crates" / "iroha" / "src" / "client.rs"
 TORII_LIB_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs"
 TORII_SORAFS_API_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "api.rs"
 TORII_OPENAPI_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
 IROHA_CLI_SORAFS_RS = REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs.rs"
+IROHA_P2P_PEER_RS = REPO_ROOT / "crates" / "iroha_p2p" / "src" / "peer.rs"
+IROHA_CORE_KISO_RS = REPO_ROOT / "crates" / "iroha_core" / "src" / "kiso.rs"
+IROHA_CONFIG_ACTUAL_RS = (
+    REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "actual.rs"
+)
+IROHA_CONFIG_USER_RS = (
+    REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
+)
 SORAFS_CLI_RS = REPO_ROOT / "crates" / "sorafs_orchestrator" / "src" / "bin" / "sorafs_cli.rs"
 HEDGING_FIXTURE_ROOT = REPO_ROOT / "fixtures" / "sorafs_manifest" / "hedging"
 HEDGING_FIXTURE_README = HEDGING_FIXTURE_ROOT / "README.md"
@@ -176,6 +212,14 @@ ACTIVE_SORAFS_TODO_MARKER_RE = re.compile(
     r"\b(?:TODO|FIXME|XXX|TBD)\b(?=\s*(?::|\(|\[|-|!|$))",
     re.I,
 )
+ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_RELATIVE_PATH = Path(
+    "scripts/tests/check_sorafs_rollout_gate_contract_test.py"
+)
+ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_FRAGMENTS = (
+    "ACTIVE_SORAFS_TODO_MARKER_RE.search(",
+    r'dirty.write_text("# todo: bypass SoraFS source review\n")',
+    '"todo: bypass SoraFS source review" in offenders[0]',
+)
 LABEL_DIAGNOSTIC_PLACEHOLDER_RE = re.compile(
     r"must match (?:canonical lowercase|reviewed) `[^`]+-name`"
 )
@@ -197,13 +241,18 @@ ROLLOUT_ARGFILE_SECRET_RE = re.compile(
     re.I,
 )
 ACTIVE_SORAFS_TODO_SCAN_SUFFIXES = {
+    ".example",
+    ".h",
     ".cs",
     ".java",
     ".js",
     ".kt",
+    ".mjs",
     ".py",
     ".rs",
     ".sh",
+    ".swift",
+    ".ts",
 }
 ACTIVE_SORAFS_TODO_SCAN_ROOTS = (
     REPO_ROOT / "crates" / "sorafs_car",
@@ -243,9 +292,11 @@ ACTIVE_SORAFS_TODO_DISCOVERY_ROOTS = (
     REPO_ROOT / "java" / "iroha_android" / "src" / "main" / "java",
     REPO_ROOT / "kotlin" / "core-jvm" / "src" / "main" / "java",
     REPO_ROOT / "csharp" / "src",
+    REPO_ROOT / "IrohaSwift" / "Sources",
     SCRIPTS_DIR,
     REPO_ROOT / "ci",
 )
+ACTIVE_SORAFS_TODO_CONTENT_DISCOVERY_ROOTS = (SCRIPTS_DIR,)
 ACTIVE_SORAFS_TODO_DISCOVERY_EXCLUDED_PARTS = {
     "build",
     "docs",
@@ -267,8 +318,376 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "actual.rs",
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "defaults.rs",
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs",
+    REPO_ROOT
+    / "crates"
+    / "connect_norito_bridge"
+    / "include"
+    / "connect_norito_bridge.h",
+    REPO_ROOT / "crates" / "sorafs_manifest" / "include" / "sorafs_reference.h",
+    REPO_ROOT / "ci" / "check_agents_guardrails.sh",
+    REPO_ROOT / "ci" / "check_connect_norito_bridge_header.sh",
+    REPO_ROOT / "ci" / "check_docs_portal.sh",
+    REPO_ROOT / "ci" / "check_soranet_privacy_guard.sh",
+    REPO_ROOT / "configs" / "soranexus" / "taira" / "check_sorafs_rollout.sh",
+    REPO_ROOT
+    / "configs"
+    / "soranexus"
+    / "taira"
+    / "check_sorafs_rollout_mock_test.sh",
+    SCRIPTS_DIR / "check_sf1_vectors.mjs",
+    SCRIPTS_DIR / "sorafs-gateway",
+    REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "__init__.py",
+    REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "client.py",
     REPO_ROOT / "python" / "iroha_python" / "src" / "iroha_python" / "sorafs.py",
+    REPO_ROOT / "python" / "iroha_torii_client" / "client.py",
+    REPO_ROOT / "javascript" / "iroha_js" / "index.d.ts",
+    REPO_ROOT / "javascript" / "iroha_js" / "src" / "index.js",
+    REPO_ROOT / "javascript" / "iroha_js" / "src" / "norito.js",
     REPO_ROOT / "javascript" / "iroha_js" / "src" / "sorafs.js",
+    REPO_ROOT / "javascript" / "iroha_js" / "src" / "soracloud.js",
+    REPO_ROOT / "javascript" / "iroha_js" / "src" / "toriiClient.js",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "client"
+    / "ClientConfig.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "client"
+    / "ClientConfigManifestLoader.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "client"
+    / "HttpClientTransport.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "client"
+    / "SoracloudPrivateModelArtifactRef.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "client"
+    / "SoracloudPrivateUploadedModelJsonParser.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "model"
+    / "instructions"
+    / "ApprovePinManifestInstruction.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "model"
+    / "instructions"
+    / "BindManifestAliasInstruction.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "model"
+    / "instructions"
+    / "RegisterCapacityDeclarationInstruction.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "model"
+    / "instructions"
+    / "RegisterCapacityDisputeInstruction.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "model"
+    / "instructions"
+    / "RegisterPinManifestInstruction.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "model"
+    / "instructions"
+    / "RetirePinManifestInstruction.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "model"
+    / "instructions"
+    / "SetPricingScheduleInstruction.java",
+    REPO_ROOT
+    / "java"
+    / "iroha_android"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "android"
+    / "model"
+    / "instructions"
+    / "UpsertProviderCreditInstruction.java",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "client"
+    / "ClientConfig.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "client"
+    / "ClientConfigManifestLoader.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "client"
+    / "HttpClientTransport.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "client"
+    / "SoracloudPrivateModels.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "client"
+    / "SoracloudPrivateUploadedModelJsonParser.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "core"
+    / "model"
+    / "instructions"
+    / "ApprovePinManifestInstruction.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "core"
+    / "model"
+    / "instructions"
+    / "BindManifestAliasInstruction.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "core"
+    / "model"
+    / "instructions"
+    / "RegisterCapacityDeclarationInstruction.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "core"
+    / "model"
+    / "instructions"
+    / "RegisterCapacityDisputeInstruction.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "core"
+    / "model"
+    / "instructions"
+    / "RegisterPinManifestInstruction.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "core"
+    / "model"
+    / "instructions"
+    / "RetirePinManifestInstruction.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "core"
+    / "model"
+    / "instructions"
+    / "SetPricingScheduleInstruction.kt",
+    REPO_ROOT
+    / "kotlin"
+    / "core-jvm"
+    / "src"
+    / "main"
+    / "java"
+    / "org"
+    / "hyperledger"
+    / "iroha"
+    / "sdk"
+    / "core"
+    / "model"
+    / "instructions"
+    / "UpsertProviderCreditInstruction.kt",
+    REPO_ROOT
+    / "csharp"
+    / "src"
+    / "Hyperledger.Iroha.Sdk"
+    / "Torii"
+    / "ToriiClient.cs",
     REPO_ROOT
     / "csharp"
     / "src"
@@ -281,12 +700,26 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     / "Hyperledger.Iroha.Sdk"
     / "Torii"
     / "ToriiSoraFsJsonConverters.cs",
+    REPO_ROOT / "IrohaSwift" / "Sources" / "IrohaSwift" / "NativeBridge.swift",
+    REPO_ROOT / "IrohaSwift" / "Sources" / "IrohaSwift" / "SorafsOptions.swift",
+    REPO_ROOT
+    / "IrohaSwift"
+    / "Sources"
+    / "IrohaSwift"
+    / "SorafsOrchestratorClient.swift",
+    REPO_ROOT
+    / "IrohaSwift"
+    / "Sources"
+    / "IrohaSwift"
+    / "SorafsReferenceValidators.swift",
+    REPO_ROOT / "IrohaSwift" / "Sources" / "IrohaSwift" / "ToriiClient.swift",
     *(
         path
         for path in sorted(SCRIPTS_DIR.glob("*sorafs*.py"))
         if "test" not in path.name
     ),
     *sorted(SCRIPTS_DIR.glob("*sorafs*.sh")),
+    *sorted((SCRIPTS_DIR / "examples").glob("*sorafs*.args.example")),
     *sorted((REPO_ROOT / "ci").glob("*sorafs*.sh")),
 )
 
@@ -302,6 +735,426 @@ def function_source(path: Path, function_name: str) -> str:
         if isinstance(node, ast.FunctionDef) and node.name == function_name:
             return ast.get_source_segment(source_text, node) or ""
     return ""
+
+
+def test_rollout_checkers_use_exact_required_value_membership() -> None:
+    offenders = [
+        path.name
+        for path in CHECKERS
+        if "value.strip() not in allowed" in read(path)
+    ]
+    lax_helpers = []
+    for path in CHECKERS:
+        source = read(path)
+        if "def require_only_required_values(" not in source:
+            continue
+        helper = function_source(path, "require_only_required_values")
+        if "value not in allowed" not in helper:
+            lax_helpers.append(path.name)
+
+    assert offenders == []
+    assert lax_helpers == []
+
+
+def test_unshipped_route_pattern_families_have_segment_aware_helpers() -> None:
+    source_text = read(Path(__file__))
+    module = ast.parse(source_text)
+    route_pattern_constants: set[str] = set()
+    helper_sources: dict[str, list[tuple[str, str]]] = {}
+
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Name)
+                and target.id.startswith("UNSHIPPED_")
+                and target.id.endswith("_ROUTE_PATTERNS")
+            ):
+                route_pattern_constants.add(target.id)
+
+    for node in module.body:
+        if (
+            not isinstance(node, ast.FunctionDef)
+            or not node.name.startswith("unshipped_")
+            or not node.name.endswith("_route_matches")
+        ):
+            continue
+        source = ast.get_source_segment(source_text, node) or ""
+        for constant in route_pattern_constants:
+            if constant in source:
+                helper_sources.setdefault(constant, []).append((node.name, source))
+
+    missing = sorted(route_pattern_constants - helper_sources.keys())
+    duplicates = {
+        constant: [name for name, _ in helpers]
+        for constant, helpers in helper_sources.items()
+        if len(helpers) != 1
+    }
+    substring_helpers = {
+        helpers[0][0]: constant
+        for constant, helpers in helper_sources.items()
+        if "route in source" in helpers[0][1] or "any(route in" in helpers[0][1]
+    }
+    non_regex_helpers = {
+        helpers[0][0]: constant
+        for constant, helpers in helper_sources.items()
+        if "re.search" not in helpers[0][1]
+        or "re.escape(route)" not in helpers[0][1]
+        or "(?<![A-Za-z0-9_/-])" not in helpers[0][1]
+        or "(?=$|" not in helpers[0][1]
+    }
+
+    assert missing == []
+    assert duplicates == {}
+    assert substring_helpers == {}
+    assert non_regex_helpers == {}
+
+
+def test_unshipped_route_matchers_reject_prefixed_paths() -> None:
+    source_text = read(Path(__file__))
+    module = ast.parse(source_text)
+    route_pattern_constants: set[str] = set()
+    helper_names: dict[str, str] = {}
+
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Name)
+                and target.id.startswith("UNSHIPPED_")
+                and target.id.endswith("_ROUTE_PATTERNS")
+            ):
+                route_pattern_constants.add(target.id)
+
+    for node in module.body:
+        if (
+            not isinstance(node, ast.FunctionDef)
+            or not node.name.startswith("unshipped_")
+            or not node.name.endswith("_route_matches")
+        ):
+            continue
+        source = ast.get_source_segment(source_text, node) or ""
+        for constant in route_pattern_constants:
+            if constant in source:
+                helper_names[constant] = node.name
+
+    violations: dict[str, list[str]] = {}
+    for constant, helper_name in sorted(helper_names.items()):
+        routes = globals()[constant]
+        helper = globals()[helper_name]
+        prefixed = " ".join(
+            f'"{prefix}{route}"'
+            for route in routes
+            for prefix in ("x", "/internal", "prefix-")
+        )
+        matched = helper(prefixed)
+        if matched:
+            violations[helper_name] = matched
+
+    assert route_pattern_constants == set(helper_names)
+    assert violations == {}
+
+
+def test_unshipped_cli_subcommand_families_have_boundary_helpers() -> None:
+    source_text = read(Path(__file__))
+    module = ast.parse(source_text)
+    cli_constants: set[str] = set()
+    nested_cli_constants: set[str] = set()
+    helper_sources: dict[str, list[tuple[str, ast.FunctionDef, str]]] = {}
+
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name) or not target.id.startswith("UNSHIPPED_"):
+                continue
+            if target.id.endswith("_CLI_SUBCOMMANDS"):
+                cli_constants.add(target.id)
+            elif target.id.endswith("_NESTED_CLI_COMMANDS"):
+                nested_cli_constants.add(target.id)
+
+    for node in module.body:
+        if (
+            not isinstance(node, ast.FunctionDef)
+            or not node.name.startswith("unshipped_")
+            or not node.name.endswith("_cli_matches")
+        ):
+            continue
+        source = ast.get_source_segment(source_text, node) or ""
+        for constant in cli_constants | nested_cli_constants:
+            if constant in source:
+                helper_sources.setdefault(constant, []).append((node.name, node, source))
+
+    expected_nested = sorted(
+        constant.replace("_CLI_SUBCOMMANDS", "_NESTED_CLI_COMMANDS")
+        for constant in cli_constants
+        if constant.replace("_CLI_SUBCOMMANDS", "_NESTED_CLI_COMMANDS")
+        not in nested_cli_constants
+    )
+    missing = sorted((cli_constants | nested_cli_constants) - helper_sources.keys())
+    duplicates = {
+        constant: [name for name, _, _ in helpers]
+        for constant, helpers in helper_sources.items()
+        if len(helpers) != 1
+    }
+    raw_substring_helpers: dict[str, str] = {}
+    for constant, helpers in helper_sources.items():
+        name, node, _ = helpers[0]
+        for child in ast.walk(node):
+            if (
+                isinstance(child, ast.Compare)
+                and len(child.ops) == 1
+                and isinstance(child.ops[0], ast.In)
+                and isinstance(child.left, ast.Name)
+                and child.left.id in {"subcommand", "command"}
+                and len(child.comparators) == 1
+                and isinstance(child.comparators[0], ast.Name)
+                and child.comparators[0].id == "source"
+            ):
+                raw_substring_helpers[name] = constant
+
+    unquoted_hyphenated_helpers = {
+        helper_sources[constant][0][0]: constant
+        for constant in cli_constants
+        if "f'\"{subcommand}\"' in source" not in helper_sources[constant][0][2]
+        or 'f"`{subcommand}`" in source' not in helper_sources[constant][0][2]
+    }
+    non_regex_nested_helpers = {
+        helper_sources[constant][0][0]: constant
+        for constant in nested_cli_constants
+        if "re.search" not in helper_sources[constant][0][2]
+        or "re.escape(command)" not in helper_sources[constant][0][2]
+        or "(?<![A-Za-z0-9_/-])" not in helper_sources[constant][0][2]
+        or "(?=$|" not in helper_sources[constant][0][2]
+    }
+
+    assert expected_nested == []
+    assert missing == []
+    assert duplicates == {}
+    assert raw_substring_helpers == {}
+    assert unquoted_hyphenated_helpers == {}
+    assert non_regex_nested_helpers == {}
+
+
+def test_unshipped_cli_matchers_reject_prefixed_commands() -> None:
+    source_text = read(Path(__file__))
+    module = ast.parse(source_text)
+    cli_constants: set[str] = set()
+    nested_cli_constants: set[str] = set()
+    helper_names: dict[str, str] = {}
+
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if not isinstance(target, ast.Name) or not target.id.startswith("UNSHIPPED_"):
+                continue
+            if target.id.endswith("_CLI_SUBCOMMANDS"):
+                cli_constants.add(target.id)
+            elif target.id.endswith("_NESTED_CLI_COMMANDS"):
+                nested_cli_constants.add(target.id)
+
+    for node in module.body:
+        if (
+            not isinstance(node, ast.FunctionDef)
+            or not node.name.startswith("unshipped_")
+            or not node.name.endswith("_cli_matches")
+        ):
+            continue
+        source = ast.get_source_segment(source_text, node) or ""
+        for constant in cli_constants | nested_cli_constants:
+            if constant in source:
+                helper_names[constant] = node.name
+
+    violations: dict[str, list[str]] = {}
+    for constant in sorted(cli_constants):
+        helper = globals()[helper_names[constant]]
+        subcommands = globals()[constant]
+        for subcommand in subcommands:
+            for quote in ('"', "`"):
+                for prefix, suffix in (
+                    ("x", ""),
+                    ("not-", ""),
+                    ("/", ""),
+                    ("", "-canary"),
+                ):
+                    prefixed = f"{quote}{prefix}{subcommand}{suffix}{quote}"
+                    matched = helper(prefixed)
+                    if subcommand in matched:
+                        violations.setdefault(helper_names[constant], []).append(
+                            f"{subcommand}: {prefixed}"
+                        )
+
+    for constant in sorted(nested_cli_constants):
+        helper = globals()[helper_names[constant]]
+        commands = globals()[constant]
+        for command in commands:
+            for prefix in ("x", "not-", "/", "/internal/"):
+                prefixed = f"`{prefix}{command}`"
+                matched = helper(prefixed)
+                if command in matched:
+                    violations.setdefault(helper_names[constant], []).append(
+                        f"{command}: {prefixed}"
+                    )
+
+    assert (cli_constants | nested_cli_constants) == set(helper_names)
+    assert violations == {}
+
+
+def test_unshipped_matcher_helpers_feed_exposure_tests() -> None:
+    source_text = read(Path(__file__))
+    module = ast.parse(source_text)
+    source_lines = source_text.splitlines()
+    functions: list[tuple[str, str]] = [
+        (node.name, "\n".join(source_lines[node.lineno - 1 : node.end_lineno]))
+        for node in module.body
+        if isinstance(node, ast.FunctionDef)
+    ]
+    route_helpers = [
+        name
+        for name, _ in functions
+        if name.startswith("unshipped_") and name.endswith("_route_matches")
+    ]
+    cli_helpers = [
+        name
+        for name, _ in functions
+        if name.startswith("unshipped_") and name.endswith("_cli_matches")
+    ]
+
+    def exposure_tests_for(helper_name: str) -> list[str]:
+        return sorted(
+            name
+            for name, source in functions
+            if name != helper_name
+            and helper_name + "(" in source
+            and ("expose" in name or "exposed" in name)
+            and "assert exposed == {}" in source
+        )
+
+    missing_route_exposure = {
+        helper: exposure_tests_for(helper)
+        for helper in route_helpers
+        if not exposure_tests_for(helper)
+    }
+    missing_cli_exposure = {
+        helper: exposure_tests_for(helper)
+        for helper in cli_helpers
+        if not exposure_tests_for(helper)
+    }
+
+    assert missing_route_exposure == {}
+    assert missing_cli_exposure == {}
+
+
+def test_unshipped_matcher_helpers_have_negative_control_tests() -> None:
+    source_text = read(Path(__file__))
+    module = ast.parse(source_text)
+    source_lines = source_text.splitlines()
+    functions: list[tuple[str, str]] = [
+        (node.name, "\n".join(source_lines[node.lineno - 1 : node.end_lineno]))
+        for node in module.body
+        if isinstance(node, ast.FunctionDef)
+    ]
+    helpers = [
+        name
+        for name, _ in functions
+        if name.startswith("unshipped_")
+        and (name.endswith("_route_matches") or name.endswith("_cli_matches"))
+    ]
+
+    missing_negative_controls = {
+        helper: sorted(
+            name
+            for name, source in functions
+            if name != helper
+            and "negative_controls" in name
+            and f"{helper}(" in source
+        )
+        for helper in helpers
+    }
+    missing_negative_controls = {
+        helper: tests
+        for helper, tests in missing_negative_controls.items()
+        if not tests
+    }
+
+    assert len(helpers) == 43
+    assert missing_negative_controls == {}
+
+
+def test_unshipped_doc_command_families_have_boundary_helper_and_exposure_tests() -> None:
+    source_text = read(Path(__file__))
+    module = ast.parse(source_text)
+    source_lines = source_text.splitlines()
+    constants: set[str] = set()
+    function_sources: list[tuple[str, str]] = [
+        (node.name, "\n".join(source_lines[node.lineno - 1 : node.end_lineno]))
+        for node in module.body
+        if isinstance(node, ast.FunctionDef)
+    ]
+
+    for node in module.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Name)
+                and target.id.startswith("UNSHIPPED_")
+                and target.id.endswith("_DOC_COMMANDS")
+            ):
+                constants.add(target.id)
+
+    helper_source = function_source(Path(__file__), "unshipped_doc_command_matches")
+    raw_substring_helper = "command in source" in helper_source
+    non_regex_helper = (
+        "re.search" not in helper_source
+        or "re.escape(command)" not in helper_source
+        or "(?<![A-Za-z0-9_/-])" not in helper_source
+        or "(?=$|" not in helper_source
+    )
+    missing_negative_controls: dict[str, list[str]] = {}
+    missing_docs_exposure: dict[str, list[str]] = {}
+
+    for constant in constants:
+        users = [
+            name
+            for name, source in function_sources
+            if constant in source
+            and name
+            not in {
+                "unshipped_doc_command_matches",
+                "test_unshipped_doc_command_families_have_boundary_helper_and_exposure_tests",
+            }
+        ]
+        negative_controls = [
+            name for name in users if "matcher" in name and "negative_controls" in name
+        ]
+        docs_exposure = [
+            name
+            for name, source in function_sources
+            if (
+                constant in source
+                and ("docs" in name or "warning_only" in name)
+                and "violations" in source
+                and "assert violations == {}" in source
+                and "unshipped_doc_command_matches(" in source
+            )
+        ]
+        if not negative_controls:
+            missing_negative_controls[constant] = users
+        if not docs_exposure:
+            missing_docs_exposure[constant] = users
+
+    assert constants == {
+        "UNSHIPPED_POP_OPERATOR_DOC_COMMANDS",
+        "UNSHIPPED_SORAFS_OPERATOR_DOC_COMMANDS",
+    }
+    assert raw_substring_helper is False
+    assert non_regex_helper is False
+    assert missing_negative_controls == {}
+    assert missing_docs_exposure == {}
 
 
 def sensitive_key_literal_entries(path: Path) -> tuple[list[str], list[str]]:
@@ -413,6 +1266,73 @@ def load_script_module(path: Path, module_name: str):
     return module
 
 
+CANARY_EXAMPLE_BUILDER_PREFIXES = (
+    ("sorafs_ai_prescreen_", "build_sorafs_ai_prescreen_canary.py"),
+    ("sorafs_appeal_finance_", "build_sorafs_appeal_finance_canary.py"),
+    ("sorafs_evidence_viewer_", "build_sorafs_evidence_viewer_canary.py"),
+    ("sorafs_gateway_compliance_", "build_sorafs_gateway_compliance_canary.py"),
+    ("sorafs_gateway_load_", "build_sorafs_gateway_load_canary.py"),
+    ("sorafs_governance_dag_", "build_sorafs_governance_dag_canary.py"),
+    ("sorafs_moderation_panel_", "build_sorafs_moderation_panel_canary.py"),
+    ("sorafs_orderbook_", "build_sorafs_orderbook_canary.py"),
+    ("sorafs_pdp_", "build_sorafs_pdp_canary.py"),
+    ("sorafs_pop_credentials_", "build_sorafs_pop_credentials_canary.py"),
+    ("sorafs_por_", "build_sorafs_por_canary.py"),
+    ("sorafs_potr_", "build_sorafs_potr_canary.py"),
+    ("sorafs_reference_sdk_", "build_sorafs_reference_sdk_release_canary.py"),
+    ("sorafs_repair_", "build_sorafs_repair_canary.py"),
+    ("sorafs_reputation_", "build_sorafs_reputation_canary.py"),
+    ("sorafs_reserve_rent_", "build_sorafs_reserve_rent_canary.py"),
+    ("sorafs_transparency_", "build_sorafs_transparency_canary.py"),
+    ("sorafs_hedging_", "build_sorafs_hedging_canary.py"),
+    ("sorafs_billing_cycle_", "build_sorafs_hedging_canary.py"),
+    ("sorafs_statement_publication_", "build_sorafs_hedging_canary.py"),
+)
+
+
+def canary_example_builder_path(example: Path) -> Path:
+    """Return the checked-in builder for a canary example argfile."""
+
+    for prefix, builder_name in CANARY_EXAMPLE_BUILDER_PREFIXES:
+        if example.name.startswith(prefix):
+            return SCRIPTS_DIR / builder_name
+    raise AssertionError(f"no checked-in canary builder maps to {example.name}")
+
+
+def canary_builder_options_with_type(builder_path: Path, type_name: str) -> list[str]:
+    """Return argparse options in a canary builder that use the given type."""
+
+    module_ast = ast.parse(read(builder_path))
+    options: list[str] = []
+    for node in ast.walk(module_ast):
+        if (
+            not isinstance(node, ast.Call)
+            or not isinstance(node.func, ast.Attribute)
+            or node.func.attr != "add_argument"
+        ):
+            continue
+        option = next(
+            (
+                arg.value
+                for arg in node.args
+                if isinstance(arg, ast.Constant)
+                and isinstance(arg.value, str)
+                and arg.value.startswith("--")
+            ),
+            None,
+        )
+        if option is None:
+            continue
+        if any(
+            keyword.arg == "type"
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == type_name
+            for keyword in node.keywords
+        ):
+            options.append(option)
+    return options
+
+
 def response_args_module():
     return load_script_module(RESPONSE_ARGS_HELPER, "sorafs_response_args_contract")
 
@@ -444,6 +1364,19 @@ def is_active_sorafs_todo_discovery_candidate(path: Path) -> bool:
     return any("sorafs" in part.lower() for part in relative_parts)
 
 
+def is_active_sorafs_todo_content_discovery_candidate(path: Path) -> bool:
+    if not path.is_file() or path.suffix not in ACTIVE_SORAFS_TODO_SCAN_SUFFIXES:
+        return False
+    try:
+        relative_parts = path.relative_to(REPO_ROOT).parts
+    except ValueError:
+        return False
+    if any(part in ACTIVE_SORAFS_TODO_DISCOVERY_EXCLUDED_PARTS for part in relative_parts):
+        return False
+    source = read(path)
+    return "SoraFS" in source or "sorafs" in source
+
+
 def discover_active_sorafs_todo_scan_paths() -> list[Path]:
     paths: list[Path] = []
     for root in ACTIVE_SORAFS_TODO_DISCOVERY_ROOTS:
@@ -453,6 +1386,19 @@ def discover_active_sorafs_todo_scan_paths() -> list[Path]:
             path
             for path in sorted(root.rglob("*"))
             if is_active_sorafs_todo_discovery_candidate(path)
+        )
+    return sorted(set(paths))
+
+
+def discover_active_sorafs_todo_content_scan_paths() -> list[Path]:
+    paths: list[Path] = []
+    for root in ACTIVE_SORAFS_TODO_CONTENT_DISCOVERY_ROOTS:
+        if not root.exists():
+            continue
+        paths.extend(
+            path
+            for path in sorted(root.rglob("*"))
+            if is_active_sorafs_todo_content_discovery_candidate(path)
         )
     return sorted(set(paths))
 
@@ -468,9 +1414,11 @@ def active_sorafs_todo_scan_paths() -> list[Path]:
     paths.extend(
         path
         for path in ACTIVE_SORAFS_TODO_SCAN_FILES
-        if path.exists() and path.suffix in ACTIVE_SORAFS_TODO_SCAN_SUFFIXES
+        if path.exists()
+        and (path.suffix in ACTIVE_SORAFS_TODO_SCAN_SUFFIXES or path.suffix == "")
     )
     paths.extend(discover_active_sorafs_todo_scan_paths())
+    paths.extend(discover_active_sorafs_todo_content_scan_paths())
     return sorted(set(paths))
 
 
@@ -527,6 +1475,57 @@ def test_active_sorafs_todo_marker_detection_has_negative_controls(
     assert "todo: bypass SoraFS source review" in offenders[0]
 
 
+def test_active_sorafs_todo_inventory_has_only_contract_negative_controls() -> None:
+    tracked_files = subprocess.check_output(
+        ["git", "ls-files"], cwd=REPO_ROOT, text=True
+    ).splitlines()
+    offenders: list[str] = []
+
+    for relative_name in tracked_files:
+        relative = Path(relative_name)
+        path = REPO_ROOT / relative
+        if not path.is_file():
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        for line_number, line in enumerate(lines, start=1):
+            if (
+                not ACTIVE_SORAFS_TODO_MARKER_RE.search(line)
+                or ("SoraFS" not in line and "sorafs" not in line)
+            ):
+                continue
+            if relative == ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_RELATIVE_PATH and any(
+                fragment in line
+                for fragment in ACTIVE_SORAFS_TODO_INVENTORY_ALLOWED_FRAGMENTS
+            ):
+                continue
+            offenders.append(f"{relative}:{line_number}: {line.strip()}")
+
+    assert offenders == []
+
+
+def test_completed_sorafs_task_inventory_has_no_active_markers() -> None:
+    inventory = REPO_ROOT / "todo_list.txt"
+    marker_terms = ("to" + "do", "fix" + "me", "x" + "xx", "t" + "bd")
+    terms = "|".join(marker_terms)
+    marker = re.compile(
+        r"(?:sorafs.*(?:" + terms + r"))|(?:(?:" + terms + r").*sorafs)",
+        re.I,
+    )
+
+    assert inventory.exists()
+
+    offenders = [
+        f"{index}: {line.strip()}"
+        for index, line in enumerate(read(inventory).splitlines(), start=1)
+        if marker.search(line)
+    ]
+
+    assert offenders == []
+
+
 def test_active_sorafs_todo_scan_discovers_path_named_sources() -> None:
     discovered = {
         path.relative_to(REPO_ROOT) for path in discover_active_sorafs_todo_scan_paths()
@@ -534,13 +1533,563 @@ def test_active_sorafs_todo_scan_discovers_path_named_sources() -> None:
 
     assert Path("crates/iroha_data_model/src/sorafs_uri.rs") in discovered
     assert Path("crates/sorafs_manifest/src/bin/sorafs-validate.rs") in discovered
+    assert (
+        Path("IrohaSwift/Sources/IrohaSwift/SorafsReferenceValidators.swift")
+        in discovered
+    )
     assert Path("ci/sdk_sorafs_orchestrator.sh") in discovered
     assert all("tests" not in path.parts for path in discovered)
     assert all("fixtures" not in path.parts for path in discovered)
 
 
+def test_active_sorafs_todo_scan_configuration_paths_exist() -> None:
+    missing_roots = [
+        str(root.relative_to(REPO_ROOT))
+        for root in ACTIVE_SORAFS_TODO_SCAN_ROOTS + ACTIVE_SORAFS_TODO_DISCOVERY_ROOTS
+        if not root.exists()
+    ]
+    missing_files = [
+        str(path.relative_to(REPO_ROOT))
+        for path in ACTIVE_SORAFS_TODO_SCAN_FILES
+        if not path.exists()
+    ]
+
+    assert missing_roots == []
+    assert missing_files == []
+
+
+def test_active_sorafs_todo_scan_covers_swift_sorafs_entrypoints() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    required = {
+        Path("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"),
+        Path("IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift"),
+        Path("IrohaSwift/Sources/IrohaSwift/SorafsOrchestratorClient.swift"),
+        Path("IrohaSwift/Sources/IrohaSwift/SorafsReferenceValidators.swift"),
+        Path("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift"),
+    }
+
+    assert required <= scanned
+
+
+def test_active_sorafs_todo_scan_covers_ffi_header_entrypoints() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    required = {
+        Path("crates/connect_norito_bridge/include/connect_norito_bridge.h"),
+        Path("crates/sorafs_manifest/include/sorafs_reference.h"),
+    }
+
+    assert required <= scanned
+
+
+def test_active_sorafs_todo_scan_covers_operator_script_entrypoints() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    required = {
+        Path("scripts/check_sf1_vectors.mjs"),
+        Path("scripts/sorafs-gateway"),
+    }
+
+    assert required <= scanned
+
+
+def test_active_sorafs_todo_scan_covers_ci_gate_entrypoints() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    required = {
+        Path("ci/check_agents_guardrails.sh"),
+        Path("ci/check_connect_norito_bridge_header.sh"),
+        Path("ci/check_docs_portal.sh"),
+        Path("ci/check_soranet_privacy_guard.sh"),
+    }
+
+    assert required <= scanned
+
+
+def test_active_sorafs_todo_scan_covers_taira_rollout_entrypoints() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    required = {
+        Path("configs/soranexus/taira/check_sorafs_rollout.sh"),
+        Path("configs/soranexus/taira/check_sorafs_rollout_mock_test.sh"),
+    }
+
+    assert required <= scanned
+
+
+def test_active_sorafs_todo_scan_discovers_sorafs_operator_scripts_by_content() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    discovered = {
+        path.relative_to(REPO_ROOT)
+        for path in discover_active_sorafs_todo_content_scan_paths()
+    }
+    expected: set[Path] = set()
+
+    for path in sorted(SCRIPTS_DIR.rglob("*")):
+        if path.suffix not in {".py", ".sh"}:
+            continue
+        relative = path.relative_to(REPO_ROOT)
+        if any(
+            part in ACTIVE_SORAFS_TODO_DISCOVERY_EXCLUDED_PARTS
+            for part in relative.parts
+        ):
+            continue
+        source = read(path)
+        if "SoraFS" in source or "sorafs" in source:
+            expected.add(relative)
+
+    assert expected
+    assert expected <= discovered
+    assert expected <= scanned
+
+
+def test_active_sorafs_todo_scan_covers_checked_in_argfile_examples() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    argfile_examples = {
+        path.relative_to(REPO_ROOT)
+        for path in sorted((SCRIPTS_DIR / "examples").glob("*sorafs*.args.example"))
+    }
+
+    assert argfile_examples
+    assert argfile_examples <= scanned
+
+
+def test_active_sorafs_todo_scan_covers_sdk_sorafs_content_sources() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in active_sorafs_todo_scan_paths()}
+    roots = (
+        REPO_ROOT / "python" / "iroha_python" / "src",
+        REPO_ROOT / "python" / "iroha_torii_client",
+        REPO_ROOT / "javascript" / "iroha_js" / "src",
+        REPO_ROOT / "javascript" / "iroha_js" / "index.d.ts",
+        REPO_ROOT / "java" / "iroha_android" / "src" / "main" / "java",
+        REPO_ROOT / "kotlin" / "core-jvm" / "src" / "main" / "java",
+        REPO_ROOT / "csharp" / "src",
+        REPO_ROOT / "IrohaSwift" / "Sources",
+    )
+    excluded_parts = {
+        "build",
+        "dist",
+        "fixtures",
+        "node_modules",
+        "target",
+        "test",
+        "tests",
+    }
+    missing: list[str] = []
+
+    for root in roots:
+        paths = [root] if root.is_file() else sorted(root.rglob("*"))
+        for path in paths:
+            if (
+                not path.is_file()
+                or path.suffix not in ACTIVE_SORAFS_TODO_SCAN_SUFFIXES
+            ):
+                continue
+            relative = path.relative_to(REPO_ROOT)
+            if any(part.lower() in excluded_parts for part in relative.parts):
+                continue
+            source = read(path)
+            if ("SoraFS" in source or "sorafs" in source) and relative not in scanned:
+                missing.append(str(relative))
+
+    assert missing == []
+
+
 def test_active_sorafs_source_todos_stay_closed() -> None:
     assert find_active_sorafs_todo_markers(active_sorafs_todo_scan_paths()) == []
+
+
+def test_sorafs_incentives_service_has_no_missing_budget_override() -> None:
+    cli = read(IROHA_CLI_SORAFS_RS)
+    reward_engine = read(SORAFS_ORCHESTRATOR_INCENTIVES_RS)
+    init_args = cli.split("pub struct IncentivesServiceInitArgs", 1)[1].split(
+        "impl Run for IncentivesServiceInitArgs", 1
+    )[0]
+    init_run = cli.split("impl Run for IncentivesServiceInitArgs", 1)[1].split(
+        "#[derive(clap::Args, Debug)]\npub struct IncentivesServiceProcessArgs", 1
+    )[0]
+    shadow_args = cli.split("pub struct IncentivesServiceShadowRunArgs", 1)[1].split(
+        "impl Run for IncentivesServiceShadowRunArgs", 1
+    )[0]
+    shadow_run = cli.split("impl Run for IncentivesServiceShadowRunArgs", 1)[1].split(
+        "#[derive(clap::Args, Debug)]\npub struct IncentivesServiceReconcileArgs", 1
+    )[0]
+    daemon_args = cli.split("pub struct IncentivesServiceDaemonArgs", 1)[1].split(
+        "impl Run for IncentivesServiceDaemonArgs", 1
+    )[0]
+    daemon_run = cli.split("impl Run for IncentivesServiceDaemonArgs", 1)[1].split(
+        "fn resolve_manifest_inputs", 1
+    )[0]
+
+    assert "allow-missing-budget-approval" not in cli
+    assert "allow_missing_budget_approval" not in cli
+    assert "new_allowing_missing_budget" not in cli
+    assert "new_allowing_missing_budget" not in reward_engine
+    assert "validate_allowing_missing_budget" not in reward_engine
+    assert "validate_with_budget_policy" not in reward_engine
+    assert "with_budget_policy" not in cli
+    assert "proceeding without budget_approval_id" not in cli
+    assert "config.budget_approval_id.is_none()" in init_run
+    assert "reward_config.budget_approval_id is required for incentives" in init_run
+    assert (
+        "require_budget_approval_id(state.reward_config.budget_approval_id.as_ref())?"
+        in shadow_run
+    )
+    assert "Some(&expected_budget)" in shadow_run
+    assert "allow-missing-budget-approval" not in init_args
+    assert "allow-missing-budget-approval" not in shadow_args
+    assert "allow-missing-budget-approval" not in daemon_args
+    assert "load_state_service(&self.state)" in daemon_run
+    assert "require_budget_approval_id" in daemon_run
+    assert "incentives_service_init_rejects_missing_budget_id" in cli
+    assert "incentives_service_process_rejects_state_without_budget_id" in cli
+    assert "incentives_service_shadow_run_rejects_state_without_budget_id" in cli
+    assert "incentives_daemon_rejects_state_without_budget_id" in cli
+    assert "incentives_daemon_rejects_missing_budget_after_lab_init_override" not in cli
+    assert "incentives_daemon_allows_missing_budget_with_override" not in cli
+
+
+def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
+    cli = read(IROHA_CLI_SORAFS_RS)
+    peer = read(IROHA_P2P_PEER_RS)
+    kiso = read(IROHA_CORE_KISO_RS)
+    actual_config = read(IROHA_CONFIG_ACTUAL_RS)
+    user_config = read(IROHA_CONFIG_USER_RS)
+
+    handshake_args = cli.split("pub struct HandshakeUpdateArgs", 1)[1].split(
+        "impl HandshakeUpdateArgs", 1
+    )[0]
+    into_payload = cli.split("fn into_payload(self)", 1)[1].split(
+        "fn normalise_hex", 1
+    )[0]
+    apply_config_update = kiso.split("fn apply_config_update", 1)[1].split(
+        "fn apply_soranet_handshake_update", 1
+    )[0]
+    apply_handshake_update = kiso.split("fn apply_soranet_handshake_update", 1)[
+        1
+    ].split("fn apply_transport_update", 1)[0]
+    apply_pow_update = kiso.split("fn apply_pow_update", 1)[1].split(
+        "fn snapshot_network_acl", 1
+    )[0]
+    verify_challenge_ticket = peer.split("pub(crate) fn verify_challenge_ticket", 1)[
+        1
+    ].split("/// Verify a signed ticket", 1)[0]
+    actual_default_pow = actual_config.split("pub const fn default_const() -> Self", 1)[
+        1
+    ].split("pub fn with_signed_ticket_public_key", 1)[0]
+    user_pow = user_config.split("pub struct SoranetHandshakePow", 1)[1].split(
+        "impl SoranetHandshakePow", 1
+    )[0]
+    user_puzzle = user_config.split("pub struct SoranetHandshakePuzzle", 1)[1].split(
+        "impl SoranetHandshakePuzzle", 1
+    )[0]
+
+    for stale in (
+        "pow-optional",
+        "pow_optional",
+        "pow-puzzle-disable",
+        "pow_puzzle_disable",
+        "allow-sm-handshake-mismatch",
+        "allow_sm_handshake_mismatch",
+        "allow-sm-openssl-preview-mismatch",
+        "allow_sm_openssl_preview_mismatch",
+    ):
+        assert stale not in handshake_args
+        assert stale not in into_payload
+
+    assert "pow_update.required = Some(false)" not in into_payload
+    assert "puzzle_update.enabled = Some(false)" not in into_payload
+    assert "require_sm_handshake_match = Some(false)" not in into_payload
+    assert "require_sm_openssl_preview_match = Some(false)" not in into_payload
+
+    assert "required: true" in actual_default_pow
+    assert "required: bool" not in user_pow
+    assert "enabled: bool" not in user_puzzle
+    assert "required: true" in user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
+        "/// Puzzle configuration supplied at the user level.", 1
+    )[0]
+    assert "Some(actual::SoranetPuzzle" in user_config.split(
+        "fn parse(self) -> Option<actual::SoranetPuzzle>", 1
+    )[1].split("/// User-level configuration container for SoraNet privacy telemetry.", 1)[0]
+
+    assert "SM handshake matching is mandatory" in apply_config_update
+    assert "SM OpenSSL preview matching is mandatory" in apply_config_update
+    assert "if !value" in apply_config_update
+    assert "Self::apply_pow_update(&mut handshake.pow, &pow_update)?" in apply_handshake_update
+    assert "-> Result<(), String>" in apply_pow_update
+    assert "PoW admission is mandatory" in apply_pow_update
+    assert "Argon2 puzzle admission is mandatory" in apply_pow_update
+    assert "pow.required = required;" in apply_pow_update
+    assert "pow.puzzle = None" not in apply_pow_update
+
+    assert "Fallback to unsigned tickets" not in peer
+    assert "raw_ticket_accepted_with_signed_key_present" not in peer
+    assert "raw_ticket_rejected_with_signed_key_present" in peer
+    assert "SignedTicket::decode(bytes).map_err(ChallengeVerifyError::Pow)?" in verify_challenge_ticket
+    assert "bytes.len() == pow::TICKET_LEN" not in verify_challenge_ticket
+    assert "self.verify_unsigned_ticket_bytes(bytes)" in verify_challenge_ticket
+
+    assert "handshake_update_accepts_pow_overrides" in cli
+    assert "soranet_handshake_update_applies" in kiso
+    assert "soranet_sm_policy_update_rejects_relaxation" in kiso
+    assert "puzzle disable should succeed" not in kiso
+
+    stale_docs = [
+        str(path.relative_to(REPO_ROOT))
+        for path in sorted(DOCS_SOURCE_DIR.rglob("*.md"))
+        if path.name.startswith(
+            ("soranet_handshake", "puzzle_service_operations", "sm_program")
+        )
+        and any(
+            stale in read(path)
+            for stale in (
+                "--pow-optional",
+                "--pow-puzzle-disable",
+                "--allow-sm-handshake-mismatch",
+                "--allow-sm-openssl-preview-mismatch",
+                "explicitly disable the puzzle",
+                "Any combination of flags is accepted",
+                "raw 74-byte PoW tickets remain valid when presented to relays that have a signed-ticket key configured",
+            )
+        )
+    ]
+    assert stale_docs == []
+
+
+def test_sorafs_soranet_orchestrator_has_no_masque_bypass_path() -> None:
+    orchestrator = read(SORAFS_ORCHESTRATOR_LIB_RS)
+    soranet = read(SORAFS_ORCHESTRATOR_SORANET_RS)
+
+    path_metadata = soranet.split("pub struct PathMetadata", 1)[1].split(
+        "pub struct PathHintReport", 1
+    )[0]
+    relay_hint = soranet.split("pub struct RelayPathHint", 1)[1].split(
+        "impl RelayPathHint", 1
+    )[0]
+    circuit = soranet.split("struct Circuit", 1)[1].split("impl Circuit", 1)[0]
+    circuit_info = soranet.split("pub struct CircuitInfo", 1)[1].split(
+        "pub enum CircuitRetirementReason", 1
+    )[0]
+    manager_config = soranet.split("pub struct CircuitManagerConfig", 1)[1].split(
+        "impl Default for CircuitManagerConfig", 1
+    )[0]
+    config_to_json = orchestrator.split("pub fn config_to_json", 1)[1].split(
+        "pub fn config_from_json", 1
+    )[0]
+    config_from_json = orchestrator.split("pub fn config_from_json", 1)[1].split(
+        "fn taikai_cache_to_json", 1
+    )[0]
+
+    for section in (path_metadata, relay_hint, circuit, circuit_info, manager_config):
+        assert "masque_bypass" not in section
+
+    assert "validator_masque_bypass" not in config_to_json
+    assert "masque_bypass_allowed" not in config_to_json
+    assert "masque_bypass_allowed" not in config_from_json
+    assert "validator_masque_bypass is not supported in the first release" in config_from_json
+    assert ".with_validator_masque_bypass" not in orchestrator
+    assert ".with_validator_masque_bypass" not in soranet
+    assert ".validator_masque_bypass()" not in orchestrator
+    assert ".validator_masque_bypass()" not in soranet
+
+    assert "config_json_rejects_validator_masque_bypass" in orchestrator
+    assert "circuit_manager_builds_validator_mesh_without_bypass" in soranet
+    assert "circuit_manager_sets_masque_bypass_for_validator_mesh" not in soranet
+
+
+def test_sorafs_chunker_fixture_export_has_no_unsigned_bypass() -> None:
+    exporter = read(SORAFS_CHUNKER_EXPORT_VECTORS_RS)
+    canonical_docs = [
+        *sorted((DOCS_SOURCE_DIR / "sorafs").rglob("*.md")),
+        *sorted(DOCS_SOURCE_DIR.glob("sorafs_*.md")),
+        *sorted(SORAFS_NODE_PORTAL_DIR.rglob("*.md")),
+    ]
+    docs_with_unsigned_escape = [
+        str(path.relative_to(REPO_ROOT))
+        for path in canonical_docs
+        if "--allow-unsigned" in read(path)
+    ]
+
+    for stale in (
+        "--allow-unsigned",
+        "allow_unsigned",
+        "allow unsigned",
+        "unsigned output",
+        "continuing due to --allow-unsigned",
+        "explicitly allow unsigned output",
+        "allow_unsigned_flag_skips_enforcement",
+    ):
+        assert stale not in exporter
+
+    assert "manifest_signatures.json missing; provide --signing-key" in exporter
+    assert "ensure_signed(root, &manifest_digest)?" in exporter
+    assert "unsigned_regeneration_without_signatures_is_rejected" in exporter
+    assert "existing_manifest_signatures_reject_empty_signature_set" in exporter
+    assert "rejects unsigned output in every mode" in read(
+        DOCS_SOURCE_DIR / "sorafs" / "chunker_conformance.md"
+    )
+    assert "--signing-key=<ed25519-private-key-hex>" in read(
+        SORAFS_NODE_PORTAL_DIR / "quickstart.md"
+    )
+    assert "--council-signature=<signerhex>:<signaturehex>" in read(
+        SORAFS_NODE_PORTAL_DIR / "quickstart.md"
+    )
+    assert docs_with_unsigned_escape == []
+
+
+def test_sorafs_fetch_integrity_verification_is_mandatory() -> None:
+    fetch_cli = read(SORAFS_CAR_FETCH_RS)
+    local_fetch = read(SORAFS_CAR_LOCAL_FETCH_RS)
+    orchestrator = read(SORAFS_ORCHESTRATOR_LIB_RS)
+    orchestrator_cli = read(SORAFS_CLI_RS)
+
+    for stale in (
+        "--allow-insecure",
+        "--no-verify-digest",
+        "--no-verify-length",
+        "refusing to disable integrity verification without --allow-insecure",
+    ):
+        assert stale not in fetch_cli
+
+    for source in (fetch_cli, local_fetch, orchestrator, orchestrator_cli):
+        assert "verify_lengths = false" not in source
+        assert "verify_digests = false" not in source
+
+    assert "IntegrityVerificationDisabled" in local_fetch
+    assert "IntegrityVerificationDisabled" in orchestrator
+    assert "build_fetch_options_rejects_disabled_integrity_verification" in local_fetch
+    assert "config_json_rejects_disabled_fetch_integrity_verification" in orchestrator
+    assert "fetch_cli_rejects_integrity_verification_bypass_flags" in read(
+        REPO_ROOT / "crates" / "sorafs_car" / "tests" / "fetch_cli.rs"
+    )
+    assert "fetch.verify_lengths must remain true" in orchestrator
+    assert "fetch.verify_digests must remain true" in orchestrator
+    assert "let should_verify_manifest =" not in orchestrator
+    assert ".verify_against_manifest(plan, verification_context)" in orchestrator
+
+    stale_docs = [
+        str(path.relative_to(REPO_ROOT))
+        for path in [
+            *sorted((DOCS_SOURCE_DIR / "sorafs" / "developer").glob("orchestrator_tuning*.md")),
+            *sorted(DOCS_SOURCE_DIR.glob("sorafs_orchestrator_plan*.md")),
+            *sorted(SORAFS_NODE_PORTAL_DIR.glob("orchestrator-tuning*.md")),
+        ]
+        if "isolated fuzzing" in read(path)
+    ]
+    assert stale_docs == []
+
+
+def test_sorafs_reference_ffi_governance_requires_expected_cid() -> None:
+    ffi = read(SORAFS_REFERENCE_FFI_RS)
+    validate_cli = read(SORAFS_VALIDATE_RS)
+    validate_cli_tests = read(SORAFS_VALIDATE_CLI_TEST_RS)
+    reference_plan = read(SORAFS_REFERENCE_SDK_PLAN)
+
+    assert "expected_cid_len = 0" not in ffi
+    assert "skip exact node-CID binding" not in ffi
+    assert "missing_expected_node_cid_error" in ffi
+    assert "requires expected governance node CID bytes" in ffi
+    assert "validate_governance_log_node_bytes(\n            input,\n            label,\n            Some(expected_cid)" in ffi
+    assert "ffi_governance_validator_accepts_matching_expected_cid" in ffi
+    assert "ffi_governance_validator_rejects_missing_expected_cid" in ffi
+    assert "governance --node <path> [--cid <node-cid>]" not in validate_cli
+    assert "governance --node requires --cid <node-cid>" in validate_cli
+    assert "sorafs_validate_governance_rejects_missing_node_cid" in validate_cli_tests
+    assert "optional node-CID binding" not in reference_plan
+    assert "with optional `--cid <node-cid>`" not in reference_plan
+    assert "required node-CID binding" in reference_plan
+    assert "with required `--cid <node-cid>`" in reference_plan
+
+
+def test_sorafs_transparency_publication_canary_requires_publisher_identity() -> None:
+    cli = read(IROHA_CLI_SORAFS_RS)
+    publication_args = cli.split(
+        "pub struct TransparencyPublicationCanaryArgs", 1
+    )[1].split("impl Run for TransparencyPublicationCanaryArgs", 1)[0]
+    evidence_fn = cli.split(
+        "fn transparency_publication_canary_evidence_json", 1
+    )[1].split("fn transparency_publication_canary_probe_route", 1)[0]
+    probe_fn = cli.split("fn transparency_publication_canary_probe_route", 1)[
+        1
+    ].split("fn transparency_publication_canary_route_url", 1)[0]
+
+    assert "allow-missing-publisher-identity" not in publication_args
+    assert "allow_missing_publisher_identity" not in cli
+    assert "require_publisher_identity" not in cli
+    assert '"publisher_identity_required".into()' in evidence_fn
+    assert "Value::Bool(true)" in evidence_fn
+    assert "&& publisher_identity_present" in probe_fn
+    assert "transparency_publication_canary_fails_missing_publisher_identity" in cli
+
+
+def test_sorafs_gateway_update_denylist_has_no_missing_removal_override() -> None:
+    cli = read(IROHA_CLI_SORAFS_RS)
+    update_args = cli.split("pub struct GatewayUpdateDenylistArgs", 1)[1].split(
+        "pub struct GatewayTemplateConfigArgs", 1
+    )[0]
+    update_run = cli.split("impl Run for GatewayUpdateDenylistArgs", 1)[1].split(
+        "impl Run for GatewayTemplateConfigArgs", 1
+    )[0]
+
+    assert "allow-missing-removals" not in update_args
+    assert "allow_missing_removals" not in cli
+    assert "pass --allow-missing-removals" not in cli
+    assert "not found in base denylist" in update_run
+    assert "denylist_update_rejects_missing_removal_descriptor" in cli
+
+    stale_docs = [
+        str(path.relative_to(REPO_ROOT))
+        for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_cli*.md"))
+        if "allow-missing-removals" in read(path)
+    ]
+    assert stale_docs == []
+
+
+def test_sorafs_direct_mode_enable_keeps_gateway_enforcement_closed() -> None:
+    cli = read(IROHA_CLI_SORAFS_RS)
+    enable_run = cli.split("impl Run for GatewayDirectModeEnableArgs", 1)[1].split(
+        "#[derive(clap::Args, Debug)]\npub struct GatewayDirectModeRollbackArgs", 1
+    )[0]
+    validate_fn = cli.split("fn validate_direct_mode_enable_plan", 1)[1].split(
+        "fn validate_direct_mode_url", 1
+    )[0]
+    render_fn = cli.split("fn render_direct_mode_enable_snippet", 1)[1].split(
+        "fn render_direct_mode_rollback_snippet", 1
+    )[0]
+
+    assert "validate_direct_mode_enable_plan(&plan)?" in enable_run
+    assert "capabilities.requires_manifest_envelope=true" in validate_fn
+    assert "capabilities.direct_car_supported=true" in validate_fn
+    assert 'direct_car_locator("https"' in validate_fn
+    assert "direct-mode plan canonical host mismatch" in validate_fn
+    assert "direct-mode plan vanity host mismatch" in validate_fn
+    assert "direct_car.canonical_url" in validate_fn
+    assert "direct_car.vanity_url" in validate_fn
+
+    assert "escape_toml_basic_string" in render_fn
+    assert "require_manifest_envelope = true" in render_fn
+    assert "enforce_admission = true" in render_fn
+    assert "enforce_capabilities = true" in render_fn
+    assert "require_manifest_envelope = false" not in render_fn
+    assert "enforce_admission = false" not in render_fn
+    assert "enforce_capabilities = false" not in render_fn
+
+    assert "direct_mode_enable_rejects_missing_direct_car_capability" in cli
+    assert "direct_mode_enable_rejects_manifest_envelope_disabled" in cli
+    assert "direct_mode_enable_rejects_tampered_direct_car_locator" in cli
+    assert "direct_mode_toml_string_escape_blocks_config_injection" in cli
+
+    stale_docs = [
+        str(path.relative_to(REPO_ROOT))
+        for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_gateway_direct_mode*.md"))
+        if any(
+            stale in read(path)
+            for stale in (
+                "require_manifest_envelope = false",
+                "enforce_admission = false",
+                "enforce_capabilities = false",
+                "explicitly disabled to match the snippet output",
+                "re-enable envelope/admission",
+            )
+        )
+    ]
+    assert stale_docs == []
 
 
 def test_sorafs_rollout_label_diagnostics_report_label_families() -> None:
@@ -740,6 +2289,730 @@ def canary_builders_with_name_set_validator() -> list[Path]:
     ]
 
 
+def test_canary_builders_keep_exact_csv_splitting() -> None:
+    offenders: list[str] = []
+    for path in sorted(SCRIPTS_DIR.glob("build_sorafs_*_canary.py")):
+        helper = function_source(path, "split_csv_values")
+        if not helper:
+            continue
+        if (
+            'items.extend(value.split(","))' not in helper
+            or ".strip()" in helper
+            or "items.append(stripped)" in helper
+        ):
+            offenders.append(path.name)
+
+    ai_prescreen_tests = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_ai_prescreen_canary_test.py"
+    )
+    repair_tests = read(SCRIPTS_DIR / "tests" / "build_sorafs_repair_canary_test.py")
+
+    assert offenders == []
+    assert (
+        "test_operator_route_csv_rejects_padded_or_empty_components"
+        in ai_prescreen_tests
+    )
+    assert "test_auditor_csv_rejects_padded_or_empty_components" in repair_tests
+
+
+def test_canary_builders_use_shared_canonical_text_validation() -> None:
+    missing: dict[str, list[str]] = {}
+    stale: list[str] = []
+
+    for path in sorted(SCRIPTS_DIR.glob("build_sorafs_*_canary.py")):
+        source = read(path)
+        helper = function_source(path, "validate_canonical_string")
+        if not helper:
+            continue
+        absent = [
+            fragment
+            for fragment in (
+                "diagnostic_text_is_canonical,",
+                "if not diagnostic_text_is_canonical(value):",
+            )
+            if fragment not in source
+        ]
+        if absent:
+            missing[path.name] = absent
+        if (
+            "not value.strip()" in helper
+            or "value != value.strip()" in helper
+            or "ord(character)" in helper
+        ):
+            stale.append(path.name)
+
+    moderation_tests = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_moderation_panel_canary_test.py"
+    )
+
+    assert missing == {}
+    assert stale == []
+    assert (
+        "test_validate_inputs_rejects_parser_returned_unicode_control_session_before_build"
+        in moderation_tests
+    )
+
+
+def test_canary_builders_use_shared_reviewed_deployment_context_validation() -> None:
+    missing: dict[str, list[str]] = {}
+    stale: list[str] = []
+
+    for path in sorted(SCRIPTS_DIR.glob("build_sorafs_*_canary.py")):
+        source = read(path)
+        absent = [
+            fragment
+            for fragment in (
+                "require_rollout_deployment_id,",
+                "require_rollout_environment,",
+                "require_rollout_deployment_id(",
+                '{"--deployment-id": args.deployment_id}',
+                'field="--deployment-id"',
+                "require_rollout_environment(",
+                '{"--environment": args.environment}',
+                'field="--environment"',
+            )
+            if fragment not in source
+        ]
+        if absent:
+            missing[path.name] = absent
+        if (
+            "validate_canonical_string(args.deployment_id" in source
+            or "validate_canonical_string(args.environment" in source
+        ):
+            stale.append(path.name)
+
+    gateway_tests = read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_gateway_compliance_canary_test.py"
+    )
+
+    assert missing == {}
+    assert stale == []
+    assert "test_unreviewed_deployment_id_fails_before_write" in gateway_tests
+    assert "test_unreviewed_environment_fails_before_write" in gateway_tests
+
+
+def test_canary_argfile_examples_build_reviewed_artifacts(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    validation = load_script_module(
+        SCRIPTS_DIR / "sorafs_evidence_validation.py",
+        "sorafs_evidence_validation_canary_examples_contract",
+    )
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_reviewed_artifact_contract",
+        )
+        output = tmp_path / example.stem / "canary.json"
+        args = [
+            f"@{example}",
+            "--out",
+            str(output),
+        ]
+
+        exit_code = module.main(args)
+        captured = capsys.readouterr()
+
+        file_errors: list[str] = []
+        if exit_code != 0:
+            file_errors.append(
+                f"exit code was {exit_code}; stderr was {captured.err!r}"
+            )
+        if not output.exists():
+            file_errors.append(f"did not write {output}")
+        else:
+            try:
+                payload = json.loads(output.read_text("utf-8"))
+            except json.JSONDecodeError as error:
+                file_errors.append(f"artifact was not JSON: {error}")
+                payload = None
+            if not isinstance(payload, dict):
+                file_errors.append("artifact was not a JSON object")
+            else:
+                schema = payload.get("schema")
+                if (
+                    not isinstance(schema, str)
+                    or not schema.startswith("sorafs.")
+                    or not schema.endswith(".v1")
+                    or schema != schema.strip()
+                    or any(ord(character) < 32 for character in schema)
+                ):
+                    file_errors.append(f"schema was {schema!r}")
+                if payload.get("deployment_context_reviewed") is not True:
+                    file_errors.append("deployment_context_reviewed was not true")
+                context_errors: list[str] = []
+                validation.require_rollout_deployment_id(payload, context_errors)
+                validation.require_rollout_environment(payload, context_errors)
+                file_errors.extend(context_errors)
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert failures == {}
+
+
+def test_canary_argfile_examples_build_payload_free_artifacts(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    explicit_false_flags = {
+        "critical_alerts_firing",
+        "debug_artifacts",
+        "degraded",
+        "contract_mirror_divergence",
+        "holder_identity_disclosed",
+        "mirror_drift_detected",
+        "rollback_detected",
+    }
+
+    def non_false_payload_safety_flags(value: object, path: str) -> list[str]:
+        violations: list[str] = []
+        if isinstance(value, dict):
+            for key, item in value.items():
+                item_path = f"{path}.{key}" if path else str(key)
+                if (
+                    isinstance(key, str)
+                    and (key.endswith("_included") or key in explicit_false_flags)
+                    and item is not False
+                ):
+                    violations.append(f"{item_path}={item!r}")
+                violations.extend(non_false_payload_safety_flags(item, item_path))
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                violations.extend(
+                    non_false_payload_safety_flags(item, f"{path}[{index}]")
+                )
+        return violations
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_payload_free_contract",
+        )
+        output = tmp_path / example.stem / "canary.json"
+        args = [
+            f"@{example}",
+            "--out",
+            str(output),
+        ]
+
+        exit_code = module.main(args)
+        captured = capsys.readouterr()
+
+        file_errors: list[str] = []
+        if exit_code != 0:
+            file_errors.append(
+                f"exit code was {exit_code}; stderr was {captured.err!r}"
+            )
+        if not output.exists():
+            file_errors.append(f"did not write {output}")
+        else:
+            try:
+                payload = json.loads(output.read_text("utf-8"))
+            except json.JSONDecodeError as error:
+                file_errors.append(f"artifact was not JSON: {error}")
+                payload = None
+            if payload is not None:
+                file_errors.extend(non_false_payload_safety_flags(payload, ""))
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert failures == {}
+
+
+def test_canary_argfile_examples_build_artifacts_without_sensitive_fields(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    sensitivity = load_script_module(
+        SENSITIVITY_HELPER,
+        "sorafs_evidence_sensitivity_canary_examples_contract",
+    )
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_sensitivity_contract",
+        )
+        output = tmp_path / example.stem / "canary.json"
+        args = [
+            f"@{example}",
+            "--out",
+            str(output),
+        ]
+
+        exit_code = module.main(args)
+        captured = capsys.readouterr()
+
+        file_errors: list[str] = []
+        if exit_code != 0:
+            file_errors.append(
+                f"exit code was {exit_code}; stderr was {captured.err!r}"
+            )
+        if not output.exists():
+            file_errors.append(f"did not write {output}")
+        else:
+            try:
+                payload = json.loads(output.read_text("utf-8"))
+            except json.JSONDecodeError as error:
+                file_errors.append(f"artifact was not JSON: {error}")
+                payload = None
+            if payload is not None:
+                sensitivity_errors: list[str] = []
+                sensitivity.visit_sensitive_fields(
+                    payload,
+                    "",
+                    sensitivity_errors,
+                    sensitive_keys=sensitivity.COMMON_SENSITIVE_KEYS,
+                    evidence_label="canary example artifact",
+                )
+                file_errors.extend(sensitivity_errors)
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert failures == {}
+
+
+def test_canary_argfile_examples_build_canonical_json_artifacts(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_canonical_json_contract",
+        )
+        output = tmp_path / example.stem / "canary.json"
+        args = [
+            f"@{example}",
+            "--out",
+            str(output),
+        ]
+
+        exit_code = module.main(args)
+        captured = capsys.readouterr()
+
+        file_errors: list[str] = []
+        if exit_code != 0:
+            file_errors.append(
+                f"exit code was {exit_code}; stderr was {captured.err!r}"
+            )
+        if not output.exists():
+            file_errors.append(f"did not write {output}")
+        else:
+            text = output.read_text("utf-8")
+            try:
+                payload = json.loads(text)
+            except json.JSONDecodeError as error:
+                file_errors.append(f"artifact was not JSON: {error}")
+                payload = None
+            if payload is not None:
+                expected = (
+                    json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)
+                    + "\n"
+                )
+                if text != expected:
+                    file_errors.append("artifact was not canonical sorted JSON")
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert failures == {}
+
+
+def test_canary_argfile_examples_reject_unreviewed_deployment_context_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_deployment_context_contract",
+        )
+        for label, option, value, expected_error in (
+            (
+                "deployment-id",
+                "--deployment-id",
+                "sorafs-dev-20260701",
+                (
+                    "--deployment-id must not contain non-reviewed deployment "
+                    "markers ['dev']"
+                ),
+            ),
+            (
+                "environment",
+                "--environment",
+                "dev",
+                (
+                    "--environment must be one of "
+                    "['prod', 'production', 'release', 'staging']"
+                ),
+            ),
+        ):
+            output = tmp_path / example.stem / label / "canary.json"
+            args = [
+                f"@{example}",
+                "--out",
+                str(output),
+                option,
+                value,
+            ]
+
+            exit_code = module.main(args)
+            captured = capsys.readouterr()
+
+            file_errors: list[str] = []
+            if exit_code != 2:
+                file_errors.append(f"{label} exit code was {exit_code}")
+            if expected_error not in captured.err:
+                file_errors.append(f"{label} stderr was {captured.err!r}")
+            if output.exists():
+                file_errors.append(f"{label} wrote {output}")
+            if file_errors:
+                failures.setdefault(example.name, []).extend(file_errors)
+
+    assert failures == {}
+
+
+def test_canary_argfile_examples_reject_noncanonical_generated_at_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_generated_at_contract",
+        )
+        output = tmp_path / example.stem / "canary.json"
+        args = [
+            f"@{example}",
+            "--out",
+            str(output),
+            "--generated-at-unix",
+            "01",
+        ]
+
+        exit_code = module.main(args)
+        captured = capsys.readouterr()
+
+        file_errors: list[str] = []
+        if exit_code != 2:
+            file_errors.append(f"exit code was {exit_code}")
+        if "argument --generated-at-unix: must be an integer" not in captured.err:
+            file_errors.append(f"stderr was {captured.err!r}")
+        if output.exists():
+            file_errors.append(f"wrote {output}")
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert failures == {}
+
+
+def test_canary_argfile_examples_reject_nonpositive_generated_at_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_positive_generated_at_contract",
+        )
+        output = tmp_path / example.stem / "canary.json"
+        args = [
+            f"@{example}",
+            "--out",
+            str(output),
+            "--generated-at-unix",
+            "0",
+        ]
+
+        exit_code = module.main(args)
+        captured = capsys.readouterr()
+
+        file_errors: list[str] = []
+        if exit_code != 2:
+            file_errors.append(f"exit code was {exit_code}")
+        if "argument --generated-at-unix: must be positive" not in captured.err:
+            file_errors.append(f"stderr was {captured.err!r}")
+        if output.exists():
+            file_errors.append(f"wrote {output}")
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert failures == {}
+
+
+def test_canary_argfile_examples_reject_invalid_now_unix_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    covered: list[str] = []
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        if '"--now-unix"' not in read(builder_path):
+            continue
+        covered.append(example.name)
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_now_unix_contract",
+        )
+        for label, value, expected_error in (
+            ("noncanonical", "01", "argument --now-unix: must be an integer"),
+            ("nonpositive", "0", "argument --now-unix: must be positive"),
+        ):
+            output = tmp_path / example.stem / label / "canary.json"
+            args = [
+                f"@{example}",
+                "--out",
+                str(output),
+                "--now-unix",
+                value,
+            ]
+
+            exit_code = module.main(args)
+            captured = capsys.readouterr()
+
+            file_errors: list[str] = []
+            if exit_code != 2:
+                file_errors.append(f"{label} exit code was {exit_code}")
+            if expected_error not in captured.err:
+                file_errors.append(f"{label} stderr was {captured.err!r}")
+            if output.exists():
+                file_errors.append(f"{label} wrote {output}")
+            if file_errors:
+                failures.setdefault(example.name, []).extend(file_errors)
+
+    assert covered
+    assert failures == {}
+
+
+def test_canary_argfile_examples_reject_negative_non_negative_options_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    covered: list[str] = []
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    options_by_builder: dict[Path, list[str]] = {}
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        if builder_path not in options_by_builder:
+            options_by_builder[builder_path] = canary_builder_options_with_type(
+                builder_path, "non_negative_int_arg"
+            )
+        options = options_by_builder[builder_path]
+        if not options:
+            continue
+
+        option = options[0]
+        covered.append(f"{example.name}:{option}")
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_non_negative_contract",
+        )
+        output = tmp_path / example.stem / option.removeprefix("--") / "canary.json"
+        args = [
+            f"@{example}",
+            "--out",
+            str(output),
+            option,
+            "-1",
+        ]
+
+        exit_code = module.main(args)
+        captured = capsys.readouterr()
+
+        expected_error = f"argument {option}: must be non-negative"
+        file_errors: list[str] = []
+        if exit_code != 2:
+            file_errors.append(f"exit code was {exit_code}")
+        if expected_error not in captured.err:
+            file_errors.append(f"stderr was {captured.err!r}")
+        if output.exists():
+            file_errors.append(f"wrote {output}")
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert covered
+    assert failures == {}
+
+
+def test_canary_argfile_examples_reject_nonpositive_positive_options_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    covered: list[str] = []
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    options_by_builder: dict[Path, list[str]] = {}
+    timestamp_options = {"--generated-at-unix", "--now-unix"}
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        if builder_path not in options_by_builder:
+            options_by_builder[builder_path] = [
+                option
+                for option in canary_builder_options_with_type(
+                    builder_path, "positive_int_arg"
+                )
+                if option not in timestamp_options
+            ]
+        options = options_by_builder[builder_path]
+        if not options:
+            continue
+
+        option = options[0]
+        covered.append(f"{example.name}:{option}")
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_positive_option_contract",
+        )
+        output = tmp_path / example.stem / option.removeprefix("--") / "canary.json"
+        args = [
+            f"@{example}",
+            "--out",
+            str(output),
+            option,
+            "0",
+        ]
+
+        exit_code = module.main(args)
+        captured = capsys.readouterr()
+
+        expected_error = f"argument {option}: must be positive"
+        file_errors: list[str] = []
+        if exit_code != 2:
+            file_errors.append(f"exit code was {exit_code}")
+        if expected_error not in captured.err:
+            file_errors.append(f"stderr was {captured.err!r}")
+        if output.exists():
+            file_errors.append(f"wrote {output}")
+        if file_errors:
+            failures[example.name] = file_errors
+
+    assert covered
+    assert failures == {}
+
+
+def test_canary_argfile_examples_reject_noncanonical_non_timestamp_integer_options_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    covered: list[str] = []
+    examples = sorted(EXAMPLES_DIR.glob("sorafs_*canary.args.example"))
+    options_by_builder: dict[Path, list[tuple[str, str]]] = {}
+    timestamp_options = {"--generated-at-unix", "--now-unix"}
+
+    assert examples
+
+    for example in examples:
+        builder_path = canary_example_builder_path(example)
+        if builder_path not in options_by_builder:
+            typed_options: list[tuple[str, str]] = []
+            for type_name in ("positive_int_arg", "non_negative_int_arg"):
+                options = [
+                    option
+                    for option in canary_builder_options_with_type(
+                        builder_path, type_name
+                    )
+                    if option not in timestamp_options
+                ]
+                if options:
+                    typed_options.append((type_name, options[0]))
+            options_by_builder[builder_path] = typed_options
+        typed_options = options_by_builder[builder_path]
+        if not typed_options:
+            continue
+
+        module = load_script_module(
+            builder_path,
+            f"{builder_path.stem}_{example.stem}_noncanonical_integer_contract",
+        )
+        for type_name, option in typed_options:
+            covered.append(f"{example.name}:{type_name}:{option}")
+            type_label = type_name.removesuffix("_int_arg")
+            output = (
+                tmp_path
+                / example.stem
+                / f"{type_label}-{option.removeprefix('--')}"
+                / "canary.json"
+            )
+            args = [
+                f"@{example}",
+                "--out",
+                str(output),
+                option,
+                "01",
+            ]
+
+            exit_code = module.main(args)
+            captured = capsys.readouterr()
+
+            expected_error = f"argument {option}: must be an integer"
+            file_errors: list[str] = []
+            if exit_code != 2:
+                file_errors.append(f"{type_label} exit code was {exit_code}")
+            if expected_error not in captured.err:
+                file_errors.append(f"{type_label} stderr was {captured.err!r}")
+            if output.exists():
+                file_errors.append(f"{type_label} wrote {output}")
+            if file_errors:
+                failures.setdefault(example.name, []).extend(file_errors)
+
+    assert covered
+    assert failures == {}
+
+
 def test_canary_builder_tests_keep_standardized_closed_set_matrix() -> None:
     missing = [
         path.name
@@ -844,6 +3117,8 @@ def test_canary_builders_use_no_follow_atomic_writes() -> None:
         "os.close(fd)",
         "os.replace(tmp_path, path)",
         'fsync_checker_output_parent(path, label="--out")',
+        "error_diagnostic_label(error, path_label=parent_label)",
+        "error_diagnostic_label(error, path_label=path_label)",
         "tmp_path.unlink()",
     )
     unsafe_fragments = (
@@ -940,6 +3215,95 @@ def test_canary_builders_report_output_parent_fsync_failure(
 
         if errors != ["--out parent cannot be fsynced"]:
             failures[path.name] = errors
+
+    assert failures == {}
+
+
+def test_canary_builders_sanitize_output_parent_creation_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    failures: dict[str, list[str]] = {}
+    original_mkdir = Path.mkdir
+
+    for path in sorted(SCRIPTS_DIR.glob("build_sorafs_*_canary.py")):
+        module = load_script_module(
+            path,
+            f"{path.stem}_atomic_parent_create_failure_contract",
+        )
+        output = tmp_path / path.stem / "artifact.json"
+
+        def mkdir(candidate: Path, *args, **kwargs):
+            if candidate == output.parent:
+                raise OSError("mkdir denied for /secret/private_key\nbearer_token")
+            return original_mkdir(candidate, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", mkdir)
+
+        errors = module.write_payload_atomic(
+            output, {"schema": "parent-create-failure.test.v1"}
+        )
+
+        expected = [
+            f"--out parent `{output.parent}` cannot be created: "
+            "<non-canonical-error>"
+        ]
+        joined = "\n".join(errors)
+        file_errors: list[str] = []
+        if errors != expected:
+            file_errors.extend(errors)
+        if "private_key" in joined or "bearer_token" in joined:
+            file_errors.append("raw mkdir error leaked")
+        if output.exists():
+            file_errors.append("output artifact was created")
+        if file_errors:
+            failures[path.name] = file_errors
+
+        monkeypatch.setattr(Path, "mkdir", original_mkdir)
+
+    assert failures == {}
+
+
+def test_canary_builders_sanitize_atomic_write_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    failures: dict[str, list[str]] = {}
+
+    def fail_write_all_bytes(_fd: int, _payload: bytes) -> None:
+        raise OSError("write denied for /secret/private_key\nbearer_token")
+
+    for path in sorted(SCRIPTS_DIR.glob("build_sorafs_*_canary.py")):
+        module = load_script_module(
+            path,
+            f"{path.stem}_atomic_write_failure_sanitized_contract",
+        )
+        monkeypatch.setattr(
+            module,
+            "write_all_checker_summary_bytes",
+            fail_write_all_bytes,
+        )
+        output_parent = tmp_path / path.stem
+        output = output_parent / "artifact.json"
+
+        errors = module.write_payload_atomic(
+            output, {"schema": "write-failure.test.v1"}
+        )
+
+        expected = [f"--out `{output}` cannot be written: <non-canonical-error>"]
+        leftovers = [leftover.name for leftover in output_parent.glob(".*.tmp")]
+        joined = "\n".join(errors)
+        file_errors: list[str] = []
+        if errors != expected:
+            file_errors.extend(errors)
+        if "private_key" in joined or "bearer_token" in joined:
+            file_errors.append("raw write error leaked")
+        if output.exists():
+            file_errors.append("output artifact was created")
+        if leftovers:
+            file_errors.append(f"temporary files left behind: {leftovers}")
+        if file_errors:
+            failures[path.name] = file_errors
 
     assert failures == {}
 
@@ -2125,11 +4489,23 @@ def test_reviewed_response_files_use_shared_path_identity_resolution() -> None:
     assert "except _PathIdentityFailureTemplateError:" in helper
     assert "def path_diagnostic_label" in helper
     assert "def error_diagnostic_label" in helper
+    assert "def diagnostic_text_is_canonical" in helper
     assert "def _path_label" in helper
     assert "def _error_label" in helper
     assert "<non-path>" in helper
     assert "<non-canonical-path>" in helper
+    assert "<secret-looking-path>" in helper
     assert "<non-canonical-error>" in helper
+    assert "COMMON_SENSITIVE_KEY_NORMALIZED" in helper
+    assert "HIGH_RISK_SENSITIVE_KEY_FRAGMENTS" in helper
+    assert "normalize_sensitive_key" in helper
+    assert "unicodedata.normalize(\"NFKC\"" in helper
+    assert 'unicodedata.category(character) != "Cf"' in helper
+    assert 'unicodedata.category(character).startswith("C")' in helper
+    assert "if not diagnostic_text_is_canonical(error):" in helper
+    assert "if not diagnostic_text_is_canonical(label):" in helper
+    assert "if not diagnostic_text_is_canonical(failure_template):" in helper
+    assert "if _path_text_is_secret_looking(error_text):" in helper
     assert "ALLOWED_FAILURE_TEMPLATE_FIELDS" in helper
     assert "Formatter().parse(failure_template)" in helper
     assert "path identity errors must be a list of strings" in helper
@@ -2156,7 +4532,27 @@ def test_reviewed_response_files_use_shared_path_identity_resolution() -> None:
         in helper_test
     )
     assert "test_path_diagnostic_label_sanitizes_malformed_values" in helper_test
+    assert (
+        "test_path_diagnostic_label_sanitizes_unicode_control_values"
+        in helper_test
+    )
+    assert (
+        "test_path_diagnostic_label_sanitizes_secret_looking_components"
+        in helper_test
+    )
+    assert (
+        "test_path_diagnostic_label_sanitizes_unicode_obfuscated_secret_components"
+        in helper_test
+    )
     assert "test_error_diagnostic_label_sanitizes_malformed_values" in helper_test
+    assert (
+        "test_error_diagnostic_label_sanitizes_unicode_obfuscated_secret_text"
+        in helper_test
+    )
+    assert (
+        "test_error_diagnostic_label_sanitizes_unicode_control_text"
+        in helper_test
+    )
     assert "test_resolve_path_identity_rejects_malformed_error_container" in helper_test
     assert (
         "test_resolve_path_identity_rejects_malformed_existing_error_text"
@@ -2175,13 +4571,19 @@ def test_reviewed_response_files_use_shared_path_identity_resolution() -> None:
         "test_resolve_path_identity_sanitizes_noncanonical_resolver_failure"
         in helper_test
     )
+    assert (
+        "test_resolve_path_identity_sanitizes_secret_resolver_failure"
+        in helper_test
+    )
     assert "error_diagnostic_label" in response_args
+    assert "diagnostic_text_is_canonical" in response_args
     assert "path_diagnostic_label" not in response_args
     assert "resolve_path_identity" in response_args
     assert "resolve_path_identity(" in response_args
     assert "path.resolve()" not in response_args
     assert "isinstance(values, (str, bytes, bytearray))" in response_args
     assert "def _require_argument_string" in response_args
+    assert "if not diagnostic_text_is_canonical(value):" in response_args
     assert "argument must be a non-empty canonical string" in response_args
     assert "test_response_file_resolution_uses_shared_identity_helper" in response_args_test
     assert "test_response_file_stat_failure_sanitizes_malformed_error" in response_args_test
@@ -2194,7 +4596,15 @@ def test_reviewed_response_files_use_shared_path_identity_resolution() -> None:
         "test_raw_bytearray_argument_container_fails_without_byte_expansion"
         in response_args_test
     )
+    assert "argument `{value}` must be a string" not in response_args
+    assert "test_direct_non_string_argument_does_not_echo_value" in response_args_test
     assert "test_malformed_direct_argument_text_fails_closed" in response_args_test
+    assert (
+        "test_response_file_parser_returning_non_string_line_arg_fails_with_line"
+        in response_args_test
+    )
+    assert "private-key" in response_args_test
+    assert "signing.key" in response_args_test
     assert (
         "test_response_file_parser_returning_malformed_line_arg_fails_with_line"
         in response_args_test
@@ -2224,6 +4634,72 @@ def test_rollout_checker_examples_document_runtime_only_evidence() -> None:
             missing[path.name] = str(example.relative_to(SCRIPTS_DIR.parent))
 
     assert missing == {}
+
+
+def test_rollout_checker_examples_fail_closed_without_runtime_evidence(capsys) -> None:
+    failures: dict[str, list[str]] = {}
+    examples = [(path, checker_example(path)) for path in CHECKERS]
+    examples.append(
+        (
+            PRODUCTION_READINESS_CHECKER,
+            EXAMPLES_DIR / "sorafs_production_readiness.args.example",
+        )
+    )
+
+    for path, example in examples:
+        module = load_script_module(
+            path,
+            f"sorafs_checker_missing_runtime_evidence_contract_{path.stem}",
+        )
+        file_errors: list[str] = []
+        try:
+            exit_code = module.main([f"@{example}"])
+        except Exception as error:
+            captured = capsys.readouterr()
+            file_errors.append(f"raised {type(error).__name__}: {error}")
+        else:
+            captured = capsys.readouterr()
+            if exit_code not in {1, 2}:
+                file_errors.append(f"exit code was {exit_code}")
+            if captured.out:
+                file_errors.append(f"unexpected stdout: {captured.out!r}")
+            if not captured.err.strip():
+                file_errors.append("stderr was empty")
+            bad_lines = [
+                line
+                for line in captured.err.splitlines()
+                if not (
+                    line.startswith("ERROR: ")
+                    or line.startswith("- ")
+                    or line == "SoraFS production readiness is blocked:"
+                )
+            ]
+            if bad_lines:
+                file_errors.append(f"stderr used unexpected line prefixes: {bad_lines!r}")
+            if ROLLOUT_ARGFILE_SECRET_RE.search(captured.err):
+                file_errors.append(
+                    f"stderr contained a secret-looking token: {captured.err!r}"
+                )
+            leaked_diagnostics = [
+                token
+                for token in (
+                    "Traceback",
+                    "FileNotFoundError",
+                    "PermissionError",
+                    "RuntimeError",
+                    "SystemExit",
+                    "ValueError",
+                )
+                if token in captured.err
+            ]
+            if leaked_diagnostics:
+                file_errors.append(
+                    f"stderr leaked raw diagnostic classes: {leaked_diagnostics!r}"
+                )
+        if file_errors:
+            failures[path.name] = file_errors
+
+    assert failures == {}
 
 
 def test_rollout_runners_accept_reviewed_response_files() -> None:
@@ -2422,6 +4898,72 @@ def test_rollout_runner_examples_parse_with_runner_parsers() -> None:
             failures[path.name] = detail[-1] if detail else f"SystemExit({error.code})"
         except Exception as error:
             failures[path.name] = f"{type(error).__name__}: {error}"
+
+    assert failures == {}
+
+
+def test_rollout_runner_collection_examples_fail_closed_without_runtime_evidence(
+    capsys,
+) -> None:
+    failures: dict[str, list[str]] = {}
+
+    for path in COLLECTION_RUNNERS:
+        example = runner_collection_example(path)
+        module = load_script_module(
+            path,
+            f"sorafs_runner_missing_runtime_evidence_contract_{path.stem}",
+        )
+        file_errors: list[str] = []
+        try:
+            exit_code = module.main([f"@{example}", "--dry-run"])
+        except Exception as error:
+            captured = capsys.readouterr()
+            file_errors.append(f"raised {type(error).__name__}: {error}")
+        else:
+            captured = capsys.readouterr()
+            if exit_code != 2:
+                file_errors.append(f"exit code was {exit_code}")
+            if captured.out:
+                file_errors.append(f"unexpected stdout: {captured.out!r}")
+            if not captured.err.strip():
+                file_errors.append("stderr was empty")
+            if not (
+                "input evidence file" in captured.err
+                or "must exist and be" in captured.err
+                or "must not be a symlink" in captured.err
+            ):
+                file_errors.append(
+                    f"stderr did not report preflight rejection: {captured.err!r}"
+                )
+            bad_lines = [
+                line
+                for line in captured.err.splitlines()
+                if not (line.startswith("ERROR: ") or line.startswith("- "))
+            ]
+            if bad_lines:
+                file_errors.append(f"stderr used unexpected line prefixes: {bad_lines!r}")
+            if ROLLOUT_ARGFILE_SECRET_RE.search(captured.err):
+                file_errors.append(
+                    f"stderr contained a secret-looking token: {captured.err!r}"
+                )
+            leaked_diagnostics = [
+                token
+                for token in (
+                    "Traceback",
+                    "FileNotFoundError",
+                    "PermissionError",
+                    "RuntimeError",
+                    "SystemExit",
+                    "ValueError",
+                )
+                if token in captured.err
+            ]
+            if leaked_diagnostics:
+                file_errors.append(
+                    f"stderr leaked raw diagnostic classes: {leaked_diagnostics!r}"
+                )
+        if file_errors:
+            failures[path.name] = file_errors
 
     assert failures == {}
 
@@ -2734,7 +5276,7 @@ def test_rollout_runner_dry_run_deployment_context_matches_args() -> None:
         else:
             expected_context = {
                 "deployment_id": args.deployment_id,
-                "environment": args.environment.lower(),
+                "environment": args.environment,
                 "deployment_context_reviewed": True,
             }
             if context != expected_context:
@@ -3279,7 +5821,13 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     )
 
     assert "--provider-proof must use PROVIDER_ID=PATH form" in reputation_runner
+    assert "diagnostic_text_is_canonical" in reputation_runner
+    assert "not diagnostic_text_is_canonical(provider_id)" in reputation_runner
+    assert "not diagnostic_text_is_canonical(path)" in reputation_runner
+    assert "--provider-id must be canonical" in reputation_runner
     assert "got `{spec}`" not in reputation_runner
+    assert "provider_id.strip()" not in reputation_runner
+    assert "path.strip()" not in reputation_runner
     assert 'errors.append("duplicate --provider-id")' in reputation_runner
     assert "duplicate --provider-id `" not in reputation_runner
     assert 'errors.append("duplicate --provider-proof")' in reputation_runner
@@ -3288,8 +5836,26 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     assert "missing --provider-proof for `" not in reputation_runner
     assert "--provider-proof supplied for unrequested provider" in reputation_runner
     assert "unrequested provider `" not in reputation_runner
+    assert (
+        "test_provider_proof_rejects_padded_or_unicode_components_without_trimming"
+        in reputation_test
+    )
+    assert (
+        "test_provider_id_rejects_padded_or_unicode_values_before_plan"
+        in reputation_test
+    )
     assert "--source-entry must use KIND=PATH form" in ai_runner
     assert "--source-entry must use KIND=PATH form" in transparency_runner
+    assert "diagnostic_text_is_canonical" in ai_runner
+    assert "diagnostic_text_is_canonical" in transparency_runner
+    assert "not diagnostic_text_is_canonical(source_kind)" in ai_runner
+    assert "not diagnostic_text_is_canonical(source_kind)" in transparency_runner
+    assert "not diagnostic_text_is_canonical(path)" in ai_runner
+    assert "not diagnostic_text_is_canonical(path)" in transparency_runner
+    assert "source_kind.strip()" not in ai_runner
+    assert "source_kind.strip()" not in transparency_runner
+    assert "path.strip()" not in ai_runner
+    assert "path.strip()" not in transparency_runner
     assert "source-entry supplied for unsupported kind" in ai_runner
     assert "source-entry supplied for unsupported kind" in transparency_runner
     assert "duplicate source-entry kind" in ai_runner
@@ -3300,6 +5866,7 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     assert "got `{spec}`" not in transparency_runner
     assert "has conflicting " in transparency_runner
     assert "DEPLOYMENT_CONTEXT_ARTIFACT_CONFLICT_DIAGNOSTIC" in transparency_runner
+    assert "args.environment.lower()" not in transparency_runner
     assert '"deployment context".format(path_diagnostic_label(path), field)' not in (
         transparency_runner
     )
@@ -3308,6 +5875,14 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
     assert "test_duplicate_provider_proof_does_not_echo_provider_id" in reputation_test
     assert "test_malformed_source_entry_does_not_echo_spec" in ai_test
     assert "test_malformed_source_entry_does_not_echo_spec" in transparency_test
+    assert (
+        "test_source_entry_rejects_padded_or_unicode_components_without_trimming"
+        in ai_test
+    )
+    assert (
+        "test_source_entry_rejects_padded_or_unicode_components_without_trimming"
+        in transparency_test
+    )
     assert "test_unknown_source_kind_fails_before_plan_without_leaking" in ai_test
     assert (
         "test_unknown_source_kind_fails_before_plan_without_leaking"
@@ -3322,6 +5897,7 @@ def test_runner_malformed_spec_diagnostics_are_payload_free() -> None:
         "test_generated_artifact_context_conflict_does_not_echo_existing_value"
         in transparency_test
     )
+    assert "test_environment_must_be_exact_reviewed_label_before_plan" in transparency_test
     assert "test_cycle_id_must_be_lowercase_16_byte_hex" in transparency_test
     assert "bad_cycle_id not in captured.err" in transparency_test
 
@@ -3464,8 +6040,22 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
     assert "is not a valid bounded JSON object: \"\n            f\"{_error_label(error)}" not in checker
     assert "_error_label(error, path_label=path_label)" in checker
     assert "from sorafs_path_identity import" in checker
+    assert "diagnostic_text_is_canonical" in checker
     assert "path_diagnostic_label(" in checker
     assert "error_diagnostic_label(" in checker
+    assert "from sorafs_runner_preflight import" in checker
+    assert "is_sensitive_path_component" in checker
+    assert "plan_rendered_path_is_safe" in checker
+    assert "INVALID_FIXTURE_NAME_LABEL" in checker
+    assert "FIXTURE_PATH_DIAGNOSTIC" in checker
+    assert "SENSITIVE_JSON_FIELD_LABEL" in checker
+    assert "NON_CANONICAL_JSON_FIELD_LABEL" in checker
+    assert "def safe_json_field_label" in checker
+    assert "if not diagnostic_text_is_canonical(field):" in checker
+    assert "def safe_json_field_labels" in checker
+    assert "safe_json_field_labels(extra)" in checker
+    assert "duplicate {field} values" in checker
+    assert "duplicate {field}: {field_value}" not in checker
     assert "path.read_bytes()" not in checker
     assert "max_bytes=max_bytes" in checker
     assert "load_generated_json_sidecar" in checker
@@ -3486,6 +6076,10 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
         in checker_test
     )
     assert (
+        "test_full_mode_rejects_secret_symlinked_generated_fixture_without_echo"
+        in checker_test
+    )
+    assert (
         "test_load_manifest_sanitizes_noncanonical_path_decode_error"
         in checker_test
     )
@@ -3494,8 +6088,16 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
         in checker_test
     )
     assert "failed to scan generated fixture root" in checker
+    assert "UNSAFE_GENERATED_FIXTURE_PATH_LABEL" in checker
+    assert "def safe_generated_fixture_path_label" in checker
+    assert "def safe_generated_fixture_path_labels" in checker
+    assert "if not diagnostic_text_is_canonical(path):" in checker
+    assert "safe_generated_fixture_path_labels(extra_paths)" in checker
+    assert "unmanifested generated hedging fixtures: {extra_paths}" not in checker
     assert "render_checker_summary" in checker
     assert "write_checker_summary" in checker
+    assert "validate_checker_rendered_paths" in checker
+    assert "validate_checker_rendered_paths((manifest,), errors)" in checker
     assert "validate_checker_summary_output" in checker
     assert "args.summary_out.parent.mkdir" not in checker
     assert "args.summary_out.write_text" not in checker
@@ -3505,6 +6107,11 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
     assert "validation_command is not shell-tokenizable: {error}" not in checker
     assert "validator execution failed: {error}" not in checker
     assert "validation_command is not shell-tokenizable:" in checker
+    assert "VALIDATION_COMMAND_TOKENS_DIAGNOSTIC" in checker
+    assert "got {command_tokens}" not in checker
+    assert "expected_tokens}, got" not in checker
+    assert "validator binary not found: {_path_label(validator_bin)}" in checker
+    assert "validator binary not found: {validator_bin}" not in checker
     assert "f\"{_error_label(error)}\"" in checker
     assert "validator execution failed: {_error_label(error)}" in checker
     assert "validate_generated_inventory" in checker
@@ -3513,11 +6120,28 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
     assert "EXPECTED_NEGATIVE_CASES" in checker
     assert "validate_status_path_contract" in checker
     assert "parse_fixture_path" in checker
+    assert "not is_sensitive_path_component(name)" in checker
+    assert "entry[\"name\"] = INVALID_FIXTURE_NAME_LABEL" in checker
+    assert "UNSAFE_CHECKER_PATH_LABEL" in checker
+    assert "not plan_rendered_path_is_safe(Path(path))" in checker
+    assert "plan_rendered_path_is_safe(fixture_path)" in checker
+    assert "fixtures include unexpected names: {sorted(extra)}" not in checker
+    assert "fixtures include unexpected names" in checker
     assert "VALIDATED_NORITO_PATH" in checker
     assert "MAX_U128_DECIMAL" in checker
     assert "lowercase even-length hex norito_bytes_hex" in checker
     assert "missing generated Norito fixture" in checker_test
     assert "test_summary_out_same_as_manifest_fails_before_write" in checker_test
+    assert "test_preflight_sanitizes_non_path_manifest_label" in checker_test
+    assert "test_manifest_unsafe_path_fails_before_read_without_leaking" in checker_test
+    assert (
+        "test_manifest_only_rejects_secret_looking_fixture_name_without_echo"
+        in checker_test
+    )
+    assert (
+        "test_manifest_only_rejects_encoded_secret_fixture_path_without_echo"
+        in checker_test
+    )
     assert "test_preflight_sanitizes_non_path_summary_out_label" in checker_test
     assert "test_summary_out_directory_fails_before_write" in checker_test
     assert "test_summary_out_symlink_fails_before_manifest_read" in checker_test
@@ -3537,6 +6161,7 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
     assert "test_read_file_bytes_sanitizes_noncanonical_path_and_error" in checker_test
     assert "test_generated_json_sidecar_missing_path_sanitizes_label" in checker_test
     assert "test_validation_command_tokenize_error_is_sanitized" in checker_test
+    assert "test_validation_command_token_mismatch_is_sanitized" in checker_test
     assert "test_validator_execution_error_is_sanitized" in checker_test
     assert (
         "test_full_mode_rejects_fixture_inventory_scan_errors_without_traceback"
@@ -3549,12 +6174,41 @@ def test_sorafs_hedging_billing_fixture_generator_is_checked_in() -> None:
     assert "test_full_mode_enforces_expected_validator_statuses" in checker_test
     assert "test_full_mode_rejects_validator_status_mismatch" in checker_test
     assert "test_full_mode_resolves_repo_relative_validator_binary" in checker_test
+    assert "test_full_mode_sanitizes_missing_secret_validator_binary" in checker_test
     assert "test_full_mode_rejects_command_injection_before_validator_exec" in checker_test
+    assert (
+        "test_full_mode_rejects_secret_validation_command_drift_without_echo"
+        in checker_test
+    )
     assert "test_full_mode_rejects_unmanifested_generated_fixtures" in checker_test
+    assert (
+        "test_full_mode_rejects_secret_unmanifested_generated_fixture_without_echo"
+        in checker_test
+    )
+    assert (
+        "test_unmanifested_generated_fixture_label_rejects_control_path_without_echo"
+        in checker_test
+    )
     assert "test_full_mode_rejects_malformed_json_sidecar" in checker_test
+    assert (
+        "test_full_mode_rejects_sensitive_extra_json_sidecar_key_without_echo"
+        in checker_test
+    )
+    assert (
+        "test_full_mode_rejects_noncanonical_extra_json_sidecar_key_without_echo"
+        in checker_test
+    )
+    assert "test_safe_json_field_label_rejects_unicode_controls_without_echo" in checker_test
+    assert '"bad\\u200dkey"' in checker_test
+    assert '"bad\\u202ekey"' in checker_test
     assert "test_full_mode_rejects_odd_length_norito_hex_without_traceback" in checker_test
     assert "test_full_mode_rejects_malformed_nested_json_sidecar" in checker_test
+    assert (
+        "test_full_mode_rejects_sensitive_nested_json_sidecar_key_without_echo"
+        in checker_test
+    )
     assert "test_full_mode_rejects_json_sidecar_version_drift" in checker_test
+    assert "test_full_mode_rejects_sensitive_duplicate_nested_id_without_echo" in checker_test
     assert "test_full_mode_rejects_statement_sidecar_value_invariants" in checker_test
     assert "test_full_mode_rejects_sidecar_numeric_policy_bounds" in checker_test
     assert missing_generator == []
@@ -3710,6 +6364,7 @@ def test_rollout_runners_use_shared_command_plan_execution() -> None:
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     helper_test = read(RUNNER_PREFLIGHT_TEST)
 
+    assert "diagnostic_text_is_canonical" in helper
     assert "def command_plan_steps" in helper
     assert "def validate_command_plan_step_shapes" in helper
     assert "COMMAND_PLAN_SHAPE_DIAGNOSTIC" in helper
@@ -3717,8 +6372,10 @@ def test_rollout_runners_use_shared_command_plan_execution() -> None:
     assert "command-plan step" in helper
     assert "command must be a non-empty list of strings" in helper
     assert "command executable must be a non-empty canonical string" in helper
+    assert "executable_is_canonical = diagnostic_text_is_canonical(command[0])" in helper
     assert "must not contain NUL bytes" in helper
     assert "must not contain control characters" in helper
+    assert "_contains_control_character(part)" in helper
     assert "isinstance(plan, (str, bytes, bytearray, Mapping))" in helper
     assert "def run_command_plan" in helper
     assert "def emit_runner_error_lines" in helper
@@ -3772,6 +6429,8 @@ def test_rollout_runners_use_shared_command_plan_execution() -> None:
         "test_validate_command_plan_step_shapes_rejects_malformed_fields"
         in helper_test
     )
+    assert "unicode_control_executable command executable" in helper_test
+    assert "unicode_control_arg command argument 1 must not contain control characters" in helper_test
     assert (
         "test_validate_command_plan_step_shapes_sanitizes_malformed_artifact_labels"
         in helper_test
@@ -3835,6 +6494,7 @@ def test_rollout_runners_use_shared_plan_rendering() -> None:
     assert "def validate_runner_plan_steps" in helper
     assert "def validate_runner_evidence_plan" in helper
     assert "def canonical_runner_plan_string" in helper
+    assert "if not diagnostic_text_is_canonical(value):" in helper
     assert "runner plan must be an object" in helper
     assert "runner plan steps must match command plan" in helper
     assert "required_kinds must not contain duplicate kinds" in helper
@@ -4676,7 +7336,22 @@ def test_sorafs_orchestrator_fixture_builder_uses_no_follow_io() -> None:
     assert "def write_open_flags" in builder
     assert "def write_all(fd: int, chunk: bytes) -> None" in builder
     assert "def fixture_file_size" in builder
+    assert "from sorafs_evidence_json import (" in builder
+    assert "json_object_without_duplicate_keys" in builder
+    assert "reject_non_standard_json_constant" in builder
+    assert "from sorafs_path_identity import error_diagnostic_label, path_diagnostic_label" in builder
+    assert "from sorafs_runner_preflight import plan_rendered_path_is_safe" in builder
+    assert "FIXTURE_PATH_DIAGNOSTIC" in builder
+    assert "if not plan_rendered_path_is_safe(path)" in builder
+    assert "path_diagnostic_label(path)" in builder
+    assert "error_diagnostic_label(error, path_label=path_label)" in builder
+    assert "failed to create {label} `{path_label}`: {error_label}" in builder
+    assert "failed to read chunker fixture `{path_label}`: {error_label}" in builder
+    assert "failed to write orchestrator fixture output " in builder
+    assert "failed to inspect {label} `{path_label}`: {error_label}" in builder
     assert "os.open(plan_path, read_open_flags())" in builder
+    assert "parse_constant=reject_non_standard_json_constant" in builder
+    assert "object_pairs_hook=json_object_without_duplicate_keys" in builder
     assert "os.open(path, write_open_flags(), 0o666)" in builder
     assert "json.dumps(payload, indent=2, allow_nan=False)" in builder
     assert "written = os.write(fd, view)" in builder
@@ -4692,15 +7367,30 @@ def test_sorafs_orchestrator_fixture_builder_uses_no_follow_io() -> None:
     assert "json.dump(payload" not in builder
     assert "stat().st_size" not in builder
     assert "test_load_chunker_fixture_rejects_symlink_before_open" in builder_test
+    assert (
+        "test_load_chunker_fixture_rejects_sensitive_duplicate_key_without_leaking"
+        in builder_test
+    )
+    assert (
+        "test_load_chunker_fixture_rejects_non_standard_numeric_constants"
+        in builder_test
+    )
+    assert "test_load_chunker_fixture_read_error_is_sanitized" in builder_test
     assert "test_write_json_uses_no_follow_descriptor_open" in builder_test
     assert "test_write_json_completes_partial_descriptor_writes" in builder_test
     assert "test_write_json_fsyncs_descriptor_before_close" in builder_test
-    assert "test_write_json_propagates_fsync_failure" in builder_test
+    assert "test_write_json_propagates_fsync_failure_without_leaking_error" in builder_test
     assert "test_write_json_fsyncs_output_parent_after_descriptor_close" in builder_test
     assert "test_write_json_propagates_parent_fsync_failure" in builder_test
     assert "test_build_telemetry_includes_reputation_score" in builder_test
     assert "test_ensure_fixture_directory_rejects_symlink_before_create" in builder_test
+    assert "test_ensure_fixture_directory_mkdir_error_is_sanitized" in builder_test
+    assert (
+        "test_validate_fixture_path_rejects_secret_looking_path_without_leaking"
+        in builder_test
+    )
     assert "test_fixture_file_size_uses_no_follow_descriptor_fstat" in builder_test
+    assert "test_fixture_file_size_fstat_error_is_sanitized" in builder_test
 
 
 def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
@@ -4717,9 +7407,46 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "def write_all(fd: int, chunk: bytes) -> None" in replay
     assert "from sorafs_path_identity import error_diagnostic_label" in replay
     assert "from sorafs_checker_preflight import fsync_checker_output_parent" in replay
+    assert "from sorafs_evidence_json import (" in replay
+    assert "json_object_without_duplicate_keys" in replay
+    assert "reject_non_standard_json_constant" in replay
+    assert "from sorafs_runner_preflight import plan_rendered_path_is_safe" in replay
+    assert "CODEGEN_PATH_DIAGNOSTIC" in replay
+    assert "FIXTURE_METADATA_PATH_DIAGNOSTIC" in replay
+    assert "FIXTURE_METADATA_NAME_RE" in replay
+    assert "FIXTURE_METADATA_NAME_DIAGNOSTIC" in replay
+    assert "FIXTURE_METADATA_FIELD_DIAGNOSTIC" in replay
+    assert "PROFILE_HANDLE_RE" in replay
+    assert "STORAGE_CLASSES" in replay
+    assert "if not plan_rendered_path_is_safe(path)" in replay
+    assert "def require_relative_fixture_path" in replay
+    assert "path.is_absolute()" in replay
+    assert "def require_fixture_name" in replay
+    assert "FIXTURE_METADATA_NAME_RE.fullmatch(value)" in replay
+    assert "def require_profile_handle" in replay
+    assert "PROFILE_HANDLE_RE.fullmatch(value)" in replay
+    assert "def require_storage_class" in replay
+    assert "value not in STORAGE_CLASSES" in replay
+    assert "def require_metadata_int" in replay
+    assert "isinstance(value, bool)" in replay
+    assert "fixture_name = require_fixture_name(" in replay
+    assert "profile_handle = require_profile_handle(" in replay
+    assert "now_unix_secs = require_metadata_int(" in replay
+    assert "retention_epoch = require_metadata_int(" in replay
+    assert "min_replicas = require_metadata_int(" in replay
+    assert "storage_class = require_storage_class(" in replay
+    assert "payload_rel = require_relative_fixture_path(" in replay
+    assert "plan_rel = require_relative_fixture_path(" in replay
+    assert 'fixture_meta["plan_file"] = plan_rel.as_posix()' in replay
+    assert '("providers_file", "telemetry_file", "options_file")' in replay
+    assert "fixture_meta[metadata_path_field] = metadata_path.as_posix()" in replay
+    assert "def main(argv: list[str] | None = None) -> int" in replay
+    assert "parser.parse_args(argv)" in replay
     assert "path_diagnostic_label" in replay
     assert 'getattr(os, "O_NOFOLLOW", 0)' in replay
     assert "os.open(path, read_open_flags())" in replay
+    assert "parse_constant=reject_non_standard_json_constant" in replay
+    assert "object_pairs_hook=json_object_without_duplicate_keys" in replay
     assert "os.open(path, write_open_flags(), 0o666)" in replay
     assert "json.dumps(payload, indent=2, allow_nan=False)" in replay
     assert "written = os.write(fd, view)" in replay
@@ -4727,6 +7454,9 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "os.fsync(fd)" in replay
     assert "fsync_checker_output_parent(path, label=label)" in replay
     assert "error_diagnostic_label(error, path_label=path_label)" in replay
+    assert "failed to create {label} `{path_label}`: {error_label}" in replay
+    assert "failed to read {label} `{path}`: {error}" not in replay
+    assert "failed to read {label} `{path_label}`: {error_label}" in replay
     assert "payload_path = require_codegen_file(" in replay
     assert "plan_path = require_codegen_file(" in replay
     assert 'path.open("r"' not in replay
@@ -4735,6 +7465,9 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "json.dump(payload" not in replay
     assert "test_load_json_uses_no_follow_descriptor_open" in replay_test
     assert "test_load_json_rejects_symlink_before_open" in replay_test
+    assert "test_load_json_rejects_sensitive_duplicate_key_without_leaking" in replay_test
+    assert "test_load_json_rejects_non_standard_numeric_constants" in replay_test
+    assert "test_load_json_read_error_is_sanitized" in replay_test
     assert "test_write_json_uses_no_follow_descriptor_open" in replay_test
     assert "test_write_json_completes_partial_descriptor_writes" in replay_test
     assert "test_write_json_fsyncs_descriptor_before_close" in replay_test
@@ -4745,11 +7478,48 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
     assert "test_write_json_fsyncs_output_parent_after_descriptor_close" in replay_test
     assert "test_write_json_parent_fsync_failure_does_not_leak_path" in replay_test
     assert "test_write_json_rejects_symlinked_parent_before_create" in replay_test
+    assert "test_ensure_codegen_directory_mkdir_error_is_sanitized" in replay_test
+    assert (
+        "test_validate_codegen_path_rejects_secret_looking_path_without_leaking"
+        in replay_test
+    )
+    assert "test_require_relative_fixture_path_accepts_safe_relative_path" in replay_test
+    assert (
+        "test_require_relative_fixture_path_rejects_unsafe_values_without_leaking"
+        in replay_test
+    )
+    assert "test_require_fixture_name_accepts_safe_name" in replay_test
+    assert "test_require_fixture_name_rejects_unsafe_values_without_leaking" in replay_test
+    assert "test_require_subprocess_metadata_fields_accept_canonical_values" in replay_test
+    assert (
+        "test_require_subprocess_metadata_fields_reject_unsafe_values_without_leaking"
+        in replay_test
+    )
+    assert (
+        "test_main_rejects_absolute_payload_metadata_path_before_subprocess_without_leaking"
+        in replay_test
+    )
+    assert (
+        "test_main_rejects_unsafe_fixture_name_before_subprocess_without_leaking"
+        in replay_test
+    )
+    assert (
+        "test_main_rejects_unsafe_profile_before_subprocess_without_leaking"
+        in replay_test
+    )
+    assert (
+        "test_main_rejects_unsafe_display_metadata_file_before_subprocess_without_leaking"
+        in replay_test
+    )
     assert "test_require_codegen_file_rejects_symlink_before_subprocess" in replay_test
 
 
 def test_sorafs_orchestrator_adoption_gate_uses_no_follow_io() -> None:
     adoption = read(REPO_ROOT / "ci" / "check_sorafs_orchestrator_adoption.sh")
+    adoption_test = read(
+        SCRIPTS_DIR / "tests" / "sorafs_orchestrator_adoption_wrapper_test.py"
+    )
+    xtask_main = read(XTASK_MAIN_RS)
 
     assert "def read_open_flags() -> int" in adoption
     assert "def write_open_flags() -> int" in adoption
@@ -4773,6 +7543,21 @@ def test_sorafs_orchestrator_adoption_gate_uses_no_follow_io() -> None:
     assert "write_all(fd, rendered)" in adoption
     assert "write_adoption_text(config_path" in adoption
     assert "write_adoption_json(note_path" in adoption
+    assert "SORAFS_ADOPTION_OVERRIDE_ID" in adoption
+    assert "--allow-single-source|--allow-zero-weight" in adoption
+    assert "relaxing XTASK_SORAFS_ADOPTION_FLAGS require" in adoption
+    assert 'ADOPTION_FLAGS+=("--adoption-override-id" "${SORAFS_ADOPTION_OVERRIDE_ID}")' in adoption
+    assert (
+        "test_adoption_wrapper_rejects_relaxing_flags_without_override_id"
+        in adoption_test
+    )
+    assert "test_adoption_wrapper_rejects_malformed_override_id" in adoption_test
+    assert "validate_sorafs_adoption_override_id" in xtask_main
+    assert '"--adoption-override-id" | "--override-id"' in xtask_main
+    assert "require --adoption-override-id <incident-or-approval-id>" in xtask_main
+    assert "parse_sorafs_adoption_check_rejects_relaxation_without_override_id" in xtask_main
+    assert "parse_sorafs_adoption_check_rejects_malformed_override_id" in xtask_main
+    assert "parse_sorafs_adoption_check_accepts_relaxation_with_override_id" in xtask_main
     assert 'require_nonempty_file "${CONFIG_PATH}" "fixture config"' in adoption
     assert 'path.open("r"' not in adoption
     assert 'config_path.open("w"' not in adoption
@@ -4989,6 +7774,7 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
     gateway_self_cert = read(SCRIPTS_DIR / "sorafs_gateway_self_cert.sh")
     gateway_probe = read(SCRIPTS_DIR / "telemetry" / "run_sorafs_gateway_probe.sh")
     release_cli_test = read(SCRIPTS_DIR / "tests" / "release_sorafs_cli_test.py")
+    direct_smoke_test = read(SCRIPTS_DIR / "tests" / "sorafs_direct_mode_smoke_test.py")
     gateway_probe_test = read(SCRIPTS_DIR / "tests" / "sorafs_gateway_probe_wrapper_test.py")
 
     for script in (release_cli, direct_smoke, gateway_probe):
@@ -5046,6 +7832,23 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
     assert 'prepare_output_file_path "scoreboard output"' in direct_smoke
     assert "must not be a symlink" in direct_smoke
     assert "parent must not be a symlink" in direct_smoke
+    assert "SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP" in direct_smoke
+    assert '"local-diagnostic"' in direct_smoke
+    assert "--skip-adoption-check requires" in direct_smoke
+    assert "SORAFS_ADOPTION_OVERRIDE_ID" in direct_smoke
+    assert "--allow-single-source|--allow-zero-weight" in direct_smoke
+    assert "relaxing XTASK_SORAFS_ADOPTION_FLAGS require" in direct_smoke
+    assert (
+        'ADOPTION_FLAGS+=("--adoption-override-id" "${SORAFS_ADOPTION_OVERRIDE_ID}")'
+        in direct_smoke
+    )
+    assert "test_direct_mode_smoke_rejects_ungated_adoption_skip" in direct_smoke_test
+    assert (
+        "test_direct_mode_smoke_rejects_relaxing_adoption_flags_without_override_id"
+        in direct_smoke_test
+    )
+    assert "test_direct_mode_smoke_rejects_malformed_adoption_override_id" in direct_smoke_test
+    assert "allow_adoption_skip=False" in direct_smoke_test
     assert 'prepare_output_dir_path "gateway self-cert output directory"' in gateway_self_cert
     assert 'prepare_output_file_path "manifest verification summary"' in gateway_self_cert
     assert 'prepare_output_file_path "denylist diff report"' in gateway_self_cert
@@ -5316,6 +8119,7 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
 
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     helper_test = read(RUNNER_PREFLIGHT_TEST)
+    assert "diagnostic_text_is_canonical" in helper
     assert "def _require_error_list" in helper
     assert "def _require_label" in helper
     assert "def _runner_path_sequence" in helper
@@ -5324,6 +8128,8 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "runner preflight errors must contain non-empty canonical strings" in helper
     assert "runner preflight label must be a non-empty canonical string" in helper
     assert "runner error message must be a non-empty canonical string" in helper
+    assert "if not diagnostic_text_is_canonical(error):" in helper
+    assert "if not diagnostic_text_is_canonical(label):" in helper
     assert "paths must be a sequence" in helper
     assert "identity map must be a dictionary" in helper
     assert "identity map entries must be path identities and " in helper
@@ -5343,9 +8149,15 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "def require_runner_url_args" in helper
     assert "def runner_passthrough_arg_is_plan_safe" in helper
     assert "def require_runner_passthrough_args" in helper
+    assert "if not diagnostic_text_is_canonical(value) or" in helper
+    assert "if not diagnostic_text_is_canonical(value):" in helper
     assert "def _decoded_text_variants" in helper
     assert "from html import unescape" in helper
     assert "unescape(unquote(current))" in helper
+    assert "import unicodedata" in helper
+    assert 'unicodedata.normalize("NFKC", current)' in helper
+    assert "def _contains_control_character" in helper
+    assert 'unicodedata.category(character).startswith("C")' in helper
     assert "def is_sensitive_path_component" in helper
     assert "HIGH_RISK_SENSITIVE_KEY_FRAGMENTS" in helper
     assert "PATH_SENSITIVE_KEY_FRAGMENTS" in helper
@@ -5356,6 +8168,9 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "def _path_like_value_has_sensitive_component" in helper
     assert "_path_component_has_windows_drive_prefix(variant)" in helper
     assert "_path_component_has_uri_scheme_prefix(variant)" in helper
+    assert "_contains_control_character(variant)" in helper
+    assert "if not diagnostic_text_is_canonical(value) or" in helper
+    assert "if not diagnostic_text_is_canonical(value):" in helper
     assert "urlsplit(value)" in helper
     assert "parsed.username is not None" in helper
     assert "parsed.query or parsed.fragment" in helper
@@ -5381,7 +8196,8 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "must not be the same path as --out-dir" in helper
     assert "validate_runner_output_dir(out_dir, errors)" in helper
     assert 'validate_runner_output_parent(summary_out, errors, label="--summary-out")' in helper
-    assert "from sorafs_path_identity import error_diagnostic_label" in helper
+    assert "from sorafs_path_identity import (" in helper
+    assert "error_diagnostic_label," in helper
     assert "resolve_path_identity" in helper
     assert "resolve_path_identity" in helper
     assert 'resolve_path_identity(path, errors, label="input file")' in helper
@@ -5400,6 +8216,8 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     )
     assert "test_runner_preflight_sanitizes_malformed_non_path_targets" in helper_test
     assert "test_plan_rendered_path_safety_rejects_unsafe_components" in helper_test
+    assert "\\uff50\\uff52\\uff49\\uff56\\uff41\\uff54\\uff45" in helper_test
+    assert "bad\\uff0fsummary.json" in helper_test
     assert (
         "test_validate_plan_rendered_paths_rejects_unsafe_components_without_leaking"
         in helper_test
@@ -5442,12 +8260,20 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
         in helper_test
     )
     assert "test_runner_url_arg_safety_rejects_secret_bearing_urls" in helper_test
+    assert "https://\\uff50\\uff52\\uff49\\uff56\\uff41\\uff54\\uff45-key.example" in helper_test
+    assert "https://\\uff23\\uff1a.example" in helper_test
+    assert "https://torii.example/bad\\uff0fpath" in helper_test
+    assert '"https://torii.example/bad\\u200dpath"' in helper_test
+    assert '"https://torii\\u202e.example/path"' in helper_test
     assert "test_require_runner_url_args_rejects_unsafe_urls_without_leaking" in helper_test
     assert "test_require_runner_url_args_rejects_malformed_field_name" in helper_test
     assert (
         "test_runner_passthrough_arg_safety_rejects_secret_like_arguments"
         in helper_test
     )
+    assert '"bad\\u200darg"' in helper_test
+    assert '"--flag=bad%E2%80%AEarg"' in helper_test
+    assert "--\\uff50\\uff52\\uff49\\uff56\\uff41\\uff54\\uff45-key" in helper_test
     assert (
         "test_require_runner_passthrough_args_rejects_unsafe_values_without_leaking"
         in helper_test
@@ -5662,6 +8488,36 @@ def test_passthrough_arg_runners_use_shared_passthrough_preflight() -> None:
         if regression not in read(SCRIPTS_DIR / "tests" / test_name):
             missing.append(f"{test_name}: missing {regression}")
 
+    ai_prescreen_runner = read(SCRIPTS_DIR / "run_sorafs_ai_prescreen_rollout_evidence.py")
+    transparency_runner = read(SCRIPTS_DIR / "run_sorafs_transparency_rollout_evidence.py")
+    ai_prescreen_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_ai_prescreen_rollout_evidence_test.py"
+    )
+    transparency_test = read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_transparency_rollout_evidence_test.py"
+    )
+    ai_prescreen_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_ai_prescreen_rollout_collection.args.example"
+    )
+    transparency_example = read(
+        SCRIPTS_DIR / "examples" / "sorafs_transparency_rollout_collection.args.example"
+    )
+
+    assert "require_equals_form_option_values" in ai_prescreen_runner
+    assert "require_equals_form_option_values" in transparency_runner
+    assert "normalize_iroha_arg_values" not in ai_prescreen_runner
+    assert "normalize_iroha_arg_values" not in transparency_runner
+    assert "IROHA_ARG_EQUALS_FORM_DIAGNOSTIC" in ai_prescreen_runner
+    assert "IROHA_ARG_EQUALS_FORM_DIAGNOSTIC" in transparency_runner
+    assert "test_split_iroha_arg_form_fails_without_leaking_value" in ai_prescreen_test
+    assert "test_split_iroha_arg_form_fails_without_leaking_value" in transparency_test
+    assert "--iroha-arg=--config" in ai_prescreen_test
+    assert "--iroha-arg=--config" in transparency_test
+    assert "--iroha-arg=--config" in ai_prescreen_example
+    assert "--iroha-arg=--config" in transparency_example
+    assert "\n--iroha-arg\n" not in ai_prescreen_example
+    assert "\n--iroha-arg\n" not in transparency_example
+
     assert missing == []
 
 
@@ -5705,12 +8561,17 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "RESPONSE_ARGFILE_CHUNK_BYTES" in helper
     assert "def require_expanded_arg_limit" in helper
     assert "require_expanded_arg_limit(expanded)" in helper
+    assert "def require_equals_form_option_values(" in helper
+    assert "if argument == option_name:" in helper
     assert "{label} must be a sequence of strings" in helper
     assert 'label="arguments"' in helper
     assert 'label="response-file line arguments"' in helper
     assert "response-file line must be a string" in helper
     assert "def _require_argument_string" in helper
-    assert "argument `{value}` must be a string" in helper
+    assert "diagnostic_text_is_canonical" in helper
+    assert "if not diagnostic_text_is_canonical(value):" in helper
+    assert "argument `{value}` must be a string" not in helper
+    assert 'raise ValueError("argument must be a string")' in helper
     assert "argument must be a non-empty canonical string" in helper
     assert "expanded arguments must be <=" in helper
     assert "def _response_argfile_open_flags" in helper
@@ -5767,7 +8628,7 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
         "test_response_file_line_parse_error_sanitizes_malformed_error"
         in helper_test
     )
-    assert "test_direct_non_string_argument_fails_without_traceback" in helper_test
+    assert "test_direct_non_string_argument_does_not_echo_value" in helper_test
     assert (
         "test_raw_string_argument_container_fails_without_character_expansion"
         in helper_test
@@ -5799,6 +8660,12 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "test_shared_integer_arg_parsers_reject_non_canonical_values" in helper_test
     assert "test_direct_expanded_argument_limit_fails" in helper_test
     assert "test_response_file_expanded_argument_limit_fails" in helper_test
+    assert "test_require_equals_form_option_values_accepts_exact_form" in helper_test
+    assert (
+        "test_require_equals_form_option_values_rejects_split_form_without_value_echo"
+        in helper_test
+    )
+    assert "test_require_equals_form_option_values_rejects_malformed_inputs" in helper_test
     assert "test_response_file_symlink_fails_before_validation" in aggregate_checker_test
     assert (
         "test_response_file_malformed_line_fails_before_validation"
@@ -5947,6 +8814,7 @@ def test_rollout_runners_use_shared_namespace_integer_validators() -> None:
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
     helper_test = read(RUNNER_PREFLIGHT_TEST)
 
+    assert "diagnostic_text_is_canonical" in helper
     assert "def runner_arg_label" in helper
     assert "RUNNER_ARG_FIELD_RE" in helper
     assert "def _require_runner_arg_field" in helper
@@ -6023,13 +8891,14 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     aggregate_checker_test = read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert "diagnostic_text_is_canonical" in helper
     assert "def emit_checker_error_lines" in helper
     assert "def emit_checker_error_block" in helper
     assert "def _checker_error_messages" in helper
     assert "checker error messages must be a sequence of strings" in helper
     assert "checker error message must be a non-empty canonical string" in helper
     assert "isinstance(errors, (str, bytes, bytearray, Mapping))" in helper
-    assert "error != error.strip()" in helper
+    assert "if not diagnostic_text_is_canonical(error):" in helper
     assert "error_messages = _checker_error_messages(errors)" in helper
     assert "def emit_checker_notice" in helper
     assert "checker notice message must be a non-empty canonical string" in helper
@@ -6039,6 +8908,8 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert "checker preflight errors must be a list of strings" in helper
     assert "checker preflight errors must contain non-empty canonical strings" in helper
     assert "checker preflight label must be a non-empty canonical string" in helper
+    assert "if not diagnostic_text_is_canonical(label):" in helper
+    assert "if not diagnostic_text_is_canonical(message):" in helper
     assert "def inspect_checker_preflight_path_exists" in helper
     assert "def inspect_checker_preflight_path_is_dir" in helper
     assert "def inspect_checker_preflight_path_is_symlink" in helper
@@ -6059,6 +8930,18 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert "def render_checker_summary" in helper
     assert "def _validate_checker_summary_keys" in helper
     assert "checker summary keys must be non-empty canonical strings" in helper
+    assert "if not diagnostic_text_is_canonical(key):" in helper
+    assert "isinstance(path, str) and diagnostic_text_is_canonical(path)" in helper
+    assert "CHECKER_EVIDENCE_SPEC_ERROR" in helper
+    assert "def _checker_evidence_string_path" in helper
+    assert "def _checker_evidence_text_variants" in helper
+    assert "def _checker_evidence_spec_separator_present" in helper
+    assert "unescape(unquote(current))" in helper
+    assert 'unicodedata.normalize("NFKC", current)' in helper
+    assert re.search(r"not diagnostic_text_is_canonical\(\s*kind\s*\)", helper)
+    assert re.search(r"not diagnostic_text_is_canonical\(\s*spec_path\s*\)", helper)
+    assert "_checker_evidence_spec_separator_present(evidence_file)" in helper
+    assert "spec_path.strip()" not in helper
     assert "def render_and_write_checker_summary" in helper
     assert "checker summary must be an object" in helper
     assert "_validate_checker_summary_keys(summary)" in helper
@@ -6093,7 +8976,8 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     assert "must not be the same path as --evidence" in helper
     assert "record_reserved_output_evidence_conflicts" in helper
     assert 'reserved_label="--summary-out"' in helper
-    assert "from sorafs_path_identity import error_diagnostic_label" in helper
+    assert "from sorafs_path_identity import (" in helper
+    assert "error_diagnostic_label," in helper
     assert (
         "test_render_and_write_checker_summary_sanitizes_malformed_render_error"
         in helper_test
@@ -6121,6 +9005,10 @@ def test_rollout_checkers_preflight_summary_output_targets() -> None:
     )
     assert (
         "test_evidence_input_check_rejects_unsafe_rendered_paths_without_leaking"
+        in helper_test
+    )
+    assert (
+        "test_evidence_spec_rejects_padded_or_unicode_components_without_trimming"
         in helper_test
     )
     assert (
@@ -6331,6 +9219,9 @@ def test_rollout_checkers_use_shared_evidence_input_preflight() -> None:
     assert "if errors:\n        return errors" in helper
     assert 'return ["provide --evidence-dir or --evidence"]' in helper
     assert "test_present_evidence_spec_passes_input_check" in helper_test
+    assert "latest\\uff1d" in helper_test
+    assert "latest%3D" in helper_test
+    assert "latest&#61;" in helper_test
     assert "test_evidence_input_check_rejects_malformed_collections" in helper_test
     assert "test_evidence_input_check_rejects_non_path_entries" in helper_test
     assert (
@@ -6397,9 +9288,12 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "def _path_label" in helper
     assert "def _error_label" in helper
     assert "from sorafs_path_identity import" in helper
+    assert "diagnostic_text_is_canonical" in helper
     assert "path_diagnostic_label(" in helper
     assert "error_diagnostic_label(" in helper
     assert "def _canonical_diagnostic_text" not in helper
+    assert "if not diagnostic_text_is_canonical(error):" in helper
+    assert "if not diagnostic_text_is_canonical(label):" in helper
     assert "<non-path>" in path_identity_helper
     assert "<non-canonical-path>" in path_identity_helper
     assert "<non-canonical-error>" in path_identity_helper
@@ -6455,6 +9349,7 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "test_missing_explicit_evidence_file_fails_closed" in helper_test
     assert "test_explicit_evidence_directory_fails_closed" in helper_test
     assert "test_explicit_evidence_symlink_fails_closed" in helper_test
+    assert "test_explicit_evidence_broken_symlink_fails_closed" in helper_test
     assert (
         "test_explicit_evidence_parent_symlink_directory_fails_closed"
         in helper_test
@@ -6463,7 +9358,15 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "test_discovered_json_directory_fails_closed_without_hiding_files" in helper_test
     assert "test_discovered_json_symlink_fails_closed_without_hiding_files" in helper_test
     assert (
+        "test_discovered_json_broken_symlink_fails_closed_without_hiding_files"
+        in helper_test
+    )
+    assert (
         "test_explicit_evidence_symlink_fails_closed_without_path_leak"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_explicit_evidence_broken_symlink_fails_closed_without_path_leak"
         in aggregate_checker_test
     )
     assert (
@@ -6472,6 +9375,10 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     )
     assert (
         "test_evidence_dir_symlink_fails_closed_without_path_leak"
+        in aggregate_checker_test
+    )
+    assert (
+        "test_evidence_dir_broken_symlink_fails_closed_without_path_leak"
         in aggregate_checker_test
     )
     assert (
@@ -6496,14 +9403,23 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     assert "linked-evidence\" not in diagnostics" in aggregate_checker_test
     assert "nested\" not in diagnostics" in aggregate_checker_test
     assert "gateway_load.json\" not in diagnostics" in aggregate_checker_test
+    assert (
+        "test_duplicate_sensitive_json_key_load_error_does_not_echo"
+        in aggregate_checker_test
+    )
     assert "test_noncanonical_evidence_file_labels_are_sanitized" in helper_test
     assert "test_evidence_file_inspection_failure_fails_closed" in helper_test
     assert "test_evidence_file_symlink_inspection_failure_fails_closed" in helper_test
     assert "test_evidence_file_parent_inspection_failure_fails_closed" in helper_test
     assert "test_discovered_evidence_file_inspection_failure_fails_closed" in helper_test
     assert "test_evidence_directory_symlink_fails_closed" in helper_test
+    assert "test_evidence_directory_broken_symlink_fails_closed" in helper_test
     assert (
         "test_evidence_directory_parent_symlink_directory_fails_closed"
+        in helper_test
+    )
+    assert (
+        "test_evidence_directory_broken_parent_symlink_fails_closed"
         in helper_test
     )
     assert (
@@ -6604,7 +9520,15 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
         in helper_test
     )
     assert (
+        "test_reserved_output_conflict_evidence_directory_broken_symlink_fails_closed"
+        in helper_test
+    )
+    assert (
         "test_reserved_output_conflict_evidence_directory_parent_symlink_fails_closed"
+        in helper_test
+    )
+    assert (
+        "test_reserved_output_conflict_evidence_directory_broken_parent_symlink_fails_closed"
         in helper_test
     )
     assert (
@@ -6616,7 +9540,15 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
         in helper_test
     )
     assert (
+        "test_reserved_output_conflict_explicit_evidence_broken_symlink_fails_closed"
+        in helper_test
+    )
+    assert (
         "test_reserved_output_conflict_explicit_evidence_parent_symlink_fails_closed"
+        in helper_test
+    )
+    assert (
+        "test_reserved_output_conflict_explicit_evidence_broken_parent_symlink_fails_closed"
         in helper_test
     )
     assert (
@@ -6628,6 +9560,10 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
         in helper_test
     )
     assert (
+        "test_reserved_output_conflict_discovered_json_broken_symlink_fails_closed"
+        in helper_test
+    )
+    assert (
         "test_reserved_output_conflict_scan_inspection_failure_fails_closed"
         in helper_test
     )
@@ -6636,7 +9572,20 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
         "test_reserved_output_conflict_scan_rejects_reserved_output_parent_symlink"
         in helper_test
     )
+    assert (
+        "test_reserved_output_conflict_scan_rejects_broken_reserved_output_symlink"
+        in helper_test
+    )
     assert "test_reserved_output_path_identities_rejects_symlink" in helper_test
+    assert (
+        "test_reserved_output_path_identities_rejects_secret_symlink_without_leak"
+        in helper_test
+    )
+    assert "test_reserved_output_path_identities_rejects_broken_symlink" in helper_test
+    assert (
+        "test_reserved_output_path_identities_secret_inspection_failure_sanitizes_error"
+        in helper_test
+    )
     assert (
         "test_reserved_output_path_identities_rejects_parent_symlink_directory"
         in helper_test
@@ -6647,6 +9596,10 @@ def test_rollout_checkers_use_shared_evidence_file_discovery() -> None:
     )
     assert (
         "test_reserved_output_path_identities_symlink_inspection_failure"
+        in helper_test
+    )
+    assert (
+        "test_discover_evidence_files_stops_after_broken_reserved_output_symlink"
         in helper_test
     )
     assert "test_evidence_path_resolution_uses_shared_identity_helper" in helper_test
@@ -6698,6 +9651,9 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "EVIDENCE_FILE_SYMLINK_DIAGNOSTIC" in helper
     assert "validate_evidence_parent_chain" in helper
     assert "from sorafs_path_identity import" in helper
+    assert "diagnostic_text_is_canonical" in helper
+    assert "if not diagnostic_text_is_canonical(error):" in helper
+    assert "and diagnostic_text_is_canonical(key)" in helper
     assert "path_diagnostic_label(" not in helper
     assert "error_diagnostic_label(" in helper
     assert "def _canonical_diagnostic_text" not in helper
@@ -6723,10 +9679,26 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "evidence JSON bytes must be bytes" in helper
     assert "evidence root must be a JSON object" in helper
     assert "def _json_key_label" in helper
+    assert "JSON_DUPLICATE_KEY_EXTRA_SENSITIVE_KEYS" in helper
+    assert "JSON_DUPLICATE_KEY_SENSITIVE_NORMALIZED_MARKERS" in helper
+    assert "JSON_DUPLICATE_KEY_PAYLOAD_FREE_REFERENCE_SUFFIXES" in helper
     assert "def json_object_without_duplicate_keys" in helper
     assert "object_pairs_hook=json_object_without_duplicate_keys" in helper
     assert "evidence JSON object contains duplicate key" in helper
     assert "`<non-canonical>`" in helper
+    assert "`<sensitive-key>`" in helper
+    assert '"bad\\u200dkey":1' in helper_test
+    assert '"bad\\u202ekey":1' in helper_test
+    assert "\\uff50\\uff52\\uff49\\uff56\\uff41\\uff54\\uff45" in helper_test
+    assert "test_decode_evidence_json_sanitizes_sensitive_duplicate_key_label" in helper_test
+    assert (
+        "test_duplicate_key_sanitizer_covers_rollout_sensitive_key_inventory"
+        in helper_test
+    )
+    assert (
+        "test_load_evidence_json_with_sha256_or_record_error_sanitizes_sensitive_duplicate_key"
+        in helper_test
+    )
     assert "hashlib.sha256(raw).hexdigest()" in helper
     assert "parse_constant=reject_non_standard_json_constant" in helper
     assert "non-standard JSON constant" in helper
@@ -6824,6 +9796,14 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert "if not path.is_file()" not in reputation
     assert "path.read_bytes()" not in reputation
     assert "hashlib.sha256(data).hexdigest()" not in reputation
+    assert "EXACT_ARTIFACT_KIND_STEMS = {" in reputation
+    assert '("provider-", "provider")' in reputation
+    assert '("verify-", "verify")' in reputation
+    assert "path.stem.lower()" not in reputation
+    assert 'replace("_", "-")' not in reputation
+    assert 'if "provider" in stem' not in reputation
+    assert 'if "fetch" in stem' not in reputation
+    assert 'if "proof" in stem' not in reputation
     reputation_test = read(
         SCRIPTS_DIR / "tests" / "check_sorafs_reputation_rollout_evidence_test.py"
     )
@@ -6854,6 +9834,14 @@ def test_rollout_checkers_use_shared_bounded_json_loader() -> None:
     assert '"typed.json" not in load_errors' in reputation_test
     assert (
         "test_malformed_explicit_evidence_kind_main_summary_sanitizes_exception_text"
+        in reputation_test
+    )
+    assert (
+        "test_schema_less_filename_fallback_rejects_alias_shapes"
+        in reputation_test
+    )
+    assert (
+        "test_schema_less_directory_alias_filename_does_not_satisfy_provider"
         in reputation_test
     )
     assert "<non-canonical-error>\" in diagnostics" in reputation_test
@@ -6910,15 +9898,13 @@ def test_rollout_checkers_use_shared_artifact_rows_and_fingerprints() -> None:
     assert "artifact fingerprint payload must be an object" in helper
     assert "isinstance(fields, (str, bytes, bytearray))" in helper
     assert "artifact fingerprint fields must be a sequence of strings" in helper
-    assert "artifact fingerprint fields must be non-empty strings" in helper
-    assert "artifact fingerprint fields must be canonical strings" in helper
-    assert (
-        "artifact fingerprint fields must not contain control characters"
-        in helper
-    )
+    assert "artifact fingerprint fields must be non-empty canonical strings " in helper
+    assert "without control characters" in helper
     assert "artifact fingerprint fields must not contain duplicates" in helper
     assert "for field in fields:" in helper
-    assert "ord(character) < 32" in helper
+    assert "diagnostic_text_is_canonical" in helper
+    assert "if not diagnostic_text_is_canonical(field):" in helper
+    assert "field.strip()" not in helper
     assert "seen_fields: set[str] = set()" in helper
     assert "if value is not None:" in helper
     assert "fingerprint[field] = value" in helper
@@ -6953,6 +9939,7 @@ def test_rollout_checkers_use_shared_artifact_rows_and_fingerprints() -> None:
         in helper_test
     )
     assert "def _artifact_validation_error_list" in validation_helper
+    assert "diagnostic_text_is_canonical" in validation_helper
     assert "SHA256_HEX_PATTERN = re.compile" in validation_helper
     assert "validation_errors: Any" in validation_helper
     assert (
@@ -6964,6 +9951,10 @@ def test_rollout_checkers_use_shared_artifact_rows_and_fingerprints() -> None:
         in validation_helper
     )
     assert "has_canonical_errors" in validation_helper
+    assert (
+        "return all(diagnostic_text_is_canonical(error) for error in errors)"
+        in validation_helper
+    )
     assert (
         "artifact validation errors must be non-empty canonical strings"
         in validation_helper
@@ -6981,9 +9972,10 @@ def test_rollout_checkers_use_shared_artifact_rows_and_fingerprints() -> None:
     assert "def _artifact_path_or_error" in validation_helper
     assert "artifact path must be a path" in validation_helper
     assert "artifact path must be a canonical path" in validation_helper
+    assert "if not diagnostic_text_is_canonical(label):" in validation_helper
     assert "def _artifact_kind_name_or_error" in validation_helper
-    assert "kind_name.strip()" in validation_helper
-    assert "artifact kind must be a non-empty string" in validation_helper
+    assert "kind_name.strip()" not in validation_helper
+    assert "artifact kind must be a non-empty string" not in validation_helper
     assert "label_name=\"artifact kind\"" in validation_helper
     assert "must be a non-empty canonical string" in validation_helper
     assert "def _artifact_fingerprint_or_error" in validation_helper
@@ -6992,18 +9984,27 @@ def test_rollout_checkers_use_shared_artifact_rows_and_fingerprints() -> None:
     assert "artifact fingerprint values must be a mapping" in validation_helper
     assert "values_to_merge" in validation_helper
     assert "label_name=\"artifact fingerprint value key\"" in validation_helper
+    assert "key.strip()" not in validation_helper
     assert (
         "artifact fingerprint value keys must be non-empty strings"
-        in validation_helper
+        not in validation_helper
     )
     assert "label_errors[0]" in validation_helper
+    assert (
+        "if not all(diagnostic_text_is_canonical(error) for error in artifact_errors):"
+        in validation_helper
+    )
     assert "def build_evidence_artifact" in validation_helper
     assert "def build_kinded_evidence_artifact" in validation_helper
     assert "def archive_artifact_path_label" in validation_helper
     assert "def is_archive_portable_artifact_path" in validation_helper
+    assert "not diagnostic_text_is_canonical(variant)" in validation_helper
+    assert "not diagnostic_text_is_canonical(label)" in validation_helper
     assert "def _decoded_text_variants" in validation_helper
     assert "from html import unescape" in validation_helper
+    assert "import unicodedata" in validation_helper
     assert "unescape(unquote(current))" in validation_helper
+    assert 'unicodedata.normalize("NFKC", current)' in validation_helper
     assert "def _path_component_has_sensitive_label" in validation_helper
     assert "HIGH_RISK_SENSITIVE_KEY_FRAGMENTS" in validation_helper
     assert "EVIDENCE_PATH_FIELD_ERROR" in validation_helper
@@ -7047,6 +10048,27 @@ def test_rollout_checkers_use_shared_artifact_rows_and_fingerprints() -> None:
         in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     )
     assert "%252e%252e" in read(
+        SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py"
+    )
+    assert "bad\\u200dname.json" in read(
+        SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py"
+    )
+    assert "bad\\u202ename.json" in read(
+        SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py"
+    )
+    assert "bad%E2%80%8Dname.json" in read(
+        SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py"
+    )
+    assert "bad&#x202e;name.json" in read(
+        SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py"
+    )
+    assert "bad\\uff0fname.json" in read(
+        SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py"
+    )
+    assert "\\uff23\\uff1a" in read(
+        SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py"
+    )
+    assert "\\uff50\\uff52\\uff49\\uff56\\uff41\\uff54\\uff45" in read(
         SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py"
     )
     assert (
@@ -7193,10 +10215,15 @@ def test_rollout_checkers_use_shared_evidence_gate_status() -> None:
     assert "def evidence_gate_status" in helper
     assert "errors: Any" in helper
     assert "not isinstance(errors, list)" in helper
-    assert "error == error.strip()" in helper
-    assert "ord(character) < 32 or ord(character) == 127" in helper
+    assert "diagnostic_text_is_canonical" in helper
+    assert (
+        "if not all(diagnostic_text_is_canonical(error) for error in errors):"
+        in helper
+    )
     assert 'return "blocked" if errors else "ready"' in helper
     assert "test_evidence_gate_status_fails_closed_on_malformed_errors" in helper_test
+    assert 'evidence_gate_status(["status\\u200dbad"]) == "blocked"' in helper_test
+    assert 'evidence_gate_status(["status\\u202ebad"]) == "blocked"' in helper_test
     assert missing == []
 
 
@@ -7215,15 +10242,25 @@ def test_rollout_checkers_use_shared_validation_error_recorder() -> None:
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def _require_error_list" in helper
+    assert (
+        "from sorafs_path_identity import diagnostic_text_is_canonical, resolve_path_identity"
+        in helper
+    )
     assert "evidence validation summary errors must be a list of strings" in helper
     assert (
         "evidence validation summary errors must contain non-empty canonical strings"
         in helper
     )
+    assert "if not diagnostic_text_is_canonical(error):" in helper
     assert "def _evidence_validation_path_label" in helper
     assert "evidence validation path must be a path" in helper
     assert "evidence validation path must be a canonical path" in helper
+    assert "if not diagnostic_text_is_canonical(label):" in helper
     assert "def _validation_error_messages" in helper
+    assert (
+        "if not all(diagnostic_text_is_canonical(error) for error in messages):"
+        in helper
+    )
     assert "def record_evidence_validation_errors" in helper
     assert "validation errors must be a sequence of strings" in helper
     assert "validation errors must be non-empty canonical strings" in helper
@@ -7259,6 +10296,8 @@ def test_rollout_checkers_use_shared_validation_error_recorder() -> None:
         "test_record_evidence_validation_errors_rejects_malformed_existing_summary_error_text"
         in helper_test
     )
+    assert '"old\\u200derror"' in helper_test
+    assert '"old\\u202eerror"' in helper_test
     assert missing == []
 
 
@@ -7365,14 +10404,20 @@ def test_rollout_checkers_use_shared_string_coverage_validation() -> None:
         and "required not in names" in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    coverage_helper = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "require_string_coverage",
+    )
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     transparency = read(SCRIPTS_DIR / "check_sorafs_transparency_rollout_evidence.py")
     ai_prescreen = read(SCRIPTS_DIR / "check_sorafs_ai_prescreen_rollout_evidence.py")
 
     assert "def collect_string_values" in helper
+    assert "trim_values: bool = False" in helper
     assert "def _collect_canonical_string_values" in helper
     assert "def _required_string_values" in helper
     assert "def require_string_coverage" in helper
+    assert "trim_values" not in coverage_helper
     assert 'label_name=f"validation {value_label}"' in helper
     assert "for index, item in enumerate(items)" in helper
     assert 'must be an object with `{field}`' in helper
@@ -7381,8 +10426,10 @@ def test_rollout_checkers_use_shared_string_coverage_validation() -> None:
     assert "allow_scalar_items" in helper
     assert "trim_values" in helper
     assert "allow_scalar_items must be a boolean" in helper
-    assert "trim_values must be a boolean" in helper
+    assert "trim_values must be a boolean" not in helper
     assert "test_string_coverage_helpers_reject_malformed_payloads" in helper_test
+    assert "test_collect_string_values_trimming_requires_explicit_opt_in" in helper_test
+    assert "test_require_string_coverage_has_no_trim_values_option" in helper_test
     assert (
         "test_require_string_coverage_rejects_noncanonical_present_values"
         in helper_test
@@ -7405,7 +10452,7 @@ def test_rollout_checkers_use_shared_string_coverage_validation() -> None:
     )
     assert 'field_name or "value"' in helper
     assert "allow_scalar_items=False" in transparency
-    assert "trim_values=False" in transparency
+    assert "trim_values=False" not in transparency
     assert 'require_string_coverage(payload, "routes", "name", required_routes, errors)' in ai_prescreen
     assert missing == []
     assert local_route_coverage_errors == []
@@ -7696,17 +10743,25 @@ def test_rollout_checkers_use_shared_environment_validation() -> None:
         if "def require_rollout_environment(" in read(path)
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    environment_helper = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "require_rollout_environment",
+    )
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def _require_canonical_payload_string" in helper
     assert "label_name=field_name" in helper
     assert "def require_rollout_environment" in helper
     assert "ALLOWED_ROLLOUT_ENVIRONMENTS" in helper
+    assert "if value not in ALLOWED_ROLLOUT_ENVIRONMENTS:" in environment_helper
+    assert "normalized = value.lower()" not in environment_helper
     assert "require_rollout_environment(payload, errors)" in helper
     assert (
         "test_require_rollout_environment_rejects_noncanonical_values"
         in helper_test
     )
+    assert '"STAGING"' in helper_test
+    assert '"Production"' in helper_test
     assert missing_shared_context == []
     assert unexpected_shared_context == []
     assert unexpected_environment_fingerprints == []
@@ -7870,6 +10925,115 @@ def test_rollout_checkers_use_shared_deployment_id_validation() -> None:
     assert unexpected_shared_context == []
     assert unexpected_deployment_fingerprints == []
     assert local_copies == []
+
+
+def test_rollout_checkers_use_shared_non_production_marker_helper() -> None:
+    helper = read(EVIDENCE_VALIDATION_HELPER)
+    helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    marker_checkers = [
+        path
+        for path in CHECKERS
+        if "FORBIDDEN_" in read(path)
+        and "non-production markers" in read(path)
+    ]
+    missing_helper = [
+        path.name
+        for path in marker_checkers
+        if "forbidden_non_production_markers," not in read(path)
+        or "forbidden_non_production_markers(" not in read(path)
+    ]
+    local_exact_scans = [
+        path.name
+        for path in marker_checkers
+        if re.search(r"marker\s+in\s+[^\n]+\.split\(\"-\"\)", read(path))
+        or "marker in label_tokens" in read(path)
+        or "marker in subject_tokens" in read(path)
+    ]
+
+    assert "def forbidden_non_production_markers" in helper
+    assert "numbered_rollout_marker_token(token, markers)" in helper
+    assert "compact_rollout_marker_tokens(token, markers)" in helper
+    assert "test_forbidden_non_production_markers_rejects_numbered_aliases" in helper_test
+    assert "test_forbidden_non_production_markers_rejects_compact_aliases" in helper_test
+    assert (
+        "test_forbidden_non_production_markers_rejects_sandwiched_compact_aliases"
+        in helper_test
+    )
+    assert "test_committee_results_reject_numbered_placeholder_marker" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_ai_prescreen_rollout_evidence_test.py"
+    )
+    assert "test_committee_results_reject_compact_placeholder_marker" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_ai_prescreen_rollout_evidence_test.py"
+    )
+    assert (
+        "test_committee_results_reject_sandwiched_compact_placeholder_marker"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_ai_prescreen_rollout_evidence_test.py")
+    )
+    assert marker_checkers
+    assert missing_helper == []
+    assert local_exact_scans == []
+
+
+def test_aggregate_readiness_uses_shared_non_production_marker_helper() -> None:
+    aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
+    aggregate_checker_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+
+    assert "forbidden_non_production_markers," in aggregate_checker
+    assert "forbidden_non_production_markers(" in aggregate_checker
+    assert re.search(
+        r"marker\s+in\s+[^\n]+\.split\(\"-\"\)",
+        aggregate_checker,
+    ) is None
+    assert (
+        "test_provider_ids_compact_non_production_marker_does_not_echo"
+        in aggregate_checker_test
+    )
+    assert (
+        "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_STRING_FIELD_POLICIES.items()"
+        in aggregate_checker_test
+    )
+    assert "prod{marker}review" in aggregate_checker_test
+    assert "policy[\"forbidden_markers\"]" in aggregate_checker_test
+
+
+def test_canary_builders_use_shared_non_production_marker_helper() -> None:
+    helper = read(EVIDENCE_VALIDATION_HELPER)
+    marker_builders = [
+        path
+        for path in sorted(SCRIPTS_DIR.glob("build_sorafs_*_canary.py"))
+        if "FORBIDDEN_" in read(path)
+        and "non-production markers" in read(path)
+    ]
+    missing_helper = [
+        path.name
+        for path in marker_builders
+        if "forbidden_non_production_markers," not in read(path)
+        or "forbidden_non_production_markers(" not in read(path)
+    ]
+    local_exact_scans = [
+        path.name
+        for path in marker_builders
+        if re.search(r"marker\s+for\s+marker\s+in\s+FORBIDDEN_", read(path))
+        or re.search(r"for\s+marker\s+in\s+FORBIDDEN_", read(path))
+        or re.search(r"marker\s+in\s+[^\n]+\.split\(", read(path))
+        or "marker in subject_tokens" in read(path)
+        or "marker in tokens" in read(path)
+    ]
+
+    assert "def forbidden_non_production_markers" in helper
+    assert "compact_rollout_marker_tokens(token, markers)" in helper
+    assert "test_committee_result_inventory_rejects_compact_placeholder_marker" in read(
+        SCRIPTS_DIR / "tests" / "build_sorafs_ai_prescreen_canary_test.py"
+    )
+    assert (
+        "test_committee_result_inventory_rejects_sandwiched_compact_placeholder_marker"
+        in read(SCRIPTS_DIR / "tests" / "build_sorafs_ai_prescreen_canary_test.py")
+    )
+    assert marker_builders
+    assert missing_helper == []
+    assert local_exact_scans == []
 
 
 def test_rollout_checkers_enforce_consistent_deployment_context() -> None:
@@ -8137,16 +11301,22 @@ def test_rollout_checkers_use_shared_hex_validation() -> None:
     ]
     direct_imports = [path.name for path in CHECKERS if "is_hex," in read(path)]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    is_hex_source = function_source(EVIDENCE_VALIDATION_HELPER, "is_hex")
+    require_hex_source = function_source(EVIDENCE_VALIDATION_HELPER, "require_hex")
     transparency = read(SCRIPTS_DIR / "check_sorafs_transparency_rollout_evidence.py")
 
     assert "def is_hex" in helper
     assert "def require_hex" in helper
+    assert "0123456789abcdefABCDEF" not in is_hex_source
+    assert "0123456789abcdef" in is_hex_source
     assert "not isinstance(payload, Mapping)" in helper
     assert "payload must be an object" in helper
-    assert "must be {hex_length} hex characters" in helper
-    assert "return value.lower()" in helper
+    assert "must be {hex_length} lowercase hex characters" in helper
+    assert "return value.lower()" not in require_hex_source
+    assert "return value" in require_hex_source
     assert "value = raw_value" in helper
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    assert "test_require_hex_rejects_uppercase_values" in helper_test
     assert "test_require_hex_rejects_malformed_payloads" in helper_test
     assert "test_require_hex_rejects_malformed_labels_before_lookup" in helper_test
     assert "test_require_hex_rejects_padded_values_before_normalization" in helper_test
@@ -8178,6 +11348,10 @@ def test_rollout_checkers_use_shared_hex_string_array_validation() -> None:
     helper = read(EVIDENCE_VALIDATION_HELPER)
     hedging = read(SCRIPTS_DIR / "check_sorafs_hedging_rollout_evidence.py")
     reputation = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
+    array_helper_source = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "require_hex_string_array",
+    )
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
 
     assert "def require_hex_string_array" in helper
@@ -8185,6 +11359,9 @@ def test_rollout_checkers_use_shared_hex_string_array_validation() -> None:
     assert "must be unique" in helper
     assert "has_array_error = False" in helper
     assert "if has_array_error:\n        return []" in helper
+    assert "normalized = value.lower()" not in array_helper_source
+    assert "hex_values.append(value)" in array_helper_source
+    assert "test_require_hex_string_array_rejects_uppercase_values" in helper_test
     assert "test_require_hex_string_array_rejects_malformed_payloads" in helper_test
     assert (
         "test_require_hex_string_array_returns_empty_on_dirty_values"
@@ -8781,7 +11958,7 @@ def test_rollout_checkers_use_shared_remaining_require_validation_primitives() -
         in helper_test
     )
     assert "def require_known_schema" in helper_source
-    assert "must be null or {hex_length} hex characters" in helper_source
+    assert "must be null or {hex_length} lowercase hex characters" in helper_source
     assert "must be <= 10000" in helper_source
     assert "must be an integer in {min_value}..={max_value}" in helper_source
     assert "must advance past" in helper_source
@@ -9003,6 +12180,14 @@ def test_rollout_checkers_use_shared_tuple_binding_validation() -> None:
         )
     ]
     helper_source = read(EVIDENCE_VALIDATION_HELPER)
+    tuple_helper_source = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "require_string_tuple_in",
+    )
+    anchor_tuple_source = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "_canonical_tuple_binding_set",
+    )
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     helper_module = load_script_module(
         EVIDENCE_VALIDATION_HELPER, "sorafs_evidence_validation_tuple_contract"
@@ -9046,11 +12231,13 @@ def test_rollout_checkers_use_shared_tuple_binding_validation() -> None:
     assert "allowed: Any" in helper_source
     assert "isinstance(values, (str, bytes, bytearray))" in helper_source
     assert "isinstance(allowed, (str, bytes, bytearray, Mapping))" in helper_source
-    assert "value.lower()" in helper_source
-    assert "normalized_values: list[str] = []" in helper_source
+    assert "value.lower()" not in tuple_helper_source
+    assert "binding_label.lower()" not in anchor_tuple_source
+    assert "values_label: list[str] = []" in tuple_helper_source
     assert "allowed_bindings: set[tuple[str, ...]] = set()" in helper_source
-    assert "normalized_allowed.append(allowed_label.lower())" in helper_source
-    assert "allowed_bindings.add(tuple(normalized_allowed))" in helper_source
+    assert "allowed_labels.append(allowed_label)" in tuple_helper_source
+    assert "allowed_bindings.add(tuple(allowed_labels))" in tuple_helper_source
+    assert "binding_values.append(binding_label)" in anchor_tuple_source
     assert "for value in values:" in helper_source
     assert "validation message" in helper_source
     assert "validation tuple value" in helper_source
@@ -9064,7 +12251,11 @@ def test_rollout_checkers_use_shared_tuple_binding_validation() -> None:
         "test_require_string_tuple_in_rejects_malformed_labels_before_binding"
         in helper_test
     )
-    assert "test_require_string_tuple_in_normalizes_allowed_bindings" in helper_test
+    assert "test_require_string_tuple_in_rejects_case_normalized_bindings" in helper_test
+    assert (
+        "test_validate_bound_evidence_tuple_references_rejects_case_normalized_anchor"
+        in helper_test
+    )
     assert (
         "test_validate_bound_evidence_tuple_references_rejects_malformed_templates_before_mutation"
         in helper_test
@@ -9087,18 +12278,26 @@ def test_rollout_checkers_use_shared_tuple_binding_validation() -> None:
     )
     assert (
         helper_module.require_string_tuple_in(
-            ("AA", "bb"), {("aa", "bb")}, errors, message="missing binding"
+            ("aa", "bb"), {("aa", "bb")}, errors, message="missing binding"
         )
         == ("aa", "bb")
     )
     assert errors == []
     assert (
         helper_module.require_string_tuple_in(
+            ("AA", "bb"), {("aa", "bb")}, errors, message="missing binding"
+        )
+        is None
+    )
+    assert errors == ["missing binding"]
+    assert (
+        helper_module.require_string_tuple_in(
             ("aa", "bb"), {("AA", "BB")}, errors, message="missing binding"
         )
-        == ("aa", "bb")
+        is None
     )
-    assert errors == []
+    assert errors == ["missing binding", "missing binding"]
+    errors.clear()
     assert (
         helper_module.require_string_tuple_in(
             ("AA", None), {("aa", "bb")}, errors, message="missing binding"
@@ -9218,6 +12417,10 @@ def test_rollout_checkers_use_shared_scalar_binding_validation() -> None:
         )
     ]
     helper_source = read(EVIDENCE_VALIDATION_HELPER)
+    value_helper_source = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "require_string_value_in",
+    )
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     helper_module = load_script_module(
         EVIDENCE_VALIDATION_HELPER, "sorafs_evidence_validation_scalar_contract"
@@ -9267,9 +12470,9 @@ def test_rollout_checkers_use_shared_scalar_binding_validation() -> None:
     assert "not isinstance(allowed_value, str) or not allowed_value" in helper_source
     assert "not value" in helper_source
     assert "value_label = _require_validation_label(" in helper_source
-    assert "normalized = value_label.lower()" in helper_source
+    assert "value_label.lower()" not in value_helper_source
     assert "allowed_values: set[str] = set()" in helper_source
-    assert "allowed_values.add(allowed_label.lower())" in helper_source
+    assert "allowed_values.add(allowed_label)" in value_helper_source
     assert "validation message" in helper_source
     assert "validation value" in helper_source
     assert "validation allowed value" in helper_source
@@ -9286,7 +12489,7 @@ def test_rollout_checkers_use_shared_scalar_binding_validation() -> None:
         "test_require_string_value_in_rejects_malformed_value_before_allowed_container"
         in helper_test
     )
-    assert "test_require_string_value_in_normalizes_allowed_values" in helper_test
+    assert "test_require_string_value_in_rejects_case_normalized_allowed_values" in helper_test
     assert (
         "test_validate_bound_evidence_digest_references_rejects_malformed_templates_before_mutation"
         in helper_test
@@ -9309,18 +12512,26 @@ def test_rollout_checkers_use_shared_scalar_binding_validation() -> None:
     )
     assert (
         helper_module.require_string_value_in(
-            "AA", {"aa"}, errors, message="missing digest"
+            "aa", {"aa"}, errors, message="missing digest"
         )
         == "aa"
     )
     assert errors == []
     assert (
         helper_module.require_string_value_in(
+            "AA", {"aa"}, errors, message="missing digest"
+        )
+        is None
+    )
+    assert errors == ["missing digest"]
+    assert (
+        helper_module.require_string_value_in(
             "aa", {"AA"}, errors, message="missing digest"
         )
-        == "aa"
+        is None
     )
-    assert errors == []
+    assert errors == ["missing digest", "missing digest"]
+    errors.clear()
     assert (
         helper_module.require_string_value_in(
             None, {"aa"}, errors, message="missing digest"
@@ -9407,6 +12618,22 @@ def test_rollout_checkers_use_shared_scalar_binding_validation() -> None:
     assert "valid_publication_bindings,\n                binding_errors" not in transparency
     assert missing == []
     assert local_scalar_binding_predicates == []
+
+
+def test_rollout_checkers_keep_evidence_anchor_membership_exact() -> None:
+    """Ensure rollout/release checkers do not rebuild case-insensitive anchors."""
+
+    offenders: dict[str, list[str]] = {}
+    for path in CHECKERS:
+        source = read(path)
+        if ".lower()" in source:
+            offenders[path.name] = [
+                line.strip()
+                for line in source.splitlines()
+                if ".lower()" in line
+            ]
+
+    assert offenders == {}
 
 
 def test_rollout_checkers_use_shared_status_in_validation() -> None:
@@ -9814,6 +13041,14 @@ def test_reputation_uses_shared_required_row_invalidation() -> None:
     helper = read(EVIDENCE_VALIDATION_HELPER)
     helper_test = read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     reputation = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
+    snapshot_record_source = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "record_snapshot_bound_evidence_artifact",
+    )
+    snapshot_pair_source = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "_snapshot_binding_pair_set",
+    )
 
     assert "def mark_required_evidence_invalid" in helper
     assert "def mark_required_evidence_invalid_if_present" in helper
@@ -10039,11 +13274,19 @@ def test_reputation_uses_shared_required_row_invalidation() -> None:
     assert 'label_name="merkle_root_hex"' in helper
     assert "if snapshot_label is None or merkle_label is None:" in helper
     assert "for error in anchor_errors:" in helper
-    assert "snapshot_label.lower()" in helper
-    assert "merkle_label.lower()" in helper
+    assert "snapshot_label.lower()" not in snapshot_record_source
+    assert "merkle_label.lower()" not in snapshot_record_source
+    assert "snapshot_label.lower()" not in snapshot_pair_source
+    assert "merkle_label.lower()" not in snapshot_pair_source
+    assert "valid_snapshot_bindings.add((snapshot_label, merkle_label))" in helper
+    assert "bindings_label.add((snapshot_label, merkle_label))" in helper
     assert "def validate_snapshot_bound_evidence_artifacts" in helper
     assert "record_artifact_error(" in helper
     assert "require_string_tuple_in(" in helper
+    assert (
+        "test_validate_snapshot_bound_evidence_artifacts_rejects_case_normalized_anchor"
+        in helper_test
+    )
     assert (
         "test_validate_snapshot_bound_evidence_artifacts_rejects_malformed_kind_containers"
         in helper_test
@@ -10332,6 +13575,14 @@ def test_rollout_checkers_use_shared_artifact_fingerprint_accessor() -> None:
         )
     ]
     helper = read(EVIDENCE_VALIDATION_HELPER)
+    artifact_digest_source = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "evidence_artifact_digest_set",
+    )
+    anchor_digest_source = function_source(
+        EVIDENCE_VALIDATION_HELPER,
+        "_canonical_digest_value_set",
+    )
     reputation = read(SCRIPTS_DIR / "check_sorafs_reputation_rollout_evidence.py")
 
     assert "def evidence_artifact_fingerprint" in helper
@@ -10343,7 +13594,10 @@ def test_rollout_checkers_use_shared_artifact_fingerprint_accessor() -> None:
     assert "not isinstance(artifact, Mapping)" in helper
     assert 'label_name="validation digest value"' in helper
     assert "if digest_label is None:\n            return set()" in helper
-    assert "digest_label.lower()" in helper
+    assert "digest_label.lower()" not in artifact_digest_source
+    assert "digest_label.lower()" not in anchor_digest_source
+    assert "values.add(digest_label)" in artifact_digest_source
+    assert "values.add(digest_label)" in anchor_digest_source
     assert "isinstance(digest, str) and digest" not in helper
     assert "def _canonical_digest_value_set" in helper
     assert (
@@ -10369,6 +13623,14 @@ def test_rollout_checkers_use_shared_artifact_fingerprint_accessor() -> None:
     )
     assert (
         "test_record_evidence_digest_mismatch_errors_rejects_malformed_allowed_digest_inputs_before_mutation"
+        in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    )
+    assert (
+        "test_record_evidence_digest_mismatch_errors_rejects_case_normalized_allowed_digest"
+        in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
+    )
+    assert (
+        "test_validate_bound_evidence_digest_references_rejects_case_normalized_anchor"
         in read(SCRIPTS_DIR / "tests" / "sorafs_evidence_validation_test.py")
     )
     assert (
@@ -10481,8 +13743,8 @@ def test_rollout_checkers_use_shared_required_kind_parser() -> None:
     assert "def _validate_allowed_kinds" in helper
     assert "def _validate_default_required" in helper
     assert "def _is_canonical_kind_name" in helper
-    assert "value == value.strip()" in helper
-    assert "ord(character) < 32 or ord(character) == 127" in helper
+    assert "diagnostic_text_is_canonical" in helper
+    assert "return diagnostic_text_is_canonical(value)" in helper
     assert "--require-kind values must be a sequence" in helper
     assert "--require-kind values must be strings" in helper
     assert "--require-kind entries must be non-empty canonical strings" in helper
@@ -10540,6 +13802,104 @@ def test_rollout_checkers_use_shared_required_kind_parser() -> None:
     assert missing == []
 
 
+def test_production_readiness_anchor_matrices_track_config() -> None:
+    aggregate_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+
+    assert "manual_case_set == configured_cases" in aggregate_test
+    assert (
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS.items()"
+        in aggregate_test
+    )
+    assert (
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS.items()"
+        in aggregate_test
+    )
+    assert "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS.items()" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS" in aggregate_test
+    assert (
+        "test_object_list_metadata_missing_owner_kind_tethers_fail_closed_from_config"
+        in aggregate_test
+    )
+    assert (
+        "test_object_list_metadata_owner_kind_tether_drift_fails_closed_from_config"
+        in aggregate_test
+    )
+    assert "dict(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS)" in aggregate_test
+    assert (
+        "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS[field]"
+        in aggregate_test
+    )
+    assert "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS" in aggregate_test
+    assert "test_object_list_metadata_schema_fields_fail_closed_from_config" in aggregate_test
+    assert "test_object_list_metadata_entries_must_not_duplicate_from_config" in aggregate_test
+    assert "schema.get(\"strings\", frozenset())" in aggregate_test
+    assert "schema.get(\"positive_ints\", frozenset())" in aggregate_test
+    assert "schema.get(\"ordered_int_pairs\", ())" in aggregate_test
+    assert (
+        "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_STRING_FIELD_POLICIES.items()"
+        in aggregate_test
+    )
+    assert "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS" in aggregate_test
+    assert (
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS.items()"
+        in aggregate_test
+    )
+    assert (
+        "test_payload_free_metadata_owner_kind_tethers_fail_closed_from_config"
+        in aggregate_test
+    )
+    assert (
+        '"PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS"'
+        in aggregate_test
+    )
+    assert "test_hex_list_metadata_entries_fail_closed_from_config" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS" in aggregate_test
+    assert (
+        '"PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS"'
+        in aggregate_test
+    )
+    assert "test_hex_binding_metadata_entries_fail_closed_from_config" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS" in aggregate_test
+    assert (
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS.items()"
+        in aggregate_test
+    )
+    assert "test_string_list_metadata_entries_fail_closed_from_config" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES.items()" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_ALLOWED_STRING_LIST_VALUES.items()" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS.items()" in aggregate_test
+    assert "test_positive_int_list_metadata_entries_fail_closed_from_config" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS" in aggregate_test
+    assert "duplicate_and_unsorted_items(" in aggregate_test
+    assert "test_required_lane_metadata_fields_fail_closed_from_config" in aggregate_test
+    assert "test_list_lane_metadata_fields_require_list_shape_from_config" in aggregate_test
+    assert "test_cross_lane_metadata_fields_fail_closed_from_config" in aggregate_test
+    assert "field not in MODULE.GATE_METADATA_FIELDS[gate.name]" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS" in aggregate_test
+    assert "test_object_metadata_fields_fail_closed_from_config" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()" in aggregate_test
+    assert "must be a payload-free metadata object" in aggregate_test
+    assert (
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS.items()"
+        in aggregate_test
+    )
+    assert "test_scalar_hex_metadata_entries_fail_closed_from_config" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS[field]" in aggregate_test
+    assert (
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS.items()"
+        in aggregate_test
+    )
+    assert "def replacement_value(" in aggregate_test
+    assert '"valid_repair_handoff_digests"' in aggregate_test
+    assert '"valid_governance_archive_handoff_digests"' in aggregate_test
+    assert '"valid_reputation_weight_digests"' in aggregate_test
+
+
 def test_rollout_runners_use_shared_required_kind_parser() -> None:
     missing = [
         path.name
@@ -10554,6 +13914,10 @@ def test_rollout_runners_use_shared_required_kind_parser() -> None:
         )
     ]
 
+    helper = read(REQUIRED_KINDS_HELPER)
+
+    assert "diagnostic_text_is_canonical" in helper
+    assert "return diagnostic_text_is_canonical(value)" in helper
     assert missing == []
 
 
@@ -10658,8 +14022,13 @@ def test_rollout_checkers_use_shared_sensitive_key_normalization() -> None:
     helper_test = read(SENSITIVITY_TEST)
 
     assert "def normalize_sensitive_key" in helper
+    assert 'unicodedata.normalize("NFKC", key)' in helper
+    assert 'unicodedata.normalize("NFKC", decoded)' in helper
+    assert 'unicodedata.normalize("NFKC", without_format_controls)' in helper
     assert "def _decoded_key_variants" in helper
     assert "def _is_canonical_sensitive_key" in helper
+    assert "def _diagnostic_text_is_canonical" in helper
+    assert 'unicodedata.category(character).startswith("C")' in helper
     assert "def _require_error_list" in helper
     assert "def _require_diagnostic_string" in helper
     assert "def _is_ascii_alphanumeric" in helper
@@ -10690,6 +14059,8 @@ def test_rollout_checkers_use_shared_sensitive_key_normalization() -> None:
     )
     assert "sensitive field errors must be a list of strings" in helper
     assert "sensitive field errors must contain non-empty canonical strings" in helper
+    assert "if not _diagnostic_text_is_canonical(error):" in helper
+    assert "if not _diagnostic_text_is_canonical(value):" in helper
     assert "label=\"sensitive field path\"" in helper
     assert (
         "label=\"sensitive field evidence label\""
@@ -10781,6 +14152,14 @@ def test_rollout_checkers_use_shared_sensitive_key_normalization() -> None:
         in helper_test
     )
     assert (
+        "test_unicode_compatibility_sensitive_key_fragments_fail_without_leaking_names"
+        in helper_test
+    )
+    assert (
+        "test_unicode_compatibility_secret_like_values_fail_without_leaking_values"
+        in helper_test
+    )
+    assert (
         "test_encoded_payload_free_sensitive_references_remain_allowed"
         in helper_test
     )
@@ -10835,11 +14214,41 @@ def test_sorafs_hedging_rollout_runner_preflights_verifier_and_outputs() -> None
     assert "test_summary_out_directory_fails_before_plan" in runner_test
 
 
+def sorafs_rollout_gate_plan_scan_paths() -> list[Path]:
+    return sorted(DOCS_SOURCE_DIR.glob("sorafs_*_plan*.md"))
+
+
+def test_sorafs_rollout_gate_plan_scan_covers_localized_mirrors() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in sorafs_rollout_gate_plan_scan_paths()}
+
+    assert Path("docs/source/sorafs_pdp_plan.md") in scanned
+    assert Path("docs/source/sorafs_pdp_plan.ja.md") in scanned
+    assert Path("docs/source/sorafs_transparency_plan.zh-hans.md") in scanned
+
+
 def test_sorafs_plan_docs_do_not_reopen_shipped_rollout_gates() -> None:
     stale: dict[str, list[str]] = {}
     pattern = re.compile(r"\bAdd fail-closed .+ rollout evidence gate", re.I)
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_*_plan.md")):
+    for path in sorafs_rollout_gate_plan_scan_paths():
         matches = pattern.findall(read(path))
+        if matches:
+            stale[str(path.relative_to(REPO_ROOT))] = matches
+
+    assert stale == {}
+
+
+def test_gateway_dns_owner_runbook_uses_current_cutover_tokens() -> None:
+    stale: dict[str, list[str]] = {}
+    pattern = re.compile(
+        r"OPS-XXXX|SNS-DF-XXXX|2025[‑-]03[‑-]03|2025-03-10|"
+        r"2025-02-27|20250303|kickoff",
+        re.I,
+    )
+    paths = sorted(DOCS_SOURCE_DIR.glob("sorafs_gateway_dns_owner_runbook*.md"))
+
+    assert SORAFS_GATEWAY_DNS_OWNER_RUNBOOK in paths
+    for path in paths:
+        matches = sorted(set(pattern.findall(read(path))))
         if matches:
             stale[str(path.relative_to(REPO_ROOT))] = matches
 
@@ -10959,8 +14368,66 @@ def unshipped_doc_command_matches(
     return [
         command
         for command in commands
-        if re.search(rf"{re.escape(command)}(?=$|[\"`\s.,;:)])", source)
+        if re.search(
+            rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s.,;:)])",
+            source,
+        )
     ]
+
+
+def sorafs_doc_command_scan_paths() -> list[Path]:
+    paths: set[Path] = set(DOCS_SOURCE_DIR.glob("sorafs*.md"))
+    nested_source = DOCS_SOURCE_DIR / "sorafs"
+    portal_i18n_root = REPO_ROOT / "docs" / "portal" / "i18n"
+
+    if nested_source.exists():
+        paths.update(nested_source.rglob("*.md"))
+    if SORAFS_NODE_PORTAL_DIR.exists():
+        paths.update(SORAFS_NODE_PORTAL_DIR.rglob("*.md"))
+    if portal_i18n_root.exists():
+        paths.update(
+            path
+            for path in portal_i18n_root.rglob("*.md")
+            if "sorafs" in path.parts
+        )
+
+    return sorted(paths)
+
+
+def test_unshipped_doc_command_scan_covers_nested_and_portal_sorafs_docs() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in sorafs_doc_command_scan_paths()}
+
+    assert Path("docs/source/sorafs/pin_registry_plan.md") in scanned
+    assert Path("docs/portal/docs/sorafs/node-plan.md") in scanned
+    assert any(
+        path.parts[:3] == ("docs", "portal", "i18n") and "sorafs" in path.parts
+        for path in scanned
+    )
+
+
+def test_unshipped_doc_command_matcher_has_adversarial_negative_controls() -> None:
+    command_families = {
+        "pop": UNSHIPPED_POP_OPERATOR_DOC_COMMANDS,
+        "operator": UNSHIPPED_SORAFS_OPERATOR_DOC_COMMANDS,
+    }
+    violations: dict[str, list[str]] = {}
+
+    for family, commands in command_families.items():
+        for command in commands:
+            samples = [
+                f"`{prefix}{command}`"
+                for prefix in ("x", "not-", "/", "/internal/")
+            ]
+            samples.extend(
+                f"`{command}{suffix}`"
+                for suffix in ("-canary", "-evidence", "-local", "-fixture")
+            )
+            for sample in samples:
+                matched = unshipped_doc_command_matches(sample, commands)
+                if command in matched:
+                    violations.setdefault(family, []).append(f"{command}: {sample}")
+
+    assert violations == {}
 
 
 def test_pop_operator_command_matcher_has_negative_controls() -> None:
@@ -10982,12 +14449,19 @@ def test_pop_operator_command_matcher_has_negative_controls() -> None:
         )
         == []
     )
+    assert (
+        unshipped_doc_command_matches(
+            "`xsorafs pop sync` `not-sorafs pop revoke`",
+            UNSHIPPED_POP_OPERATOR_DOC_COMMANDS,
+        )
+        == []
+    )
 
 
 def test_pop_credentials_docs_do_not_publish_unshipped_operator_commands() -> None:
     violations: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs*.md")):
+    for path in sorafs_doc_command_scan_paths():
         lines = read(path).splitlines()
         for index, line in enumerate(lines):
             matched = unshipped_doc_command_matches(
@@ -11040,6 +14514,7 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
         "Metrics/alert artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed POP metrics set, and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics/alert artifact fingerprint before final promotion can report ready.",
         "The aggregate production-readiness gate also rechecks the juror-client sync tuple before final promotion: synced roots in `valid_juror_sync_bindings` must appear in `valid_root_digests`, and synced revocation lists must appear in `valid_revocation_list_digests`.",
+        "PoP rollout summaries must expose exactly one active root digest, revocation-list digest, verifier policy digest, and moderation PoP snapshot digest; mixed valid anchors fail closed before downstream evidence can satisfy the rollout gate.",
         "Aggregate promotion also rechecks the lane-proven PoP digest relationships: root-bound artifact fingerprints must match `valid_root_digests`, revocation-bound artifact fingerprints must match `valid_revocation_list_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
@@ -11159,6 +14634,12 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
         )
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in checker
     assert "def require_inventory_label(" in checker
+    assert "def require_single_active_digest(" in checker
+    assert "must contain exactly one active digest" in checker
+    assert 'label="valid_root_digests"' in checker
+    assert 'label="valid_revocation_list_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
+    assert 'label="valid_pop_snapshot_digests"' in checker
     assert '("pop_credentials", "metrics"): ("metrics_alerts",)' in aggregate_checker
     assert (
         '("pop_credentials", "metric_count_values"): ("metrics_alerts",)'
@@ -11223,6 +14704,10 @@ def test_pop_credentials_docs_keep_rollout_contract_markers() -> None:
         "test_all_policy_bound_artifacts_reject_verifier_policy_mismatch"
         in checker_test
     )
+    assert "test_multiple_valid_root_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_revocation_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_pop_snapshot_anchors_fail_closed" in checker_test
     assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
     assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
     assert "test_issuer_id_must_be_canonical" in checker_test
@@ -11469,21 +14954,34 @@ UNSHIPPED_POP_CREDENTIALS_CLI_SUBCOMMANDS = (
     "pop-promote",
 )
 
+UNSHIPPED_POP_CREDENTIALS_NESTED_CLI_COMMANDS = (
+    "pop sync",
+    "pop status",
+    "pop prove",
+    "pop revoke",
+)
+
 
 def unshipped_pop_credentials_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_POP_CREDENTIALS_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_pop_credentials_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_POP_CREDENTIALS_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_POP_CREDENTIALS_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_pop_credentials_service_surface_matcher_has_negative_controls() -> None:
@@ -11502,6 +15000,10 @@ def test_pop_credentials_service_surface_matcher_has_negative_controls() -> None
         "pop-enrollment-request",
         "pop-renewal-request",
         "pop-membership-proof",
+        "pop sync-canary",
+        "pop status-evidence",
+        "pop prove-local",
+        "pop revoke-canary",
     )
 
     assert unshipped_pop_credentials_route_matches(
@@ -11522,6 +15024,12 @@ def test_pop_credentials_service_surface_matcher_has_negative_controls() -> None
     assert unshipped_pop_credentials_cli_matches(
         '"pop-issuer-serve" `pop-verifier-service` "pop-promote"'
     ) == ["pop-issuer-serve", "pop-verifier-service", "pop-promote"]
+    assert unshipped_pop_credentials_cli_matches(
+        "`sorafs pop sync` "
+        '"sorafs pop status" '
+        "`pop prove` "
+        '"pop revoke --root root.to"'
+    ) == ["pop sync", "pop status", "pop prove", "pop revoke"]
     assert unshipped_pop_credentials_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
     ) == []
@@ -11592,12 +15100,19 @@ def test_unshipped_sorafs_operator_command_matcher_has_negative_controls() -> No
         )
         == []
     )
+    assert (
+        unshipped_doc_command_matches(
+            "`xsorafs pdp challenge` `not-sorafs moderation open-case`",
+            UNSHIPPED_SORAFS_OPERATOR_DOC_COMMANDS,
+        )
+        == []
+    )
 
 
 def test_unshipped_sorafs_operator_commands_stay_warning_only() -> None:
     violations: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs*.md")):
+    for path in sorafs_doc_command_scan_paths():
         lines = read(path).splitlines()
         for index, line in enumerate(lines):
             matched = unshipped_doc_command_matches(
@@ -11629,21 +15144,25 @@ UNSHIPPED_PUBLIC_ROUTE_PATTERNS = (
 
 
 def unshipped_public_route_matches(source: str) -> list[str]:
-    return [
-        route
-        for route in UNSHIPPED_PUBLIC_ROUTE_PATTERNS
-        if (
-            route.endswith("/")
-            and route in source
-            or re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
-        )
-    ]
+    matches: list[str] = []
+
+    for route in UNSHIPPED_PUBLIC_ROUTE_PATTERNS:
+        if route.endswith("/"):
+            if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[A-Za-z0-9_{{]|[\"`\s?}}])", source):
+                matches.append(route)
+            continue
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source):
+            matches.append(route)
+
+    return matches
 
 
 def test_unshipped_public_route_matcher_has_negative_controls() -> None:
     shipped_warning_or_canary_candidates = (
         "/v1/transparency-canary/",
+        "/v1/transparency-canary/head",
         "/v1/transparency-evidence/",
+        "/v1/transparency-evidence/head",
         "/v1/evidence/session-canary",
         "/v1/evidence/manifest-evidence",
         "/v1/evidence/log-canary",
@@ -11667,10 +15186,21 @@ def test_unshipped_public_route_matcher_has_negative_controls() -> None:
     )
 
 
+def test_unshipped_public_route_doc_scan_covers_nested_and_portal_sorafs_docs() -> None:
+    scanned = {path.relative_to(REPO_ROOT) for path in sorafs_doc_command_scan_paths()}
+
+    assert Path("docs/source/sorafs/pin_registry_plan.md") in scanned
+    assert Path("docs/portal/docs/sorafs/node-plan.md") in scanned
+    assert any(
+        path.parts[:3] == ("docs", "portal", "i18n") and "sorafs" in path.parts
+        for path in scanned
+    )
+
+
 def test_unshipped_public_routes_stay_warning_only() -> None:
     violations: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.rglob("*sorafs*.md")):
+    for path in sorafs_doc_command_scan_paths():
         lines = read(path).splitlines()
         for index, line in enumerate(lines):
             matched = unshipped_public_route_matches(line)
@@ -11737,8 +15267,9 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
         "Runner and committee artifacts must use reviewed `cid:*` subject references without non-production markers",
         "Runner evidence must carry both `evidence_digest_hex` and `policy_digest_hex` before it can anchor downstream Governance DAG policy binding.",
         "The aggregate production-readiness gate rechecks those exported summary relationships before final promotion: runner-bound committee fingerprints must match `valid_runner_bindings`, workflow-bound fingerprints must match `valid_workflow_digests`, and policy-bound Governance DAG fingerprints must match `valid_policy_digests`.",
+        "The AI prescreen gate fail-closes when more than one valid runner, workflow, notification manifest, executor summary, or policy anchor appears, and clears the mixed `valid_runner_bindings`, `valid_workflow_digests`, `valid_notification_manifest_digests`, `valid_executor_summary_digests`, or `valid_policy_digests` set before aggregate promotion can report ready.",
         "Operator workflow artifacts also bind `route_count` and `passed_route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready.",
-        "Juror notification transport artifacts also bind `probe_count` and `accepted_count` to the unique canonical `probes[].delivery_id` inventory and require reviewed `ai-prescreen-notification-delivery-*` labels without non-production markers and at least one accepted notification delivery before promotion can report ready.",
+        "Juror notification transport artifacts also bind `probe_count` and `accepted_count` to the unique canonical `probes[].delivery_id` inventory and require reviewed `ai-prescreen-notification-delivery-*` labels without non-production markers, at least one accepted notification delivery, and coverage for both shipped `submit_commit` and `submit_reveal` actions before promotion can report ready.",
         "Transparency publication artifacts also bind `probe_count`, `passed_probe_count`, and `source_entry_probe_count` to the unique canonical `probes[].source_kind` inventory, require source-entry probe coverage for every required transparency source kind, and reject duplicate or unknown source-entry probes before promotion can report ready.",
         "Transparency publication artifacts must explicitly set `payload_bytes_included`, `private_payloads_included`, and `response_bodies_included` to `false` before promotion can report ready.",
         "AI pre-screen payload-safety artifacts must also explicitly set `payload_bytes_included` and `private_payloads_included` to `false` on operator workflow, juror notification transport, commit/reveal executor, transparency publication, Governance DAG, end-to-end workflow, and their nested route, probe, artifact, and execution-summary records; executor artifacts must set `private_payload_files_copied` to `false`, and transparency probes must set `response_body_included` to `false` before promotion can report ready.",
@@ -11776,6 +15307,13 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert "test_operator_route_url_is_required" in checker_test
     assert 'require_hex(payload, "evidence_digest_hex", HEX64_LEN, errors)' in checker
     assert "test_runner_evidence_digest_is_required" in checker_test
+    assert "def require_single_active_digest(" in checker
+    assert "def require_single_active_binding(" in checker
+    assert 'label="valid_runner_bindings"' in checker
+    assert 'label="valid_workflow_digests"' in checker
+    assert 'label="valid_notification_manifest_digests"' in checker
+    assert 'label="valid_executor_summary_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
     assert "def validate_ai_prescreen_bound_artifact_metadata(" in production_checker
     assert '"ai_prescreen runner-bound artifact fingerprints must match "' in production_checker
     assert '"ai_prescreen workflow-bound artifact fingerprints must match "' in production_checker
@@ -11812,9 +15350,24 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
         "test_all_policy_bound_artifacts_reject_runner_policy_mismatch"
         in checker_test
     )
+    assert "test_multiple_valid_runner_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_workflow_anchors_fail_closed" in checker_test
+    assert (
+        "test_multiple_valid_notification_manifest_anchors_fail_closed"
+        in checker_test
+    )
+    assert "test_multiple_valid_executor_summary_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
     assert "URI-scheme-like host/path tokens" in validation_helper
     assert "https://C%3A.committee.example/aggregate" in checker_test
     assert "https://http%3A.committee.example/aggregate" in checker_test
+    assert "AI_PRESCREEN_BASE_URL_ERROR" in checker
+    assert "def require_ai_prescreen_base_url(" in checker
+    assert 'require_ai_prescreen_base_url(payload, "runner_url", errors)' in checker
+    assert 'require_ai_prescreen_base_url(payload, "committee_url", errors)' in checker
+    assert 'require_ai_prescreen_base_url(payload, "operator_url", errors)' in checker
+    assert ".rstrip" not in checker
+    assert "test_base_url_evidence_fields_reject_trailing_slash" in checker_test
     assert "require_archive_portable_path" in checker
     assert "EVIDENCE_PATH_FIELD_ERROR" in checker
     assert "REQUIRED_EXECUTOR_ARTIFACTS" in checker
@@ -11834,6 +15387,7 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert "NOTIFICATION_DELIVERY_LABEL_ERROR" in checker
     assert 'NOTIFICATION_DEDUP_PREFIX = "sorafs-moderation-juror:"' in checker
     assert 'ALLOWED_NOTIFICATION_ACTIONS = ("submit_commit", "submit_reveal")' in checker
+    assert 'require_string_coverage(\n        payload,\n        "probes",\n        "action"' in checker
     assert "require_string_type" in checker
     assert 'field="dedup_key"' in checker
     assert "probes[{}].dedup_key must equal " in checker
@@ -11845,6 +15399,8 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
     assert "must not include unknown values" in checker
     assert "def operator_route_paths(" in checker
     assert "def expected_operator_route_url(" in checker
+    assert "return f\"{operator_url}{route_path}\"" in checker
+    assert "test_expected_operator_route_url_preserves_exact_base_url" in checker_test
     assert "REQUIRED_OPERATOR_CONTENT_TYPES" in checker
     assert 'require_string_equal(\n            record,\n            "method",' in checker
     assert 'require_string_equal(\n                record,\n                "content_type",' in checker
@@ -11923,11 +15479,11 @@ def test_ai_prescreen_docs_keep_rollout_contract_markers() -> None:
         in checker_test
     )
     assert "test_notification_probe_identity_fields_are_required" in checker_test
+    assert "test_notification_transport_requires_both_shipped_actions" in checker_test
     assert "test_notification_dedup_key_must_bind_delivery_id" in checker_test
     assert (
         "Each probe's dedup key must also be unique, bound to its reviewed "
-        "delivery ID, and accompanied by a shipped `submit_commit` or "
-        "`submit_reveal` action"
+        "delivery ID, and accompanied by one of those shipped actions"
         in normalized_plan
     )
     assert "test_executor_artifact_count_must_match_unique_artifacts" in checker_test
@@ -11988,9 +15544,17 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "REQUIRED_EXECUTOR_SERVICE_NAME" in builder
     assert "runner_url_arg_is_plan_safe" in builder
     assert "CANARY_URL_ARG_ERROR" in builder
+    assert "CANARY_BASE_URL_ARG_ERROR" in builder
     assert "URI-scheme-like host/path tokens" in builder
+    assert "diagnostic_text_is_canonical" in builder
+    assert "if not diagnostic_text_is_canonical(value):" in builder
+    assert "ord(character)" not in builder
     assert "https://C%3A.committee.example/aggregate" in builder_tests
     assert "https://http%3A.committee.example/aggregate" in builder_tests
+    assert "base_url: bool = False" in builder
+    assert "base_url and value.endswith(\"/\")" in builder
+    assert ".rstrip" not in builder
+    assert "test_base_url_arguments_reject_trailing_slash_before_write" in builder_tests
     assert "is_archive_portable_artifact_path" in builder
     assert "CANARY_PATH_ARG_ERROR" in builder
     assert "ALLOWED_PRESCREEN_VERDICTS" in builder
@@ -12005,10 +15569,48 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "operator_route_paths" in builder
     assert "expected_operator_route_url" in builder
     assert "REQUIRED_OPERATOR_CONTENT_TYPES" in builder
+    assert "ALLOWED_NOTIFICATION_ACTIONS" in builder
+    assert "default=len(ALLOWED_NOTIFICATION_ACTIONS)" in builder
+    assert "args.probe_count < len(ALLOWED_NOTIFICATION_ACTIONS)" in builder
+    assert "--probe-count must cover both shipped notification actions" in builder
+    assert 'validate_canonical_string(args.case_id, label="--case-id", errors=errors)' in builder
+    assert (
+        'validate_canonical_string(args.round_id, label="--round-id", errors=errors)'
+        in builder
+    )
+    assert (
+        'validate_canonical_string(args.bundle_dir, label="--bundle-dir", errors=errors)'
+        in builder
+    )
+    assert "args.commit_action_count" in builder
+    assert "args.reveal_action_count" in builder
+    assert "args.tally_action_count" in builder
+    assert "--action-count must equal commit, reveal, and tally action counts" in builder
     assert "route_paths = operator_route_paths(args.quarantine_id_hex)" in builder
     assert "test_operator_workflow_canary_records_passed_route_count" in builder_tests
+    assert "test_notification_default_probe_count_covers_shipped_actions" in builder_tests
+    assert (
+        "test_notification_probe_count_must_cover_shipped_actions_before_write"
+        in builder_tests
+    )
+    assert (
+        "test_notification_identity_arguments_reject_unicode_controls_before_write"
+        in builder_tests
+    )
+    assert (
+        "test_executor_bundle_dir_rejects_unicode_controls_before_write"
+        in builder_tests
+    )
+    assert (
+        "test_validate_inputs_rejects_parser_returned_unicode_controls_before_build"
+        in builder_tests
+    )
     assert (
         "test_executor_service_name_must_match_reviewed_service_before_write"
+        in builder_tests
+    )
+    assert (
+        "test_executor_action_count_must_match_action_breakdown_before_write"
         in builder_tests
     )
     assert "CHECKER.operator_route_paths(QUARANTINE_ID)" in builder_tests
@@ -12022,6 +15624,8 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert '"passed_route_count": len(routes)' in builder
     assert "--governance-edge" in builder
     assert "validate_governance_edges(" in builder
+    assert "producer = producer.strip()" not in builder
+    assert "name = name.strip()" not in builder
     assert "REQUIRED_GOVERNANCE_EDGE_COUNT" in builder
     assert "--edge-count must match required governance producer inventory" in builder
     assert "test_generated_canaries_pass_full_ai_prescreen_gate" in builder_tests
@@ -12058,6 +15662,10 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
         in builder_tests
     )
     assert (
+        "test_governance_edge_inventory_rejects_padded_tuple_components"
+        in builder_tests
+    )
+    assert (
         "test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write"
         in builder_tests
     )
@@ -12076,6 +15684,14 @@ def test_ai_prescreen_canary_builder_is_checked_in() -> None:
     assert "`ai-prescreen-committee-result-*` production family" in normalized_plan
     assert (
         "`ai-prescreen-notification-delivery-*` production family"
+        in normalized_plan
+    )
+    assert (
+        "`--probe-count` covers both shipped notification actions"
+        in normalized_plan
+    )
+    assert (
+        "commit/reveal executor action-count breakdowns that sum to `--action-count`"
         in normalized_plan
     )
     assert "reviewed `ai-prescreen-governance-edge-*` edge labels" in normalized_plan
@@ -12126,13 +15742,47 @@ UNSHIPPED_AI_PRESCREEN_DEPLOYED_CLI_SUBCOMMANDS = (
     "ai-prescreen-promote",
 )
 
+UNSHIPPED_AI_PRESCREEN_DEPLOYED_NESTED_CLI_COMMANDS = (
+    "moderation runner promote",
+    "moderation deployed-runner promote",
+    "moderation committee promote",
+    "moderation deployed-committee promote",
+    "moderation juror-notification-transport service",
+    "moderation juror notification transport service",
+    "moderation deployed-juror-notification-transport",
+    "moderation commit-reveal-executor service",
+    "moderation commit reveal executor service",
+    "moderation deployed-commit-reveal-executor",
+    "moderation release-workflow",
+    "moderation release workflow",
+    "moderation workflow service",
+    "moderation workflow promote",
+    "ai-prescreen release-workflow",
+    "ai-prescreen release workflow",
+    "ai-prescreen promote",
+)
+
+
+def unshipped_ai_prescreen_route_matches(source: str) -> list[str]:
+    return [
+        route
+        for route in UNSHIPPED_AI_PRESCREEN_DEPLOYED_ROUTE_PATTERNS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
+    ]
+
 
 def unshipped_ai_prescreen_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_AI_PRESCREEN_DEPLOYED_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_AI_PRESCREEN_DEPLOYED_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_ai_prescreen_deployed_workflow_surface_matcher_has_negative_controls() -> None:
@@ -12149,6 +15799,20 @@ def test_ai_prescreen_deployed_workflow_surface_matcher_has_negative_controls() 
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status",
+    )
+    shipped_local_route_candidates = (
+        "/v1/sorafs/moderation/deployed-runner-canary",
+        "/v1/sorafs/moderation/runner/deployed-canary",
+        "/v1/sorafs/moderation/deployed-committee-canary",
+        "/v1/sorafs/moderation/committee/deployed-canary",
+        "/v1/sorafs/moderation/deployed-juror-notification-transport-canary",
+        "/v1/sorafs/moderation/juror-notification-transport/service-canary",
+        "/v1/sorafs/moderation/deployed-commit-reveal-executor-canary",
+        "/v1/sorafs/moderation/commit-reveal-executor/service-canary",
+        "/v1/sorafs/moderation/end-to-end-workflow-canary",
+        "/v1/sorafs/moderation/release-workflow-evidence",
+        "/v1/sorafs/moderation/workflow/promotion-canary",
+        "/v1/sorafs/moderation/ai-prescreen/promotion-evidence",
     )
     shipped_local_subcommands = (
         "registry-serve",
@@ -12169,27 +15833,62 @@ def test_ai_prescreen_deployed_workflow_surface_matcher_has_negative_controls() 
         "commit-reveal-status",
         "executor-bundle",
         "executor-canary",
+        "moderation registry-serve",
+        "moderation run-local",
+        "moderation runner-serve",
+        "moderation runner-grpc-serve",
+        "moderation runner-bundle",
+        "moderation runner-canary",
+        "moderation committee-run",
+        "moderation committee-serve",
+        "moderation committee-bundle",
+        "moderation committee-canary",
+        "moderation honey-audit",
+        "moderation quarantine list",
+        "moderation quarantine review",
+        "moderation quarantine release",
+        "moderation quarantine appeal-handoff",
+        "moderation quarantine appeal-ballot",
+        "moderation quarantine operator-panel",
+        "moderation quarantine bridge-plan",
+        "moderation quarantine operator-serve",
+        "moderation quarantine operator-canary",
+        "moderation quarantine notifications deliver",
+        "moderation quarantine notifications canary",
+        "moderation ballots execute",
+        "moderation ballots executor-bundle",
+        "moderation ballots executor-canary",
     )
 
-    assert all(
-        any(
-            route in candidate
-            for route in UNSHIPPED_AI_PRESCREEN_DEPLOYED_ROUTE_PATTERNS
+    assert unshipped_ai_prescreen_route_matches(
+        '"GET /v1/sorafs/moderation/deployed-runner/status" '
+        "`/v1/sorafs/moderation/committee/deployed` "
+        '"/v1/sorafs/moderation/workflow/promotion?deployment_id=prod"'
+    ) == [
+        "/v1/sorafs/moderation/deployed-runner",
+        "/v1/sorafs/moderation/committee/deployed",
+        "/v1/sorafs/moderation/workflow/promotion",
+    ]
+    assert unshipped_ai_prescreen_route_matches(
+        '"/v1/sorafs/moderation/juror-notification-transport/service" '
+        "`/v1/sorafs/moderation/commit-reveal-executor/service/run` "
+        '"/v1/sorafs/moderation/ai-prescreen/promotion"'
+    ) == [
+        "/v1/sorafs/moderation/juror-notification-transport/service",
+        "/v1/sorafs/moderation/commit-reveal-executor/service",
+        "/v1/sorafs/moderation/ai-prescreen/promotion",
+    ]
+    assert (
+        unshipped_ai_prescreen_route_matches(
+            " ".join(f'"{route}"' for route in shipped_local_routes)
         )
-        for candidate in (
-            "/v1/sorafs/moderation/deployed-runner",
-            "/v1/sorafs/moderation/juror-notification-transport/service",
-            "/v1/sorafs/moderation/commit-reveal-executor/service",
-            "/v1/sorafs/moderation/end-to-end-workflow",
-            "/v1/sorafs/moderation/workflow/promotion",
-        )
+        == []
     )
-    assert not any(
-        any(
-            route in candidate
-            for route in UNSHIPPED_AI_PRESCREEN_DEPLOYED_ROUTE_PATTERNS
+    assert (
+        unshipped_ai_prescreen_route_matches(
+            " ".join(f'"{route}"' for route in shipped_local_route_candidates)
         )
-        for candidate in shipped_local_routes
+        == []
     )
     assert unshipped_ai_prescreen_cli_matches(
         '"deployed-runner-promote" '
@@ -12201,6 +15900,19 @@ def test_ai_prescreen_deployed_workflow_surface_matcher_has_negative_controls() 
         "ai-prescreen-promote",
     ]
     assert unshipped_ai_prescreen_cli_matches(
+        "`iroha sorafs moderation runner promote` "
+        '"sorafs moderation juror-notification-transport service" '
+        "`moderation commit-reveal-executor service` "
+        '"ai-prescreen release workflow --deployment prod" '
+        "`ai-prescreen promote`"
+    ) == [
+        "moderation runner promote",
+        "moderation juror-notification-transport service",
+        "moderation commit-reveal-executor service",
+        "ai-prescreen release workflow",
+        "ai-prescreen promote",
+    ]
+    assert unshipped_ai_prescreen_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
     ) == []
 
@@ -12210,11 +15922,7 @@ def test_unshipped_ai_prescreen_deployed_workflow_surface_is_not_exposed() -> No
 
     for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
         source = read(path)
-        matched = [
-            route
-            for route in UNSHIPPED_AI_PRESCREEN_DEPLOYED_ROUTE_PATTERNS
-            if route in source
-        ]
+        matched = unshipped_ai_prescreen_route_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
@@ -12270,6 +15978,7 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "Metrics/alert artifacts also bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics/alert artifact fingerprint before final promotion can report ready.",
         "The aggregate production-readiness gate also requires `valid_roster_bindings`, `valid_tally_bindings`, `valid_e2e_runs`, and `valid_evidence_viewer_digest_sets` to preserve those case, roster, and tally relationships before final promotion can report ready. It also rechecks the lane-proven bound artifacts before final promotion: case-bound artifact fingerprints must match `valid_case_digests`, roster-bound artifact fingerprints must match `valid_roster_bindings`, tally-bound artifact fingerprints must match `valid_tally_bindings`, and policy-bound governance approval fingerprints must match `valid_policy_digests`.",
+        "The moderation-panel gate fail-closes when more than one valid case, roster, tally, or policy anchor appears, and clears the mixed `valid_case_digests`, `valid_roster_bindings`, `valid_tally_bindings`, or `valid_policy_digests` set before aggregate promotion can report ready.",
         "End-to-end panel artifacts also bind `peer_count` and `validator_count` to the unique canonical `peers[].name` and `validators[].name` inventories and reject duplicate peer or validator entries before promotion can report ready, and require reviewed lowercase `moderation-peer-*` and `moderation-validator-*` labels without non-production markers.",
         "End-to-end panel artifacts also bind `case_count` to the unique canonical `cases[].name` inventory, require `case_count` to match the `cases[].passed` partition, require reviewed lowercase `moderation-case-*` labels without non-production markers, and reject duplicate end-to-end case entries before promotion can report ready.",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
@@ -12291,6 +16000,12 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
     assert "def validate_route_inventory(" in checker
     assert "def require_only_required_values(" in checker
     assert "must not include unknown values" in checker
+    assert "def require_single_active_digest(" in checker
+    assert "def require_single_active_binding(" in checker
+    assert 'label="valid_case_digests"' in checker
+    assert 'label="valid_roster_bindings"' in checker
+    assert 'label="valid_tally_bindings"' in checker
+    assert 'label="valid_policy_digests"' in checker
     assert "APPEAL_CASE_LABEL_PATTERN" in checker
     assert "ROSTER_JUROR_LABEL_PATTERN" in checker
     assert "VIEWER_SESSION_LABEL_PATTERN" in checker
@@ -12551,6 +16266,10 @@ def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
         "test_all_policy_bound_artifacts_reject_e2e_policy_mismatch"
         in checker_test
     )
+    assert "test_multiple_valid_case_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_roster_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_tally_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
     assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
     assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
     readiness_test = read(
@@ -12956,21 +16675,40 @@ UNSHIPPED_MODERATION_PANEL_PARENT_CLI_SUBCOMMANDS = (
     "moderation-portal",
 )
 
+UNSHIPPED_MODERATION_PANEL_PARENT_NESTED_CLI_COMMANDS = (
+    "moderation open-case",
+    "moderation appeal-intake",
+    "moderation panel service",
+    "moderation panel sortition",
+    "moderation panel roster",
+    "moderation panel decision-publish",
+    "moderation panel promote",
+    "moderation jury-accept",
+    "moderation juror-panel",
+    "moderation portal",
+)
+
 
 def unshipped_moderation_panel_parent_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_MODERATION_PANEL_PARENT_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_moderation_panel_parent_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_MODERATION_PANEL_PARENT_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_MODERATION_PANEL_PARENT_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_moderation_panel_parent_surface_matcher_has_negative_controls() -> None:
@@ -13008,6 +16746,13 @@ def test_moderation_panel_parent_surface_matcher_has_negative_controls() -> None
         "tally",
         "executor-bundle",
         "executor-canary",
+        "moderation quarantine operator-panel",
+        "moderation quarantine appeal-handoff",
+        "moderation quarantine appeal-ballot",
+        "moderation panel service-canary",
+        "moderation panel decision-canary",
+        "moderation portal-canary",
+        "moderation jury-plan",
     )
 
     assert unshipped_moderation_panel_parent_route_matches(
@@ -13034,6 +16779,17 @@ def test_moderation_panel_parent_surface_matcher_has_negative_controls() -> None
     assert unshipped_moderation_panel_parent_cli_matches(
         '"open-case" `panel-service` "jury-accept"'
     ) == ["open-case", "panel-service", "jury-accept"]
+    assert unshipped_moderation_panel_parent_cli_matches(
+        "`sorafs moderation open-case` "
+        '"sorafs moderation panel service" '
+        "`moderation jury-accept` "
+        '"moderation portal --deployment prod"'
+    ) == [
+        "moderation open-case",
+        "moderation panel service",
+        "moderation jury-accept",
+        "moderation portal",
+    ]
     assert unshipped_moderation_panel_parent_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
     ) == []
@@ -13094,7 +16850,7 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
         "Aggregate promotion also requires `valid_reputation_weight_digests` to match publish/latest artifact fingerprints and rechecks every publish/latest artifact against that metadata before final promotion can report ready.",
         "Provider proof and verification artifacts must use reviewed lowercase `provider-*` IDs and must not contain non-production markers in provider/proof/verify `provider_id` fields.",
         "Required providers must have both matching provider-proof evidence and matching proof-verification evidence before promotion can report ready, and the default gate requires at least one provider ID to appear in both proof and verification evidence.",
-        "Event-watch evidence must carry a positive `limit`, keep `count` equal to the `events[]` length, bind `count` to duplicate-free `events[].sequence` values, and reject `count` values above that limit before transport evidence can report ready.",
+        "Event-watch evidence must carry a positive `limit`, keep `count` equal to the `events[]` length, bind `count` to duplicate-free `events[].sequence` values, reject `count` values above that limit, and require every `events[]` row to be V1 with the same snapshot id, Merkle root, and provider count before transport evidence can report ready.",
         "Transport evidence must bind `sse_event_count` and `websocket_event_count` to the unique canonical `sse_events[].name` and `websocket_events[].name` inventories, require reviewed `reputation-sse-event-*` and `reputation-websocket-event-*` labels without non-production markers, and reject duplicate or malformed transport-event entries before promotion can report ready.",
         "Its `--dry-run` output includes the checker-backed `evidence_contract` map for publish/latest, provider, events, verify, metrics, transport, and consumption artifacts, and the runner validates the schema-closed collection plan, external evidence map, evidence contract, and command steps before dry-run output or live collection.",
     )
@@ -13135,6 +16891,13 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
     assert "PROVIDER_ID_PATTERN" in checker
     assert "provider_id must match canonical lowercase `provider-*`" in checker
     assert "FORBIDDEN_PROVIDER_ID_MARKERS" in checker
+    assert "def parse_evidence_spec(" in checker
+    assert "diagnostic_text_is_canonical" in checker
+    assert "not diagnostic_text_is_canonical(kind)" in checker
+    assert "not diagnostic_text_is_canonical(path)" in checker
+    assert "kind.strip()" not in checker
+    assert "path.strip()" not in checker
+    assert "evidence spec must use KIND=PATH form" in checker
     assert (
         'errors.append(f"{path} must not contain non-production markers {forbidden}")\n'
         '        return ""'
@@ -13188,8 +16951,18 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
         "require_only_required_values(payload, \"metrics\", \"\", REQUIRED_METRICS, errors)"
         in checker
     )
+    assert "events[].version must be 1" in checker
+    assert (
+        "events[].snapshot_id_hex must match first event snapshot_id_hex"
+        in checker
+    )
+    assert "events[].merkle_root_hex must match first event merkle_root_hex" in checker
+    assert "events[].provider_count must match first event provider_count" in checker
     assert 'require_false(payload, "response_bodies_included", errors)' in checker
     assert 'require_false(payload, "raw_provider_records_included", errors)' in checker
+    assert "test_events_all_rows_must_match_snapshot_binding" in checker_test
+    assert "test_events_provider_count_must_match_across_rows" in checker_test
+    assert "test_events_rows_must_be_v1" in checker_test
     assert "test_transport_sse_event_count_must_match_unique_events" in checker_test
     assert "test_transport_response_bodies_flag_is_required" in checker_test
     assert "test_payload_safety_flags_are_required" in checker_test
@@ -13216,6 +16989,10 @@ def test_reputation_docs_keep_rollout_contract_markers() -> None:
     assert "test_metrics_must_not_include_unknown_values" in checker_test
     assert "test_provider_id_must_be_canonical" in checker_test
     assert "test_provider_id_rejects_non_production_markers" in checker_test
+    assert (
+        "test_typed_explicit_evidence_rejects_padded_kind_or_path_without_trimming"
+        in checker_test
+    )
     assert (
         "test_provider_id_non_production_marker_stdout_does_not_echo_provider_id"
         in checker_test
@@ -13323,21 +17100,41 @@ UNSHIPPED_REPUTATION_LIVE_CLI_SUBCOMMANDS = (
     "reputation-promote",
 )
 
+UNSHIPPED_REPUTATION_LIVE_NESTED_CLI_COMMANDS = (
+    "reputation ingest",
+    "reputation engine",
+    "reputation publisher",
+    "reputation api-gateway",
+    "reputation api gateway",
+    "reputation public-api",
+    "reputation public api",
+    "reputation graphql",
+    "reputation storage",
+    "reputation ipfs",
+    "reputation promote",
+)
+
 
 def unshipped_reputation_live_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_REPUTATION_LIVE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_reputation_live_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_REPUTATION_LIVE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_REPUTATION_LIVE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_reputation_live_service_surface_matcher_has_negative_controls() -> None:
@@ -13367,6 +17164,18 @@ def test_reputation_live_service_surface_matcher_has_negative_controls() -> None
         "publication-canary",
         "provider-canary",
         "transport-canary",
+        "metrics-canary",
+        "consumption-canary",
+        "reputation publish",
+        "reputation snapshot",
+        "reputation fetch",
+        "reputation watch",
+        "reputation verify",
+        "reputation publication-canary",
+        "reputation provider-canary",
+        "reputation transport-canary",
+        "reputation metrics-canary",
+        "reputation consumption-canary",
     )
 
     assert unshipped_reputation_live_route_matches(
@@ -13393,6 +17202,17 @@ def test_reputation_live_service_surface_matcher_has_negative_controls() -> None
     assert unshipped_reputation_live_cli_matches(
         '"reputation-ingest" `reputation-publisher` "reputation-promote"'
     ) == ["reputation-ingest", "reputation-publisher", "reputation-promote"]
+    assert unshipped_reputation_live_cli_matches(
+        "`sorafs_cli reputation ingest` "
+        '"sorafs_cli reputation publisher" '
+        "`reputation graphql --listen :8080` "
+        '"reputation promote --deployment prod"'
+    ) == [
+        "reputation ingest",
+        "reputation publisher",
+        "reputation graphql",
+        "reputation promote",
+    ]
     assert unshipped_reputation_live_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
     ) == []
@@ -13428,6 +17248,9 @@ def test_reputation_canary_builder_is_checked_in() -> None:
     assert "SNAPSHOT_ANCHOR_KINDS" in builder
     assert "SNAPSHOT_BOUND_KINDS" in builder
     assert "duplicate --sibling-hex" in builder
+    assert "normalized = sibling.lower()" not in builder
+    assert "previous_error_count = len(errors)" in builder
+    assert "if sibling in seen_siblings:" in builder
     assert "PROVIDER_ID_PATTERN" in builder
     assert "FORBIDDEN_PROVIDER_ID_MARKERS" in builder
     assert "SSE_EVENT_LABEL_PATTERN" in builder
@@ -13455,6 +17278,10 @@ def test_reputation_canary_builder_is_checked_in() -> None:
     assert "test_provider_id_rejects_non_production_markers" in builder_tests
     assert "test_provider_id_accepts_future_production_label" in builder_tests
     assert "test_duplicate_provider_proof_sibling_fails_before_write" in builder_tests
+    assert (
+        "test_invalid_provider_proof_sibling_does_not_seed_duplicate_tracking"
+        in builder_tests
+    )
     assert "test_provider_inventory_must_match_count_before_write" in builder_tests
     assert "test_provider_inventory_must_use_provider_ids_before_write" in builder_tests
     assert (
@@ -13596,21 +17423,42 @@ UNSHIPPED_CLI_SDK_DISTRIBUTION_CLI_SUBCOMMANDS = (
     "release-promote",
 )
 
+UNSHIPPED_CLI_SDK_DISTRIBUTION_NESTED_CLI_COMMANDS = (
+    "release distribute",
+    "release publish",
+    "distribution publish",
+    "homebrew publish",
+    "npm publish",
+    "crates publish",
+    "go-module publish",
+    "go module publish",
+    "sdk distribute",
+    "live governance capture",
+    "governance runbook capture",
+    "release promote",
+)
+
 
 def unshipped_cli_sdk_distribution_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_CLI_SDK_DISTRIBUTION_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_cli_sdk_distribution_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_CLI_SDK_DISTRIBUTION_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_CLI_SDK_DISTRIBUTION_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_cli_sdk_distribution_surface_matcher_has_negative_controls() -> None:
@@ -13634,6 +17482,11 @@ def test_cli_sdk_distribution_surface_matcher_has_negative_controls() -> None:
         "homebrew-publish-evidence",
         "live-governance-capture-canary",
         "release-promote-canary",
+        "release distribute-canary",
+        "homebrew publish-evidence",
+        "sdk distribute-canary",
+        "live governance capture-canary",
+        "release promote-canary",
     )
 
     assert unshipped_cli_sdk_distribution_route_matches(
@@ -13657,6 +17510,33 @@ def test_cli_sdk_distribution_surface_matcher_has_negative_controls() -> None:
         "release-publish",
         "npm-publish",
         "release-promote",
+    ]
+    assert unshipped_cli_sdk_distribution_cli_matches(
+        "`iroha sorafs release distribute` "
+        '"sorafs release publish" '
+        "`distribution publish` "
+        '"homebrew publish --registry tap" '
+        "`npm publish` "
+        '"crates publish" '
+        "`go-module publish` "
+        '"go module publish" '
+        "`sdk distribute` "
+        '"live governance capture --deployment prod" '
+        "`governance runbook capture` "
+        '"release promote --deployment prod"'
+    ) == [
+        "release distribute",
+        "release publish",
+        "distribution publish",
+        "homebrew publish",
+        "npm publish",
+        "crates publish",
+        "go-module publish",
+        "go module publish",
+        "sdk distribute",
+        "live governance capture",
+        "governance runbook capture",
+        "release promote",
     ]
     assert unshipped_cli_sdk_distribution_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -13726,6 +17606,7 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed PoR metric set, and reject duplicate or unknown metric labels before promotion can report ready.",
         "PoR payload-safety artifacts must explicitly set `raw_randomness_included`, `raw_vrf_included`, `response_bodies_included`, `raw_challenge_bytes_included`, `raw_proof_bytes_included`, `raw_report_included`, `raw_export_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "Reporting/archive artifacts fingerprint the reviewed `archive_backend` value and `governance_archive_handoff_digest_hex`, the summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, `archive_backends`, and `valid_governance_archive_handoff_digests`, and the aggregate production-readiness gate requires those fields to match the observability and reporting/archive artifact fingerprints before final promotion can report ready.",
+        "The PoR gate fail-closes when more than one valid seed replay, policy, or governance archive handoff anchor appears, and clears the mixed `valid_seed_replay_digests`, `valid_policy_digests`, or `valid_governance_archive_handoff_digests` set before aggregate promotion can report ready.",
         "Aggregate promotion also rechecks the lane-proven PoR digest relationships: seed-replay-bound artifact fingerprints must match `valid_seed_replay_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -13770,6 +17651,10 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
         '"valid_governance_archive_handoff_digests": sorted('
         in checker
     )
+    assert "def require_single_active_digest(" in checker
+    assert 'label="valid_seed_replay_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
+    assert 'label="valid_governance_archive_handoff_digests"' in checker
     assert '"metric_count_values": sorted(metric_counts)' in checker
     assert '"metrics": sorted(metric_names)' in checker
     assert '"archive_backend"' in checker
@@ -13810,6 +17695,12 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
     assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
     assert (
         "test_all_policy_bound_artifacts_reject_randomness_policy_mismatch"
+        in checker_test
+    )
+    assert "test_multiple_valid_seed_replay_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
+    assert (
+        "test_multiple_valid_governance_archive_handoff_anchors_fail_closed"
         in checker_test
     )
     assert "test_randomness_provider_count_must_match_unique_providers" in checker_test
@@ -14026,21 +17917,45 @@ UNSHIPPED_POR_LIVE_CLI_SUBCOMMANDS = (
     "por-promote",
 )
 
+UNSHIPPED_POR_LIVE_NESTED_CLI_COMMANDS = (
+    "por live-deployment",
+    "por external-drand",
+    "por drand-feed",
+    "por vrf-feed",
+    "por auditor-feed",
+    "por live-auditor",
+    "por production-archive",
+    "por archive-handoff",
+    "por sql-warehouse",
+    "por parquet-warehouse",
+    "por proof-bundle",
+    "por proof-bundle fetch",
+    "por proof-bundle show",
+    "por proof-bundle replay",
+    "por promote",
+)
+
 
 def unshipped_por_live_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_POR_LIVE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_por_live_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_POR_LIVE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_POR_LIVE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
@@ -14075,6 +17990,16 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "sorafs_cli",
         "por-rollout",
         "por-proof-bundle-canary",
+        "por status",
+        "por export",
+        "por report",
+        "por trigger",
+        "por rollout",
+        "por live-deployment-canary",
+        "por external-drand-proof",
+        "por production-archive-evidence",
+        "por proof-bundle-canary",
+        "por promotion-evidence",
     )
 
     assert unshipped_por_live_route_matches(
@@ -14104,6 +18029,39 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "por-live-deployment",
         "por-proof-bundle-replay",
         "por-promote",
+    ]
+    assert unshipped_por_live_cli_matches(
+        "`iroha sorafs por live-deployment` "
+        '"sorafs por external-drand" '
+        "`por drand-feed` "
+        '"por vrf-feed" '
+        "`por auditor-feed` "
+        '"por live-auditor" '
+        "`por production-archive` "
+        '"por archive-handoff" '
+        "`por sql-warehouse` "
+        '"por parquet-warehouse" '
+        "`por proof-bundle` "
+        '"por proof-bundle fetch --deployment prod" '
+        "`por proof-bundle show` "
+        '"por proof-bundle replay" '
+        "`por promote`"
+    ) == [
+        "por live-deployment",
+        "por external-drand",
+        "por drand-feed",
+        "por vrf-feed",
+        "por auditor-feed",
+        "por live-auditor",
+        "por production-archive",
+        "por archive-handoff",
+        "por sql-warehouse",
+        "por parquet-warehouse",
+        "por proof-bundle",
+        "por proof-bundle fetch",
+        "por proof-bundle show",
+        "por proof-bundle replay",
+        "por promote",
     ]
     assert unshipped_por_live_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -14158,6 +18116,7 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed PoTR metric set, and reject duplicate or unknown metric labels before promotion can report ready.",
         "PoTR payload-safety artifacts must explicitly set `raw_receipts_included`, `fetch_transcripts_included`, `raw_receipt_bytes_included`, `response_bodies_included`, `raw_reputation_inputs_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
+        "The PoTR gate fail-closes when more than one valid receipt summary, PQ key roster, reputation weight policy, or governance policy anchor appears, and clears the mixed `valid_receipt_summary_digests`, `valid_pq_key_roster_digests`, `valid_reputation_weight_policy_digests`, or `valid_policy_digests` set before aggregate promotion can report ready.",
         "Aggregate promotion also rechecks the lane-proven PoTR digest relationships: receipt-summary-bound artifact fingerprints must match `valid_receipt_summary_digests`, PQ-key-roster-bound artifact fingerprints must match `valid_pq_key_roster_digests`, and reputation-weight-bound artifact fingerprints must match `valid_reputation_weight_policy_digests` before final promotion can report ready.",
         "The collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before contacting live PoTR services.",
     )
@@ -14185,6 +18144,11 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
     )
     assert '"metric_count_values": sorted(metric_counts)' in checker
     assert '"metrics": sorted(metric_names)' in checker
+    assert "def require_single_active_digest(" in checker
+    assert 'label="valid_receipt_summary_digests"' in checker
+    assert 'label="valid_pq_key_roster_digests"' in checker
+    assert 'label="valid_reputation_weight_policy_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
     assert "field=\"name\"" in checker
     assert "allow_scalar_items=False" in checker
     assert "PROVIDER_LABEL_PATTERN" in checker
@@ -14282,6 +18246,10 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
         "test_all_reputation_weight_bound_artifacts_reject_governance_mismatch"
         in checker_test
     )
+    assert "test_multiple_valid_receipt_summary_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_pq_key_roster_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_reputation_weight_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
     assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
     assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
 
@@ -14394,21 +18362,40 @@ UNSHIPPED_POTR_LIVE_CLI_SUBCOMMANDS = (
     "potr-promote",
 )
 
+UNSHIPPED_POTR_LIVE_NESTED_CLI_COMMANDS = (
+    "potr live-probes",
+    "potr multi-provider-probes",
+    "potr live-rollout",
+    "potr provider-key-distribution",
+    "potr ml-dsa-keys",
+    "potr pq-provider-keys",
+    "potr reputation-weights",
+    "potr governance-approval",
+    "potr promote",
+    "proof stream potr live",
+)
+
 
 def unshipped_potr_live_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_POTR_LIVE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_potr_live_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_POTR_LIVE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_POTR_LIVE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_potr_live_rollout_surface_matcher_has_negative_controls() -> None:
@@ -14431,6 +18418,14 @@ def test_potr_live_rollout_surface_matcher_has_negative_controls() -> None:
         "potr-proof-stream-canary",
         "potr-multi-provider-probe-canary",
         "potr-governance-approval-canary",
+        "proof stream",
+        "proof stream --proof-kind=potr",
+        "potr rollout",
+        "potr live-probes-canary",
+        "potr provider-key-distribution-evidence",
+        "potr reputation-weights-canary",
+        "potr governance-approval-canary",
+        "proof stream potr live-canary",
     )
 
     assert unshipped_potr_live_route_matches(
@@ -14460,6 +18455,29 @@ def test_potr_live_rollout_surface_matcher_has_negative_controls() -> None:
         "potr-live-probes",
         "potr-pq-provider-keys",
         "potr-promote",
+    ]
+    assert unshipped_potr_live_cli_matches(
+        "`iroha sorafs potr live-probes` "
+        '"sorafs potr multi-provider-probes" '
+        "`potr live-rollout` "
+        '"potr provider-key-distribution" '
+        "`potr ml-dsa-keys` "
+        '"potr pq-provider-keys" '
+        "`potr reputation-weights` "
+        '"potr governance-approval" '
+        "`potr promote` "
+        '"proof stream potr live --deployment prod"'
+    ) == [
+        "potr live-probes",
+        "potr multi-provider-probes",
+        "potr live-rollout",
+        "potr provider-key-distribution",
+        "potr ml-dsa-keys",
+        "potr pq-provider-keys",
+        "potr reputation-weights",
+        "potr governance-approval",
+        "potr promote",
+        "proof stream potr live",
     ]
     assert unshipped_potr_live_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -14514,6 +18532,7 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed repair metrics, and reject duplicate or unknown metric labels before promotion can report ready.",
         "Repair payload-safety artifacts must explicitly set `raw_roster_included`, `raw_evidence_included`, `response_bodies_included`, `raw_repair_payloads_included`, `raw_ledger_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
+        "The repair gate fail-closes when more than one valid roster, failure bundle, handoff, or policy anchor appears, and clears the mixed `valid_roster_digests`, `valid_failure_bundle_digests`, `valid_handoff_digests`, or `valid_policy_digests` set before aggregate promotion can report ready.",
         "Aggregate promotion also rechecks the lane-proven repair digest relationships: roster-bound artifact fingerprints must match `valid_roster_digests`, failure-bound artifact fingerprints must match `valid_failure_bundle_digests`, handoff-bound artifact fingerprints must match `valid_handoff_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
         "Its collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before touching live repair services.",
     )
@@ -14647,6 +18666,11 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
     assert 'path=f"routes[{index}].body_blake3_hex"' in checker
     assert '"metric_count_values": sorted(metric_counts)' in checker
     assert '"metrics": sorted(metric_names)' in checker
+    assert "def require_single_active_digest(" in checker
+    assert 'label="valid_roster_digests"' in checker
+    assert 'label="valid_failure_bundle_digests"' in checker
+    assert 'label="valid_handoff_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
     assert "test_observability_metrics_must_not_duplicate" in checker_test
     assert "test_observability_metrics_must_not_include_unknown_values" in checker_test
     assert '("repair", "metrics"): ("observability",)' in aggregate_checker
@@ -14691,6 +18715,10 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
         "test_all_policy_bound_artifacts_reject_governance_policy_mismatch"
         in checker_test
     )
+    assert "test_multiple_valid_roster_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_failure_bundle_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_handoff_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
     assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
     production_checker_test = read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
@@ -14723,6 +18751,7 @@ def test_repair_canary_builder_is_checked_in() -> None:
         SCRIPTS_DIR / "examples" / "sorafs_repair_worker_lifecycle_canary.args.example"
     )
     docs = read(SORAFS_REPAIR_PLAN)
+    normalized_docs = re.sub(r"\s+", " ", docs)
     roadmap = read(REPO_ROOT / "roadmap.md")
 
     assert "Build payload-free SoraFS repair rollout canary artifacts." in builder
@@ -14733,8 +18762,10 @@ def test_repair_canary_builder_is_checked_in() -> None:
     assert "--route-body-blake3-hex" in builder
     assert '"body_blake3_hex": args.route_body_blake3_hex' in builder
     assert "REQUIRED_METRICS" in builder
+    assert "REQUIRED_FAILURE_SOURCES" in builder
     assert "ROSTER_BOUND_KINDS" in builder
     assert "FAILURE_BOUND_KINDS" in builder
+    assert "default=len(REQUIRED_FAILURE_SOURCES)" in builder
     assert "--auditor" in builder
     assert "--failure-event" in builder
     assert "validate_reviewed_inventory(" in builder
@@ -14744,6 +18775,8 @@ def test_repair_canary_builder_is_checked_in() -> None:
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in builder
     assert "pattern=AUDITOR_LABEL_PATTERN" in builder
     assert "validate_failure_events(" in builder
+    assert "source = source.strip()" not in builder
+    assert "name = name.strip()" not in builder
     assert '"status_count": len(args.lifecycle_statuses)' in builder
     assert '"handoff_target_count": len(args.handoff_targets)' in builder
     assert "test_generated_canaries_pass_full_repair_gate" in builder_tests
@@ -14760,9 +18793,14 @@ def test_repair_canary_builder_is_checked_in() -> None:
         in builder_tests
     )
     assert "test_failure_event_inventory_must_match_failure_event_count" in builder_tests
+    assert "test_default_failure_event_count_matches_required_sources" in builder_tests
     assert "test_failure_event_inventory_must_not_duplicate" in builder_tests
     assert "test_failure_event_inventory_must_use_production_family" in builder_tests
     assert "test_failure_event_inventory_rejects_placeholder_marker" in builder_tests
+    assert (
+        "test_failure_event_inventory_rejects_padded_tuple_components"
+        in builder_tests
+    )
     assert (
         "test_closed_set_inputs_reject_duplicate_and_unknown_values_before_write"
         in builder_tests
@@ -14772,6 +18810,10 @@ def test_repair_canary_builder_is_checked_in() -> None:
     assert "repair-auditor-02" in auditor_roster_example
     assert "--route-body-blake3-hex" in worker_lifecycle_example
     assert "scripts/build_sorafs_repair_canary.py" in docs
+    assert (
+        "`--failure-event-count` values derived from the reviewed failure-source inventory"
+        in normalized_docs
+    )
     assert "scripts/build_sorafs_repair_canary.py" in roadmap
     assert (
         SCRIPTS_DIR / "examples" / "sorafs_repair_auditor_roster_canary.args.example"
@@ -14810,21 +18852,40 @@ UNSHIPPED_REPAIR_LIVE_CLI_SUBCOMMANDS = (
     "repair-promotion",
 )
 
+UNSHIPPED_REPAIR_LIVE_NESTED_CLI_COMMANDS = (
+    "repair live-operator-evidence",
+    "repair deployed-auditor-roster",
+    "repair auditor-roster-live",
+    "repair sf9-coordinator-runbook",
+    "repair por-potr-failure-capture",
+    "repair live-failure-capture",
+    "repair live-governance-handoff",
+    "repair production-handoff",
+    "repair promote",
+    "repair promotion",
+)
+
 
 def unshipped_repair_live_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_REPAIR_LIVE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_repair_live_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_REPAIR_LIVE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_REPAIR_LIVE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_repair_live_operator_surface_matcher_has_negative_controls() -> None:
@@ -14857,6 +18918,18 @@ def test_repair_live_operator_surface_matcher_has_negative_controls() -> None:
         "repair-auditor-roster-canary",
         "repair-worker-lifecycle-canary",
         "repair-promotion-canary",
+        "repair list",
+        "repair claim",
+        "repair complete",
+        "repair fail",
+        "repair escalate",
+        "repair inspect",
+        "repair dry-run",
+        "repair live-operator-evidence-canary",
+        "repair deployed-auditor-roster-evidence",
+        "repair production-handoff-evidence",
+        "repair promote-canary",
+        "repair promotion-evidence",
     )
 
     assert unshipped_repair_live_route_matches(
@@ -14886,6 +18959,17 @@ def test_repair_live_operator_surface_matcher_has_negative_controls() -> None:
         "repair-live-operator-evidence",
         "repair-production-handoff",
         "repair-promote",
+    ]
+    assert unshipped_repair_live_cli_matches(
+        "`iroha sorafs repair live-operator-evidence` "
+        '"iroha sorafs repair deployed-auditor-roster" '
+        "`repair production-handoff` "
+        '"repair promote --deployment prod"'
+    ) == [
+        "repair live-operator-evidence",
+        "repair deployed-auditor-roster",
+        "repair production-handoff",
+        "repair promote",
     ]
     assert unshipped_repair_live_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -14932,6 +19016,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "governance approval must reference that same digest and name the approved `public_key_fingerprint_hex`",
         "`valid_policy_digests` and `valid_release_key_fingerprints` only from valid signed-manifest artifacts",
         "Aggregate promotion also rechecks the lane-proven reference SDK release digest relationships: manifest-bound artifact fingerprints must match `valid_release_manifest_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`, and governance-approval release-key fingerprints must match `valid_release_key_fingerprints` before final promotion can report ready.",
+        "The reference SDK release gate fail-closes when more than one valid release manifest, policy, or release key anchor appears, and clears the mixed `valid_release_manifest_digests`, `valid_policy_digests`, or `valid_release_key_fingerprints` set before aggregate promotion can report ready.",
         "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
         "digests, governance approval policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
@@ -14962,6 +19047,10 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     )
     assert "def require_only_required_values(" in checker
     assert "must not include unknown values" in checker
+    assert "def require_single_active_digest(" in checker
+    assert 'label="valid_release_manifest_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
+    assert 'label="valid_release_key_fingerprints"' in checker
     assert "ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS" in checker
     assert 'ALLOWED_MANIFEST_SIGNATURE_ALGORITHMS = ("ed25519",)' in checker
     assert "rsa-sha256" not in checker
@@ -15075,6 +19164,9 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "test_all_release_key_bound_artifacts_reject_signed_manifest_key_mismatch"
         in checker_test
     )
+    assert "test_multiple_valid_release_manifest_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_release_key_anchors_fail_closed" in checker_test
 
 
 def test_reference_sdk_docs_do_not_reopen_implemented_guides() -> None:
@@ -15226,21 +19318,45 @@ UNSHIPPED_REFERENCE_SDK_DISTRIBUTION_CLI_SUBCOMMANDS = (
     "release-manifest-publish",
 )
 
+UNSHIPPED_REFERENCE_SDK_DISTRIBUTION_NESTED_CLI_COMMANDS = (
+    "reference-sdk publish",
+    "reference-sdk release-archives",
+    "reference-sdk signed-manifests",
+    "reference-sdk downstream-bindings",
+    "reference-sdk downstream-packages",
+    "reference-sdk live-smoke",
+    "reference-sdk published-cookbook-smoke",
+    "reference-sdk package-publication",
+    "reference-sdk release-promote",
+    "reference-sdk promote",
+    "sorafs-validate publish",
+    "sorafs-validate release-promote",
+    "published-archive smoke",
+    "downstream-bindings publish",
+    "release-manifest publish",
+)
+
 
 def unshipped_reference_sdk_distribution_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_REFERENCE_SDK_DISTRIBUTION_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_reference_sdk_distribution_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_REFERENCE_SDK_DISTRIBUTION_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_REFERENCE_SDK_DISTRIBUTION_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_reference_sdk_distribution_surface_matcher_has_negative_controls() -> None:
@@ -15271,6 +19387,23 @@ def test_reference_sdk_distribution_surface_matcher_has_negative_controls() -> N
         "reference-sdk-release-promote-canary",
         "sorafs-validate-release-promote-canary",
         "release-manifest-publish-evidence",
+        "sorafs-validate advert",
+        "sorafs-validate admission",
+        "sorafs-validate order",
+        "sorafs-validate orderbook",
+        "sorafs-validate por",
+        "sorafs-validate pdp",
+        "sorafs-validate potr",
+        "sorafs-validate repair",
+        "sorafs-validate bundle",
+        "sorafs-validate governance",
+        "sorafs-validate sign",
+        "reference-sdk release-canary",
+        "reference-sdk release-promote-canary",
+        "sorafs-validate release-promote-canary",
+        "published-archive smoke-canary",
+        "downstream-bindings publish-evidence",
+        "release-manifest publish-evidence",
     )
 
     assert unshipped_reference_sdk_distribution_route_matches(
@@ -15294,6 +19427,39 @@ def test_reference_sdk_distribution_surface_matcher_has_negative_controls() -> N
         "reference-sdk-publish",
         "reference-sdk-live-smoke",
         "sorafs-validate-publish",
+    ]
+    assert unshipped_reference_sdk_distribution_cli_matches(
+        "`iroha sorafs reference-sdk publish` "
+        '"reference-sdk release-archives" '
+        "`reference-sdk signed-manifests` "
+        '"reference-sdk downstream-bindings" '
+        "`reference-sdk downstream-packages` "
+        '"reference-sdk live-smoke" '
+        "`reference-sdk published-cookbook-smoke` "
+        '"reference-sdk package-publication" '
+        "`reference-sdk release-promote` "
+        '"reference-sdk promote" '
+        "`sorafs-validate publish` "
+        '"sorafs-validate release-promote" '
+        "`published-archive smoke` "
+        '"downstream-bindings publish" '
+        "`release-manifest publish`"
+    ) == [
+        "reference-sdk publish",
+        "reference-sdk release-archives",
+        "reference-sdk signed-manifests",
+        "reference-sdk downstream-bindings",
+        "reference-sdk downstream-packages",
+        "reference-sdk live-smoke",
+        "reference-sdk published-cookbook-smoke",
+        "reference-sdk package-publication",
+        "reference-sdk release-promote",
+        "reference-sdk promote",
+        "sorafs-validate publish",
+        "sorafs-validate release-promote",
+        "published-archive smoke",
+        "downstream-bindings publish",
+        "release-manifest publish",
     ]
     assert unshipped_reference_sdk_distribution_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -15368,6 +19534,7 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
         "Governance/repair artifacts fingerprint `repair_handoff_digest_hex`, the summary exports `valid_repair_handoff_digests`, and the aggregate production-readiness gate requires those values to match governance/repair artifact fingerprints before final promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
         "Aggregate promotion also rechecks the lane-proven PDP digest relationships: proof-summary-bound artifact fingerprints must match `valid_proof_summary_digests`, policy-bound artifact fingerprints must match `valid_policy_digests`, provider-roster-bound artifact fingerprints must match `valid_provider_roster_digests`, and repair-handoff metadata must match `valid_repair_handoff_digests` before final promotion can report ready.",
+        "PDP rollout summaries must expose exactly one active proof summary digest, one active policy digest, one active provider-roster digest, and one active repair-handoff digest; mixed valid anchors fail closed before final promotion can report ready.",
         "Proof-summary mismatches are recorded on the offending artifact in the JSON summary before required-kind validity is reported.",
         "Policy and provider-roster mismatches are recorded on the offending governance approval artifact through the same summary path.",
         "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
@@ -15486,6 +19653,16 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
         "test_all_provider_roster_bound_artifacts_reject_generation_roster_mismatch"
         in checker_test
     )
+    assert "def require_single_active_digest(" in checker
+    assert "{label} must contain exactly one active digest" in checker
+    assert 'label="valid_proof_summary_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
+    assert 'label="valid_provider_roster_digests"' in checker
+    assert 'label="valid_repair_handoff_digests"' in checker
+    assert "test_multiple_valid_proof_summary_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_provider_roster_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_repair_handoff_anchors_fail_closed" in checker_test
     assert 'path=f"routes[{index}].body_blake3_hex"' in checker
     assert "test_observability_metrics_must_not_duplicate" in checker_test
     assert "test_observability_metrics_must_not_include_unknown_values" in checker_test
@@ -15666,21 +19843,44 @@ UNSHIPPED_PDP_PROVIDER_CLI_SUBCOMMANDS = (
     "pdp-promote",
 )
 
+UNSHIPPED_PDP_PROVIDER_NESTED_CLI_COMMANDS = (
+    "pdp challenge",
+    "pdp fetch",
+    "pdp respond",
+    "pdp verify",
+    "pdp status",
+    "pdp export",
+    "pdp provider-transport",
+    "pdp proof-generation",
+    "pdp governance-archive",
+    "pdp repair-handoff",
+    "pdp promote",
+)
+
 
 def unshipped_pdp_provider_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_PDP_PROVIDER_ROUTE_PATTERNS
-        if re.search(rf"(?<![A-Za-z0-9]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_pdp_provider_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated = [
         subcommand
         for subcommand in UNSHIPPED_PDP_PROVIDER_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested = [
+        command
+        for command in UNSHIPPED_PDP_PROVIDER_NESTED_CLI_COMMANDS
+        if re.search(
+            rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])",
+            source,
+        )
+    ]
+    return [*hyphenated, *nested]
 
 
 def test_pdp_provider_protocol_surface_matcher_has_negative_controls() -> None:
@@ -15698,6 +19898,7 @@ def test_pdp_provider_protocol_surface_matcher_has_negative_controls() -> None:
     shipped_local_subcommands = (
         "proof",
         "stream",
+        "proof stream --proof-kind=pdp",
         "sorafs_cli",
         "sorafs-validate",
         "pdp",
@@ -15743,6 +19944,21 @@ def test_pdp_provider_protocol_surface_matcher_has_negative_controls() -> None:
         "pdp-challenge",
         "pdp-proof-generation",
         "pdp-promote",
+    ]
+    assert unshipped_pdp_provider_cli_matches(
+        "`sorafs pdp challenge` "
+        '"sorafs pdp fetch" '
+        "`pdp respond` "
+        '"pdp verify" '
+        "`pdp status` "
+        '"pdp export"'
+    ) == [
+        "pdp challenge",
+        "pdp fetch",
+        "pdp respond",
+        "pdp verify",
+        "pdp status",
+        "pdp export",
     ]
     assert unshipped_pdp_provider_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -15806,6 +20022,7 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
         "Governance DAG payload-safety artifacts must explicitly set `payload_bytes_included`, `raw_head_included`, `raw_car_included`, `mirror_drift_detected`, `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
         "Governance DAG aggregate promotion also rechecks the lane-proven relationships: public-head bound artifact fingerprints must match `valid_public_head_cids`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
+        "Governance DAG rollout summaries must expose exactly one active public head CID, one active publisher policy digest, and one active checkpoint digest; mixed valid public-head, policy, or checkpoint anchors fail closed before final promotion can report ready.",
         "collection planner with dry-run evidence-contract export and schema-closed plan validation",
     )
     missing_current: dict[str, list[str]] = {}
@@ -15854,6 +20071,8 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     assert "allow_scalar_items=False" in checker
     assert "REQUIRED_PAYLOAD_KIND_SET = frozenset(REQUIRED_PAYLOAD_KINDS)" in checker
     assert "def require_only_required_payload_kinds(" in checker
+    assert "value.strip() not in REQUIRED_PAYLOAD_KIND_SET" not in checker
+    assert "value not in REQUIRED_PAYLOAD_KIND_SET" in checker
     assert "def require_only_required_values(" in checker
     assert "BLOCK_REF_LABEL_PATTERN" in checker
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in checker
@@ -15883,6 +20102,14 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
         "test_all_policy_bound_artifacts_reject_publisher_policy_mismatch"
         in checker_test
     )
+    assert "def require_single_active_digest(" in checker
+    assert "{label} must contain exactly one active digest" in checker
+    assert 'label="valid_public_head_cids"' in checker
+    assert 'label="valid_policy_digests"' in checker
+    assert 'label="valid_checkpoint_digests"' in checker
+    assert "test_multiple_valid_public_head_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_checkpoint_anchors_fail_closed" in checker_test
     assert "test_ingest_source_count_must_match_unique_payload_kinds" in checker_test
     assert "test_ingest_payload_kinds_must_not_duplicate" in checker_test
     assert (
@@ -15902,6 +20129,10 @@ def test_governance_dag_docs_keep_rollout_contract_markers() -> None:
     assert "test_ipfs_block_refs_must_use_production_family" in checker_test
     assert "test_ipfs_payload_kinds_must_not_duplicate" in checker_test
     assert "test_ipfs_payload_kinds_must_not_include_unknown_values" in checker_test
+    assert (
+        "test_payload_kinds_reject_trim_normalized_and_unicode_variants"
+        in checker_test
+    )
     assert "test_dashboard_route_count_must_match_unique_routes" in checker_test
     assert "test_dashboard_routes_must_not_duplicate" in checker_test
     assert "test_dashboard_routes_must_not_include_unknown_values" in checker_test
@@ -16040,21 +20271,37 @@ UNSHIPPED_GOVERNANCE_DAG_PUBLIC_CLI_SUBCOMMANDS = (
     "ipns-publish",
 )
 
+UNSHIPPED_GOVERNANCE_DAG_PUBLIC_NESTED_CLI_COMMANDS = (
+    "governance dag live-head",
+    "governance dag fetch-head",
+    "governance dag publish-checkpoint",
+    "governance dag checkpoint-publish",
+    "governance dag mirror-service",
+    "governance dag ipfs-publish",
+    "governance dag ipns-publish",
+)
+
 
 def unshipped_governance_dag_public_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_GOVERNANCE_DAG_PUBLIC_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_governance_dag_public_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_GOVERNANCE_DAG_PUBLIC_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_GOVERNANCE_DAG_PUBLIC_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_governance_dag_public_surface_matcher_has_negative_controls() -> None:
@@ -16098,6 +20345,15 @@ def test_governance_dag_public_surface_matcher_has_negative_controls() -> None:
         "checkpoint-recover",
         "mirror-build",
         "mirror-query",
+        "governance dag verify",
+        "governance dag export",
+        "governance dag checkpoint",
+        "governance dag checkpoint-verify",
+        "governance dag checkpoint-recover",
+        "governance dag mirror-build",
+        "governance dag mirror-query",
+        "governance dag ipfs-publish-canary",
+        "governance dag ipns-publish-evidence",
         "publisher-service",
         "ipfs-ipns-e2e",
         "ipfs-publish-canary",
@@ -16130,6 +20386,17 @@ def test_governance_dag_public_surface_matcher_has_negative_controls() -> None:
         "live-head",
         "checkpoint-publish",
         "ipns-publish",
+    ]
+    assert unshipped_governance_dag_public_cli_matches(
+        "`sorafs governance dag live-head` "
+        '"sorafs governance dag fetch-head" '
+        "`governance dag checkpoint-publish` "
+        '"governance dag ipfs-publish --cid root"'
+    ) == [
+        "governance dag live-head",
+        "governance dag fetch-head",
+        "governance dag checkpoint-publish",
+        "governance dag ipfs-publish",
     ]
     assert unshipped_governance_dag_public_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -16193,6 +20460,7 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
         "rejects duplicate or unknown closed-set `--verified-claim`, `--route`, `--stream`, `--language`, `--metric`, and `--source` inputs before writing any canary JSON",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
         "Aggregate promotion also rechecks the lane-proven orderbook digest relationships: contract-bound artifact fingerprints must match `valid_contract_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
+        "Promotion summaries must expose exactly one active contract digest and exactly one active policy digest; mixed valid contract or policy anchors fail closed before binding checks can satisfy final promotion.",
         "Reconciliation artifacts also bind `peer_count` and `source_count` to the unique canonical `peers[].name` and `sources[].name` inventories, require peer labels to use reviewed lowercase `orderbook-peer-*` labels without non-production markers, and reject duplicate peer entries plus duplicate or unknown source entries before promotion can report ready.",
         "collection planner with dry-run evidence-contract export",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
@@ -16321,6 +20589,12 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
         "test_all_policy_bound_artifacts_reject_contract_policy_mismatch"
         in checker_test
     )
+    assert "def require_single_active_digest(" in checker
+    assert "{label} must contain exactly one active digest" in checker
+    assert 'label="valid_contract_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
+    assert "test_multiple_valid_contract_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
     assert "test_sdk_release_debug_artifacts_flag_is_required" in checker_test
     assert (
         "require_string_inventory_count_match(payload, \"metrics\", \"metric_count\", errors)"
@@ -16650,21 +20924,37 @@ UNSHIPPED_ORDERBOOK_SERVICE_CLI_SUBCOMMANDS = (
     "dashboard-serve",
 )
 
+UNSHIPPED_ORDERBOOK_SERVICE_NESTED_CLI_COMMANDS = (
+    "orderbook match-daemon",
+    "orderbook matcher-service",
+    "orderbook settlement-daemon",
+    "orderbook contract-submit",
+    "orderbook contract-forward",
+    "orderbook escrow-mutate",
+    "orderbook dashboard-serve",
+)
+
 
 def unshipped_orderbook_service_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_ORDERBOOK_SERVICE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_orderbook_service_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_ORDERBOOK_SERVICE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_ORDERBOOK_SERVICE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_orderbook_service_surface_matcher_has_negative_controls() -> None:
@@ -16701,6 +20991,17 @@ def test_orderbook_service_surface_matcher_has_negative_controls() -> None:
         "orderbook-canary",
         "contract-submit-canary",
         "dashboard-serve-canary",
+        "orderbook orders",
+        "orderbook cancel",
+        "orderbook receipts",
+        "orderbook book",
+        "orderbook trades",
+        "orderbook channels",
+        "orderbook events",
+        "orderbook events-stream",
+        "orderbook events-ws",
+        "orderbook contract-submit-canary",
+        "orderbook dashboard-serve-canary",
     )
 
     assert unshipped_orderbook_service_route_matches(
@@ -16737,6 +21038,17 @@ def test_orderbook_service_surface_matcher_has_negative_controls() -> None:
         "match-daemon",
         "contract-submit",
         "dashboard-serve",
+    ]
+    assert unshipped_orderbook_service_cli_matches(
+        "`sorafs orderbook matcher-service` "
+        '"sorafs orderbook settlement-daemon" '
+        "`orderbook contract-submit` "
+        '"orderbook dashboard-serve --listen :8080"'
+    ) == [
+        "orderbook matcher-service",
+        "orderbook settlement-daemon",
+        "orderbook contract-submit",
+        "orderbook dashboard-serve",
     ]
     assert unshipped_orderbook_service_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -16789,6 +21101,7 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
         "Feed-collector and reference-price artifacts also bind `feed_count` to the unique canonical `feeds[].name` inventory, require `accepted_feed_count` to equal `feed_count`, require coverage for the reviewed `feed-primary`, `feed-secondary`, and `feed-tertiary` price feeds, and reject duplicate or unknown feed entries before promotion can report ready.",
         "Billing-cycle artifacts also require `cycle_id` to match a reviewed lowercase `billing-cycle-*` label without non-production markers, bind `statement_count` to the unique canonical `statements[].name` inventory using reviewed `billing-statement-*` labels without non-production markers, and bind `line_item_count` to the unique canonical `line_items[].name` inventory using reviewed `billing-line-item-*` labels without non-production markers, rejecting duplicate statement or line-item entries before promotion can report ready.",
         "The aggregate production-readiness gate now derives cycle tuple and policy digest sets from `valid_billing_cycles`: `valid_cycle_bindings` must match those cycle tuples, `valid_policy_digests` must match those cycle policies, and every billing-cycle `reference_decision_id_hex` must appear in `valid_reference_decision_ids` before final promotion can report ready. It also rechecks cycle-bound and policy-bound artifact fingerprints against `valid_cycle_bindings` and `valid_policy_digests`.",
+        "The hedging gate fail-closes when more than one valid cycle tuple or policy anchor appears, and clears the mixed `valid_cycle_bindings` or `valid_policy_digests` set before aggregate promotion can report ready.",
         "Statement-publication artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready, require every route response to carry a lowercase `body_blake3_hex` digest, and bind `acknowledgement_probe_count` to the unique canonical `acknowledgement_probes` inventory using reviewed `billing-ack-probe-*` labels without non-production markers.",
         "Statement-publication canaries bind `acknowledgement_probe_count` to reviewed `billing-ack-probe-*` `acknowledgement_probes` inventory and reject duplicate or non-production acknowledgement probes.",
         "Reconciliation artifacts also bind `source_count` to the unique canonical `sources[].name` inventory and `line_item_count` to the unique canonical `line_items[].name` inventory using reviewed `billing-line-item-*` labels without non-production markers, rejecting duplicate or unknown source entries and duplicate line-item entries before promotion can report ready.",
@@ -16848,6 +21161,10 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
     assert "NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES" in checker
     assert "hedging-native-artifact-" in checker
     assert "DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS = 2" in checker
+    assert "def require_single_active_digest(" in checker
+    assert "def require_single_active_binding(" in checker
+    assert 'label="valid_cycle_bindings"' in checker
+    assert 'label="valid_policy_digests"' in checker
     assert "DEFAULT_MIN_NATIVE_BRIDGE_ARTIFACTS" in builder
     assert "at least one Swift-family plus one JNI-family artifact" in hedging_plan
     assert "NATIVE_BRIDGE_ARTIFACT_FAMILY_PREFIXES" in builder
@@ -16882,6 +21199,8 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
         "test_all_policy_bound_artifacts_reject_billing_cycle_policy_mismatch"
         in checker_test
     )
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_cycle_binding_anchors_fail_closed" in checker_test
     assert "test_hedging_cycle_bindings_must_match_billing_cycles" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
@@ -17260,21 +21579,40 @@ UNSHIPPED_HEDGING_BILLING_CLI_SUBCOMMANDS = (
     "hedging-status",
 )
 
+UNSHIPPED_HEDGING_BILLING_NESTED_CLI_COMMANDS = (
+    "hedging daemon",
+    "hedging price-feed-collector",
+    "hedging collector-service",
+    "hedging hedge-execute",
+    "hedging exposure-status",
+    "hedging status",
+    "billing daemon",
+    "billing statement-publish",
+    "billing statement-ack",
+    "billing api",
+)
+
 
 def unshipped_hedging_billing_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_HEDGING_BILLING_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_hedging_billing_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_HEDGING_BILLING_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_HEDGING_BILLING_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_hedging_billing_service_surface_matcher_has_negative_controls() -> None:
@@ -17298,6 +21636,16 @@ def test_hedging_billing_service_surface_matcher_has_negative_controls() -> None
         "hedging-canary",
         "billing-cycle-canary",
         "statement-publish-canary",
+        "sorafs-validate hedging",
+        "sorafs-validate billing",
+        "hedging feed",
+        "hedging reference-price",
+        "hedging metrics-alerts",
+        "hedging status-canary",
+        "billing billing-cycle",
+        "billing statement-publication",
+        "billing statement-publish-canary",
+        "billing statement-ack-evidence",
     )
 
     assert unshipped_hedging_billing_route_matches(
@@ -17321,6 +21669,17 @@ def test_hedging_billing_service_surface_matcher_has_negative_controls() -> None
         "price-feed-collector",
         "statement-publish",
         "billing-api",
+    ]
+    assert unshipped_hedging_billing_cli_matches(
+        "`sorafs hedging daemon` "
+        '"sorafs hedging price-feed-collector" '
+        "`billing statement-publish` "
+        '"billing api --listen :8080"'
+    ) == [
+        "hedging daemon",
+        "hedging price-feed-collector",
+        "billing statement-publish",
+        "billing api",
     ]
     assert unshipped_hedging_billing_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -17405,6 +21764,8 @@ def test_evidence_viewer_canary_builder_keeps_checker_required_counts() -> None:
     assert "VIEWER_SESSION_LABEL_PATTERN" in builder
     assert "VIEWER_SESSION_LABEL_ERROR" in builder
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in builder
+    assert "require_rollout_deployment_id" in builder
+    assert "require_rollout_environment" in builder
     assert "test_unknown_and_duplicate_role_coverage_fails_before_write" in builder_test
     assert "test_unknown_security_control_fails_before_write" in builder_test
     assert "test_duplicate_export_target_fails_before_write" in builder_test
@@ -17412,8 +21773,15 @@ def test_evidence_viewer_canary_builder_keeps_checker_required_counts() -> None:
     assert "test_viewer_session_placeholder_marker_fails_before_write" in builder_test
     assert "test_digest_must_be_exact_lowercase_hex_before_write" in builder_test
     assert "test_long_lived_url_ttl_fails_before_write" in builder_test
+    assert "test_unreviewed_deployment_id_fails_before_write" in builder_test
+    assert "test_unreviewed_environment_fails_before_write" in builder_test
     assert 'payload["audit_log_tamper_rejected"] is True' in builder_test
     assert 'payload["watermark_metadata_mismatch_rejected"] is True' in builder_test
+    assert (
+        "rejects unreviewed `--deployment-id` and `--environment` values before "
+        "checker prevalidation"
+        in docs
+    )
 
 
 UNSHIPPED_EVIDENCE_VIEWER_ROUTE_PATTERNS = (
@@ -17440,21 +21808,42 @@ UNSHIPPED_EVIDENCE_VIEWER_CLI_SUBCOMMANDS = (
     "access-logger",
 )
 
+UNSHIPPED_EVIDENCE_VIEWER_NESTED_CLI_COMMANDS = (
+    "moderation evidence-viewer",
+    "moderation evidence-viewer serve",
+    "moderation evidence viewer serve",
+    "moderation viewer serve",
+    "moderation viewer session",
+    "moderation viewer manifest",
+    "moderation viewer audit",
+    "moderation watermark-engine",
+    "moderation watermark engine",
+    "moderation access-log",
+    "moderation access logger",
+    "evidence-viewer serve",
+)
+
 
 def unshipped_evidence_viewer_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_EVIDENCE_VIEWER_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_evidence_viewer_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_EVIDENCE_VIEWER_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_EVIDENCE_VIEWER_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_evidence_viewer_service_surface_matcher_has_negative_controls() -> None:
@@ -17479,6 +21868,16 @@ def test_evidence_viewer_service_surface_matcher_has_negative_controls() -> None
         "access-log-digest",
         "moderation-viewer-session-00",
         "moderation-viewer-session-02",
+        "moderation evidence-viewer-canary",
+        "moderation viewer-session-canary",
+        "moderation viewer-manifest-digest",
+        "moderation viewer-audit-digest",
+        "moderation viewer-audit-reports",
+        "moderation viewer-audit-reports publish-due",
+        "moderation watermark-metadata-digest",
+        "moderation access-log-digest",
+        "moderation viewer audit-report-canary",
+        "moderation viewer audit-report-digest",
     )
 
     assert unshipped_evidence_viewer_route_matches(
@@ -17503,6 +21902,17 @@ def test_evidence_viewer_service_surface_matcher_has_negative_controls() -> None
         "viewer-session",
         "watermark-engine",
         "access-logger",
+    ]
+    assert unshipped_evidence_viewer_cli_matches(
+        "`iroha sorafs moderation evidence viewer serve` "
+        '"sorafs moderation viewer session" '
+        "`moderation watermark engine` "
+        '"moderation access logger --listen :8080"'
+    ) == [
+        "moderation evidence viewer serve",
+        "moderation viewer session",
+        "moderation watermark engine",
+        "moderation access logger",
     ]
     assert unshipped_evidence_viewer_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -18019,21 +22429,47 @@ UNSHIPPED_COMMIT_REVEAL_SERVICE_CLI_SUBCOMMANDS = (
     "sorafs-juror",
 )
 
+UNSHIPPED_COMMIT_REVEAL_SERVICE_NESTED_CLI_COMMANDS = (
+    "moderation voting-contract",
+    "moderation ballots contract",
+    "moderation ballots service",
+    "moderation ballots orchestrator",
+    "moderation ballots coordinator",
+    "moderation ballots disputes",
+    "moderation commit-reveal coordinator",
+    "moderation challenge monitor",
+    "moderation challenge open",
+    "moderation dispute open",
+    "moderation decision-dag publish",
+    "moderation challenge-dag publish",
+    "moderation juror portal",
+    "sorafs juror",
+)
+
 
 def unshipped_commit_reveal_service_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_COMMIT_REVEAL_SERVICE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(
+            rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])",
+            source,
+        )
     ]
 
 
 def unshipped_commit_reveal_service_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_COMMIT_REVEAL_SERVICE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_COMMIT_REVEAL_SERVICE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_commit_reveal_service_surface_matcher_has_negative_controls() -> None:
@@ -18068,6 +22504,17 @@ def test_commit_reveal_service_surface_matcher_has_negative_controls() -> None:
         "executor-canary",
         "commit-reveal-canary",
         "sorafs-juror-canary",
+        "moderation ballots list",
+        "moderation ballots get",
+        "moderation ballots no-show-plan",
+        "moderation ballots events",
+        "moderation ballots commit",
+        "moderation ballots reveal",
+        "moderation ballots tally",
+        "moderation ballots execute",
+        "moderation ballots executor-bundle",
+        "moderation ballots executor-canary",
+        "moderation ballots commit-reveal-canary",
     )
 
     assert unshipped_commit_reveal_service_route_matches(
@@ -18091,12 +22538,30 @@ def test_commit_reveal_service_surface_matcher_has_negative_controls() -> None:
         )
         == []
     )
+    assert (
+        unshipped_commit_reveal_service_route_matches(
+            '"/internal/v1/sorafs/juror" '
+            '"x/v1/sorafs/moderation/juror-portal"'
+        )
+        == []
+    )
     assert unshipped_commit_reveal_service_cli_matches(
         '"voting-contract" `commit-reveal-coordinator` "sorafs-juror"'
     ) == [
         "voting-contract",
         "commit-reveal-coordinator",
         "sorafs-juror",
+    ]
+    assert unshipped_commit_reveal_service_cli_matches(
+        "`iroha sorafs moderation ballots service` "
+        '"sorafs moderation commit-reveal coordinator" '
+        "`moderation juror portal --case prod` "
+        '"sorafs juror vote --ballot prod"'
+    ) == [
+        "moderation ballots service",
+        "moderation commit-reveal coordinator",
+        "moderation juror portal",
+        "sorafs juror",
     ]
     assert unshipped_commit_reveal_service_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -18119,6 +22584,36 @@ def test_unshipped_commit_reveal_production_service_surface_is_not_exposed() -> 
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     assert exposed == {}
+
+
+def test_unshipped_commit_reveal_production_service_docs_stay_warning_only() -> None:
+    violations: dict[str, list[str]] = {}
+
+    for path in sorafs_doc_command_scan_paths():
+        lines = read(path).splitlines()
+        for index, line in enumerate(lines):
+            matched = (
+                unshipped_commit_reveal_service_route_matches(line)
+                + unshipped_commit_reveal_service_cli_matches(line)
+            )
+            if not matched:
+                continue
+            context = " ".join(lines[max(0, index - 3) : index + 4]).lower()
+            warning_context = (
+                "do not document" in context
+                and "shipped" in context
+                and (
+                    "until then" in context
+                    or "until the" in context
+                    or "does not yet ship" in context
+                )
+            )
+            if not warning_context:
+                violations.setdefault(str(path.relative_to(REPO_ROOT)), []).extend(
+                    matched
+                )
+
+    assert violations == {}
 
 
 def test_appeal_finance_live_dashboard_and_reconciliation_stay_open_in_docs() -> None:
@@ -18163,6 +22658,7 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
         "Governance-DAG publication and dashboard metrics artifacts also require `payload_kind_count`, bind it to the unique canonical `payload_kinds` inventory, and reject missing, inflated, duplicate, or unknown payload-kind evidence before promotion can report ready.",
         "Dashboard metrics artifacts also bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the dashboard metrics artifact fingerprint before final promotion can report ready.",
+        "The appeal-finance gate fail-closes when more than one valid config or policy anchor appears, and clears the mixed `valid_config_digests` or `valid_policy_digests` set before aggregate promotion can report ready.",
         "Multi-peer reconciliation artifacts also bind `peer_count`, `validator_count`, and `case_count` to the unique canonical `peers[].name`, `validators[].name`, and `cases[].name` inventories, require those names to use reviewed `appeal-finance-peer-*`, `appeal-finance-validator-*`, and `appeal-finance-case-*` labels without non-production markers, require `case_count` to match the `cases[].reconciled` partition, and reject duplicate peer, validator, or case entries before promotion can report ready.",
         "aggregate promotion rechecks config-bound artifact fingerprints against `valid_config_digests`, policy-bound governance approval fingerprints against `valid_policy_digests`, and every `valid_multi_peer_runs.config_digest_hex` value against `valid_config_digests`.",
         "Appeal-finance payload-safety artifacts must explicitly set `config_payload_included`, `payloads_included`, `raw_instruction_included`, `deposit_payloads_included`, `signed_transaction_included`, `raw_receipt_included`, `raw_ballot_included`, `deposit_confirmation_payload_included`, `raw_report_included`, `raw_rollup_included`, `critical_alerts_firing`, `response_bodies_included`, and `raw_ledger_included` to `false` before promotion can report ready.",
@@ -18240,6 +22736,8 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
     ) in checker
     assert "case_count must match reconciled cases count" in checker
     assert "def unique_scalar_inventory_count(" in checker
+    assert "diagnostic_text_is_canonical" in checker
+    assert "if not diagnostic_text_is_canonical(item):" in checker
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
@@ -18315,6 +22813,9 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
     assert '"metrics": sorted(metric_names)' in checker
     assert "hashable_evidence_values" in checker
     assert "record_observed_evidence_value" in checker
+    assert "def require_single_active_digest(" in checker
+    assert 'label="valid_config_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
     assert (
         '("appeal_finance", "metrics"): ("dashboard_metrics",)'
         in aggregate_checker
@@ -18329,6 +22830,10 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
     assert "test_pricing_config_classes_must_not_duplicate" in checker_test
     assert "test_pricing_config_requires_class_coverage" in checker_test
     assert "test_pricing_config_class_count_must_match_unique_classes" in checker_test
+    assert (
+        "test_unique_scalar_inventory_count_rejects_unicode_controls_before_counting"
+        in checker_test
+    )
     assert "test_deposit_probe_count_must_match_unique_probes" in checker_test
     assert "test_deposit_probes_must_not_duplicate" in checker_test
     assert "test_confirmed_deposit_count_must_match_probe_partition" in checker_test
@@ -18391,6 +22896,8 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
         "test_all_policy_bound_artifacts_reject_pricing_policy_mismatch"
         in checker_test
     )
+    assert "test_multiple_valid_config_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
     assert (
         "require_string_inventory_count_match(\n"
         "        payload,\n"
@@ -18702,21 +23209,40 @@ UNSHIPPED_APPEAL_FINANCE_PUBLIC_CLI_SUBCOMMANDS = (
     "appeal-finance-promote",
 )
 
+UNSHIPPED_APPEAL_FINANCE_PUBLIC_NESTED_CLI_COMMANDS = (
+    "appeals pricing daemon",
+    "appeals finance pricing-daemon",
+    "appeals finance public-dashboard",
+    "appeals finance hosted-dashboard",
+    "appeals finance dashboard serve",
+    "appeals finance reconcile multi-peer",
+    "appeals finance multi-peer-reconcile",
+    "appeals finance promote",
+    "appeal finance dashboard",
+    "appeal finance promote",
+)
+
 
 def unshipped_appeal_finance_public_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_APPEAL_FINANCE_PUBLIC_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_appeal_finance_public_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_APPEAL_FINANCE_PUBLIC_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_APPEAL_FINANCE_PUBLIC_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_appeal_finance_public_surface_matcher_has_negative_controls() -> None:
@@ -18758,6 +23284,21 @@ def test_appeal_finance_public_surface_matcher_has_negative_controls() -> None:
         "appeal-finance-canary",
         "appeal-finance-public-dashboard-canary",
         "appeal-finance-multi-peer-reconcile-canary",
+        "appeals pricing config",
+        "appeals pricing status",
+        "appeals pricing quote",
+        "appeals finance deposits create",
+        "appeals finance deposits confirm",
+        "appeals finance deposits get",
+        "appeals finance deposits settle",
+        "appeals finance deposits reconcile",
+        "appeals finance deposits submit-settlement",
+        "appeals finance reports",
+        "appeals finance weekly-rollups",
+        "appeals finance settlement-receipts",
+        "appeals finance public-dashboard-canary",
+        "appeals finance multi-peer-reconcile-canary",
+        "appeals finance promote-canary",
     )
 
     assert unshipped_appeal_finance_public_route_matches(
@@ -18787,6 +23328,17 @@ def test_appeal_finance_public_surface_matcher_has_negative_controls() -> None:
         "pricing-daemon",
         "appeal-finance-dashboard",
         "appeal-finance-promote",
+    ]
+    assert unshipped_appeal_finance_public_cli_matches(
+        "`iroha sorafs appeals pricing daemon` "
+        '"iroha sorafs appeals finance public-dashboard" '
+        "`appeals finance reconcile multi-peer` "
+        '"appeals finance promote --deployment prod"'
+    ) == [
+        "appeals pricing daemon",
+        "appeals finance public-dashboard",
+        "appeals finance reconcile multi-peer",
+        "appeals finance promote",
     ]
     assert unshipped_appeal_finance_public_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -18865,13 +23417,58 @@ UNSHIPPED_TRANSPARENCY_DEPLOYED_CLI_SUBCOMMANDS = (
     "transparency-promote",
 )
 
+UNSHIPPED_TRANSPARENCY_DEPLOYED_NESTED_CLI_COMMANDS = (
+    "transparency producer-service",
+    "transparency source-entry-producer-service",
+    "transparency source-entry producer-service",
+    "transparency gar-producer",
+    "transparency moderation-producer",
+    "transparency appeal-producer",
+    "transparency legal-hold-producer",
+    "transparency redaction-producer",
+    "transparency evidence-viewer-producer",
+    "transparency anchoring-service",
+    "transparency publisher-identities",
+    "transparency proof-api serve",
+    "transparency public-explorer",
+    "transparency receipt-explorer",
+    "transparency public-receipt-explorer",
+    "transparency proof-token-issuance producer-service",
+    "transparency proof-token-issuance explorer-linking",
+    "transparency privacy-aggregate scheduler-service",
+    "transparency privacy-aggregate scheduler-serve",
+    "transparency privacy-aggregate deployed-producers",
+    "transparency moderation-ledger-service",
+    "transparency promote",
+)
+
+
+def unshipped_transparency_route_matches(source: str) -> list[str]:
+    matches: list[str] = []
+
+    for route in UNSHIPPED_TRANSPARENCY_DEPLOYED_ROUTE_PATTERNS:
+        if route.endswith("/"):
+            if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[A-Za-z0-9_{{]|[\"`\s?}}])", source):
+                matches.append(route)
+            continue
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source):
+            matches.append(route)
+
+    return matches
+
 
 def unshipped_transparency_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_TRANSPARENCY_DEPLOYED_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_TRANSPARENCY_DEPLOYED_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_transparency_deployed_services_stay_open_in_docs() -> None:
@@ -18912,6 +23509,7 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
         "It also rejects duplicate or unsupported `--source-entry` kinds before rendering the plan or contacting live services.",
         "transparency rollout collection runner reject non-lowercase, wrong-length, or otherwise malformed `--cycle-id` values before rendering dry-run command plans or contacting deployed cycle-detail routes.",
         "emits `valid_publication_bindings` so aggregate promotion can prove every ready cycle digest came from a source-bound publication. Aggregate promotion also rechecks source-bound artifact fingerprints against `valid_source_batch_digests` and cycle-bound artifact fingerprints against `valid_cycle_digests` before final promotion can report ready.",
+        "The transparency gate fail-closes when more than one valid source batch, publication cycle, or publication binding anchor appears, and clears the mixed `valid_source_batch_digests`, `valid_cycle_digests`, or `valid_publication_bindings` set before aggregate promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
 
@@ -18933,6 +23531,11 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
     assert "require_sum_equal(" in checker
     assert "def require_only_required_values(" in checker
     assert "must not include unknown values" in checker
+    assert "def require_single_active_digest(" in checker
+    assert "def require_single_active_binding(" in checker
+    assert 'label="valid_source_batch_digests"' in checker
+    assert 'label="valid_cycle_digests"' in checker
+    assert 'label="valid_publication_bindings"' in checker
     assert '        "probe_count",' in checker
     assert (
         "source_entry_probe_count\""
@@ -19003,6 +23606,8 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
         "test_all_cycle_bound_artifacts_reject_publication_cycle_mismatch"
         in checker_test
     )
+    assert "test_multiple_valid_source_batch_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_publication_cycle_anchors_fail_closed" in checker_test
     assert "test_bound_fixture_tables_cover_checker_bound_kind_sets" in checker_test
     assert "test_fixture_inventories_cover_checker_required_sets" in checker_test
     assert "valid_publication_bindings" in checker_test
@@ -19026,6 +23631,7 @@ def test_transparency_canary_builder_is_checked_in() -> None:
         SCRIPTS_DIR / "tests" / "build_sorafs_transparency_canary_test.py"
     )
     docs = read(SORAFS_TRANSPARENCY_PLAN)
+    normalized_docs = re.sub(r"\s+", " ", docs)
     roadmap = read(REPO_ROOT / "roadmap.md")
     publication_example = read(
         SCRIPTS_DIR
@@ -19045,6 +23651,7 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     assert "FORBIDDEN_INVENTORY_LABEL_MARKERS" in builder
     assert "SOURCE_BOUND_KINDS" in builder
     assert "CYCLE_BOUND_KINDS" in builder
+    assert "default=len(REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES)" in builder
     assert "test_builds_payload_free_proof_token_issuance_canary" in builder_tests
     assert "test_generated_canaries_pass_full_transparency_gate" in builder_tests
     assert "test_duplicate_source_kind_coverage_fails_closed" in builder_tests
@@ -19060,6 +23667,10 @@ def test_transparency_canary_builder_is_checked_in() -> None:
         in builder_tests
     )
     assert "test_cycle_detail_probe_count_must_match_inventory" in builder_tests
+    assert (
+        "test_default_cycle_detail_probe_count_matches_required_inventory"
+        in builder_tests
+    )
     assert "test_duplicate_privacy_action_coverage_fails_closed" in builder_tests
     assert "test_unknown_privacy_action_coverage_fails_closed" in builder_tests
     assert "test_duplicate_explorer_route_coverage_fails_closed" in builder_tests
@@ -19070,6 +23681,10 @@ def test_transparency_canary_builder_is_checked_in() -> None:
     )
     assert "test_output_directory_is_refused" in builder_tests
     assert "scripts/build_sorafs_transparency_canary.py" in docs
+    assert (
+        "`--cycle-detail-probe-count` from the reviewed cycle-detail probe inventory"
+        in normalized_docs
+    )
     assert "scripts/build_sorafs_transparency_canary.py" in roadmap
     assert "--cycle-detail-probe\ntransparency-cycle-detail-readback" in publication_example
     assert (
@@ -19123,6 +23738,32 @@ def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
         "/v1/sorafs/transparency/tokens/issuances",
         "/v1/sorafs/transparency/tokens/verify",
     )
+    shipped_local_route_candidates = (
+        "/v1/sorafs/transparency/deployed-producers-canary",
+        "/v1/sorafs/transparency/producer-service-canary",
+        "/v1/sorafs/transparency/source-entry-producers-canary",
+        "/v1/sorafs/transparency/source-entry/producer-service-canary",
+        "/v1/sorafs/transparency/gar-producer-canary",
+        "/v1/sorafs/transparency/moderation-producer-canary",
+        "/v1/sorafs/transparency/appeal-producer-canary",
+        "/v1/sorafs/transparency/legal-hold-producer-canary",
+        "/v1/sorafs/transparency/redaction-producer-canary",
+        "/v1/sorafs/transparency/evidence-viewer-producer-canary",
+        "/v1/sorafs/transparency/anchoring-service-evidence",
+        "/v1/sorafs/transparency/publisher-identities-evidence",
+        "/v1/sorafs/transparency/public-explorer-canary",
+        "/v1/sorafs/transparency/receipt-explorer-canary",
+        "/v1/sorafs/transparency/public-receipt-explorer-canary",
+        "/v1/sorafs/transparency/proof-api/public-canary",
+        "/v1/sorafs/transparency/proof-token-producers-evidence",
+        "/v1/sorafs/transparency/proof-token-issuance/producers-canary",
+        "/v1/sorafs/transparency/proof-token-issuance/explorer-linking-evidence",
+        "/v1/sorafs/transparency/privacy-aggregate/scheduler-service-canary",
+        "/v1/sorafs/transparency/privacy-aggregates/scheduler-service-canary",
+        "/v1/sorafs/transparency/privacy-aggregates/deployed-producers-evidence",
+        "/v1/sorafs/transparency/moderation-ledger-service-canary",
+        "/v1/sorafs/transparency/promotion-evidence",
+    )
     shipped_local_subcommands = (
         "cycles",
         "explorer",
@@ -19132,20 +23773,51 @@ def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
         "privacy-aggregate",
         "token-issuance",
         "tokens",
+        "transparency cycles",
+        "transparency explorer",
+        "transparency explorer-canary",
+        "transparency publication-canary",
+        "transparency source-entry",
+        "transparency source-entry canary",
+        "transparency privacy-aggregate source-event",
+        "transparency privacy-aggregate publish-due",
+        "transparency privacy-aggregate canary",
+        "transparency token-issuance submit",
+        "transparency token-issuance canary",
+        "transparency tokens",
+        "transparency public-explorer-canary",
+        "transparency promote-canary",
     )
 
-    assert all(
-        any(route in candidate for route in UNSHIPPED_TRANSPARENCY_DEPLOYED_ROUTE_PATTERNS)
-        for candidate in (
-            "/v1/sorafs/transparency/source-entry-producers",
-            "/v1/sorafs/transparency/proof-token-issuance/producers",
-            "/v1/sorafs/transparency/public-receipt-explorer",
-            "/v1/sorafs/transparency/privacy-aggregates/scheduler-service",
+    assert unshipped_transparency_route_matches(
+        '"GET /v1/transparency/public/cycles" '
+        "`/v1/sorafs/transparency/source-entry-producers` "
+        '"/v1/sorafs/transparency/public-receipt-explorer?deployment_id=prod"'
+    ) == [
+        "/v1/transparency/",
+        "/v1/sorafs/transparency/source-entry-producers",
+        "/v1/sorafs/transparency/public-receipt-explorer",
+    ]
+    assert unshipped_transparency_route_matches(
+        '"/v1/sorafs/transparency/proof-token-issuance/producers" '
+        "`/v1/sorafs/transparency/privacy-aggregates/scheduler-service/run` "
+        '"/v1/sorafs/transparency/promotion"'
+    ) == [
+        "/v1/sorafs/transparency/proof-token-issuance/producers",
+        "/v1/sorafs/transparency/privacy-aggregates/scheduler-service",
+        "/v1/sorafs/transparency/promotion",
+    ]
+    assert (
+        unshipped_transparency_route_matches(
+            " ".join(f'"{route}"' for route in shipped_local_routes)
         )
+        == []
     )
-    assert not any(
-        any(route in candidate for route in UNSHIPPED_TRANSPARENCY_DEPLOYED_ROUTE_PATTERNS)
-        for candidate in shipped_local_routes
+    assert (
+        unshipped_transparency_route_matches(
+            " ".join(f'"{route}"' for route in shipped_local_route_candidates)
+        )
+        == []
     )
     assert unshipped_transparency_cli_matches(
         '"transparency-source-entry-producer-service" '
@@ -19157,6 +23829,17 @@ def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
         "proof-token-issuance-producer-service",
     ]
     assert unshipped_transparency_cli_matches(
+        "`iroha sorafs transparency source-entry producer-service` "
+        '"iroha sorafs transparency public-explorer" '
+        "`transparency proof-token-issuance explorer-linking` "
+        '"transparency promote --deployment prod"'
+    ) == [
+        "transparency source-entry producer-service",
+        "transparency public-explorer",
+        "transparency proof-token-issuance explorer-linking",
+        "transparency promote",
+    ]
+    assert unshipped_transparency_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
     ) == []
 
@@ -19166,11 +23849,7 @@ def test_unshipped_transparency_deployed_service_surface_is_not_exposed() -> Non
 
     for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
         source = read(path)
-        matched = [
-            route
-            for route in UNSHIPPED_TRANSPARENCY_DEPLOYED_ROUTE_PATTERNS
-            if route in source
-        ]
+        matched = unshipped_transparency_route_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
@@ -19246,6 +23925,7 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed gateway compliance metrics inventory, and reject duplicate or unknown metric entries before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
         "Aggregate promotion also rechecks the lane-proven digest relationships: bundle-bound artifact fingerprints must match `valid_bundle_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`.",
+        "Gateway compliance rollout summaries must expose exactly one active feed-promotion bundle digest and exactly one active policy digest; mixed valid bundle or policy anchors fail closed before final promotion can report ready.",
         "Gateway compliance payload-safety artifacts must explicitly set `raw_feeds_included`, `feed_payloads_included`, `raw_toggle_payloads_included`, `raw_catalog_included`, `raw_probe_responses_included`, `raw_appeal_payload_included`, `raw_receipts_included`, `critical_alerts_firing`, and `response_bodies_included` to `false` before promotion can report ready.",
     )
     missing_current: dict[str, list[str]] = {}
@@ -19441,6 +24121,12 @@ def test_gateway_compliance_docs_keep_rollout_contract_markers() -> None:
         "test_all_policy_bound_artifacts_reject_feed_promotion_policy_mismatch"
         in checker_test
     )
+    assert "def require_single_active_digest(" in checker
+    assert "{label} must contain exactly one active digest" in checker
+    assert 'label="valid_bundle_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
+    assert "test_multiple_valid_bundle_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
     assert '("gateway_compliance", "metrics"): ("observability",)' in aggregate_checker
     assert (
         '("gateway_compliance", "metric_count_values"): ("observability",)'
@@ -19630,21 +24316,42 @@ UNSHIPPED_GATEWAY_COMPLIANCE_CLI_SUBCOMMANDS = (
     "gateway-compliance-promote",
 )
 
+UNSHIPPED_GATEWAY_COMPLIANCE_NESTED_CLI_COMMANDS = (
+    "compliance controller",
+    "compliance controller-daemon",
+    "compliance daemon",
+    "compliance service",
+    "compliance moderation-toggle service",
+    "compliance moderation toggle",
+    "compliance appeal-override service",
+    "compliance appeal override apply",
+    "compliance feed-sync",
+    "compliance acknowledgements",
+    "compliance history",
+    "compliance promote",
+)
+
 
 def unshipped_gateway_compliance_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_GATEWAY_COMPLIANCE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_gateway_compliance_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_GATEWAY_COMPLIANCE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_GATEWAY_COMPLIANCE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> None:
@@ -19673,6 +24380,20 @@ def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> N
         "controller-canary",
         "moderation-toggle-canary",
         "appeal-override-canary",
+        "feed-sync-proof",
+        "promotion-canary",
+        "gateway compliance canary",
+        "gateway compliance controller-canary",
+        "gateway compliance moderation-toggle-canary",
+        "gateway compliance appeal-override-canary",
+        "gateway compliance feed-sync-proof",
+        "gateway compliance promotion-canary",
+        "denylist pack",
+        "denylist diff",
+        "denylist verify",
+        "gar proof-token",
+        "transparency source-entry",
+        "transparency publication-canary",
     )
 
     assert unshipped_gateway_compliance_route_matches(
@@ -19702,6 +24423,17 @@ def test_gateway_compliance_service_surface_matcher_has_negative_controls() -> N
         "compliance-controller",
         "moderation-toggle-service",
         "gateway-compliance-promote",
+    ]
+    assert unshipped_gateway_compliance_cli_matches(
+        "`iroha sorafs gateway compliance controller` "
+        '"sorafs gateway compliance moderation toggle" '
+        "`gateway compliance feed-sync` "
+        '"gateway compliance promote --deployment prod"'
+    ) == [
+        "compliance controller",
+        "compliance moderation toggle",
+        "compliance feed-sync",
+        "compliance promote",
     ]
     assert unshipped_gateway_compliance_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -19750,6 +24482,7 @@ def test_gateway_load_rollout_evidence_work_stays_open_in_docs() -> None:
         "Gateway-load payload-safety artifacts must explicitly set `raw_report_included`, `private_keys_included`, `response_bodies_included`, `raw_payloads_included`, and `critical_alerts_firing` to `false`; transport-scope artifacts must also explicitly set the non-applicable HTTP/3 booleans to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the telemetry/SLO artifact fingerprint before final promotion can report ready.",
         "Aggregate promotion also rechecks the lane-proven digest relationships: suite-bound artifact fingerprints must match `valid_suite_report_digests`, staging-bound artifact fingerprints must match `valid_staging_report_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests`.",
+        "Gateway-load rollout summaries must expose exactly one active local conformance suite digest, one active staging-load report digest, and one active policy digest; mixed valid anchors fail closed before final promotion can report ready.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -19766,6 +24499,8 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
     plan = read(SORAFS_GATEWAY_LOAD_PLAN)
     roadmap = read(REPO_ROOT / "roadmap.md")
+    normalized_plan = re.sub(r"\s+", " ", plan)
+    normalized_roadmap = re.sub(r"\s+", " ", roadmap)
 
     assert "Build payload-free SoraFS gateway load rollout canary artifacts." in builder
     assert "validate_evidence_payload(payload, validation_options(args))" in builder
@@ -19787,6 +24522,13 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
     assert "test_cargo_command_accepts_locked_reviewed_value" in builder_tests
     assert "test_gateway_version_rejects_placeholder_before_write" in builder_tests
     assert "test_gateway_version_accepts_reviewed_rc_label" in builder_tests
+    assert (
+        "test_http3_committed_flag_fails_closed_until_endpoint_exists"
+        in builder_tests
+    )
+    assert "HTTP3_ENDPOINT_COMMITTED_UNSUPPORTED_ERROR" in builder
+    assert "--http3-endpoint-committed is unsupported until a reviewed " in builder
+    assert "SoraFS HTTP/3 gateway endpoint is committed" in builder
     assert "test_staging_hardware_profile_rejects_placeholder_before_write" in builder_tests
     assert (
         "test_staging_hardware_profile_requires_gateway_load_family_before_write"
@@ -19846,6 +24588,14 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
         "test_all_policy_bound_artifacts_reject_staging_load_policy_mismatch"
         in checker_tests
     )
+    assert "def require_single_active_digest(" in checker
+    assert "{label} must contain exactly one active digest" in checker
+    assert 'label="valid_suite_report_digests"' in checker
+    assert 'label="valid_staging_report_digests"' in checker
+    assert 'label="valid_policy_digests"' in checker
+    assert "test_multiple_valid_suite_anchors_fail_closed" in checker_tests
+    assert "test_multiple_valid_staging_anchors_fail_closed" in checker_tests
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_tests
     assert "test_telemetry_metrics_must_not_duplicate" in checker_tests
     assert "test_telemetry_metrics_must_not_include_unknown_values" in checker_tests
     assert "test_local_conformance_cargo_command_must_be_reviewed" in checker_tests
@@ -19890,6 +24640,14 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
     assert "--provider" in staging_example
     assert '"iroha-gateway 1.0.0"' in staging_example
     assert "scripts/build_sorafs_gateway_load_canary.py" in plan
+    assert (
+        "rejects `--http3-endpoint-committed` until a reviewed SoraFS HTTP/3 "
+        "gateway endpoint is committed"
+    ) in normalized_plan
+    assert (
+        "rejects `--http3-endpoint-committed` until a reviewed SoraFS HTTP/3 "
+        "gateway endpoint is committed"
+    ) in normalized_roadmap
     assert "scripts/build_sorafs_gateway_load_canary.py" in roadmap
     assert (
         SCRIPTS_DIR
@@ -19919,21 +24677,35 @@ UNSHIPPED_GATEWAY_LOAD_LIVE_CLI_SUBCOMMANDS = (
     "gateway-load-soak",
 )
 
+UNSHIPPED_GATEWAY_LOAD_LIVE_NESTED_CLI_COMMANDS = (
+    "gateway load live",
+    "gateway load staging",
+    "gateway load http3",
+    "gateway load promote",
+    "gateway load soak",
+)
+
 
 def unshipped_gateway_load_live_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_GATEWAY_LOAD_LIVE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_gateway_load_live_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_GATEWAY_LOAD_LIVE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_GATEWAY_LOAD_LIVE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_gateway_load_live_surface_matcher_has_negative_controls() -> None:
@@ -19955,6 +24727,16 @@ def test_gateway_load_live_surface_matcher_has_negative_controls() -> None:
         "gateway-load-http3-canary",
         "gateway-load-promote-canary",
         "gateway-load-soak-canary",
+        "gateway load local-conformance",
+        "gateway load staging-load",
+        "gateway load canary",
+        "gateway load local-conformance-canary",
+        "gateway load staging-canary",
+        "gateway load http3-canary",
+        "gateway load promote-canary",
+        "gateway load soak-canary",
+        "gateway load staging-load-evidence",
+        "gateway load promotion-evidence",
     )
 
     assert unshipped_gateway_load_live_route_matches(
@@ -19985,6 +24767,19 @@ def test_gateway_load_live_surface_matcher_has_negative_controls() -> None:
         "gateway-load-live",
         "gateway-load-http3",
         "gateway-load-promote",
+    ]
+    assert unshipped_gateway_load_live_cli_matches(
+        "`iroha sorafs gateway load live` "
+        '"sorafs gateway load staging" '
+        "`gateway load http3` "
+        '"gateway load promote --deployment prod" '
+        "`gateway load soak`"
+    ) == [
+        "gateway load live",
+        "gateway load staging",
+        "gateway load http3",
+        "gateway load promote",
+        "gateway load soak",
     ]
     assert unshipped_gateway_load_live_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -20095,6 +24890,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "GATE_REQUIRED_KIND_SCHEMAS" in checker
     assert "schema must match required evidence schema" in checker
     assert "schema gate contract is not configured" in checker
+    assert "test_required_kind_schema_bindings_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "visit_sensitive_fields(" in checker
     assert "test_sensitive_summary_key_diagnostic_is_sanitized" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
@@ -20127,8 +24925,19 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     )
     assert "SUCCESS_ARTIFACT_STATUSES" in checker
     assert "must be a successful status" in checker
+    assert "test_required_and_recognized_artifact_digests_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "test_required_and_recognized_artifact_status_must_be_successful" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_required_and_recognized_artifact_statuses_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_required_and_recognized_artifact_valid_markers_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert "PAYLOAD_FREE_SUMMARY_METADATA_FIELDS" in checker
     assert "PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS" in checker
@@ -20140,7 +24949,26 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS" in checker
     assert "PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS" in checker
     assert "GATE_METADATA_FIELDS" in checker
-    assert "validate_payload_free_summary_metadata(gate, payload, errors)" in checker
+    assert "enforce_production_deployment_context" in checker
+    assert "validate_payload_free_deployment_context_metadata" in checker
+    assert (
+        "test_payload_free_deployment_context_rejects_nonproduction_without_echo"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_payload_free_deployment_context_surfaces_reject_nonproduction_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_payload_free_deployment_context_surfaces_must_match_artifacts_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    aggregate_test = read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()" in aggregate_test
+    assert "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.items()" in aggregate_test
+    assert '"deployment_id", "environment"' in aggregate_test
     assert "payload_free_summary_metadata_deployment_contexts(gate, payload)" in checker
     assert (
         "deployment context must match across artifacts and metadata" in checker
@@ -20311,7 +25139,18 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "is not allowed for `" in checker
     assert "must be a payload-free metadata list" in checker
     assert "must contain only payload-free canonical metadata" in checker
-    assert "validate_payload_free_artifact_fingerprint(artifact, path, errors)" in checker
+    assert "fingerprint = validate_payload_free_artifact_fingerprint" in checker
+    assert "test_non_object_artifact_fingerprint_reports_single_sanitized_error" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_sensitive_artifact_fingerprint_key_is_rejected_without_echo" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "fingerprint.generated_at_unix must not be future" in checker
+    assert "fingerprint.generated_at_unix exceeds max summary artifact age" in checker
+    assert "test_future_artifact_timestamp_fails_with_fingerprint_path" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "test_artifact_fingerprint_metadata_must_be_payload_free" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
@@ -20386,6 +25225,12 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "unknown-schema diagnostics must match discovered unknown summaries" in checker
     assert "unrequired-gate diagnostics must match explicit unrequired summaries" in checker
     assert "validate_aggregate_summary_output" in checker
+    assert (
+        "from sorafs_path_identity import diagnostic_text_is_canonical, resolve_path_identity"
+        in checker
+    )
+    assert "return value if diagnostic_text_is_canonical(value) else None" in checker
+    assert "test_canonical_string_rejects_unicode_controls" in readiness_test
     assert "aggregate summary required_gates must be a list" in checker
     assert "aggregate summary required_gates must contain canonical strings" in checker
     assert "aggregate summary required_gates must not contain duplicate gates" in checker
@@ -20394,6 +25239,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "errors.append(f\"aggregate summary {threshold_error}\")" in checker
     assert "aggregate summary status must match aggregate diagnostics" in checker
     assert "aggregate summary errors must not contain duplicate diagnostics" in checker
+    assert '"bad\\u200derror"' in readiness_test
+    assert '"bad\\u202eerror"' in readiness_test
+    assert '"bad\\u200dkey"' in readiness_test
+    assert '"prod\\u202esecret"' in readiness_test
     assert "summary.get(\"status\") != evidence_gate_status(error_values)" in checker
     assert (
         "aggregate summary ready deployment must include deployment_id and environment"
@@ -20404,7 +25253,7 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "def is_production_ready_environment" in checker
     assert "def require_reviewed_deployment_id_value" in checker
     assert "def require_production_deployment_id_value" in checker
-    assert "numbered_rollout_marker_token" in checker
+    assert "forbidden_non_production_markers" in checker
     assert "require_rollout_deployment_id" in checker
     assert "aggregate environment must be production" in checker
     assert "aggregate row environment must be production" in checker
@@ -20437,6 +25286,10 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     )
     assert (
         "test_numbered_staging_deployment_id_cannot_promote_production_readiness"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_compact_staging_deployment_id_cannot_promote_production_readiness"
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert (
@@ -20483,6 +25336,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )
     assert "test_numbered_staging_deployment_id_fails" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_compact_staging_deployment_id_fails" in read(
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )
     assert "test_joined_nonproduction_deployment_id_fails" in read(
@@ -20541,6 +25397,16 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "require_payload_free_required_row_fields" in checker
     assert "is not allowed in payload-free required row" in checker
     assert "deployment_context_reviewed" in checker
+    assert "artifact_deployment_context" in checker
+    assert "fingerprint.environment must be production" in checker
+    assert (
+        "test_artifact_fingerprint_deployment_context_rejects_nonproduction_without_echo"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
+    assert (
+        "test_artifact_fingerprint_deployment_context_rejects_nonproduction_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "required row labels must be canonical strings" in checker
     assert "sanitized_required_row_labels" not in checker
     assert "required_kinds contains duplicate kind" in checker
@@ -20576,6 +25442,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_artifact_paths_must_be_archive_portable" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
+    assert "test_required_and_recognized_artifact_paths_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "test_artifact_paths_reject_platform_specific_segments" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
@@ -20598,6 +25467,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert ".kind must match required row kind" in checker
+    assert "test_required_and_recognized_artifact_kind_labels_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert "unknown SoraFS readiness summary schema" in checker
     assert "unknown SoraFS readiness summary schema `{schema}`" not in checker
     assert (
@@ -20611,6 +25483,9 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert ".artifacts must not duplicate artifact identities" in checker
     assert "recognized_artifacts must not duplicate artifact paths" in checker
     assert "test_required_artifact_duplicate_paths_fail" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_required_artifact_duplicate_identities_fail_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "test_recognized_artifacts_duplicate_paths_fail" in read(
@@ -20634,10 +25509,29 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
     )
     assert "evidence_file_count must match recognized artifact path count" in checker
+    assert "test_required_row_state_fields_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_required_row_presence_and_shape_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert "test_required_and_recognized_error_lists_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
+    assert (
+        "test_required_and_recognized_malformed_error_lists_fail_closed_from_config"
+        in read(SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py")
+    )
     assert "recognized_artifacts must match required artifact counts" in checker
     assert "recognized_artifacts must match required artifact identities" in checker
     assert "required_artifacts_by_identity" in checker
+    assert "test_recognized_artifact_identity_drift_fails_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert 'for metadata_field in ("schema", "status", "fingerprint")' in checker
+    assert "test_recognized_artifact_metadata_bindings_fail_closed_from_config" in read(
+        SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
+    )
     assert ".kind must be part of the full" in checker
     assert "recognized_artifact_count must match required row artifact total" in checker
     assert "max_summary_artifact_age_secs" in checker
@@ -20748,10 +25642,20 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_plan_rendered_output_path_components_must_be_plan_safe" in read(
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )
+    assert "test_encoded_plan_rendered_output_path_components_must_be_plan_safe" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
     assert "test_plan_rendered_summary_output_path_components_must_be_plan_safe" in read(
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )
+    assert (
+        "test_encoded_plan_rendered_summary_output_path_components_must_be_plan_safe"
+        in read(SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py")
+    )
     assert "test_plan_rendered_verifier_path_components_must_be_plan_safe" in read(
+        SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
+    )
+    assert "test_encoded_plan_rendered_verifier_path_components_must_be_plan_safe" in read(
         SCRIPTS_DIR / "tests" / "run_sorafs_production_readiness_test.py"
     )
     assert "test_plan_rendered_path_safety_rejects_drive_prefix" in read(
@@ -20927,6 +25831,7 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
         "credit-line artifacts bind `credit_line_mutation_count` to unique canonical `credit_line_mutations[].name` and `accrual_cycle_count` to unique canonical `accrual_cycles[].name` inventories and reject duplicate or unknown credit-line entries before promotion can report ready",
         "metrics artifacts bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metrics before promotion can report ready",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics/alert artifact fingerprint before final promotion can report ready.",
+        "The reserve-rent gate fail-closes when more than one valid policy, policy/matrix, or policy/matrix/ledger anchor appears, and clears the mixed `valid_policy_digests`, `valid_policy_matrix_bindings`, or `valid_policy_matrix_ledger_bindings` set before aggregate promotion can report ready.",
         "The aggregate production-readiness gate also preserves the full policy/matrix/ledger chain: policies in `valid_policy_matrix_bindings` must appear in `valid_policy_digests`, ledger binding policy/matrix pairs must appear in `valid_policy_matrix_bindings`, and provider-bake policy/matrix/ledger tuples must appear in `valid_policy_matrix_ledger_bindings` before final promotion can report ready. It also rechecks policy-bound, matrix-bound, and ledger-bound artifact fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and `valid_policy_matrix_ledger_bindings`.",
         "Governance approval artifacts must carry the accepted provider-bake `bake_id`, and the rollout gate plus aggregate production-readiness gate reject governance approval evidence whose `bake_id` does not match a valid provider-bake artifact before final promotion can report ready.",
         "Reserve-movement artifacts prove live chain submission coverage, submitted transaction-hash readback, automatic finality polling",
@@ -20980,6 +25885,11 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
     assert "record_observed_evidence_value" in checker
     assert '"metric_count_values": sorted(metric_counts)' in checker
     assert '"metrics": sorted(metric_names)' in checker
+    assert "def require_single_active_digest(" in checker
+    assert "def require_single_active_binding(" in checker
+    assert 'label="valid_policy_digests"' in checker
+    assert 'label="valid_policy_matrix_bindings"' in checker
+    assert 'label="valid_policy_matrix_ledger_bindings"' in checker
     assert '("reserve_rent", "metrics"): ("metrics_alerts",)' in aggregate_checker
     assert (
         '("reserve_rent", "metric_count_values"): ("metrics_alerts",)'
@@ -20997,6 +25907,12 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
     assert "valid_policy_matrix_bindings" in aggregate_checker
     assert "valid_provider_bakes ledger tuples must match " in aggregate_checker
     assert "valid_policy_matrix_ledger_bindings" in aggregate_checker
+    assert "test_multiple_valid_policy_anchors_fail_closed" in checker_test
+    assert "test_multiple_valid_policy_matrix_anchors_fail_closed" in checker_test
+    assert (
+        "test_multiple_valid_policy_matrix_ledger_anchors_fail_closed"
+        in checker_test
+    )
     assert (
         "reserve_rent governance approval bake_id fingerprints must "
         in aggregate_checker
@@ -21116,6 +26032,8 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
     )
     assert "`reserve-lifecycle-tick-*`" in checker
     assert "def unique_scalar_inventory_count(" in checker
+    assert "diagnostic_text_is_canonical" in checker
+    assert "if not diagnostic_text_is_canonical(item):" in checker
     assert "def require_only_required_values(" in checker
     assert "must not include unknown values" in checker
     assert "REQUIRED_QUOTE_MATRIX_SCENARIOS" in checker
@@ -21200,6 +26118,10 @@ def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
     ) in checker
     assert "test_quote_matrix_dimensions_must_not_duplicate" in checker_test
     assert "test_quote_matrix_dimensions_must_not_include_unknown_values" in checker_test
+    assert (
+        "test_unique_scalar_inventory_count_rejects_unicode_controls_before_counting"
+        in checker_test
+    )
     assert "test_quote_matrix_scenario_count_must_match_dimension_product" in checker_test
     assert "test_route_count_must_match_unique_routes_for_route_artifacts" in checker_test
     assert "test_routes_must_not_duplicate_for_route_artifacts" in checker_test
@@ -21587,21 +26509,40 @@ UNSHIPPED_RESERVE_RENT_LIVE_CLI_SUBCOMMANDS = (
     "reserve-promote",
 )
 
+UNSHIPPED_RESERVE_RENT_LIVE_NESTED_CLI_COMMANDS = (
+    "reserve live-submit",
+    "reserve finality-poller",
+    "reserve finality-service",
+    "reserve credit-line-mutator",
+    "reserve account-mutator",
+    "reserve provider-bake-service",
+    "reserve provider-bake-live",
+    "reserve provider-bake live",
+    "reserve governance-apply",
+    "reserve promote",
+)
+
 
 def unshipped_reserve_rent_live_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_RESERVE_RENT_LIVE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_reserve_rent_live_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_RESERVE_RENT_LIVE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_RESERVE_RENT_LIVE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_reserve_rent_live_control_plane_surface_matcher_has_negative_controls() -> None:
@@ -21649,6 +26590,18 @@ def test_reserve_rent_live_control_plane_surface_matcher_has_negative_controls()
         "reserve-live-submit-canary",
         "reserve-finality-poller-canary",
         "reserve-provider-bake-live-canary",
+        "reserve lifecycle",
+        "reserve top-up",
+        "reserve withdraw",
+        "reserve movements",
+        "reserve credit-lines",
+        "reserve credit-status",
+        "reserve appeal-submit",
+        "reserve appeal-decide",
+        "reserve policy-update",
+        "reserve provider-bake-live-canary",
+        "reserve provider-bake live-canary",
+        "reserve promote-canary",
     )
 
     assert unshipped_reserve_rent_live_route_matches(
@@ -21685,6 +26638,17 @@ def test_reserve_rent_live_control_plane_surface_matcher_has_negative_controls()
         "reserve-live-submit",
         "reserve-finality-service",
         "reserve-promote",
+    ]
+    assert unshipped_reserve_rent_live_cli_matches(
+        "`iroha app sorafs reserve finality-poller` "
+        '"iroha app sorafs reserve credit-line-mutator" '
+        "`reserve provider-bake live` "
+        '"reserve promote --deployment prod"'
+    ) == [
+        "reserve finality-poller",
+        "reserve credit-line-mutator",
+        "reserve provider-bake live",
+        "reserve promote",
     ]
     assert unshipped_reserve_rent_live_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
@@ -21782,21 +26746,47 @@ UNSHIPPED_SORAFS_PROTO_RELEASE_CLI_SUBCOMMANDS = (
     "proto-promote",
 )
 
+UNSHIPPED_SORAFS_PROTO_RELEASE_NESTED_CLI_COMMANDS = (
+    "sora proto",
+    "sorafs proto",
+    "proto schema-service",
+    "proto schema service",
+    "schema-registry service",
+    "schema registry service",
+    "wire-format service",
+    "wire format service",
+    "proto release-bundle",
+    "proto release bundle",
+    "fixture release-bundle",
+    "fixture release bundle",
+    "fixture-bundle publish",
+    "fixture bundle publish",
+    "sdk-smoke publish",
+    "sdk smoke publish",
+    "proto promote",
+)
+
 
 def unshipped_sorafs_proto_release_route_matches(source: str) -> list[str]:
     return [
         route
         for route in UNSHIPPED_SORAFS_PROTO_RELEASE_ROUTE_PATTERNS
-        if re.search(rf"{re.escape(route)}(?=$|[\"`/\s?}}])", source)
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
 def unshipped_sorafs_proto_release_cli_matches(source: str) -> list[str]:
-    return [
+    hyphenated_matches = [
         subcommand
         for subcommand in UNSHIPPED_SORAFS_PROTO_RELEASE_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
+    nested_matches = [
+        command
+        for command in UNSHIPPED_SORAFS_PROTO_RELEASE_NESTED_CLI_COMMANDS
+        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])", source)
+    ]
+    return hyphenated_matches + nested_matches
 
 
 def test_sorafs_proto_release_surface_matcher_has_negative_controls() -> None:
@@ -21828,6 +26818,16 @@ def test_sorafs_proto_release_surface_matcher_has_negative_controls() -> None:
         "proto-release-bundle-canary",
         "fixture-release-bundle-evidence",
         "sdk-smoke-publish-canary",
+        "sora proto-canary",
+        "sorafs proto-canary",
+        "proto release-bundle-canary",
+        "proto release bundle-canary",
+        "schema-registry service-evidence",
+        "wire-format service-evidence",
+        "fixture release-bundle-evidence",
+        "fixture bundle publish-evidence",
+        "sdk-smoke publish-canary",
+        "sdk smoke publish-canary",
     )
 
     assert unshipped_sorafs_proto_release_route_matches(
@@ -21856,6 +26856,43 @@ def test_sorafs_proto_release_surface_matcher_has_negative_controls() -> None:
         "sorafs-proto",
         "proto-schema-service",
         "sdk-smoke-publish",
+    ]
+    assert unshipped_sorafs_proto_release_cli_matches(
+        "`iroha sorafs sora proto` "
+        '"sorafs proto" '
+        "`proto schema-service` "
+        '"proto schema service" '
+        "`schema-registry service` "
+        '"schema registry service" '
+        "`wire-format service` "
+        '"wire format service" '
+        "`proto release-bundle` "
+        '"proto release bundle" '
+        "`fixture release-bundle` "
+        '"fixture release bundle" '
+        "`fixture-bundle publish` "
+        '"fixture bundle publish" '
+        "`sdk-smoke publish` "
+        '"sdk smoke publish" '
+        "`proto promote`"
+    ) == [
+        "sora proto",
+        "sorafs proto",
+        "proto schema-service",
+        "proto schema service",
+        "schema-registry service",
+        "schema registry service",
+        "wire-format service",
+        "wire format service",
+        "proto release-bundle",
+        "proto release bundle",
+        "fixture release-bundle",
+        "fixture release bundle",
+        "fixture-bundle publish",
+        "fixture bundle publish",
+        "sdk-smoke publish",
+        "sdk smoke publish",
+        "proto promote",
     ]
     assert unshipped_sorafs_proto_release_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)

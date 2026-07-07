@@ -41,6 +41,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    forbidden_non_production_markers,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
     record_explicit_evidence_validation_errors,
@@ -217,7 +218,27 @@ def operator_route_paths(quarantine_id_hex: str) -> dict[str, str]:
 def expected_operator_route_url(operator_url: str, route_path: str) -> str:
     """Return the reviewed operator route URL for a base URL and route path."""
 
-    return f"{operator_url.rstrip('/')}{route_path}"
+    return f"{operator_url}{route_path}"
+
+
+AI_PRESCREEN_BASE_URL_ERROR = (
+    "SoraFS AI pre-screen base URL fields must not end with a slash"
+)
+
+
+def require_ai_prescreen_base_url(
+    payload: dict[str, Any],
+    field: str,
+    errors: list[str],
+) -> str:
+    """Return a safe slashless AI pre-screen base URL or append an error."""
+
+    value = require_safe_url(payload, field, errors)
+    if value.endswith("/"):
+        if AI_PRESCREEN_BASE_URL_ERROR not in errors:
+            errors.append(AI_PRESCREEN_BASE_URL_ERROR)
+        return ""
+    return value
 
 
 REQUIRED_TRANSPARENCY_SOURCE_KINDS = (
@@ -316,7 +337,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -330,11 +351,7 @@ def require_workflow_id(payload: dict[str, Any], errors: list[str]) -> str:
     if WORKFLOW_ID_PATTERN.fullmatch(workflow_id) is None:
         errors.append(WORKFLOW_ID_ERROR)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_WORKFLOW_ID_MARKERS
-        if marker in workflow_id.split("-")
-    )
+    forbidden = forbidden_non_production_markers(workflow_id, FORBIDDEN_WORKFLOW_ID_MARKERS)
     if forbidden:
         errors.append(
             f"workflow_id must not contain non-production markers {forbidden}"
@@ -357,11 +374,7 @@ def require_subject_reference(
     subject_tokens = frozenset(
         token for token in re.split(r"[^a-z0-9]+", subject) if token
     )
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_SUBJECT_REFERENCE_MARKERS
-        if marker in subject_tokens
-    )
+    forbidden = forbidden_non_production_markers(subject_tokens, FORBIDDEN_SUBJECT_REFERENCE_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -388,11 +401,7 @@ def require_inventory_label(
     label_tokens = frozenset(
         token for token in re.split(r"[^a-z0-9]+", label) if token
     )
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in label_tokens
-    )
+    forbidden = forbidden_non_production_markers(label_tokens, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -606,7 +615,7 @@ def validate_status(kind: EvidenceKind, payload: dict[str, Any], errors: list[st
 
 
 def validate_runner(payload: dict[str, Any], errors: list[str]) -> None:
-    require_safe_url(payload, "runner_url", errors)
+    require_ai_prescreen_base_url(payload, "runner_url", errors)
     require_safe_url(payload, "status_url", errors)
     require_safe_url(payload, "screen_url", errors)
     require_hex(payload, "manifest_id_hex", HEX32_LEN, errors)
@@ -622,7 +631,7 @@ def validate_runner(payload: dict[str, Any], errors: list[str]) -> None:
 
 
 def validate_committee(payload: dict[str, Any], errors: list[str]) -> None:
-    require_safe_url(payload, "committee_url", errors)
+    require_ai_prescreen_base_url(payload, "committee_url", errors)
     require_safe_url(payload, "status_url", errors)
     require_safe_url(payload, "aggregate_url", errors)
     require_hex(payload, "manifest_id_hex", HEX32_LEN, errors)
@@ -765,7 +774,7 @@ def validate_routes(
 
 def validate_operator_workflow(payload: dict[str, Any], errors: list[str]) -> None:
     require_hex(payload, "workflow_digest_hex", HEX64_LEN, errors)
-    operator_url = require_safe_url(payload, "operator_url", errors)
+    operator_url = require_ai_prescreen_base_url(payload, "operator_url", errors)
     quarantine_id_hex = require_hex(payload, "quarantine_id_hex", HEX32_LEN, errors)
     require_positive_int(payload, "generated_at_unix", errors)
     require_false(payload, "payload_bytes_included", errors)
@@ -843,6 +852,14 @@ def validate_notification_transport(payload: dict[str, Any], errors: list[str]) 
         "probe_count",
         errors,
         field="dedup_key",
+        allow_scalar_items=False,
+    )
+    require_string_coverage(
+        payload,
+        "probes",
+        "action",
+        ALLOWED_NOTIFICATION_ACTIONS,
+        errors,
         allow_scalar_items=False,
     )
     require_false(payload, "payload_bytes_included", errors)
@@ -1280,6 +1297,33 @@ def validate_evidence_payload(payload: dict[str, Any]) -> tuple[str | None, list
     return kind_name, errors
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
+def require_single_active_binding(
+    bindings: set[Any],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[Any]:
+    """Return one active rollout binding or fail closed on mixed anchors."""
+
+    if len(bindings) <= 1:
+        return bindings
+    errors.append(f"{label} must contain exactly one active binding")
+    return set()
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -1339,30 +1383,56 @@ def build_summary(
                     and isinstance(subject_digest, str)
                 ):
                     valid_runner_bindings.add(
-                        (manifest_id.lower(), runner_hash.lower(), subject_digest.lower())
+                        (manifest_id, runner_hash, subject_digest)
                     )
                 if isinstance(policy_digest, str):
-                    valid_policy_digests.add(policy_digest.lower())
+                    valid_policy_digests.add(policy_digest)
             if kind_name in RUNNER_BOUND_KINDS:
                 runner_bound_artifacts.append((kind_name, artifact))
             if kind_name == "end_to_end_workflow":
                 digest = fingerprint.get("workflow_digest_hex")
                 if isinstance(digest, str):
-                    valid_workflow_digests.add(digest.lower())
+                    valid_workflow_digests.add(digest)
             if kind_name == "notification_transport":
                 digest = fingerprint.get("manifest_body_blake3_hex")
                 if isinstance(digest, str):
-                    valid_notification_manifest_digests.add(digest.lower())
+                    valid_notification_manifest_digests.add(digest)
             if kind_name == "commit_reveal_executor":
                 digest = fingerprint.get("execution_summary_digest_hex")
                 if isinstance(digest, str):
-                    valid_executor_summary_digests.add(digest.lower())
+                    valid_executor_summary_digests.add(digest)
             if kind_name in WORKFLOW_BOUND_KINDS:
                 workflow_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
 
+
+    valid_runner_bindings = require_single_active_binding(
+        valid_runner_bindings,
+        errors,
+        label="valid_runner_bindings",
+    )
+    valid_workflow_digests = require_single_active_digest(
+        valid_workflow_digests,
+        errors,
+        label="valid_workflow_digests",
+    )
+    valid_notification_manifest_digests = require_single_active_digest(
+        valid_notification_manifest_digests,
+        errors,
+        label="valid_notification_manifest_digests",
+    )
+    valid_executor_summary_digests = require_single_active_digest(
+        valid_executor_summary_digests,
+        errors,
+        label="valid_executor_summary_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_tuple_references(
         required_kinds=required_kinds,

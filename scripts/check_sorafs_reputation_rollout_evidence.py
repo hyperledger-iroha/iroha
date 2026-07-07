@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from sorafs_checker_preflight import (  # noqa: E402
+    emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
     render_and_write_checker_summary,
@@ -30,6 +31,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_kinded_evidence_artifact,
     count_evidence_files,
     count_recognized_evidence_artifacts,
@@ -78,6 +80,7 @@ from sorafs_response_args import (  # noqa: E402
     expand_response_args,
     positive_int_arg,
 )
+from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
 from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_evidence_sensitivity import visit_sensitive_fields  # noqa: E402
 
@@ -333,7 +336,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -348,25 +351,31 @@ class LoadedEvidence:
     digest: str
 
 
+EXACT_ARTIFACT_KIND_STEMS = {
+    "publish": "publish",
+    "latest": "latest",
+    "snapshot": "latest",
+    "events": "events",
+    "metrics": "metrics",
+    "transport": "transport",
+    "consumption": "consumption",
+    "routing-consumption": "consumption",
+}
+
+ARTIFACT_KIND_PREFIXES = (
+    ("provider-", "provider"),
+    ("verify-", "verify"),
+)
+
 
 def artifact_kind_from_name(path: Path) -> str | None:
-    stem = path.stem.lower().replace("_", "-")
-    if "verify" in stem or "proof-replay" in stem:
-        return "verify"
-    if "provider" in stem or "fetch" in stem or "proof" in stem:
-        return "provider"
-    if "watch" in stem or "event" in stem:
-        return "events"
-    if "metric" in stem or "prometheus" in stem:
-        return "metrics"
-    if "transport" in stem or "sse" in stem or "websocket" in stem:
-        return "transport"
-    if "routing" in stem or "incentive" in stem or "consumption" in stem:
-        return "consumption"
-    if "publish" in stem:
-        return "publish"
-    if "latest" in stem or "snapshot" in stem:
-        return "latest"
+    stem = path.stem
+    kind = EXACT_ARTIFACT_KIND_STEMS.get(stem)
+    if kind is not None:
+        return kind
+    for prefix, kind in ARTIFACT_KIND_PREFIXES:
+        if stem.startswith(prefix):
+            return kind
     return None
 
 
@@ -382,10 +391,16 @@ def artifact_kind(path: Path, payload: dict[str, Any], explicit_kind: str | None
 def parse_evidence_spec(spec: str) -> tuple[str | None, Path]:
     kind, separator, path = spec.partition("=")
     if separator:
-        kind = kind.strip()
+        if (
+            not kind
+            or not path
+            or not diagnostic_text_is_canonical(kind)
+            or not diagnostic_text_is_canonical(path)
+        ):
+            raise ValueError("evidence spec must use KIND=PATH form")
         if kind not in KIND_BY_NAME:
             raise ValueError("unknown evidence kind")
-        return kind, Path(path.strip())
+        return kind, Path(path)
     return None, Path(spec)
 
 
@@ -574,11 +589,7 @@ def validate_provider_id_value(
     if PROVIDER_ID_PATTERN.fullmatch(provider_id) is None:
         errors.append(PROVIDER_ID_ERROR.replace("provider_id", path))
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_PROVIDER_ID_MARKERS
-        if marker in provider_id.split("-")
-    )
+    forbidden = forbidden_non_production_markers(provider_id, FORBIDDEN_PROVIDER_ID_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -605,11 +616,7 @@ def require_transport_event_label(
     label_tokens = frozenset(
         token for token in re.split(r"[^a-z0-9]+", label) if token
     )
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_TRANSPORT_EVENT_LABEL_MARKERS
-        if marker in label_tokens
-    )
+    forbidden = forbidden_non_production_markers(label_tokens, FORBIDDEN_TRANSPORT_EVENT_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -674,14 +681,55 @@ def validate_events(evidence: LoadedEvidence, errors: list[str]) -> tuple[str, s
         and count > limit
     ):
         errors.append("count must be <= limit")
-    if not event_records:
-        return "", "", count
-    event = event_records[-1][1]
     sequences: list[int] = []
+    snapshot_id = ""
+    merkle_root = ""
+    provider_count = 0
     for _index, event_record in event_records:
+        version = require_positive_int(event_record, "version", errors)
+        if version and version != 1:
+            errors.append("events[].version must be 1")
         event_sequence = require_positive_int(event_record, "sequence", errors)
         if event_sequence:
             sequences.append(event_sequence)
+        event_snapshot_id = require_hex(
+            event_record,
+            "snapshot_id_hex",
+            HEX32_LEN,
+            errors,
+            path="events[].snapshot_id_hex",
+        )
+        if event_snapshot_id:
+            if not snapshot_id:
+                snapshot_id = event_snapshot_id
+            elif event_snapshot_id != snapshot_id:
+                errors.append(
+                    "events[].snapshot_id_hex must match first event snapshot_id_hex"
+                )
+        event_merkle_root = require_hex(
+            event_record,
+            "merkle_root_hex",
+            HEX64_LEN,
+            errors,
+            path="events[].merkle_root_hex",
+        )
+        if event_merkle_root:
+            if not merkle_root:
+                merkle_root = event_merkle_root
+            elif event_merkle_root != merkle_root:
+                errors.append(
+                    "events[].merkle_root_hex must match first event merkle_root_hex"
+                )
+        event_provider_count = require_minimum_int(
+            event_record, "provider_count", 1, errors
+        )
+        if event_provider_count:
+            if provider_count == 0:
+                provider_count = event_provider_count
+            elif event_provider_count != provider_count:
+                errors.append(
+                    "events[].provider_count must match first event provider_count"
+                )
     unique_sequences = set(sequences)
     if len(unique_sequences) != len(sequences):
         errors.append("events must not contain duplicate sequence values")
@@ -692,9 +740,6 @@ def validate_events(evidence: LoadedEvidence, errors: list[str]) -> tuple[str, s
     ):
         errors.append("count must match unique events sequence count")
     sequence = sequences[-1] if sequences else 0
-    snapshot_id = require_hex(event, "snapshot_id_hex", HEX32_LEN, errors)
-    merkle_root = require_hex(event, "merkle_root_hex", HEX64_LEN, errors)
-    require_minimum_int(event, "provider_count", 1, errors)
     require_count_length_match(count, event_records, "count", "events", errors)
     return snapshot_id, merkle_root, sequence
 
@@ -1207,7 +1252,16 @@ def main(argv: list[str] | None = None) -> int:
     if summary_errors:
         emit_checker_error_lines(summary_errors)
         return 2
-    return 0 if summary["status"] == "ready" else 1
+    if summary["status"] != "ready":
+        errors = summary.get("errors", [])
+        if not isinstance(errors, list) or not errors:
+            errors = ["SoraFS reputation rollout evidence is incomplete"]
+        emit_checker_error_block(
+            "ERROR: SoraFS reputation rollout evidence is incomplete:",
+            errors,
+        )
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

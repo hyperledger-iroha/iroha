@@ -171,8 +171,8 @@ remains auditable.
 
 - If the adoption check reports `provider_mix="direct-only"` without the
   explicit override, pause the rollout immediately and run
-  `scripts/sorafs_direct_mode_smoke.sh --skip-adoption-check` to validate the
-  fallback path before switching production configs.
+  `SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP=local-diagnostic scripts/sorafs_direct_mode_smoke.sh --skip-adoption-check`
+  to validate the fallback path before switching production configs.
 - Drills should exercise the script weekly even when no alerts fire; log each
   run under `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md` §6.4 so the
   rollback evidence stays fresh for the SF-6 governance review.

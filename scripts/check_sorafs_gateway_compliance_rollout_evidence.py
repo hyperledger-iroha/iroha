@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from sorafs_checker_preflight import (  # noqa: E402
+    emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
     render_and_write_checker_summary,
@@ -39,6 +40,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     evidence_artifact_is_valid,
     evidence_artifact_fingerprint,
     evidence_schema_by_kind,
+    forbidden_non_production_markers,
     hashable_evidence_values,
     init_evidence_artifact_buckets,
     build_required_evidence_summary,
@@ -545,7 +547,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -561,11 +563,7 @@ def require_controller_instance_id(
     if CONTROLLER_INSTANCE_ID_PATTERN.fullmatch(controller_instance_id) is None:
         errors.append(CONTROLLER_INSTANCE_ID_ERROR)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_CONTROLLER_INSTANCE_ID_MARKERS
-        if marker in controller_instance_id.split("-")
-    )
+    forbidden = forbidden_non_production_markers(controller_instance_id, FORBIDDEN_CONTROLLER_INSTANCE_ID_MARKERS)
     if forbidden:
         errors.append(
             "controller_instance_id must not contain non-production markers "
@@ -591,11 +589,7 @@ def require_inventory_label(
     if pattern.fullmatch(label) is None:
         errors.append(label_error)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in label.split("-")
-    )
+    forbidden = forbidden_non_production_markers(label, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -956,6 +950,20 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -1011,15 +1019,26 @@ def build_summary(
             digest = fingerprint.get("bundle_digest_hex")
             if kind_name == "feed_promotion":
                 if isinstance(digest, str):
-                    valid_bundle_digests.add(digest.lower())
+                    valid_bundle_digests.add(digest)
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
-                    valid_policy_digests.add(policy_digest.lower())
+                    valid_policy_digests.add(policy_digest)
             if kind_name in BUNDLE_BOUND_KINDS:
                 bundle_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_bundle_digests = require_single_active_digest(
+        valid_bundle_digests,
+        errors,
+        label="valid_bundle_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
@@ -1187,7 +1206,13 @@ def main(argv: list[str] | None = None) -> int:
     if summary_errors:
         emit_checker_error_lines(summary_errors)
         return 2
-    return 1 if errors else 0
+    if errors:
+        emit_checker_error_block(
+            "ERROR: SoraFS gateway compliance rollout evidence is incomplete:",
+            errors,
+        )
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

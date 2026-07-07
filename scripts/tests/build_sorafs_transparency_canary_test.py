@@ -452,6 +452,27 @@ def test_cycle_detail_probe_count_must_match_inventory(
     assert not canary_path(tmp_path, "publication").exists()
 
 
+def test_default_cycle_detail_probe_count_matches_required_inventory(
+    tmp_path: Path,
+) -> None:
+    args = args_for("publication", tmp_path)
+    parsed = MODULE.parse_args(args)
+
+    assert parsed.cycle_detail_probe_count == len(
+        MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES
+    )
+
+    assert MODULE.main(args) == 0
+
+    payload = json.loads(canary_path(tmp_path, "publication").read_text("utf-8"))
+    assert payload["cycle_detail_probe_count"] == len(
+        MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES
+    )
+    assert [probe["name"] for probe in payload["cycle_detail_probes"]] == list(
+        MODULE.REQUIRED_PUBLICATION_CYCLE_DETAIL_PROBES
+    )
+
+
 def test_non_2xx_statuses_fail_before_write(tmp_path: Path, capsys) -> None:
     args = args_for("publication", tmp_path)
     args.extend(["--route-status-code", "503", "--probe-status-code", "500"])

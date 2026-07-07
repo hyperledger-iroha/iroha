@@ -53,10 +53,10 @@ qurğular və `fixtures/sorafs_chunker/` altında aşağıdakı faylları yayır
 
 ### İmzalama Siyasəti
 
-Armaturun bərpası **gərək** etibarlı şura imzasını daxil etməlidir. Generator
-`--allow-unsigned` açıq şəkildə (nəzərdə tutulan) qəbul edilmədikdə imzasız çıxışı rədd edir
-yalnız yerli təcrübə üçün). İmza zərfləri yalnız əlavə olunur və
-hər imzalayan üçün təkrarlanır.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 Şura imzası əlavə etmək üçün:
 

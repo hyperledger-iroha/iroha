@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-မန်နီးဖက်စ်သည် မတူညီသော URL တွင်ရှိနေပါက `--manifest` ကို ဖြတ်ပါ။ လက်မှတ်မပါသော စာအိတ်များ
-`--allow-unsigned` ကို ဒေသတွင်း မီးခိုးထွက်ခြင်းအတွက် သတ်မှတ်ထားခြင်းမရှိပါက ငြင်းဆိုထားသည်။
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - ဇာတ်ဝင်ခန်းဝင်ပေါက်မှတစ်ဆင့် မန်နီးဖက်စ်တစ်ခုကို အတည်ပြုသည့်အခါ၊ Torii အစား Torii ကို ပစ်မှတ်ထားပါ။
   ဒေသတွင်း ဝန်ဆောင်ခများ-

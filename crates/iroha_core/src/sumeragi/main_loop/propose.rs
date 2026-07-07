@@ -25,6 +25,13 @@ const PROPOSAL_STALE_WINDOW_PREP_TX_QUANTUM: usize = 32;
 const PROPOSAL_STALE_WINDOW_FULL_BATCH_PREP_GRACE: usize = 2;
 const PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER: u32 = 8;
 
+#[derive(Debug, Default)]
+struct FinalLanePayloadPlan {
+    ownerships: Vec<SumeragiLanePayloadOwnership>,
+    lane_block_proposal_artifacts: Vec<crate::sumeragi::consensus::LaneBlockProposalV1>,
+    lane_block_prepare_vote_plans: Vec<super::lane_scheduler::LaneBlockVotePlan>,
+}
+
 pub(super) const fn should_seed_frontier_backup_transport(
     da_enabled: bool,
     inline_frontier_block_created_transport: bool,
@@ -191,22 +198,56 @@ fn known_lane_block_tips_for_proposal(state: &State) -> Vec<super::lane_schedule
     let mut tips = state
         .lane_block_artifact_tips_snapshot_cached()
         .into_iter()
-        .map(|(lane_id, dataspace_id, latest_lane_block_height)| {
-            super::lane_scheduler::LaneBlockTip {
+        .map(
+            |(
                 lane_id,
                 dataspace_id,
                 latest_lane_block_height,
-            }
-        })
+                latest_lane_block_descriptor_hash,
+            )| {
+                super::lane_scheduler::LaneBlockTip {
+                    lane_id,
+                    dataspace_id,
+                    latest_lane_block_height,
+                    latest_lane_block_descriptor_hash,
+                }
+            },
+        )
         .collect::<Vec<_>>();
     tips.extend(state.lane_relay_snapshot().into_iter().map(|relay| {
         super::lane_scheduler::LaneBlockTip {
             lane_id: relay.lane_id,
             dataspace_id: relay.dataspace_id,
             latest_lane_block_height: relay.block_height,
+            latest_lane_block_descriptor_hash: relay_tip_descriptor_hash_for_proposal(&relay),
         }
     }));
+    tips.extend(
+        state
+            .certified_lane_block_tips_snapshot_cached()
+            .into_iter()
+            .map(
+                |(lane_id, dataspace_id, latest_lane_block_height, descriptor_hash)| {
+                    super::lane_scheduler::LaneBlockTip {
+                        lane_id,
+                        dataspace_id,
+                        latest_lane_block_height,
+                        latest_lane_block_descriptor_hash: descriptor_hash,
+                    }
+                },
+            ),
+    );
     tips
+}
+
+fn relay_tip_descriptor_hash_for_proposal(
+    relay: &iroha_data_model::nexus::LaneRelayEnvelope,
+) -> Option<Hash> {
+    if relay.is_merge_admissible() {
+        relay.lane_block_descriptor_hash
+    } else {
+        None
+    }
 }
 
 fn next_cached_slot_timeout_streak(
@@ -1502,7 +1543,7 @@ impl Actor {
                 view, "proposal queue routing refreshed from committed Nexus state"
             );
         }
-        let known_lane_block_tips = known_lane_block_tips_for_proposal(state);
+        let known_lane_block_tips = self.known_lane_block_tips_for_proposal();
         let lane_reset_heights = state.da_shard_reset_heights_snapshot_cached();
 
         loop {
@@ -1559,6 +1600,10 @@ impl Actor {
                 .iter()
                 .map(crate::queue::TransactionGuard::routing)
                 .collect();
+            let fetched_hashes: Vec<_> = fetched
+                .iter()
+                .map(|guard| Hash::from(guard.hash_as_entrypoint()))
+                .collect();
             let candidates: Vec<_> = fetched
                 .iter()
                 .map(|guard| super::lane_scheduler::ProposalAdmissionCandidate {
@@ -1614,16 +1659,15 @@ impl Actor {
                         match super::lane_scheduler::plan_lane_payload(
                             &domains,
                             &known_lane_block_tips,
+                            &fetched_hashes,
                             height.saturating_sub(1),
                             &lane_reset_heights,
                             view,
                         ) {
                             Ok(lane_payload_plan) => {
                                 planned_lane_payload_ownerships.extend(
-                                    lane_payload_plan.ownerships.iter().map(|ownership| {
-                                        Self::lane_payload_ownership_to_wire(
-                                            ownership, height, view,
-                                        )
+                                    lane_payload_plan.entries.iter().map(|entry| {
+                                        Self::lane_payload_ownership_to_wire(entry, height, view)
                                     }),
                                 );
                                 trace!(
@@ -1647,31 +1691,36 @@ impl Actor {
                                         .map(|domain| domain.accepted_candidate_indices.clone())
                                         .collect::<Vec<_>>(),
                                     lane_tip_heights = ?lane_payload_plan
-                                        .lane_tips
+                                        .entries
                                         .iter()
-                                        .map(|tip| tip.latest_lane_block_height)
+                                        .map(|entry| entry.tip.latest_lane_block_height)
                                         .collect::<Vec<_>>(),
                                     lane_slot_heights = ?lane_payload_plan
-                                        .slots
+                                        .entries
                                         .iter()
-                                        .map(|slot| slot.lane_block_height)
+                                        .map(|entry| entry.slot.lane_block_height)
                                         .collect::<Vec<_>>(),
-                                    lane_block_subjects = lane_payload_plan.subjects.len(),
+                                    lane_block_subjects = lane_payload_plan.entries.len(),
                                     lane_block_subject_hashes = ?lane_payload_plan
-                                        .subjects
+                                        .entries
                                         .iter()
-                                        .map(|subject| hex::encode(subject.subject_hash.as_ref()))
+                                        .map(|entry| hex::encode(entry.subject.subject_hash.as_ref()))
                                         .collect::<Vec<_>>(),
-                                    lane_payload_ownerships = lane_payload_plan.ownerships.len(),
+                                    lane_payload_ownerships = lane_payload_plan.entries.len(),
                                     lane_payload_ownership_hashes = ?lane_payload_plan
-                                        .ownerships
+                                        .entries
                                         .iter()
-                                        .map(|ownership| hex::encode(ownership.payload_ownership_hash.as_ref()))
+                                        .map(|entry| hex::encode(entry.ownership.payload_ownership_hash.as_ref()))
                                         .collect::<Vec<_>>(),
                                     lane_rbc_instance_hashes = ?lane_payload_plan
-                                        .ownerships
+                                        .entries
                                         .iter()
-                                        .map(|ownership| hex::encode(ownership.rbc_instance_hash.as_ref()))
+                                        .map(|entry| hex::encode(entry.ownership.rbc_instance_hash.as_ref()))
+                                        .collect::<Vec<_>>(),
+                                    lane_block_descriptor_hashes = ?lane_payload_plan
+                                        .entries
+                                        .iter()
+                                        .map(|entry| hex::encode(entry.block_descriptor.descriptor_hash.as_ref()))
                                         .collect::<Vec<_>>(),
                                     validator_count = domains
                                         .iter()
@@ -1795,10 +1844,11 @@ impl Actor {
     }
 
     fn lane_payload_ownership_to_wire(
-        ownership: &super::lane_scheduler::LanePayloadOwnership,
+        entry: &super::lane_scheduler::LanePayloadPlanEntry,
         proposal_height: u64,
         proposal_view: u64,
     ) -> SumeragiLanePayloadOwnership {
+        let ownership = &entry.ownership;
         SumeragiLanePayloadOwnership {
             proposal_height,
             proposal_view,
@@ -1815,20 +1865,30 @@ impl Actor {
                     u64::try_from(*index).expect("validated lane payload candidate index fits u64")
                 })
                 .collect(),
+            accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
+            previous_lane_block_height: entry.block_descriptor.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: entry
+                .block_descriptor
+                .previous_lane_block_descriptor_hash,
+            lane_block_descriptor_hash: Some(entry.block_descriptor.descriptor_hash),
+            lane_block_descriptor_validator_set: entry.block_descriptor.validator_set.clone(),
+            lane_block_descriptor_validator_count: entry.block_descriptor.quorum.validator_count,
+            lane_block_descriptor_min_quorum: entry.block_descriptor.quorum.min_quorum,
             payload_ownership_hash: ownership.payload_ownership_hash,
             rbc_instance_hash: ownership.rbc_instance_hash,
         }
     }
 
-    fn plan_final_lane_payload_ownerships(
+    fn plan_final_lane_payload(
         &self,
         state: &State,
         routing_batch: &[RoutingDecision],
+        candidate_hashes: &[Hash],
         height: u64,
         view: u64,
-    ) -> Result<Vec<SumeragiLanePayloadOwnership>> {
+    ) -> Result<FinalLanePayloadPlan> {
         if routing_batch.is_empty() {
-            return Ok(Vec::new());
+            return Ok(FinalLanePayloadPlan::default());
         }
 
         let committed_nexus = state.nexus_snapshot();
@@ -1878,14 +1938,15 @@ impl Actor {
             eyre!("failed to plan lane-local consensus domains for final proposal batch: {error:?}")
         })?;
         if lane_domains.is_empty() {
-            return Ok(Vec::new());
+            return Ok(FinalLanePayloadPlan::default());
         }
 
-        let known_lane_block_tips = known_lane_block_tips_for_proposal(state);
+        let known_lane_block_tips = self.known_lane_block_tips_for_proposal();
         let lane_reset_heights = state.da_shard_reset_heights_snapshot_cached();
         let lane_payload_plan = super::lane_scheduler::plan_lane_payload(
             &lane_domains,
             &known_lane_block_tips,
+            candidate_hashes,
             height.saturating_sub(1),
             &lane_reset_heights,
             view,
@@ -1894,11 +1955,153 @@ impl Actor {
             eyre!("failed to plan lane-local payload for final proposal batch: {error:?}")
         })?;
 
-        Ok(lane_payload_plan
-            .ownerships
+        let ownerships = lane_payload_plan
+            .entries
             .iter()
-            .map(|ownership| Self::lane_payload_ownership_to_wire(ownership, height, view))
-            .collect())
+            .map(|entry| Self::lane_payload_ownership_to_wire(entry, height, view))
+            .collect();
+
+        Ok(FinalLanePayloadPlan {
+            ownerships,
+            lane_block_proposal_artifacts: lane_payload_plan.lane_block_proposal_artifacts,
+            lane_block_prepare_vote_plans: lane_payload_plan.lane_block_prepare_vote_plans,
+        })
+    }
+
+    pub(super) fn known_lane_block_tips_for_proposal(
+        &self,
+    ) -> Vec<super::lane_scheduler::LaneBlockTip> {
+        let mut tips = known_lane_block_tips_for_proposal(self.state.as_ref());
+        tips.extend(
+            self.subsystems
+                .committed_lane_blocks
+                .lane_block_tips_snapshot(),
+        );
+        tips
+    }
+
+    pub(super) fn local_lane_block_prepare_vote(
+        &self,
+        plan: &super::lane_scheduler::LaneBlockVotePlan,
+    ) -> Option<crate::lane_consensus::LaneBlockVoteV1> {
+        if plan.phase != crate::sumeragi::consensus::Phase::Prepare {
+            return None;
+        }
+
+        match self.common_config.key_pair.public_key().try_algorithm() {
+            Ok(iroha_crypto::Algorithm::BlsNormal) => {}
+            Ok(algorithm) => {
+                warn!(
+                    ?algorithm,
+                    "skipping local lane-block prepare vote broadcast with non-BLS consensus key"
+                );
+                return None;
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "skipping local lane-block prepare vote broadcast with unrecognized consensus key"
+                );
+                return None;
+            }
+        }
+
+        let local_peer = self.common_config.peer.id();
+        let Some(vote) = plan.votes.iter().find(|vote| {
+            vote.phase == crate::sumeragi::consensus::Phase::Prepare && &vote.signer == local_peer
+        }) else {
+            return None;
+        };
+
+        if vote.body.phase != crate::sumeragi::consensus::Phase::Prepare
+            || vote.proposal_hash != plan.proposal_hash
+            || vote.descriptor_hash != plan.descriptor_hash
+            || vote.validator_set_hash != plan.validator_set_hash
+        {
+            warn!(
+                lane = vote.lane_id.as_u32(),
+                lane_block_height = vote.lane_block_height,
+                lane_block_view = vote.lane_block_view,
+                "skipping inconsistent local lane-block prepare vote plan"
+            );
+            return None;
+        }
+
+        if vote.signer.public_key() != self.common_config.key_pair.public_key() {
+            warn!("skipping local lane-block prepare vote for mismatched local peer key");
+            return None;
+        }
+
+        let signing_hash = Hash::new(vote.body.signature_preimage());
+        if vote.signing_hash != signing_hash {
+            warn!(
+                lane = vote.lane_id.as_u32(),
+                lane_block_height = vote.lane_block_height,
+                lane_block_view = vote.lane_block_view,
+                "skipping local lane-block prepare vote with stale signing hash"
+            );
+            return None;
+        }
+
+        let signature = match Signature::try_new(
+            self.common_config.key_pair.private_key(),
+            &vote.body.signature_preimage(),
+        ) {
+            Ok(signature) => signature,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    lane = vote.lane_id.as_u32(),
+                    lane_block_height = vote.lane_block_height,
+                    lane_block_view = vote.lane_block_view,
+                    "skipping local lane-block prepare vote after signing failure"
+                );
+                return None;
+            }
+        };
+
+        Some(crate::lane_consensus::LaneBlockVoteV1 {
+            body: vote.body.clone(),
+            signer: vote.signer.clone(),
+            bls_signature: signature.payload().to_vec(),
+        })
+    }
+
+    pub(super) fn broadcast_lane_block_plan_artifacts(
+        &mut self,
+        proposals: &[crate::sumeragi::consensus::LaneBlockProposalV1],
+        prepare_vote_plans: &[super::lane_scheduler::LaneBlockVotePlan],
+    ) -> usize {
+        let mut scheduled = 0_usize;
+
+        for proposal in proposals {
+            self.schedule_background(BackgroundRequest::Broadcast {
+                msg: BlockMessageWire::new(BlockMessage::LaneBlockProposal(proposal.clone())),
+            });
+            scheduled = scheduled.saturating_add(1);
+        }
+
+        let local_prepare_votes = prepare_vote_plans
+            .iter()
+            .filter_map(|plan| self.local_lane_block_prepare_vote(plan))
+            .collect::<Vec<_>>();
+        for vote in local_prepare_votes {
+            self.schedule_background(BackgroundRequest::Broadcast {
+                msg: BlockMessageWire::new(BlockMessage::LaneBlockVote(vote)),
+            });
+            scheduled = scheduled.saturating_add(1);
+        }
+
+        if scheduled > 0 {
+            debug!(
+                lane_block_proposals = proposals.len(),
+                lane_block_prepare_vote_plans = prepare_vote_plans.len(),
+                scheduled,
+                "scheduled finalized lane-block proposal artifacts for broadcast"
+            );
+        }
+
+        scheduled
     }
 
     fn requeue_accepted_transaction(
@@ -3875,7 +4078,7 @@ impl Actor {
                 proposal_hint,
                 block_hash,
                 block_created_frame_len,
-                lane_payload_ownerships,
+                final_lane_payload_plan,
             ) = loop {
                 let sidecar_started_at = Instant::now();
                 let nexus = self.state.nexus_snapshot();
@@ -4244,9 +4447,14 @@ impl Actor {
                     );
                 }
 
-                let lane_payload_ownerships = self.plan_final_lane_payload_ownerships(
+                let tx_hashes: Vec<_> = tx_batch
+                    .iter()
+                    .map(|tx| Hash::from(tx.hash_as_entrypoint()))
+                    .collect();
+                let final_lane_payload_plan = self.plan_final_lane_payload(
                     self.state.as_ref(),
                     &routing_batch,
+                    &tx_hashes,
                     proposal_height,
                     view,
                 )?;
@@ -4272,7 +4480,7 @@ impl Actor {
                     })
                     .collect::<Vec<_>>();
                 let execution_context = BlockExecutionContextBundle::new(execution_context)
-                    .with_lane_payload_ownerships(lane_payload_ownerships.clone());
+                    .with_lane_payload_ownerships(final_lane_payload_plan.ownerships.clone());
                 if !execution_context.is_empty() {
                     builder = builder.with_execution_context(Some(execution_context));
                 }
@@ -4467,7 +4675,7 @@ impl Actor {
                     proposal_hint,
                     block_hash,
                     frame_len,
-                    lane_payload_ownerships,
+                    final_lane_payload_plan,
                 );
             };
             let block_loop_ms = block_loop_started_at.elapsed().as_millis();
@@ -4513,7 +4721,9 @@ impl Actor {
                     stale_window.as_millis()
                 ));
             }
-            crate::sumeragi::status::set_lane_payload_ownerships(lane_payload_ownerships);
+            crate::sumeragi::status::set_lane_payload_ownerships(
+                final_lane_payload_plan.ownerships.clone(),
+            );
 
             // Loop back consensus messages locally so the leader participates immediately.
             let frontier_block_created_ready = matches!(
@@ -4618,6 +4828,10 @@ impl Actor {
                 &local_peer_id,
                 proposal_hint,
                 proposal,
+            );
+            self.broadcast_lane_block_plan_artifacts(
+                &final_lane_payload_plan.lane_block_proposal_artifacts,
+                &final_lane_payload_plan.lane_block_prepare_vote_plans,
             );
             if let Some(plan) = rbc_plan.take() {
                 self.broadcast_rbc_session_plan(plan.primary)?;
@@ -8261,8 +8475,8 @@ mod tests {
         collect_sccp_messages_for_active_proposal_routes,
         collect_sccp_messages_for_committable_proposal_routes, consensus_queue_backpressure,
         da_payload_budget, drain_aligned_batch, next_cached_slot_timeout_streak,
-        refresh_proposal_routing_from_state, reorder_vec_by_indices, trim_batch_for_size_cap,
-        trim_batch_for_size_cap_with_plans,
+        refresh_proposal_routing_from_state, relay_tip_descriptor_hash_for_proposal,
+        reorder_vec_by_indices, trim_batch_for_size_cap, trim_batch_for_size_cap_with_plans,
     };
     use crate::queue::{
         BackpressureState, ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingPlan,
@@ -8270,16 +8484,19 @@ mod tests {
     use crate::sumeragi::status;
     use crate::tx::AcceptedTransaction;
     use iroha_config::parameters::actual::LaneRoutingPolicy;
-    use iroha_crypto::Hash;
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         ChainId, Level,
+        block::{BlockHeader, consensus::LaneBlockCommitment},
+        consensus::{CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         domain::{Domain, DomainId},
         isi::{Log, Register},
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
-            DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+            DataSpaceMetadata, LaneCatalog, LaneConfig, LaneFastpqProofMaterial, LaneId,
+            LaneRelayEnvelope,
         },
+        peer::PeerId,
         prelude::{AccountId, InstructionBox, TransactionBuilder},
         transaction::{Executable, IvmBytecode, IvmProved},
     };
@@ -8378,6 +8595,90 @@ mod tests {
             1,
             0,
         )
+    }
+
+    fn proposal_lane_relay_settlement(height: u64) -> LaneBlockCommitment {
+        LaneBlockCommitment {
+            block_height: height,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            tx_count: 0,
+            total_local_micro: 0,
+            total_xor_due_micro: 0,
+            total_xor_after_haircut_micro: 0,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        }
+    }
+
+    fn proposal_lane_relay_qc(header: &BlockHeader) -> Qc {
+        let validator_set: Vec<PeerId> = Vec::new();
+        Qc {
+            phase: CertPhase::Commit,
+            subject_block_hash: header.hash(),
+            parent_state_root: Hash::new(b"proposal relay parent state"),
+            post_state_root: Hash::new(b"proposal relay post state"),
+            height: header.height().get(),
+            view: header.view_change_index(),
+            epoch: 0,
+            chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: iroha_data_model::block::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap: vec![0b0000_0001],
+                bls_aggregate_signature: vec![0xA5; 48],
+            },
+        }
+    }
+
+    fn proposal_lane_relay_envelope(
+        descriptor_hash: Option<Hash>,
+        include_qc: bool,
+        fastpq_proof: Option<LaneFastpqProofMaterial>,
+    ) -> LaneRelayEnvelope {
+        let header = proposal_test_header();
+        let qc = include_qc.then(|| proposal_lane_relay_qc(&header));
+        LaneRelayEnvelope::new(header, qc, None, proposal_lane_relay_settlement(1), 0)
+            .expect("proposal lane relay envelope")
+            .with_lane_block_descriptor_hash(descriptor_hash)
+            .with_fastpq_proof_material(fastpq_proof)
+    }
+
+    #[test]
+    fn relay_tip_descriptor_hash_for_proposal_requires_merge_admissible_relay() {
+        let descriptor_hash = Hash::new(b"proposal relay descriptor");
+        let fastpq_proof = LaneFastpqProofMaterial {
+            proof_digest: Hash::new(b"proposal relay fastpq proof"),
+            verified_at_height: 1,
+        };
+        let pending = proposal_lane_relay_envelope(Some(descriptor_hash), true, None);
+        assert_eq!(
+            relay_tip_descriptor_hash_for_proposal(&pending),
+            None,
+            "QC-only pending relay metadata must not become proposal lineage"
+        );
+
+        let fastpq_without_qc =
+            proposal_lane_relay_envelope(Some(descriptor_hash), false, Some(fastpq_proof));
+        assert_eq!(
+            relay_tip_descriptor_hash_for_proposal(&fastpq_without_qc),
+            None,
+            "FastPQ metadata without lane finality must not become proposal lineage"
+        );
+
+        let merge_admissible =
+            proposal_lane_relay_envelope(Some(descriptor_hash), true, Some(fastpq_proof));
+        assert_eq!(
+            relay_tip_descriptor_hash_for_proposal(&merge_admissible),
+            Some(descriptor_hash)
+        );
     }
 
     #[test]

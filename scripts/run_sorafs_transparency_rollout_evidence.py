@@ -30,7 +30,9 @@ from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
     positive_int_arg,
+    require_equals_form_option_values,
 )
+from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
 from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     require_rollout_deployment_id,
@@ -101,27 +103,20 @@ class CommandPlan:
     command: list[str]
 
 
-def normalize_iroha_arg_values(args: Sequence[str]) -> list[str]:
-    """Let --iroha-arg accept values that look like options."""
-
-    normalized: list[str] = []
-    index = 0
-    while index < len(args):
-        arg = args[index]
-        if arg == "--iroha-arg" and index + 1 < len(args):
-            normalized.append(f"--iroha-arg={args[index + 1]}")
-            index += 2
-            continue
-        normalized.append(arg)
-        index += 1
-    return normalized
+IROHA_ARG_EQUALS_FORM_DIAGNOSTIC = (
+    "SoraFS runner --iroha-arg values must use --iroha-arg=VALUE form"
+)
 
 
 def split_source_entry_spec(spec: str) -> tuple[str, Path]:
     source_kind, separator, path = spec.partition("=")
-    source_kind = source_kind.strip()
-    path = path.strip()
-    if not separator or not source_kind or not path:
+    if (
+        not separator
+        or not source_kind
+        or not path
+        or not diagnostic_text_is_canonical(source_kind)
+        or not diagnostic_text_is_canonical(path)
+    ):
         raise ValueError("--source-entry must use KIND=PATH form")
     return source_kind, Path(path)
 
@@ -298,7 +293,7 @@ def deployment_context(args: argparse.Namespace) -> dict[str, object]:
 
     return {
         "deployment_id": args.deployment_id,
-        "environment": args.environment.lower(),
+        "environment": args.environment,
         "deployment_context_reviewed": True,
     }
 
@@ -482,7 +477,7 @@ def run_plan(plan: Sequence[CommandPlan], out_dir: Path, args: argparse.Namespac
     annotation_errors = annotate_evidence_artifacts(
         canary_plan,
         deployment_id=args.deployment_id,
-        environment=args.environment.lower(),
+        environment=args.environment,
     )
     if annotation_errors:
         emit_runner_error_lines(annotation_errors)
@@ -586,10 +581,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     raw_args = sys.argv[1:] if argv is None else argv
     try:
         expanded_args = expand_response_args(raw_args, parser)
+        expanded_args = require_equals_form_option_values(
+            expanded_args,
+            "--iroha-arg",
+            IROHA_ARG_EQUALS_FORM_DIAGNOSTIC,
+        )
     except ValueError as error:
         emit_runner_exception(error)
         raise SystemExit(2) from error
-    return parser.parse_args(normalize_iroha_arg_values(expanded_args))
+    return parser.parse_args(expanded_args)
 
 
 def main(argv: list[str] | None = None) -> int:

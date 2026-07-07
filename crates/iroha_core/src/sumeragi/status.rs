@@ -22,13 +22,22 @@ use iroha_data_model::{
     block::{
         BlockHeader,
         consensus::{
-            LaneBlockCommitment, SumeragiLanePayloadOwnership, SumeragiMembershipStatus,
-            ValidatorIndex,
+            COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT,
+            COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
+            COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION,
+            COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK,
+            COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION, LaneBlockCommitment,
+            LaneBlockProposalV1, LaneBlockQcV1, SumeragiLanePayloadOwnership,
+            SumeragiMembershipStatus, ValidatorIndex,
         },
     },
     consensus::{ConsensusKeyRecord, Qc, ValidatorElectionOutcome, ValidatorSetCheckpoint},
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
-    nexus::{LaneId, LaneRelayEnvelope, LaneRelayError},
+    nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
     peer::PeerId,
 };
 use iroha_primitives::numeric::Numeric;
@@ -684,6 +693,7 @@ static LANE_SETTLEMENT_COMMITMENTS: OnceLock<Mutex<Vec<LaneBlockCommitment>>> = 
 static LANE_RELAY_ENVELOPES: OnceLock<Mutex<Vec<LaneRelayEnvelope>>> = OnceLock::new();
 static LANE_PAYLOAD_OWNERSHIPS: OnceLock<Mutex<Vec<SumeragiLanePayloadOwnership>>> =
     OnceLock::new();
+static COMMITTED_LANE_BLOCKS: OnceLock<Mutex<Vec<CommittedLaneBlockSnapshot>>> = OnceLock::new();
 static LANE_GOVERNANCE: OnceLock<Mutex<Vec<LaneGovernanceSnapshot>>> = OnceLock::new();
 static NEXUS_FEE_STATUS: OnceLock<Mutex<NexusFeeSnapshot>> = OnceLock::new();
 static NEXUS_STAKING_STATUS: OnceLock<Mutex<BTreeMap<LaneId, NexusStakingLaneSnapshot>>> =
@@ -697,6 +707,7 @@ static QC_QUORUM_WITHOUT_QC_TOTAL: AtomicU64 = AtomicU64::new(0);
 static PREVOTE_TIMEOUT_TOTAL: AtomicU64 = AtomicU64::new(0);
 const LANE_RELAY_ENVELOPES_CAP: usize = 64;
 const LANE_PAYLOAD_OWNERSHIPS_CAP: usize = 128;
+const COMMITTED_LANE_BLOCKS_CAP: usize = 128;
 const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
 const KEY_LIFECYCLE_HISTORY_CAP: usize = 128;
 static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
@@ -1599,6 +1610,131 @@ pub struct DataspaceCommitmentSnapshot {
     pub teu_total: u64,
     /// Block hash identifying the commitment.
     pub block_hash: HashOf<BlockHeader>,
+}
+
+/// Execution readiness for a certified standalone lane-local block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommittedLaneBlockExecutionStatus {
+    /// The block has proposal/prepare/commit certificates, but no executable lane payload yet.
+    AwaitingExecutablePayload,
+    /// Accepted entrypoints are locally recoverable, but standalone execution is not wired yet.
+    PayloadAvailableAwaitingExecutor,
+    /// Accepted entrypoints have been durably recovered for standalone state application.
+    PayloadRecoveredAwaitingStateApplication,
+    /// Recovered entrypoints passed direct-execution preflight at the current local state tip.
+    PayloadPreflightedAwaitingStateApplication,
+    /// Recovered entrypoints produced at least one rejection during direct-execution preflight.
+    PayloadPreflightRejectedAwaitingStateApplication,
+    /// Canonical application receipt disagrees with durable direct-execution preflight results.
+    ApplicationReceiptConflictsWithPreflight,
+    /// This lane block cannot execute until its certified predecessor is applied.
+    AwaitingPredecessorApplication,
+    /// Accepted entrypoints already have canonical committed results recorded locally.
+    StateAppliedByCanonicalBlock,
+    /// Accepted entrypoints were directly applied to local WSV without a canonical block append.
+    StateAppliedByDirectExecution,
+}
+
+impl CommittedLaneBlockExecutionStatus {
+    /// Stable operator-facing label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AwaitingExecutablePayload => COMMITTED_LANE_STATUS_AWAITING_EXECUTABLE_PAYLOAD,
+            Self::PayloadAvailableAwaitingExecutor => {
+                COMMITTED_LANE_STATUS_PAYLOAD_AVAILABLE_AWAITING_EXECUTOR
+            }
+            Self::PayloadRecoveredAwaitingStateApplication => {
+                COMMITTED_LANE_STATUS_PAYLOAD_RECOVERED_AWAITING_STATE_APPLICATION
+            }
+            Self::PayloadPreflightedAwaitingStateApplication => {
+                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHTED_AWAITING_STATE_APPLICATION
+            }
+            Self::PayloadPreflightRejectedAwaitingStateApplication => {
+                COMMITTED_LANE_STATUS_PAYLOAD_PREFLIGHT_REJECTED_AWAITING_STATE_APPLICATION
+            }
+            Self::ApplicationReceiptConflictsWithPreflight => {
+                COMMITTED_LANE_STATUS_APPLICATION_RECEIPT_CONFLICTS_WITH_PREFLIGHT
+            }
+            Self::AwaitingPredecessorApplication => {
+                COMMITTED_LANE_STATUS_AWAITING_PREDECESSOR_APPLICATION
+            }
+            Self::StateAppliedByCanonicalBlock => {
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_CANONICAL_BLOCK
+            }
+            Self::StateAppliedByDirectExecution => {
+                COMMITTED_LANE_STATUS_STATE_APPLIED_BY_DIRECT_EXECUTION
+            }
+        }
+    }
+
+    /// Whether the committed lane block can be handed to a standalone executor.
+    #[must_use]
+    pub const fn executable_payload_available(self) -> bool {
+        match self {
+            Self::AwaitingExecutablePayload => false,
+            Self::PayloadAvailableAwaitingExecutor
+            | Self::PayloadRecoveredAwaitingStateApplication
+            | Self::PayloadPreflightedAwaitingStateApplication
+            | Self::StateAppliedByCanonicalBlock
+            | Self::StateAppliedByDirectExecution => true,
+            Self::ApplicationReceiptConflictsWithPreflight
+            | Self::PayloadPreflightRejectedAwaitingStateApplication
+            | Self::AwaitingPredecessorApplication => false,
+        }
+    }
+}
+
+/// Standalone lane-local block that has proposal, prepare QC, and commit QC.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommittedLaneBlockSnapshot {
+    /// Lane whose local block is committed.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the committed lane-local block.
+    pub dataspace_id: DataSpaceId,
+    /// Lane-local block height.
+    pub lane_block_height: u64,
+    /// Lane-local consensus view.
+    pub lane_block_view: u64,
+    /// Stable hash of the standalone lane block descriptor.
+    pub descriptor_hash: Hash,
+    /// Stable hash of the standalone lane block proposal.
+    pub proposal_hash: Hash,
+    /// Execution readiness of the certified standalone lane-local block.
+    pub execution_status: CommittedLaneBlockExecutionStatus,
+    /// Proposal artifact committed by the QCs.
+    pub proposal: LaneBlockProposalV1,
+    /// Prepare QC for the proposal.
+    pub prepare_qc: LaneBlockQcV1,
+    /// Commit QC for the proposal.
+    pub commit_qc: LaneBlockQcV1,
+}
+
+impl CommittedLaneBlockSnapshot {
+    pub(crate) fn from_committed_session_with_execution_status(
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+        execution_status: CommittedLaneBlockExecutionStatus,
+    ) -> Self {
+        let descriptor = &session.proposal.descriptor;
+        Self {
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            descriptor_hash: descriptor.descriptor_hash,
+            proposal_hash: session.proposal.proposal_hash,
+            execution_status,
+            proposal: session.proposal.clone(),
+            prepare_qc: session.prepare_qc.clone(),
+            commit_qc: session.commit_qc.clone(),
+        }
+    }
+
+    /// Whether the committed lane block has enough payload material for execution.
+    #[must_use]
+    pub const fn executable_payload_available(&self) -> bool {
+        self.execution_status.executable_payload_available()
+    }
 }
 
 /// Governance manifest snapshot for a lane.
@@ -2755,10 +2891,16 @@ pub enum ConsensusMessageKind {
     ProposalHint,
     /// Proposals (`Proposal`).
     Proposal,
+    /// Standalone lane-local block proposals (`LaneBlockProposal`).
+    LaneBlockProposal,
     /// Commit votes (`QcVote`).
     QcVote,
     /// Commit certificates (`Qc`).
     Qc,
+    /// Standalone lane-local block votes (`LaneBlockVote`).
+    LaneBlockVote,
+    /// Standalone lane-local block QCs (`LaneBlockQc`).
+    LaneBlockQc,
     /// VRF commit broadcasts (`VrfCommit`).
     VrfCommit,
     /// VRF reveal broadcasts (`VrfReveal`).
@@ -2796,8 +2938,11 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::ConsensusParams => "consensus_params",
             ConsensusMessageKind::ProposalHint => "proposal_hint",
             ConsensusMessageKind::Proposal => "proposal",
+            ConsensusMessageKind::LaneBlockProposal => "lane_block_proposal",
             ConsensusMessageKind::QcVote => "qc_vote",
             ConsensusMessageKind::Qc => "qc",
+            ConsensusMessageKind::LaneBlockVote => "lane_block_vote",
+            ConsensusMessageKind::LaneBlockQc => "lane_block_qc",
             ConsensusMessageKind::VrfCommit => "vrf_commit",
             ConsensusMessageKind::VrfReveal => "vrf_reveal",
             ConsensusMessageKind::ExecWitness => "exec_witness",
@@ -4260,6 +4405,8 @@ pub struct StatusSnapshot {
     pub lane_relay_envelopes: Vec<LaneRelayEnvelope>,
     /// Planned lane-local payload ownership and RBC instance identities.
     pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+    /// Standalone lane-local blocks with proposal, prepare QC, and commit QC.
+    pub committed_lane_blocks: Vec<CommittedLaneBlockSnapshot>,
     /// Number of lanes that remain sealed awaiting governance manifests.
     pub lane_governance_sealed_total: u32,
     /// Aliases of lanes that remain sealed awaiting governance manifests.
@@ -4287,6 +4434,7 @@ impl StatusSnapshot {
         self.lane_settlement_commitments.clear();
         self.lane_relay_envelopes.clear();
         self.lane_payload_ownerships.clear();
+        self.committed_lane_blocks.clear();
         self.lane_governance_sealed_total = 0;
         self.lane_governance_sealed_aliases.clear();
         self.lane_governance.clear();
@@ -4908,6 +5056,7 @@ pub fn snapshot() -> StatusSnapshot {
         lane_governance_sealed_summary();
     let lane_relay_envelopes = lane_relay_envelopes_snapshot();
     let lane_payload_ownerships = lane_payload_ownerships_snapshot();
+    let committed_lane_blocks = committed_lane_blocks_snapshot();
     let kura_last_hash = (*lock_operator_status_slot(
         KURA_STORE_LAST_HASH.get_or_init(|| Mutex::new(None)),
         "kura store failure hash",
@@ -5250,6 +5399,7 @@ pub fn snapshot() -> StatusSnapshot {
         lane_settlement_commitments: lane_settlement_commitments_snapshot(),
         lane_relay_envelopes,
         lane_payload_ownerships,
+        committed_lane_blocks,
         lane_governance_sealed_total,
         lane_governance_sealed_aliases,
         lane_governance: lane_governance_entries,
@@ -6996,6 +7146,10 @@ fn lane_payload_ownerships_slot() -> &'static Mutex<Vec<SumeragiLanePayloadOwner
     LANE_PAYLOAD_OWNERSHIPS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+fn committed_lane_blocks_slot() -> &'static Mutex<Vec<CommittedLaneBlockSnapshot>> {
+    COMMITTED_LANE_BLOCKS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
 fn lane_relay_key(
     envelope: &LaneRelayEnvelope,
 ) -> (
@@ -7117,6 +7271,19 @@ pub fn set_lane_payload_ownerships(mut entries: Vec<SumeragiLanePayloadOwnership
     *guard = entries;
 }
 
+/// Replace the committed standalone lane-block snapshot used by `/v1/sumeragi/status`.
+pub fn set_committed_lane_blocks(mut entries: Vec<CommittedLaneBlockSnapshot>) {
+    if entries.len() > COMMITTED_LANE_BLOCKS_CAP {
+        let drain = entries.len() - COMMITTED_LANE_BLOCKS_CAP;
+        entries.drain(0..drain);
+    }
+    let mut guard = lock_operator_status_slot(
+        committed_lane_blocks_slot(),
+        "committed lane block snapshot",
+    );
+    *guard = entries;
+}
+
 /// Remove lane-scoped operator status snapshots for lanes whose runtime state was reset.
 pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
     if lanes_to_reset.is_empty() {
@@ -7154,6 +7321,11 @@ pub fn prune_lane_scoped_snapshots(lanes_to_reset: &BTreeSet<LaneId>) {
         "lane payload ownership snapshot",
     )
     .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
+    lock_operator_status_slot(
+        committed_lane_blocks_slot(),
+        "committed lane block snapshot",
+    )
+    .retain(|entry| !lanes_to_reset.contains(&entry.lane_id));
     lock_operator_status_slot(lane_governance_slot(), "lane governance snapshot")
         .retain(|entry| !lane_matches(entry.lane_id));
 }
@@ -7189,6 +7361,15 @@ pub fn lane_payload_ownerships_snapshot() -> Vec<SumeragiLanePayloadOwnership> {
     lock_operator_status_slot(
         lane_payload_ownerships_slot(),
         "lane payload ownership snapshot",
+    )
+    .clone()
+}
+
+/// Returns the cached standalone committed lane-block snapshot used by Sumeragi status endpoints.
+pub fn committed_lane_blocks_snapshot() -> Vec<CommittedLaneBlockSnapshot> {
+    lock_operator_status_slot(
+        committed_lane_blocks_slot(),
+        "committed lane block snapshot",
     )
     .clone()
 }
@@ -8875,6 +9056,42 @@ mod tests {
 
     fn checked_public_key() -> iroha_crypto::PublicKey {
         checked_keypair().public_key().clone()
+    }
+
+    #[test]
+    fn committed_lane_block_executable_flag_is_fail_closed_for_rejected_preflight() {
+        use super::CommittedLaneBlockExecutionStatus::{
+            ApplicationReceiptConflictsWithPreflight, AwaitingExecutablePayload,
+            AwaitingPredecessorApplication, PayloadAvailableAwaitingExecutor,
+            PayloadPreflightRejectedAwaitingStateApplication,
+            PayloadPreflightedAwaitingStateApplication, PayloadRecoveredAwaitingStateApplication,
+            StateAppliedByCanonicalBlock, StateAppliedByDirectExecution,
+        };
+
+        for status in [
+            PayloadAvailableAwaitingExecutor,
+            PayloadRecoveredAwaitingStateApplication,
+            PayloadPreflightedAwaitingStateApplication,
+            StateAppliedByCanonicalBlock,
+            StateAppliedByDirectExecution,
+        ] {
+            assert!(
+                status.executable_payload_available(),
+                "{status:?} should expose a handoff-ready payload"
+            );
+        }
+
+        for status in [
+            AwaitingExecutablePayload,
+            PayloadPreflightRejectedAwaitingStateApplication,
+            ApplicationReceiptConflictsWithPreflight,
+            AwaitingPredecessorApplication,
+        ] {
+            assert!(
+                !status.executable_payload_available(),
+                "{status:?} should remain fail-closed"
+            );
+        }
     }
 
     fn commit_qc_fixture(height: u64, view: u64, hash_byte: u8) -> Qc {
@@ -11075,8 +11292,20 @@ mod tests {
             "proposal_hint"
         );
         assert_eq!(super::ConsensusMessageKind::Proposal.as_str(), "proposal");
+        assert_eq!(
+            super::ConsensusMessageKind::LaneBlockProposal.as_str(),
+            "lane_block_proposal"
+        );
         assert_eq!(super::ConsensusMessageKind::QcVote.as_str(), "qc_vote");
         assert_eq!(super::ConsensusMessageKind::Qc.as_str(), "qc");
+        assert_eq!(
+            super::ConsensusMessageKind::LaneBlockVote.as_str(),
+            "lane_block_vote"
+        );
+        assert_eq!(
+            super::ConsensusMessageKind::LaneBlockQc.as_str(),
+            "lane_block_qc"
+        );
         assert_eq!(
             super::ConsensusMessageKind::VrfCommit.as_str(),
             "vrf_commit"
@@ -13189,6 +13418,18 @@ mod tests {
             subject_hash: UntypedHash::new(b"lane subject"),
             qc_mode_tag: "test-lane-qc-mode".to_string(),
             accepted_candidate_indices: vec![0, 2],
+            accepted_transaction_hashes: vec![
+                UntypedHash::new(b"lane accepted tx 0"),
+                UntypedHash::new(b"lane accepted tx 2"),
+            ],
+            previous_lane_block_height: 1,
+            previous_lane_block_descriptor_hash: Some(UntypedHash::new(
+                b"previous lane block descriptor",
+            )),
+            lane_block_descriptor_hash: Some(UntypedHash::new(b"lane block descriptor")),
+            lane_block_descriptor_validator_set: Vec::new(),
+            lane_block_descriptor_validator_count: 0,
+            lane_block_descriptor_min_quorum: 0,
             payload_ownership_hash: UntypedHash::new(b"lane payload ownership"),
             rbc_instance_hash: UntypedHash::new(b"lane rbc instance"),
         };
@@ -13280,6 +13521,22 @@ mod tests {
                     subject_hash: UntypedHash::new(format!("subject-{index}").as_bytes()),
                     qc_mode_tag: format!("test-lane-qc-mode-{index}"),
                     accepted_candidate_indices: vec![index, index + 1],
+                    accepted_transaction_hashes: vec![
+                        UntypedHash::new(format!("accepted-tx-{index}-0").as_bytes()),
+                        UntypedHash::new(format!("accepted-tx-{index}-1").as_bytes()),
+                    ],
+                    previous_lane_block_height: index,
+                    previous_lane_block_descriptor_hash: (index > 0).then(|| {
+                        UntypedHash::new(
+                            format!("previous-lane-block-descriptor-{index}").as_bytes(),
+                        )
+                    }),
+                    lane_block_descriptor_hash: Some(UntypedHash::new(
+                        format!("lane-block-descriptor-{index}").as_bytes(),
+                    )),
+                    lane_block_descriptor_validator_set: Vec::new(),
+                    lane_block_descriptor_validator_count: 0,
+                    lane_block_descriptor_min_quorum: 0,
                     payload_ownership_hash: UntypedHash::new(
                         format!("payload-ownership-{index}").as_bytes(),
                     ),
@@ -13387,6 +13644,19 @@ mod tests {
             subject_hash: UntypedHash::new(format!("subject-{}", lane_id.as_u32()).as_bytes()),
             qc_mode_tag: format!("test-lane-qc-mode-{}", lane_id.as_u32()),
             accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![UntypedHash::new(
+                format!("accepted-tx-{}", lane_id.as_u32()).as_bytes(),
+            )],
+            previous_lane_block_height: 1,
+            previous_lane_block_descriptor_hash: Some(UntypedHash::new(
+                format!("previous-descriptor-{}", lane_id.as_u32()).as_bytes(),
+            )),
+            lane_block_descriptor_hash: Some(UntypedHash::new(
+                format!("descriptor-{}", lane_id.as_u32()).as_bytes(),
+            )),
+            lane_block_descriptor_validator_set: Vec::new(),
+            lane_block_descriptor_validator_count: 0,
+            lane_block_descriptor_min_quorum: 0,
             payload_ownership_hash: UntypedHash::new(
                 format!("payload-{}", lane_id.as_u32()).as_bytes(),
             ),

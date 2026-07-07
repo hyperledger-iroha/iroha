@@ -296,8 +296,6 @@ pub struct PathMetadata {
     pub asn: Option<u32>,
     /// Whether the relay belongs to a validator-class fast lane.
     pub validator_lane: bool,
-    /// Whether validator-only meshes may bypass MASQUE/obfs wrappers when using this relay.
-    pub masque_bypass_allowed: bool,
 }
 
 /// Outcome when applying a collection of path hints to a guard directory.
@@ -327,9 +325,6 @@ impl PathMetadata {
         if hint.validator_lane {
             self.validator_lane = true;
         }
-        if hint.masque_bypass_allowed {
-            self.masque_bypass_allowed = true;
-        }
     }
 }
 
@@ -346,8 +341,6 @@ pub struct RelayPathHint {
     pub asn: Option<u32>,
     /// Whether the relay participates in the validator fast lane.
     pub validator_lane: bool,
-    /// Whether validator-only meshes may bypass MASQUE/obfs wrappers when using this relay.
-    pub masque_bypass_allowed: bool,
 }
 
 impl RelayPathHint {
@@ -361,7 +354,6 @@ impl RelayPathHint {
         region: Option<String>,
         asn: Option<u32>,
         validator_lane: bool,
-        masque_bypass_allowed: bool,
     ) -> Result<Self, String> {
         let trimmed = relay_id_hex.trim();
         if trimmed.len() != 64 {
@@ -379,7 +371,6 @@ impl RelayPathHint {
             region,
             asn,
             validator_lane,
-            masque_bypass_allowed,
         })
     }
 }
@@ -1635,7 +1626,6 @@ fn emit_guard_selection_telemetry(guards: &[GuardRecord]) {
                 path_region = ?path.region,
                 path_asn = ?path.asn,
                 path_validator_lane = path.validator_lane,
-                path_masque_bypass_allowed = path.masque_bypass_allowed,
             );
         } else {
             info!(
@@ -1647,7 +1637,6 @@ fn emit_guard_selection_telemetry(guards: &[GuardRecord]) {
                 path_region = ?path.region,
                 path_asn = ?path.asn,
                 path_validator_lane = path.validator_lane,
-                path_masque_bypass_allowed = path.masque_bypass_allowed,
             );
         }
     }
@@ -1672,7 +1661,6 @@ fn emit_circuit_build_telemetry(guard: &GuardRecord) {
             path_region = ?guard.path_metadata.region,
             path_asn = ?guard.path_metadata.asn,
             path_validator_lane = guard.path_metadata.validator_lane,
-            path_masque_bypass_allowed = guard.path_metadata.masque_bypass_allowed,
         );
     } else {
         info!(
@@ -1684,7 +1672,6 @@ fn emit_circuit_build_telemetry(guard: &GuardRecord) {
             path_region = ?guard.path_metadata.region,
             path_asn = ?guard.path_metadata.asn,
             path_validator_lane = guard.path_metadata.validator_lane,
-            path_masque_bypass_allowed = guard.path_metadata.masque_bypass_allowed,
         );
     }
 }
@@ -1818,11 +1805,6 @@ fn reconcile_path_metadata(
             .map(|guard| guard.path_metadata.validator_lane)
             .unwrap_or(false);
     }
-    if !metadata.masque_bypass_allowed {
-        metadata.masque_bypass_allowed = record
-            .map(|guard| guard.path_metadata.masque_bypass_allowed)
-            .unwrap_or(false);
-    }
     metadata
 }
 
@@ -1898,8 +1880,6 @@ struct GuardRecordPersist {
     path_asn: Option<u32>,
     #[norito(default)]
     path_validator_lane: bool,
-    #[norito(default)]
-    path_masque_bypass_allowed: bool,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
@@ -1937,7 +1917,6 @@ impl From<&GuardRecord> for GuardRecordPersist {
             path_region: record.path_metadata.region.clone(),
             path_asn: record.path_metadata.asn,
             path_validator_lane: record.path_metadata.validator_lane,
-            path_masque_bypass_allowed: record.path_metadata.masque_bypass_allowed,
         }
     }
 }
@@ -1957,7 +1936,6 @@ impl From<GuardRecordPersist> for GuardRecord {
             path_region,
             path_asn,
             path_validator_lane,
-            path_masque_bypass_allowed,
         } = persist;
 
         let pq_kem_public = pq_kem_public_hex.and_then(|hex| hex::decode(hex).ok());
@@ -1990,7 +1968,6 @@ impl From<GuardRecordPersist> for GuardRecord {
                 region: path_region.map(|region| region.trim().to_string()),
                 asn: path_asn,
                 validator_lane: path_validator_lane,
-                masque_bypass_allowed: path_masque_bypass_allowed,
             },
         }
     }
@@ -2035,8 +2012,6 @@ struct Circuit {
     built_at_unix: u64,
     expires_at_unix: u64,
     latency: LatencyWindow,
-    /// Whether the circuit may bypass MASQUE/obfs layers for validator-class meshes.
-    masque_bypass: bool,
 }
 
 impl Circuit {
@@ -2049,7 +2024,6 @@ impl Circuit {
             entry: self.entry.clone(),
             middle: self.middle.clone(),
             exit: self.exit.clone(),
-            masque_bypass: self.masque_bypass,
         }
     }
 }
@@ -2071,8 +2045,6 @@ pub struct CircuitInfo {
     pub middle: CircuitRelay,
     /// Exit relay metadata.
     pub exit: CircuitRelay,
-    /// Whether MASQUE/obfs is bypassed for this circuit (validator mesh fast-path).
-    pub masque_bypass: bool,
 }
 
 /// Reason why a circuit left the active set.
@@ -2129,24 +2101,13 @@ pub struct CircuitRotationRecord {
 #[derive(Debug, Clone)]
 pub struct CircuitManagerConfig {
     circuit_ttl: Duration,
-    validator_masque_bypass: bool,
 }
 
 impl CircuitManagerConfig {
     /// Creates a configuration with the supplied circuit TTL.
     #[must_use]
     pub const fn new(circuit_ttl: Duration) -> Self {
-        Self {
-            circuit_ttl,
-            validator_masque_bypass: false,
-        }
-    }
-
-    /// Enable or disable MASQUE/obfs bypass for validator-class meshes.
-    #[must_use]
-    pub const fn with_validator_masque_bypass(mut self, enabled: bool) -> Self {
-        self.validator_masque_bypass = enabled;
-        self
+        Self { circuit_ttl }
     }
 
     /// Returns the configured circuit TTL.
@@ -2154,19 +2115,12 @@ impl CircuitManagerConfig {
     pub const fn circuit_ttl(&self) -> Duration {
         self.circuit_ttl
     }
-
-    /// Returns whether MASQUE/obfs bypass is enabled for validator meshes.
-    #[must_use]
-    pub const fn validator_masque_bypass(&self) -> bool {
-        self.validator_masque_bypass
-    }
 }
 
 impl Default for CircuitManagerConfig {
     fn default() -> Self {
         Self {
             circuit_ttl: Duration::from_mins(15),
-            validator_masque_bypass: false,
         }
     }
 }
@@ -2451,12 +2405,6 @@ impl CircuitManager {
         let middle = descriptor_to_circuit_relay(middle_descriptor, None, now_unix);
         let exit =
             descriptor_to_circuit_relay(exit_descriptor, Some(EndpointTag::NoritoStream), now_unix);
-        let masque_bypass = self.config.validator_masque_bypass()
-            && guard.path_metadata.validator_lane
-            && guard.path_metadata.masque_bypass_allowed
-            && middle_descriptor.path_metadata.masque_bypass_allowed
-            && exit_descriptor.path_metadata.masque_bypass_allowed;
-
         let id = CircuitId(self.next_circuit_id);
         self.next_circuit_id = self.next_circuit_id.wrapping_add(1);
         let ttl_secs = self.config.circuit_ttl.as_secs();
@@ -2471,7 +2419,6 @@ impl CircuitManager {
             built_at_unix: now_unix,
             expires_at_unix,
             latency: LatencyWindow::default(),
-            masque_bypass,
         };
         emit_circuit_build_telemetry(&circuit.guard);
         Ok(circuit)
@@ -3088,7 +3035,6 @@ mod tests {
                 region: Some("us-west".to_string()),
                 asn: Some(64512),
                 validator_lane: true,
-                masque_bypass_allowed: true,
             },
             RelayPathHint {
                 relay_id: relay_id(0x02),
@@ -3096,7 +3042,6 @@ mod tests {
                 region: Some("us-east".to_string()),
                 asn: Some(64513),
                 validator_lane: false,
-                masque_bypass_allowed: false,
             },
         ];
         let report = directory.apply_path_hints(&hints);
@@ -3109,7 +3054,6 @@ mod tests {
         assert_eq!(guard.relay_id, relay_id(0x01));
         assert_eq!(guard.path_metadata.avg_rtt_ms, Some(20));
         assert!(guard.path_metadata.validator_lane);
-        assert!(guard.path_metadata.masque_bypass_allowed);
     }
 
     #[test]
@@ -3309,13 +3253,11 @@ mod tests {
     }
 
     #[test]
-    fn circuit_manager_sets_masque_bypass_for_validator_mesh() {
+    fn circuit_manager_builds_validator_mesh_without_bypass() {
         let mut entry = entry_descriptor(0x01, 120, vec![Endpoint::new("soranet://entry", 0)]);
         entry.path_metadata.validator_lane = true;
-        entry.path_metadata.masque_bypass_allowed = true;
 
-        let mut middle = middle_descriptor(0x02, 80, false, 0);
-        middle.path_metadata.masque_bypass_allowed = true;
+        let middle = middle_descriptor(0x02, 80, false, 0);
 
         let exit = RelayDescriptor {
             relay_id: relay_id(0x03),
@@ -3326,19 +3268,14 @@ mod tests {
             endpoints: vec![Endpoint::new("soranet://exit", 0)],
             pq_kem_public: None,
             certificate: None,
-            path_metadata: PathMetadata {
-                masque_bypass_allowed: true,
-                ..PathMetadata::default()
-            },
+            path_metadata: PathMetadata::default(),
         };
 
         let directory = RelayDirectory::new(vec![entry, middle, exit]);
         let mut guard = guard_record(0x01, 0, "soranet://entry");
         guard.path_metadata.validator_lane = true;
-        guard.path_metadata.masque_bypass_allowed = true;
         let guard_set = GuardSet::new(vec![guard]);
-        let mut manager =
-            CircuitManager::new(CircuitManagerConfig::default().with_validator_masque_bypass(true));
+        let mut manager = CircuitManager::new(CircuitManagerConfig::default());
 
         let events = manager
             .refresh(&directory, &guard_set, 0, AnonymityPolicy::GuardPq)
@@ -3351,8 +3288,7 @@ mod tests {
         );
 
         let circuits = manager.active_circuits();
-        let circuit = circuits.first().expect("circuit");
-        assert!(circuit.masque_bypass, "validator mesh should bypass MASQUE");
+        assert!(circuits.first().is_some(), "expected an active circuit");
     }
 
     #[test]
@@ -4255,7 +4191,6 @@ mod tests {
             region: Some("us-west".to_string()),
             asn: Some(64_512),
             validator_lane: true,
-            masque_bypass_allowed: true,
         };
 
         let report = directory.apply_path_hints(&[hint]);
@@ -4267,7 +4202,6 @@ mod tests {
         assert_eq!(metadata.region.as_deref(), Some("us-west"));
         assert_eq!(metadata.asn, Some(64_512));
         assert!(metadata.validator_lane);
-        assert!(metadata.masque_bypass_allowed);
     }
 
     #[test]
@@ -4286,7 +4220,6 @@ mod tests {
                 region: Some("us-east".to_string()),
                 asn: Some(64_512),
                 validator_lane: true,
-                masque_bypass_allowed: true,
             },
         };
         let same_asn = RelayDescriptor {
@@ -4303,7 +4236,6 @@ mod tests {
                 region: Some("us-east".to_string()),
                 asn: Some(64_512),
                 validator_lane: false,
-                masque_bypass_allowed: false,
             },
         };
         let diverse_asn = RelayDescriptor {
@@ -4320,7 +4252,6 @@ mod tests {
                 region: Some("us-west".to_string()),
                 asn: Some(64_570),
                 validator_lane: false,
-                masque_bypass_allowed: false,
             },
         };
 

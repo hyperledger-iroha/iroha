@@ -33,6 +33,7 @@ from sorafs_evidence_json import (  # noqa: E402
 from sorafs_evidence_fingerprint import artifact_fingerprint  # noqa: E402
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -82,6 +83,7 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     positive_int_arg,
 )
+from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
 
 
 SUMMARY_SCHEMA = "sorafs.appeal_finance.rollout_evidence_gate.v1"
@@ -307,7 +309,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -655,11 +657,7 @@ def require_config_version(payload: dict[str, Any], errors: list[str]) -> str:
         errors.append(CONFIG_VERSION_ERROR)
         return ""
     name = config_version[: config_version.rfind("-v")]
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_CONFIG_VERSION_MARKERS
-        if marker in name.split("-")
-    )
+    forbidden = forbidden_non_production_markers(name, FORBIDDEN_CONFIG_VERSION_MARKERS)
     if forbidden:
         errors.append(
             f"config_version must not contain non-production markers {forbidden}"
@@ -683,11 +681,7 @@ def require_inventory_label(
     if pattern.fullmatch(value) is None:
         errors.append(label_error)
         return value
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
     return value
@@ -746,7 +740,7 @@ def unique_scalar_inventory_count(
     labels: list[str] = []
     malformed = False
     for item in items:
-        if not isinstance(item, str) or not item or item.strip() != item:
+        if not diagnostic_text_is_canonical(item):
             malformed = True
             continue
         labels.append(item)
@@ -1384,6 +1378,20 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
 def build_summary(
     evidence_dirs: list[Path],
     evidence_files: list[Path],
@@ -1437,7 +1445,7 @@ def build_summary(
         if evidence_artifact_is_valid(artifact):
             digest = evidence_artifact_fingerprint(artifact).get("config_digest_hex")
             if kind_name == "pricing_config" and isinstance(digest, str):
-                valid_config_digests.add(digest.lower())
+                valid_config_digests.add(digest)
             elif kind_name in CONFIG_BOUND_KINDS:
                 valid_config_bound_artifacts.append((kind_name, artifact))
             if kind_name == "dashboard_metrics":
@@ -1447,11 +1455,22 @@ def build_summary(
                 "policy_digest_hex"
             )
             if kind_name == "pricing_config" and isinstance(policy_digest, str):
-                valid_policy_digests.add(policy_digest.lower())
+                valid_policy_digests.add(policy_digest)
             elif kind_name in POLICY_BOUND_KINDS:
                 valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_config_digests = require_single_active_digest(
+        valid_config_digests,
+        errors,
+        label="valid_config_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,

@@ -41,6 +41,21 @@ def write_json(path: Path, payload: dict) -> Path:
     return path
 
 
+def assert_reputation_stderr_is_sanitized(stderr: str, *forbidden: str) -> None:
+    assert "ERROR: SoraFS reputation rollout evidence is incomplete:" in stderr
+    for token in (
+        "Traceback",
+        "FileNotFoundError",
+        "PermissionError",
+        "RuntimeError",
+        "SystemExit",
+        "ValueError",
+    ):
+        assert token not in stderr
+    for value in forbidden:
+        assert value not in stderr
+
+
 def load_production_readiness_module():
     spec = importlib.util.spec_from_file_location(
         "check_sorafs_production_readiness_for_reputation_test",
@@ -207,6 +222,44 @@ EXPLICIT_EVIDENCE_FILES = (
     ("transport", "transport.json"),
     ("consumption", "routing-consumption.json"),
 )
+
+
+def test_schema_less_filename_fallback_accepts_only_reviewed_shapes() -> None:
+    expected = {
+        "publish.json": "publish",
+        "latest.json": "latest",
+        "snapshot.json": "latest",
+        "events.json": "events",
+        "metrics.json": "metrics",
+        "transport.json": "transport",
+        "consumption.json": "consumption",
+        "routing-consumption.json": "consumption",
+        "provider-provider-a.json": "provider",
+        "provider-cli-output.json": "provider",
+        "verify-provider-a.json": "verify",
+    }
+
+    for filename, kind in expected.items():
+        assert MODULE.artifact_kind_from_name(Path(filename)) == kind
+
+
+def test_schema_less_filename_fallback_rejects_alias_shapes() -> None:
+    rejected = (
+        "PROVIDER-provider-a.json",
+        "provider_provider-a.json",
+        "fetch-provider-a.json",
+        "proof-provider-a.json",
+        "proof-replay-provider-a.json",
+        "metrics-extra.json",
+        "event-log.json",
+        "sse-transport.json",
+        "routing.json",
+        "publish-output.json",
+        "latest-output.json",
+    )
+
+    for filename in rejected:
+        assert MODULE.artifact_kind_from_name(Path(filename)) is None
 
 
 def run_gate(root: Path, *extra: str) -> int:
@@ -419,6 +472,38 @@ def test_schema_less_explicit_evidence_advertises_required_schema(tmp_path: Path
         "latest": MODULE.KIND_BY_NAME["latest"].schema,
         "provider": MODULE.KIND_BY_NAME["provider"].schema,
     }
+
+
+def test_schema_less_directory_alias_filename_does_not_satisfy_provider(
+    tmp_path: Path,
+) -> None:
+    payload = provider_evidence()
+    write_json(tmp_path / "PROVIDER-provider-a.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-kind",
+                "provider",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    report = json.loads(summary.read_text(encoding="utf-8"))
+    assert report["status"] == "failed"
+    assert report["recognized_artifacts"] == []
+    provider_row = report["required"]["provider"]
+    assert provider_row["present"] is False
+    assert provider_row["artifact_count"] == 0
+    assert "missing required `provider` evidence" in provider_row["errors"]
 
 
 def test_response_file_arguments_pass(tmp_path: Path) -> None:
@@ -673,6 +758,80 @@ def test_events_sequences_must_not_duplicate(tmp_path: Path) -> None:
     assert "count must match unique events sequence count" in artifact["errors"]
 
 
+def test_events_all_rows_must_match_snapshot_binding(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = events_evidence()
+    payload["events"][0]["merkle_root_hex"] = MERKLE_ROOT_2
+    payload["events"].append(
+        {
+            "version": 1,
+            "sequence": 2,
+            "snapshot_id_hex": SNAPSHOT_ID,
+            "generated_at_unix": GENERATED_AT,
+            "merkle_root_hex": MERKLE_ROOT,
+            "provider_count": 2,
+        }
+    )
+    payload["count"] = 2
+    payload["next_since"] = 2
+    write_json(tmp_path / "events.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["events"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "events[].merkle_root_hex must match first event merkle_root_hex"
+        in artifact["errors"]
+    )
+
+
+def test_events_provider_count_must_match_across_rows(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = events_evidence()
+    payload["events"].append(
+        {
+            "version": 1,
+            "sequence": 2,
+            "snapshot_id_hex": SNAPSHOT_ID,
+            "generated_at_unix": GENERATED_AT,
+            "merkle_root_hex": MERKLE_ROOT,
+            "provider_count": 3,
+        }
+    )
+    payload["count"] = 2
+    payload["next_since"] = 2
+    write_json(tmp_path / "events.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["events"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert (
+        "events[].provider_count must match first event provider_count"
+        in artifact["errors"]
+    )
+
+
+def test_events_rows_must_be_v1(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    summary = tmp_path / "summary.json"
+    payload = events_evidence()
+    payload["events"][0]["version"] = 2
+    write_json(tmp_path / "events.json", payload)
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    artifact = payload["required"]["events"]["artifacts"][0]
+    assert artifact["valid"] is False
+    assert "events[].version must be 1" in artifact["errors"]
+
+
 def test_provider_proof_provider_id_must_match_provider(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -755,7 +914,7 @@ def test_provider_id_non_production_marker_stdout_does_not_echo_provider_id(
         in diagnostics
     )
     assert invalid_provider_id not in diagnostics
-    assert captured.err == ""
+    assert_reputation_stderr_is_sanitized(captured.err, invalid_provider_id)
 
 
 def test_verify_provider_id_rejects_non_production_markers(tmp_path: Path) -> None:
@@ -798,7 +957,7 @@ def test_verify_provider_id_non_production_marker_stdout_does_not_echo_provider_
         in diagnostics
     )
     assert invalid_provider_id not in diagnostics
-    assert captured.err == ""
+    assert_reputation_stderr_is_sanitized(captured.err, invalid_provider_id)
 
 
 def test_provider_id_accepts_future_production_label(tmp_path: Path) -> None:
@@ -848,7 +1007,7 @@ def test_provider_proof_siblings_must_be_unique(tmp_path: Path) -> None:
 def test_invalid_duplicate_artifact_fails_even_with_valid_artifact(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(
-        tmp_path / "latest-stale.json",
+        tmp_path / "snapshot.json",
         snapshot_summary(generated_at=NOW_UNIX - 900_000),
     )
 
@@ -899,7 +1058,7 @@ def test_required_provider_stdout_does_not_echo_provider_id(
     assert "missing provider/proof evidence for required provider" in diagnostics
     assert "missing proof verification evidence for required provider" in diagnostics
     assert provider_id not in diagnostics
-    assert captured.err == ""
+    assert_reputation_stderr_is_sanitized(captured.err, provider_id)
 
 
 def test_required_provider_needs_matching_proof_not_only_verification(
@@ -1497,7 +1656,12 @@ def test_explicit_unknown_schema_stdout_does_not_echo_schema_or_path(
     assert unknown_schema not in load_errors
     assert "unknown.json" not in load_errors
     assert str(path) not in load_errors
-    assert captured.err == ""
+    assert_reputation_stderr_is_sanitized(
+        captured.err,
+        unknown_schema,
+        "unknown.json",
+        str(path),
+    )
 
 
 def test_explicit_untyped_evidence_without_inferred_kind_does_not_echo_path(
@@ -1551,7 +1715,11 @@ def test_explicit_untyped_evidence_stdout_without_inferred_kind_does_not_echo_pa
     assert "cannot infer evidence kind" in load_errors
     assert "opaque.json" not in load_errors
     assert str(path) not in load_errors
-    assert captured.err == ""
+    assert_reputation_stderr_is_sanitized(
+        captured.err,
+        "opaque.json",
+        str(path),
+    )
 
 
 def test_explicit_kind_must_match_recognized_schema(tmp_path: Path) -> None:
@@ -1609,7 +1777,13 @@ def test_explicit_kind_schema_mismatch_stdout_does_not_echo_kind_or_path(
     assert "metrics" not in load_errors
     assert "typed.json" not in load_errors
     assert str(path) not in load_errors
-    assert captured.err == ""
+    assert_reputation_stderr_is_sanitized(
+        captured.err,
+        "transport",
+        "metrics",
+        "typed.json",
+        str(path),
+    )
 
 
 def test_explicit_same_path_conflicting_kinds_fail(tmp_path: Path) -> None:
@@ -1671,7 +1845,13 @@ def test_explicit_conflicting_kinds_stdout_does_not_echo_kind_or_path(
     assert "metrics" not in load_errors
     assert "typed.json" not in load_errors
     assert str(path) not in load_errors
-    assert captured.err == ""
+    assert_reputation_stderr_is_sanitized(
+        captured.err,
+        "transport",
+        "metrics",
+        "typed.json",
+        str(path),
+    )
 
 
 def test_malformed_explicit_evidence_kind_sanitizes_exception_text(
@@ -1718,7 +1898,7 @@ def test_malformed_explicit_evidence_kind_main_summary_sanitizes_exception_text(
     diagnostics = json.dumps(payload, sort_keys=True)
     assert "<non-canonical-error>" in diagnostics
     assert bad_message not in diagnostics
-    assert captured.err == ""
+    assert_reputation_stderr_is_sanitized(captured.err, bad_message)
 
 
 def test_unknown_explicit_evidence_kind_does_not_echo_kind() -> None:
@@ -1730,6 +1910,28 @@ def test_unknown_explicit_evidence_kind_does_not_echo_kind() -> None:
     assert loaded == []
     assert "unknown evidence kind" in diagnostics
     assert unknown_kind not in diagnostics
+
+
+def test_typed_explicit_evidence_rejects_padded_kind_or_path_without_trimming(
+    tmp_path: Path,
+) -> None:
+    path = write_json(tmp_path / "latest.json", snapshot_summary())
+    cases = (
+        f"latest ={path}",
+        f"latest={path} ",
+        f"latest\u200d={path}",
+        f"latest={path}\u202e",
+    )
+
+    for spec in cases:
+        loaded, errors = MODULE.load_evidence([], [spec])
+        diagnostics = "\n".join(errors)
+        escaped_spec = spec.encode("unicode_escape").decode("ascii")
+
+        assert loaded == []
+        assert "evidence spec must use KIND=PATH form" in diagnostics
+        assert spec not in diagnostics
+        assert escaped_spec not in diagnostics
 
 
 def test_unknown_explicit_evidence_kind_main_summary_does_not_echo_kind(
@@ -1754,7 +1956,7 @@ def test_unknown_explicit_evidence_kind_main_summary_does_not_echo_kind(
     diagnostics = json.dumps(payload, sort_keys=True)
     assert "unknown evidence kind" in diagnostics
     assert unknown_kind not in diagnostics
-    assert captured.err == ""
+    assert_reputation_stderr_is_sanitized(captured.err, unknown_kind)
 
 
 def test_typed_explicit_evidence_unsafe_path_fails_before_load_without_leaking(
@@ -1791,10 +1993,7 @@ def test_typed_explicit_evidence_empty_path_fails_before_load_without_leaking(
     assert MODULE.main(["--evidence", "latest=", "--now-unix", str(NOW_UNIX)]) == 2
 
     captured = capsys.readouterr()
-    assert (
-        "SoraFS checker-rendered paths must not contain secret-looking"
-        in captured.err
-    )
+    assert "--evidence must use canonical path or KIND=PATH spec" in captured.err
     assert "latest=" not in captured.err
     assert "unknown evidence kind" not in captured.err
     assert captured.out == ""

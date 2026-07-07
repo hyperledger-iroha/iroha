@@ -26,6 +26,7 @@ from sorafs_response_args import (  # noqa: E402
     non_negative_int_arg,
     positive_int_arg,
 )
+from sorafs_path_identity import diagnostic_text_is_canonical  # noqa: E402
 from sorafs_path_identity import error_diagnostic_label  # noqa: E402
 from sorafs_runner_preflight import (  # noqa: E402
     emit_runner_error_block,
@@ -68,9 +69,13 @@ class CommandPlan:
 
 def split_provider_proof_spec(spec: str) -> tuple[str, Path]:
     provider_id, separator, path = spec.partition("=")
-    provider_id = provider_id.strip()
-    path = path.strip()
-    if not separator or not provider_id or not path:
+    if (
+        not separator
+        or not provider_id
+        or not path
+        or not diagnostic_text_is_canonical(provider_id)
+        or not diagnostic_text_is_canonical(path)
+    ):
         raise ValueError("--provider-proof must use PROVIDER_ID=PATH form")
     return provider_id, Path(path)
 
@@ -84,8 +89,8 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         errors.append("at least one --provider-id is required")
     seen_provider_ids: set[str] = set()
     for provider_id in args.provider_id:
-        if not provider_id.strip():
-            errors.append("--provider-id must be non-empty")
+        if not diagnostic_text_is_canonical(provider_id):
+            errors.append("--provider-id must be canonical")
             continue
         if provider_id in seen_provider_ids:
             errors.append("duplicate --provider-id")

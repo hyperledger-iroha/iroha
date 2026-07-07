@@ -35,15 +35,15 @@ use sorafs_car::{
     por_json::{proof_to_value, sample_to_map},
 };
 use sorafs_manifest::{
-    BLAKE3_256_MULTIHASH_CODE, DagCodecId, GovernanceDagBlockV1, GovernanceDagHeadV1,
-    GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder, ManifestV1,
-    ManualPorChallengeV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
-    PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
-    PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReputationProviderInputV1, ReputationProviderMetricsV1,
-    ReputationReserveStageV1, ReputationSnapshotV1, ReputationWeightsV1, StorageClass,
-    StreamTokenBodyV1, StreamTokenV1, XorAmount, build_reputation_snapshot,
-    validate_governance_dag_head_against_chain_v1,
+    BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceDagBlockV1,
+    GovernanceDagHeadV1, GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder,
+    ManifestV1, ManualPorChallengeV1, POR_CHALLENGE_STATUS_VERSION_V1,
+    POR_WEEKLY_REPORT_VERSION_V1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
+    PorProviderSummaryV1, PorReportIsoWeek, PorSlashingEventV1, PorWeeklyReportV1,
+    REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
+    ReputationSnapshotV1, ReputationWeightsV1, StorageClass, StreamTokenBodyV1, StreamTokenV1,
+    XorAmount, build_reputation_snapshot, validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
 
@@ -172,6 +172,15 @@ fn make_stream_token_b64(
     };
     let bytes = to_bytes(&token).expect("encode stream token");
     BASE64_STANDARD.encode(bytes)
+}
+
+fn council_signed_governance_proofs() -> GovernanceProofs {
+    GovernanceProofs {
+        council_signatures: vec![CouncilSignature {
+            signer: [0x42; 32],
+            signature: vec![0x24; 64],
+        }],
+    }
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
@@ -2209,12 +2218,46 @@ fn fetch_command_streams_payload_via_gateway() {
     let plan_path = tempdir.path().join("plan.json");
     fs::write(&plan_path, plan_json).expect("write plan json");
 
-    let manifest_id_hex = hex_encode([0x42u8; 32]);
     let provider_id_bytes = [0x17u8; 32];
     let provider_id_hex = hex_encode(provider_id_bytes);
+    let writer = CarWriter::new(&plan, &payload).expect("writer");
+    let car_stats = writer.write_to(std::io::sink()).expect("write car stats");
+    let manifest = ManifestBuilder::new()
+        .root_cid(car_stats.root_cids[0].clone())
+        .dag_codec(DagCodecId(car_stats.dag_codec))
+        .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
+        .content_length(plan.content_length)
+        .car_digest(car_stats.car_archive_digest.into())
+        .car_size(car_stats.car_size)
+        .pin_policy(PinPolicy {
+            min_replicas: 1,
+            storage_class: StorageClass::Hot,
+            retention_epoch: 0,
+        })
+        .governance(council_signed_governance_proofs())
+        .build()
+        .expect("manifest");
+    let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
+    let manifest_digest_hex = hex_encode(manifest.digest().expect("manifest digest").as_bytes());
+    let manifest_id_hex = manifest_digest_hex.clone();
+    let manifest_response = format!(
+        "{{\"manifest_id_hex\":\"{}\",\"manifest_b64\":\"{}\",\"manifest_digest_hex\":\"{}\",\"payload_digest_hex\":\"{}\",\"content_length\":{},\"chunk_count\":{},\"chunk_profile_handle\":\"{}\",\"stored_at_unix_secs\":1735000000}}",
+        manifest_id_hex,
+        BASE64_STANDARD.encode(&manifest_bytes),
+        manifest_digest_hex,
+        hex_encode(plan.payload_digest.as_bytes()),
+        plan.content_length,
+        plan.chunks.len(),
+        "sorafs.sf1@1.0.0"
+    );
 
     let chunk_specs = plan.chunk_fetch_specs();
     let server = MockServer::start();
+    let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
+    server.mock(|when, then| {
+        when.method(GET).path(manifest_path.as_str());
+        then.status(200).body(manifest_response.clone());
+    });
     let mut mocks = Vec::with_capacity(chunk_specs.len());
     for spec in &chunk_specs {
         let digest_hex = hex_encode(spec.digest);
@@ -2235,7 +2278,7 @@ fn fetch_command_streams_payload_via_gateway() {
     let signing = SigningKey::from_bytes(&[0xAB; 32]);
     let token_body = StreamTokenBodyV1 {
         token_id: "tok-cli-integration".to_string(),
-        manifest_cid: vec![0x01, 0x55, 0x01],
+        manifest_cid: hex_decode(&manifest_id_hex).expect("decode manifest id"),
         provider_id: provider_id_bytes,
         profile_handle: "sorafs.sf1@1.0.0".to_string(),
         max_streams: 4,
@@ -5654,7 +5697,7 @@ fn fetch_command_streams_gateway_payload() {
             storage_class: StorageClass::Hot,
             retention_epoch: 0,
         })
-        .governance(GovernanceProofs::default())
+        .governance(council_signed_governance_proofs())
         .build()
         .expect("manifest");
     let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
@@ -5680,6 +5723,11 @@ fn fetch_command_streams_gateway_payload() {
         format!("{}\n", manifest_response).as_bytes(),
     )
     .expect("write manifest report");
+    let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
+    server.mock(|when, then| {
+        when.method(GET).path(manifest_path.as_str());
+        then.status(200).body(manifest_response.clone());
+    });
 
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
@@ -5784,7 +5832,7 @@ fn fetch_command_respects_direct_transports() {
             storage_class: StorageClass::Hot,
             retention_epoch: 0,
         })
-        .governance(GovernanceProofs::default())
+        .governance(council_signed_governance_proofs())
         .build()
         .expect("manifest");
     let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
@@ -5810,6 +5858,11 @@ fn fetch_command_respects_direct_transports() {
         format!("{}\n", manifest_response).as_bytes(),
     )
     .expect("write manifest report");
+    let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
+    server.mock(|when, then| {
+        when.method(GET).path(manifest_path.as_str());
+        then.status(200).body(manifest_response.clone());
+    });
 
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
@@ -5914,7 +5967,7 @@ fn fetch_command_applies_policy_override() {
             storage_class: StorageClass::Hot,
             retention_epoch: 0,
         })
-        .governance(GovernanceProofs::default())
+        .governance(council_signed_governance_proofs())
         .build()
         .expect("manifest");
     let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
@@ -5933,6 +5986,11 @@ fn fetch_command_applies_policy_override() {
     );
     let manifest_report_path = tempdir.path().join("gateway_manifest_override.json");
     fs::write(&manifest_report_path, format!("{}\n", manifest_response)).expect("write report");
+    let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
+    server.mock(|when, then| {
+        when.method(GET).path(manifest_path.as_str());
+        then.status(200).body(manifest_response.clone());
+    });
 
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
@@ -6002,7 +6060,7 @@ fn fetch_command_uses_orchestrator_config_json() {
             storage_class: StorageClass::Hot,
             retention_epoch: 0,
         })
-        .governance(GovernanceProofs::default())
+        .governance(council_signed_governance_proofs())
         .build()
         .expect("manifest");
     let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
@@ -6029,6 +6087,11 @@ fn fetch_command_uses_orchestrator_config_json() {
     .expect("write manifest report");
 
     let server = MockServer::start();
+    let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
+    server.mock(|when, then| {
+        when.method(GET).path(manifest_path.as_str());
+        then.status(200).body(manifest_response.clone());
+    });
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -6158,7 +6221,7 @@ fn fetch_command_persists_scoreboard_via_flag() {
             storage_class: StorageClass::Hot,
             retention_epoch: 0,
         })
-        .governance(GovernanceProofs::default())
+        .governance(council_signed_governance_proofs())
         .build()
         .expect("manifest");
     let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
@@ -6182,6 +6245,11 @@ fn fetch_command_persists_scoreboard_via_flag() {
     .expect("write manifest report");
 
     let server = MockServer::start();
+    let manifest_path = format!("/v1/sorafs/storage/manifest/{manifest_id_hex}");
+    server.mock(|when, then| {
+        when.method(GET).path(manifest_path.as_str());
+        then.status(200).body(manifest_response.clone());
+    });
     for spec in plan.chunk_fetch_specs() {
         let path = format!(
             "/v1/sorafs/storage/chunk/{}/{}",
@@ -6333,7 +6401,7 @@ fn fetch_command_writes_local_proxy_manifest() {
             storage_class: StorageClass::Hot,
             retention_epoch: 0,
         })
-        .governance(GovernanceProofs::default())
+        .governance(council_signed_governance_proofs())
         .build()
         .expect("manifest");
     let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");

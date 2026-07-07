@@ -93,7 +93,7 @@ so manifests, CAR tooling, and fixtures stay aligned.
 
 | Artifact | Location | Highlights |
 |----------|----------|------------|
-| Chunker profile & CLI | [`sorafs_chunker`](../../crates/sorafs_chunker/src/lib.rs) · [`export_vectors`](../../crates/sorafs_chunker/src/bin/export_vectors.rs) | `ChunkProfile::DEFAULT` implements the SF-1 parameters, and the CLI regenerates signed fixtures (guarded by council signatures unless `--allow-unsigned` is supplied). |
+| Chunker profile & CLI | [`sorafs_chunker`](../../crates/sorafs_chunker/src/lib.rs) · [`export_vectors`](../../crates/sorafs_chunker/src/bin/export_vectors.rs) | `ChunkProfile::DEFAULT` implements the SF-1 parameters, and the CLI regenerates signed fixtures with mandatory council signatures. |
 | CAR planner & fetch tooling | [`sorafs_car`](../../crates/sorafs_car/src/lib.rs) · [`sorafs_fetch`](../../crates/sorafs_car/src/bin/sorafs_fetch.rs) | `CarBuildPlan`, `CarStreamingWriter`, and `ChunkFetchPlan` emit deterministic chunk metadata and PoR descriptors; the fetch CLI replays manifests across multi-provider inputs, enforcing BLAKE3 digests before reassembly. |
 | Manifest builder & stub CLI | [`sorafs_manifest`](../../crates/sorafs_manifest/src/lib.rs) · [`sorafs_manifest_stub`](../../crates/sorafs_car/src/bin/sorafs_manifest_stub.rs) | `ManifestBuilder` encodes Norito manifests, attaches pin policy and alias claims, and writes governance envelopes; the stub orchestrates end-to-end CAR + manifest generation for CI and release pipelines. |
 | Manifest validator & PoR CLI | [`sorafs_manifest_chunk_store`](../../crates/sorafs_car/src/bin/sorafs_manifest_chunk_store.rs) | Replays CAR payloads through `ChunkStore`, derives PoR trees, and emits manifest reports for QA and governance tooling. |

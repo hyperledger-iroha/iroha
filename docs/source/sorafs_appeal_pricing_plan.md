@@ -576,7 +576,10 @@ duplicate or unknown metric entries before promotion can report ready. The
 summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the dashboard metrics artifact fingerprint before final
-promotion can report ready. Multi-peer
+promotion can report ready. The appeal-finance gate fail-closes when more than
+one valid config or policy anchor appears, and clears the mixed
+`valid_config_digests` or `valid_policy_digests` set before aggregate promotion
+can report ready. Multi-peer
 reconciliation artifacts also bind `peer_count`, `validator_count`, and
 `case_count` to the unique canonical `peers[].name`, `validators[].name`, and
 `cases[].name` inventories, require those names to use reviewed

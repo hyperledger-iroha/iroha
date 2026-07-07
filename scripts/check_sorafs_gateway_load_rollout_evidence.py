@@ -32,6 +32,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     build_required_evidence_summary,
     count_evidence_artifacts,
@@ -359,7 +360,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -405,11 +406,7 @@ def require_staging_metadata_label(
     if pattern.fullmatch(value) is None:
         errors.append(pattern_error)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_STAGING_METADATA_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_STAGING_METADATA_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
         return ""
@@ -623,6 +620,20 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
 def build_summary(
     evidence_dirs: list[Path],
     evidence_files: list[Path],
@@ -678,20 +689,36 @@ def build_summary(
             staging_digest = fingerprint.get("staging_report_digest_hex")
             policy_digest = fingerprint.get("policy_digest_hex")
             if kind_name == "local_conformance" and isinstance(suite_digest, str):
-                valid_suite_report_digests.add(suite_digest.lower())
+                valid_suite_report_digests.add(suite_digest)
             if kind_name == "staging_load":
                 if isinstance(suite_digest, str):
                     suite_bound_artifacts.append((kind_name, artifact))
                 if isinstance(staging_digest, str):
-                    valid_staging_report_digests.add(staging_digest.lower())
+                    valid_staging_report_digests.add(staging_digest)
                 if isinstance(policy_digest, str):
-                    valid_policy_digests.add(policy_digest.lower())
+                    valid_policy_digests.add(policy_digest)
             if kind_name in STAGING_REPORT_BOUND_KINDS:
                 staging_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_suite_report_digests = require_single_active_digest(
+        valid_suite_report_digests,
+        errors,
+        label="valid_suite_report_digests",
+    )
+    valid_staging_report_digests = require_single_active_digest(
+        valid_staging_report_digests,
+        errors,
+        label="valid_staging_report_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,

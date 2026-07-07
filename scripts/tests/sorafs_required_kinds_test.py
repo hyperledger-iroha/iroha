@@ -54,7 +54,13 @@ def test_empty_required_kind_fails() -> None:
 
 
 def test_malformed_required_kind_name_text_fails() -> None:
-    for value in (" feed_collector", "feed_collector ", "feed\ncollector"):
+    for value in (
+        " feed_collector",
+        "feed_collector ",
+        "feed\ncollector",
+        "feed\u200dcollector",
+        "feed\u202ecollector",
+    ):
         try:
             parse_required_kinds(
                 [value],
@@ -138,6 +144,8 @@ def test_malformed_allowed_kind_registry_fails() -> None:
         {"": object()},
         {" feed_collector": object()},
         {"feed_collector\n": object()},
+        {"feed\u200dcollector": object()},
+        {"feed\u202ecollector": object()},
         {7: object()},
     ):
         try:
@@ -160,6 +168,8 @@ def test_malformed_default_required_kinds_fail() -> None:
         (("feed_collector", ""), "must be non-empty canonical strings"),
         (("feed_collector", " billing_cycle"), "must be non-empty canonical strings"),
         (("feed_collector", "billing\ncycle"), "must be non-empty canonical strings"),
+        (("feed_collector", "billing\u200dcycle"), "must be non-empty canonical strings"),
+        (("feed_collector", "billing\u202ecycle"), "must be non-empty canonical strings"),
         (
             ("feed_collector", "default-private-key-placeholder"),
             "unknown default required evidence kind",

@@ -183,6 +183,65 @@ def test_builds_payload_free_notification_transport_canary(tmp_path: Path) -> No
     assert errors == []
 
 
+def test_notification_default_probe_count_covers_shipped_actions(
+    tmp_path: Path,
+) -> None:
+    args = args_for("notification_transport", tmp_path)
+    index = args.index("--probe-count")
+    del args[index : index + 2]
+
+    assert MODULE.main(args) == 0
+
+    payload = json.loads(
+        canary_path(tmp_path, "notification_transport").read_text("utf-8")
+    )
+    assert payload["probe_count"] == len(MODULE.ALLOWED_NOTIFICATION_ACTIONS)
+    assert [probe["action"] for probe in payload["probes"]] == list(
+        MODULE.ALLOWED_NOTIFICATION_ACTIONS
+    )
+
+
+def test_notification_probe_count_must_cover_shipped_actions_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("notification_transport", tmp_path)
+    args[args.index("--probe-count") + 1] = "1"
+
+    assert_rejected_without_artifact(
+        args,
+        kind="notification_transport",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--probe-count must cover both shipped notification actions",
+    )
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    (
+        ("--case-id", "case-\u200d1"),
+        ("--round-id", "round-\u202e1"),
+    ),
+)
+def test_notification_identity_arguments_reject_unicode_controls_before_write(
+    option: str,
+    value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("notification_transport", tmp_path)
+    args.extend([option, value])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "argument must be a non-empty canonical string" in captured.err
+    assert value not in captured.err
+    assert value.encode("unicode_escape").decode("ascii") not in captured.err
+    assert not canary_path(tmp_path, "notification_transport").exists()
+
+
 def test_generated_canaries_pass_full_ai_prescreen_gate(tmp_path: Path) -> None:
     evidence_paths: list[Path] = []
     for kind in MODULE.CANARY_KINDS:
@@ -384,6 +443,31 @@ def test_missing_operator_route_coverage_fails_closed(
     assert not canary_path(tmp_path, "operator_workflow").exists()
 
 
+@pytest.mark.parametrize(
+    "route_value",
+    (
+        f"{MODULE.REQUIRED_OPERATOR_ROUTES[0]}, {MODULE.REQUIRED_OPERATOR_ROUTES[1]}",
+        f"{MODULE.REQUIRED_OPERATOR_ROUTES[0]},,{MODULE.REQUIRED_OPERATOR_ROUTES[1]}",
+    ),
+)
+def test_operator_route_csv_rejects_padded_or_empty_components(
+    route_value: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("operator_workflow", tmp_path)
+    first_route = args.index("--operator-route") + 1
+    args[first_route] = route_value
+
+    assert_rejected_without_artifact(
+        args,
+        kind="operator_workflow",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error="--operator-route contains an unknown value",
+    )
+
+
 def test_operator_workflow_canary_records_passed_route_count(tmp_path: Path) -> None:
     assert MODULE.main(args_for("operator_workflow", tmp_path)) == 0
 
@@ -419,6 +503,82 @@ def test_executor_service_name_must_match_reviewed_service_before_write(
         tmp_path=tmp_path,
         capsys=capsys,
         expected_error="--service-name must match the reviewed executor service",
+    )
+
+
+def test_executor_bundle_dir_rejects_unicode_controls_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    bundle_dir = "/tmp/sorafs-ai-prescreen-executor\u200d"
+    args = args_for("commit_reveal_executor", tmp_path)
+    args.extend(["--bundle-dir", bundle_dir])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "argument must be a non-empty canonical string" in captured.err
+    assert bundle_dir not in captured.err
+    assert bundle_dir.encode("unicode_escape").decode("ascii") not in captured.err
+    assert not canary_path(tmp_path, "commit_reveal_executor").exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "attribute", "value", "expected_error"),
+    (
+        (
+            "notification_transport",
+            "case_id",
+            "case-\u200d1",
+            "--case-id must be a non-empty canonical string",
+        ),
+        (
+            "notification_transport",
+            "round_id",
+            "round-\u202e1",
+            "--round-id must be a non-empty canonical string",
+        ),
+        (
+            "commit_reveal_executor",
+            "bundle_dir",
+            "/tmp/sorafs-ai-prescreen-executor\u200d",
+            "--bundle-dir must be a non-empty canonical string",
+        ),
+    ),
+)
+def test_validate_inputs_rejects_parser_returned_unicode_controls_before_build(
+    kind: str,
+    attribute: str,
+    value: str,
+    expected_error: str,
+    tmp_path: Path,
+) -> None:
+    args = MODULE.parse_args(args_for(kind, tmp_path))
+    setattr(args, attribute, value)
+
+    errors = MODULE.validate_inputs(args)
+
+    assert expected_error in errors
+    assert value not in "\n".join(errors)
+    assert value.encode("unicode_escape").decode("ascii") not in "\n".join(errors)
+    assert not canary_path(tmp_path, kind).exists()
+
+
+def test_executor_action_count_must_match_action_breakdown_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("commit_reveal_executor", tmp_path)
+    args.extend(["--action-count", "2"])
+
+    assert_rejected_without_artifact(
+        args,
+        kind="commit_reveal_executor",
+        tmp_path=tmp_path,
+        capsys=capsys,
+        expected_error=(
+            "--action-count must equal commit, reveal, and tally action counts"
+        ),
     )
 
 
@@ -487,6 +647,44 @@ def test_committee_result_inventory_rejects_placeholder_marker(
     args = args_for("committee", tmp_path)
     first_result = args.index("--committee-result") + 1
     args[first_result] = "ai-prescreen-committee-result-placeholder"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--committee-result[0] must not contain non-production markers "
+        "['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "committee").exists()
+
+
+def test_committee_result_inventory_rejects_compact_placeholder_marker(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("committee", tmp_path)
+    first_result = args.index("--committee-result") + 1
+    args[first_result] = "ai-prescreen-committee-result-placeholderreview"
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert (
+        "--committee-result[0] must not contain non-production markers "
+        "['placeholder']"
+        in captured.err
+    )
+    assert not canary_path(tmp_path, "committee").exists()
+
+
+def test_committee_result_inventory_rejects_sandwiched_compact_placeholder_marker(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("committee", tmp_path)
+    first_result = args.index("--committee-result") + 1
+    args[first_result] = "ai-prescreen-committee-result-prodplaceholderreview"
 
     assert MODULE.main(args) == 2
 
@@ -599,6 +797,44 @@ def test_governance_edge_inventory_rejects_unknown_producer(
 
     captured = capsys.readouterr()
     assert "--governance-edge producer must be a required producer" in captured.err
+    assert not canary_path(tmp_path, "governance_dag").exists()
+
+
+@pytest.mark.parametrize(
+    ("edge_value", "diagnostic"),
+    (
+        (
+            " screening_ingest:ai-prescreen-governance-edge-screening-ingest",
+            "argument must be a non-empty canonical string",
+        ),
+        (
+            "screening_ingest :ai-prescreen-governance-edge-screening-ingest",
+            "--governance-edge[0].producer must be a non-empty canonical string",
+        ),
+        (
+            "screening_ingest: ai-prescreen-governance-edge-screening-ingest",
+            "--governance-edge[0].name must be a non-empty canonical string",
+        ),
+        (
+            "screening_ingest:ai-prescreen-governance-edge-screening-ingest ",
+            "argument must be a non-empty canonical string",
+        ),
+    ),
+)
+def test_governance_edge_inventory_rejects_padded_tuple_components(
+    edge_value: str,
+    diagnostic: str,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("governance_dag", tmp_path)
+    first_edge = args.index("--governance-edge") + 1
+    args[first_edge] = edge_value
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert diagnostic in captured.err
     assert not canary_path(tmp_path, "governance_dag").exists()
 
 
@@ -822,6 +1058,31 @@ def test_url_arguments_reject_encoded_or_secret_bearing_values_without_leaking(
         for leaked_token in leaked_tokens:
             assert leaked_token not in captured.err
         assert not canary_path(case_dir, kind).exists()
+
+
+def test_base_url_arguments_reject_trailing_slash_before_write(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    cases = (
+        ("runner", "--runner-url", "https://runner.example/"),
+        ("committee", "--committee-url", "https://committee.example/"),
+        ("operator_workflow", "--operator-url", "https://operator.example/"),
+    )
+
+    for index, (kind, flag, value) in enumerate(cases):
+        case_dir = tmp_path / f"case-{index}"
+        case_dir.mkdir()
+        args = args_for(kind, case_dir)
+        args[args.index(flag) + 1] = value
+
+        assert_rejected_without_artifact(
+            args,
+            kind=kind,
+            tmp_path=case_dir,
+            capsys=capsys,
+            expected_error=MODULE.CANARY_BASE_URL_ARG_ERROR,
+        )
 
 
 def test_path_arguments_reject_encoded_or_platform_values_without_leaking(

@@ -165,10 +165,12 @@ population.
 
 ### Argon2 Puzzle Service (SNNet-6a)
 
-SNNet-16D the Argon2 path ships enabled-by-default; deployments only fall back to
-hashcash if they explicitly disable the puzzle (`pow.puzzle.enabled = false`). The
-relay verifies the incoming ticket by hashing the client solution against the
-descriptor commitment with Argon2id. Tickets retain the exact same on-wire layout
+SNNet-16D the Argon2 path ships as mandatory first-release admission policy:
+`pow.required` is always true and the puzzle gate remains enabled. Startup
+configuration normalizes to that policy, and live `/v1/config` updates reject
+attempts to disable PoW or clear the puzzle gate. The relay verifies the incoming
+ticket by hashing the client solution against the descriptor commitment with
+Argon2id. Tickets retain the exact same on-wire layout
 (version/difficulty/expiry/nonces) so clients can submit a single frame regardless
 of which policy a relay enforces.
 
@@ -824,7 +826,7 @@ interactive media latency remains minimal.
 ### Torii CLI helpers
 
 - `iroha app sorafs handshake show` fetches `/v1/config` and prints the live descriptor commit, capability vectors, negotiated suite identifiers, resume hash, and PoW admission window. Operators can diff this output against the directory bundle before rotating relays.
-- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. Any combination of flags is accepted, and `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs.
+- `iroha app sorafs handshake update --descriptor-commit <hex> --client-capabilities <hex> --relay-capabilities <hex> --resume-hash <hex> --pow-required --pow-difficulty <u8> ...` submits a partial update via `/v1/config`. The command can rotate descriptors, capabilities, resume hashes, PoW timing/cost parameters, and SM matching back to the mandatory strict policy; it does not expose flags that make PoW optional, disable the Argon2 puzzle, or allow SM/OpenSSL preview mismatches. `--clear-resume-hash` removes the advertisement entirely. The command reuses the existing logger settings so the update remains idempotent with other config knobs.
 
 ## Open Design Items
 

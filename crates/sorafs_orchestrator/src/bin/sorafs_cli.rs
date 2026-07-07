@@ -3855,7 +3855,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
         return Err("provide at least one `--provider` entry".to_string());
     }
 
-    let has_manifest_report = manifest_report_source.is_some();
     let manifest_report = if let Some(source) = manifest_report_source.take() {
         Some(source.read()?)
     } else {
@@ -4135,16 +4134,6 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(budget) = retry_budget {
         fetch_options.per_chunk_retry_limit = Some(budget);
     }
-    // Preserve legacy CLI behaviour for tests and offline flows: unless callers explicitly
-    // request manifest verification inputs, do not require the gateway manifest endpoint.
-    let explicit_manifest_verification = manifest_envelope.is_some()
-        || manifest_cid_hex.is_some()
-        || expected_cache_version.is_some();
-    if has_manifest_report || !explicit_manifest_verification {
-        fetch_options.verify_lengths = false;
-        fetch_options.verify_digests = false;
-    }
-
     if let Some(limit) = max_peers {
         let limit = limit.max(1);
         orchestrator_config.max_providers = std::num::NonZeroUsize::new(limit);

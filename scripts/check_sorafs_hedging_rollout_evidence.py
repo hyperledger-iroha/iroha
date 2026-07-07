@@ -32,6 +32,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -246,7 +247,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -260,9 +261,7 @@ def require_cycle_id(payload: dict[str, Any], errors: list[str]) -> str:
     if CYCLE_ID_PATTERN.fullmatch(cycle_id) is None:
         errors.append(CYCLE_ID_ERROR)
         return ""
-    forbidden = sorted(
-        marker for marker in FORBIDDEN_CYCLE_ID_MARKERS if marker in cycle_id.split("-")
-    )
+    forbidden = forbidden_non_production_markers(cycle_id, FORBIDDEN_CYCLE_ID_MARKERS)
     if forbidden:
         errors.append(f"cycle_id must not contain non-production markers {forbidden}")
         return ""
@@ -284,11 +283,7 @@ def require_inventory_label(
     if pattern.fullmatch(value) is None:
         errors.append(label_error)
         return value
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
     return value
@@ -952,6 +947,33 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
+def require_single_active_binding(
+    bindings: set[Any],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[Any]:
+    """Return one active rollout binding or fail closed on mixed anchors."""
+
+    if len(bindings) <= 1:
+        return bindings
+    errors.append(f"{label} must contain exactly one active binding")
+    return set()
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -961,7 +983,6 @@ def build_summary(
     summary_out: Path | None,
 ) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
-
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_billing_cycles: list[dict[str, Any]] = []
@@ -1012,11 +1033,11 @@ def build_summary(
             valid_billing_cycle_artifacts.append(artifact)
             policy_digest = evidence_artifact_fingerprint(artifact).get("policy_digest_hex")
             if isinstance(policy_digest, str):
-                valid_policy_digests.add(policy_digest.lower())
+                valid_policy_digests.add(policy_digest)
         if kind_name == "reference_price" and artifact_valid:
             decision_id = payload.get("decision_id_hex")
             if isinstance(decision_id, str):
-                valid_reference_decision_ids.add(decision_id.lower())
+                valid_reference_decision_ids.add(decision_id)
         if kind_name == "metrics_alerts" and artifact_valid:
             record_observed_evidence_value(metric_counts, payload.get("metric_count"))
             metric_names.update(hashable_evidence_values(payload.get("metrics")))
@@ -1055,12 +1076,23 @@ def build_summary(
         if evidence_artifact_is_valid(artifact)
     ]
     valid_cycle_bindings = {
-        (statement_bundle.lower(), reconciliation_digest.lower())
+        (statement_bundle, reconciliation_digest)
         for cycle in valid_billing_cycles
         for statement_bundle in [cycle.get("statement_bundle_digest_hex")]
         for reconciliation_digest in [cycle.get("reconciliation_digest_hex")]
         if isinstance(statement_bundle, str) and isinstance(reconciliation_digest, str)
     }
+
+    valid_cycle_bindings = require_single_active_binding(
+        valid_cycle_bindings,
+        errors,
+        label="valid_cycle_bindings",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     if required_evidence_has_any_kind(required_kinds, ("billing_cycle",)):
         distinct_cycle_ids = {

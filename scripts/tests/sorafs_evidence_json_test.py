@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -26,6 +27,30 @@ from sorafs_evidence_json import (  # noqa: E402
     validate_evidence_file_for_read,
 )
 from sorafs_evidence_paths import EVIDENCE_FILE_PARENT_SYMLINK_DIAGNOSTIC  # noqa: E402
+
+
+def rollout_sensitive_keys() -> set[str]:
+    """Return the current SoraFS checker sensitive-key inventory."""
+
+    keys: set[str] = set()
+    checker_paths = sorted(SCRIPTS_DIR.glob("check_sorafs*_rollout_evidence.py")) + [
+        SCRIPTS_DIR / "check_sorafs_production_readiness.py",
+    ]
+    for path in checker_paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(
+                isinstance(target, ast.Name) and target.id == "SENSITIVE_KEYS"
+                for target in node.targets
+            ):
+                continue
+            value = ast.literal_eval(node.value)
+            assert isinstance(value, (set, frozenset))
+            keys.update(value)
+    assert keys
+    return keys
 
 
 def test_load_evidence_json_returns_object(tmp_path: Path) -> None:
@@ -183,7 +208,14 @@ def test_load_evidence_json_with_sha256_or_record_error_rejects_malformed_existi
     evidence = tmp_path / "evidence.json"
     evidence.write_text('{"schema":"test"}', encoding="utf-8")
 
-    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+    for errors in (
+        [""],
+        [" old"],
+        ["old "],
+        ["old\nerror"],
+        ["old\u200derror"],
+        ["old\u202eerror"],
+    ):
         try:
             load_evidence_json_with_sha256_or_record_error(
                 evidence,
@@ -417,6 +449,8 @@ def test_decode_evidence_json_sanitizes_malformed_duplicate_key_label() -> None:
     for raw in (
         b'{"bad\\nkey":1,"bad\\nkey":2}',
         b'{" padded":1," padded":2}',
+        '{"bad\u200dkey":1,"bad\u200dkey":2}'.encode("utf-8"),
+        '{"bad\u202ekey":1,"bad\u202ekey":2}'.encode("utf-8"),
     ):
         try:
             decode_evidence_json(raw)
@@ -426,8 +460,83 @@ def test_decode_evidence_json_sanitizes_malformed_duplicate_key_label() -> None:
                 message
             )
             assert "\n" not in message
+            assert "\u200d" not in message
+            assert "\u202e" not in message
         else:
             raise AssertionError("expected malformed duplicate key to fail")
+
+
+def test_decode_evidence_json_sanitizes_sensitive_duplicate_key_label() -> None:
+    fullwidth_private_key = (
+        "\uff50\uff52\uff49\uff56\uff41\uff54\uff45"
+        "\uff3f\uff4b\uff45\uff59"
+    )
+    for raw, leaked_label in (
+        (b'{"private_key":1,"private_key":2}', "private_key"),
+        (b'{"private%5Fkey":1,"private%5Fkey":2}', "private%5Fkey"),
+        (
+            (
+                '{"\\uff50\\uff52\\uff49\\uff56\\uff41\\uff54\\uff45'
+                '\\uff3f\\uff4b\\uff45\\uff59":1,'
+                '"\\uff50\\uff52\\uff49\\uff56\\uff41\\uff54\\uff45'
+                '\\uff3f\\uff4b\\uff45\\uff59":2}'
+            ).encode("utf-8"),
+            fullwidth_private_key,
+        ),
+        (b'{"payload_body":1,"payload_body":2}', "payload_body"),
+        (
+            b'{"raw_provider_records":1,"raw_provider_records":2}',
+            "raw_provider_records",
+        ),
+    ):
+        try:
+            decode_evidence_json(raw)
+        except ValueError as error:
+            message = str(error)
+            assert "evidence JSON object contains duplicate key `<sensitive-key>`" in (
+                message
+            )
+            assert leaked_label not in message
+        else:
+            raise AssertionError("expected sensitive duplicate key to fail")
+
+
+def test_duplicate_key_sanitizer_covers_rollout_sensitive_key_inventory() -> None:
+    for key in sorted(rollout_sensitive_keys()):
+        encoded_key = json.dumps(key)
+        raw = f"{{{encoded_key}:1,{encoded_key}:2}}".encode("utf-8")
+        try:
+            decode_evidence_json(raw)
+        except ValueError as error:
+            message = str(error)
+            assert "evidence JSON object contains duplicate key `<sensitive-key>`" in (
+                message
+            )
+            assert key not in message
+        else:
+            raise AssertionError(f"expected duplicate sensitive key {key!r} to fail")
+
+
+def test_decode_evidence_json_keeps_payload_free_duplicate_reference_label() -> None:
+    for raw, expected_label in (
+        (
+            b'{"private_key_hash":1,"private_key_hash":2}',
+            "private_key_hash",
+        ),
+        (
+            b'{"route_body_blake3_hex":1,"route_body_blake3_hex":2}',
+            "route_body_blake3_hex",
+        ),
+    ):
+        try:
+            decode_evidence_json(raw)
+        except ValueError as error:
+            assert (
+                f"evidence JSON object contains duplicate key `{expected_label}`"
+                in str(error)
+            )
+        else:
+            raise AssertionError("expected duplicate payload-free key reference to fail")
 
 
 def test_load_evidence_json_with_sha256_or_record_error_records_duplicate_key(
@@ -462,6 +571,27 @@ def test_load_evidence_json_with_sha256_or_record_error_sanitizes_malformed_dupl
         "evidence JSON object contains duplicate key `<non-canonical>`"
     ]
     assert str(evidence) not in errors[0]
+
+
+def test_load_evidence_json_with_sha256_or_record_error_sanitizes_sensitive_duplicate_key(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "duplicate.json"
+    evidence.write_text(
+        '{"private_key":"one","private_key":"two"}',
+        encoding="utf-8",
+    )
+    errors: list[str] = []
+
+    loaded = load_evidence_json_with_sha256_or_record_error(evidence, 1024, errors)
+
+    assert loaded is None
+    assert errors == [
+        f"{EVIDENCE_JSON_LOAD_DIAGNOSTIC}: "
+        "evidence JSON object contains duplicate key `<sensitive-key>`"
+    ]
+    assert str(evidence) not in errors[0]
+    assert "private_key" not in errors[0]
 
 
 def test_load_evidence_json_rejects_non_standard_numeric_constants(

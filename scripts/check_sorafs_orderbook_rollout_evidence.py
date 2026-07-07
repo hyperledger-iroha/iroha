@@ -32,6 +32,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -383,7 +384,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -403,9 +404,7 @@ def require_inventory_label(
     if pattern.fullmatch(value) is None:
         errors.append(label_error.format(path=path))
         return value
-    forbidden = sorted(
-        marker for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
     return value
@@ -879,6 +878,20 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -931,10 +944,10 @@ def build_summary(
             digest = fingerprint.get("contract_digest_hex")
             if kind_name == "contract_surface":
                 if isinstance(digest, str):
-                    valid_contract_digests.add(digest.lower())
+                    valid_contract_digests.add(digest)
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
-                    valid_policy_digests.add(policy_digest.lower())
+                    valid_policy_digests.add(policy_digest)
             if kind_name == "observability":
                 record_observed_evidence_value(metric_counts, payload.get("metric_count"))
                 metric_names.update(hashable_evidence_values(payload.get("metrics")))
@@ -943,6 +956,17 @@ def build_summary(
             if kind_name in POLICY_BOUND_KINDS:
                 valid_policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_contract_digests = require_single_active_digest(
+        valid_contract_digests,
+        errors,
+        label="valid_contract_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,

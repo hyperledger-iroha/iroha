@@ -23,6 +23,7 @@ NOW_UNIX = 1_800_900_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
+DIGEST_3 = "12" * 32
 POLICY_DIGEST = "ef" * 32
 
 
@@ -799,6 +800,40 @@ def test_all_policy_bound_artifacts_reject_feed_promotion_policy_mismatch(
             f"{kind_name} policy_digest_hex must match a valid "
             "feed_promotion policy_digest_hex"
         ) in artifact["errors"]
+
+
+def test_multiple_valid_bundle_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["bundle_digest_hex"] = DIGEST_3
+    write_json(tmp_path / "feed-promotion-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_bundle_digests"] == []
+    assert (
+        "valid_bundle_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = feed_promotion()
+    payload["policy_digest_hex"] = DIGEST_3
+    write_json(tmp_path / "feed-promotion-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
 
 
 def test_moderation_toggle_requires_approved_toggle_count_equality(

@@ -357,14 +357,18 @@ entries before promotion can report ready. Every route response must include a
 `body_blake3_hex` digest before runtime or reporting readiness can report ready.
 Observability artifacts also bind `metric_count` to the unique canonical
 `metrics` inventory, require the reviewed PoR metric set, and reject duplicate
-or unknown metric labels before promotion can report ready. Reporting/archive
-artifacts fingerprint the reviewed `archive_backend` value and
+or unknown metric labels before promotion can report ready.
+Reporting/archive artifacts fingerprint the reviewed `archive_backend` value and
 `governance_archive_handoff_digest_hex`, the summary exports the sorted
 reviewed `metrics` inventory plus `metric_count_values`, `archive_backends`,
 and `valid_governance_archive_handoff_digests`, and the aggregate
 production-readiness gate requires those fields to match the observability and
 reporting/archive artifact fingerprints before final promotion can report
-ready.
+ready. The PoR gate fail-closes when more than one valid seed replay, policy,
+or governance archive handoff anchor appears, and clears the mixed
+`valid_seed_replay_digests`, `valid_policy_digests`, or
+`valid_governance_archive_handoff_digests` set before aggregate promotion can
+report ready.
 Aggregate promotion also rechecks the lane-proven PoR digest relationships:
 seed-replay-bound artifact fingerprints must match `valid_seed_replay_digests`,
 and policy-bound artifact fingerprints must match `valid_policy_digests` before

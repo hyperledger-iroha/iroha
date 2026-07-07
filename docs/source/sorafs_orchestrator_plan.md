@@ -231,6 +231,10 @@ The defaults shipped in `FetchOptions::default()` are normative:
 | `global_parallel_limit` | `None` | Optional hard cap on concurrent requests; defaults to the sum of provider capacities. |
 | `score_policy` | `None` | Deterministic hook that can adjust provider priority or veto eligibility during scheduling. |
 
+`verify_lengths` and `verify_digests` are mandatory in the first release; JSON
+config that sets either field to `false` is rejected before an orchestrator is
+constructed.
+
 Callers may override these fields, but doing so MUST remain deterministic across
 identical inputs.
 

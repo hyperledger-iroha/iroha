@@ -27,6 +27,7 @@ GENERATED_AT = NOW_UNIX - 120
 SUITE_DIGEST = "ab" * 32
 STAGING_DIGEST = "cd" * 32
 POLICY_DIGEST = "ef" * 32
+ALT_DIGEST = "12" * 32
 
 
 def write_json(path: Path, payload: dict) -> Path:
@@ -500,17 +501,32 @@ def test_telemetry_metrics_must_not_duplicate(tmp_path: Path) -> None:
 
 
 def test_telemetry_metrics_must_not_include_unknown_values(tmp_path: Path) -> None:
-    write_complete_evidence(tmp_path)
-    payload = telemetry_slo()
-    payload["metrics"].append("sorafs_gateway_debug_metric")
-    payload["metric_count"] = len(payload["metrics"])
-    write_json(tmp_path / "telemetry-slo.json", payload)
-    summary = tmp_path / "summary.json"
+    allowed_metric = MODULE.REQUIRED_METRICS[0]
+    for index, metric in enumerate(
+        (
+            "sorafs_gateway_debug_metric",
+            f" {allowed_metric}",
+            f"{allowed_metric} ",
+            f"{allowed_metric}\u200d",
+            f"{allowed_metric}\u202e",
+        )
+    ):
+        evidence_dir = tmp_path / f"case-{index}"
+        evidence_dir.mkdir()
+        write_complete_evidence(evidence_dir)
+        payload = telemetry_slo()
+        payload["metrics"].append(metric)
+        payload["metric_count"] = len(payload["metrics"])
+        write_json(evidence_dir / "telemetry-slo.json", payload)
+        summary = evidence_dir / "summary.json"
 
-    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
-    result = json.loads(summary.read_text(encoding="utf-8"))
-    artifact = result["required"]["telemetry_slo"]["artifacts"][0]
-    assert "metrics must not include unknown values" in artifact["errors"]
+        assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        artifact = result["required"]["telemetry_slo"]["artifacts"][0]
+        assert "metrics must not include unknown values" in artifact["errors"]
+        diagnostics = "\n".join(artifact["errors"])
+        assert metric not in diagnostics
+        assert metric.encode("unicode_escape").decode("ascii") not in diagnostics
 
 
 def test_local_conformance_scenario_count_must_match_unique_scenarios(
@@ -861,3 +877,54 @@ def test_all_policy_bound_artifacts_reject_staging_load_policy_mismatch(
             f"{kind_name} policy_digest_hex must reference a valid "
             "staging_load policy_digest_hex"
         ) in artifact["errors"]
+
+
+def test_multiple_valid_suite_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = local_conformance()
+    payload["suite_report_digest_hex"] = ALT_DIGEST
+    write_json(tmp_path / "local-conformance-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_suite_report_digests"] == []
+    assert (
+        "valid_suite_report_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_staging_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["staging_report_digest_hex"] = ALT_DIGEST
+    write_json(tmp_path / "staging-load-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_staging_report_digests"] == []
+    assert (
+        "valid_staging_report_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = staging_load()
+    payload["policy_digest_hex"] = ALT_DIGEST
+    write_json(tmp_path / "staging-load-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )

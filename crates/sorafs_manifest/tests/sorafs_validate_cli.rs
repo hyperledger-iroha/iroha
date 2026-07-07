@@ -1099,6 +1099,35 @@ fn sorafs_validate_governance_rejects_cid_mismatch() {
 }
 
 #[test]
+fn sorafs_validate_governance_rejects_missing_node_cid() {
+    let fixture = workspace_fixture("fixtures/sorafs_manifest/governance/node_v1.to");
+    let output = cargo_bin_cmd!("sorafs-validate")
+        .args([
+            "governance",
+            "--node",
+            fixture.to_str().expect("fixture path is utf-8"),
+            "--generated-at",
+            "123",
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("run sorafs-validate");
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("governance --node requires --cid <node-cid>"),
+        "stderr: {stderr}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "config errors should not emit validation JSON: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 fn sorafs_validate_governance_dag_block_accepts_signed_block() {
     let temp = tempdir().expect("tempdir");
     let block = governance_dag_block(None, 0, 1_700_000_800);

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from sorafs_path_identity import (
+    diagnostic_text_is_canonical,
     error_diagnostic_label,
     path_diagnostic_label,
     resolve_path_identity,
@@ -58,11 +59,7 @@ def _require_error_list(errors: Any) -> list[str]:
     for error in errors:
         if not isinstance(error, str):
             raise ValueError("evidence path errors must be a list of strings")
-        if (
-            not error.strip()
-            or error != error.strip()
-            or any(ord(character) < 32 or ord(character) == 127 for character in error)
-        ):
+        if not diagnostic_text_is_canonical(error):
             raise ValueError(
                 "evidence path errors must contain non-empty canonical strings"
             )
@@ -70,12 +67,7 @@ def _require_error_list(errors: Any) -> list[str]:
 
 
 def _require_label(label: Any) -> str:
-    if (
-        not isinstance(label, str)
-        or not label.strip()
-        or label != label.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in label)
-    ):
+    if not diagnostic_text_is_canonical(label):
         raise ValueError("evidence path label must be a non-empty canonical string")
     return label
 

@@ -7,10 +7,8 @@
 sorafs_cli
 --iroha-bin
 iroha
---iroha-arg
---config
---iroha-arg
-/runtime/client.toml
+--iroha-arg=--config
+--iroha-arg=/runtime/client.toml
 --out-dir
 dist/sorafs-ai-prescreen-rollout-evidence
 --manifest

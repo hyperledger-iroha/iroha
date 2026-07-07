@@ -2,15 +2,18 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque, btree_map::Entry};
 
+use crate::queue::RoutingDecision;
 use iroha_config::parameters::actual::Nexus;
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
+    block::consensus::{
+        CertPhase, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockVoteBodyV1,
+        SumeragiLanePayloadOwnership,
+    },
+    consensus::VALIDATOR_SET_HASH_VERSION_V1,
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayQuorumContext},
     peer::PeerId,
 };
-use norito::codec::Encode;
-
-use crate::queue::RoutingDecision;
 
 /// Return true when proposal assembly should look beyond the remaining block
 /// slots to discover work from other currently routable lanes.
@@ -189,6 +192,8 @@ pub(super) struct LaneBlockSubject {
     pub(super) lane_block_view: u64,
     /// Fetched-batch candidate indices committed by this subject.
     pub(super) accepted_candidate_indices: Vec<usize>,
+    /// Stable transaction hashes committed by this subject in accepted-candidate order.
+    pub(super) accepted_transaction_hashes: Vec<Hash>,
     /// Domain-separated QC mode tag used for lane-local votes.
     pub(super) qc_mode_tag: String,
     /// Stable Norito-backed digest of the subject preimage.
@@ -205,6 +210,8 @@ pub(super) struct LaneBlockTip {
     /// Latest committed lane-local block height. Use zero for a newly created
     /// lane with no committed lane-local block yet.
     pub(super) latest_lane_block_height: u64,
+    /// Descriptor hash of the latest committed lane-local block, when known.
+    pub(super) latest_lane_block_descriptor_hash: Option<Hash>,
 }
 
 /// Lane-local slot coordinates assigned before subject derivation.
@@ -237,15 +244,140 @@ pub(super) struct LanePayloadOwnership {
     pub(super) qc_mode_tag: String,
     /// Fetched-batch candidate indices owned by this lane payload.
     pub(super) accepted_candidate_indices: Vec<usize>,
+    /// Stable transaction hashes owned by this lane payload in accepted-candidate order.
+    pub(super) accepted_transaction_hashes: Vec<Hash>,
     /// Stable digest naming lane-local payload ownership.
     pub(super) payload_ownership_hash: Hash,
     /// Stable digest naming the lane-local RBC instance for this payload.
     pub(super) rbc_instance_hash: Hash,
 }
 
+/// Replayable lane-local block descriptor for standalone lane scheduling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LaneBlockDescriptor {
+    /// Lane whose local block is described.
+    pub(super) lane_id: LaneId,
+    /// Dataspace bound to the lane-local block.
+    pub(super) dataspace_id: DataSpaceId,
+    /// Latest committed lane-local height used as this block's predecessor tip.
+    pub(super) previous_lane_block_height: u64,
+    /// Descriptor hash of the predecessor tip, when the predecessor is known.
+    pub(super) previous_lane_block_descriptor_hash: Option<Hash>,
+    /// Lane-local block height assigned to the descriptor.
+    pub(super) lane_block_height: u64,
+    /// Lane-local view assigned to the descriptor.
+    pub(super) lane_block_view: u64,
+    /// Subject hash signed by lane-local voters.
+    pub(super) subject_hash: Hash,
+    /// Payload ownership hash used for DA/RBC handoff.
+    pub(super) payload_ownership_hash: Hash,
+    /// RBC instance hash used for DA/RBC handoff.
+    pub(super) rbc_instance_hash: Hash,
+    /// Accepted fetched-batch candidate indices in scheduler order.
+    pub(super) accepted_candidate_indices: Vec<usize>,
+    /// Accepted transaction hashes in scheduler order.
+    pub(super) accepted_transaction_hashes: Vec<Hash>,
+    /// Canonical validator order eligible to sign the lane-local block.
+    pub(super) validator_set: Vec<PeerId>,
+    /// Quorum context required for the lane-local block.
+    pub(super) quorum: LaneRelayQuorumContext,
+    /// Domain-separated QC mode tag used for lane-local votes.
+    pub(super) qc_mode_tag: String,
+    /// Stable descriptor digest binding predecessor, work, ownership, committee, and quorum.
+    pub(super) descriptor_hash: Hash,
+}
+
+/// Standalone lane-local block proposal artifact ready for lane voting.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LaneBlockProposal {
+    /// Replayable block descriptor proposed to the lane committee.
+    pub(super) block_descriptor: LaneBlockDescriptor,
+    /// Canonical lane-local vote/DA subject carried by the descriptor.
+    pub(super) subject: LaneBlockSubject,
+    /// DA/RBC ownership identity carried by the descriptor.
+    pub(super) ownership: LanePayloadOwnership,
+    /// Stable proposal digest binding descriptor, subject, ownership, and committee.
+    pub(super) proposal_hash: Hash,
+    /// Canonical public proposal artifact ready for broadcast.
+    pub(super) artifact: LaneBlockProposalV1,
+}
+
+/// Lane-local vote record over a standalone lane block proposal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LaneBlockVote {
+    /// Lane-local QC phase this vote contributes to.
+    pub(super) phase: CertPhase,
+    /// Lane whose proposal is being voted on.
+    pub(super) lane_id: LaneId,
+    /// Dataspace bound to the lane proposal.
+    pub(super) dataspace_id: DataSpaceId,
+    /// Lane-local block height of the proposal.
+    pub(super) lane_block_height: u64,
+    /// Lane-local view of the proposal.
+    pub(super) lane_block_view: u64,
+    /// Proposal digest being signed.
+    pub(super) proposal_hash: Hash,
+    /// Descriptor digest carried by the proposal.
+    pub(super) descriptor_hash: Hash,
+    /// Stable digest of the validator set bound into the descriptor.
+    pub(super) validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Signer index within the descriptor's canonical validator set.
+    pub(super) signer_index: u32,
+    /// Signer peer identity.
+    pub(super) signer: PeerId,
+    /// Canonical body to be signed by the lane validator.
+    pub(super) body: LaneBlockVoteBodyV1,
+    /// Common digest to sign for this lane proposal and phase.
+    ///
+    /// This intentionally excludes signer-local transport fields so every
+    /// validator signs the same message and later BLS aggregation remains
+    /// possible.
+    pub(super) signing_hash: Hash,
+}
+
+/// Quorum-ready collection of lane-local votes for one proposal phase.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LaneBlockVotePlan {
+    /// Lane-local QC phase being assembled.
+    pub(super) phase: CertPhase,
+    /// Proposal digest certified by the vote set.
+    pub(super) proposal_hash: Hash,
+    /// Descriptor digest certified by the vote set.
+    pub(super) descriptor_hash: Hash,
+    /// Stable digest of the descriptor validator set.
+    pub(super) validator_set_hash: HashOf<Vec<PeerId>>,
+    /// Minimum distinct signer count required for quorum.
+    pub(super) min_quorum: u32,
+    /// Votes sorted by descriptor signer index.
+    pub(super) votes: Vec<LaneBlockVote>,
+}
+
+/// One lane-local block payload descriptor for standalone lane scheduling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct LanePayloadPlanEntry {
+    /// Consensus domain, committee, and accepted work for this lane block.
+    pub(super) domain: LaneConsensusDomain,
+    /// Latest committed tip used to assign the next lane-local slot.
+    pub(super) tip: LaneBlockTip,
+    /// Next lane-local height/view selected for this lane block.
+    pub(super) slot: LaneBlockSlot,
+    /// Canonical lane-local vote/DA subject.
+    pub(super) subject: LaneBlockSubject,
+    /// DA/RBC ownership identity derived from the subject.
+    pub(super) ownership: LanePayloadOwnership,
+    /// Stable transaction hashes owned by this lane payload in accepted-candidate order.
+    pub(super) accepted_transaction_hashes: Vec<Hash>,
+    /// Replayable standalone lane-local block descriptor.
+    pub(super) block_descriptor: LaneBlockDescriptor,
+    /// Standalone lane-local block proposal artifact.
+    pub(super) lane_block_proposal: LaneBlockProposal,
+}
+
 /// Full deterministic lane payload plan derived for accepted proposal work.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct LanePayloadPlan {
+    /// Per-lane payload descriptors, sorted by lane id.
+    pub(super) entries: Vec<LanePayloadPlanEntry>,
     /// Latest lane tips selected for accepted work after reset filtering.
     pub(super) lane_tips: Vec<LaneBlockTip>,
     /// Next lane-local block slots derived from the selected tips.
@@ -254,6 +386,14 @@ pub(super) struct LanePayloadPlan {
     pub(super) subjects: Vec<LaneBlockSubject>,
     /// DA/RBC ownership identities for the selected subjects.
     pub(super) ownerships: Vec<LanePayloadOwnership>,
+    /// Standalone lane block proposals derived from the entries.
+    pub(super) lane_block_proposals: Vec<LaneBlockProposal>,
+    /// Canonical public proposal artifacts ready for per-lane broadcast.
+    pub(super) lane_block_proposal_artifacts: Vec<LaneBlockProposalV1>,
+    /// Full-committee prepare vote templates for each standalone lane proposal.
+    pub(super) lane_block_prepare_vote_plans: Vec<LaneBlockVotePlan>,
+    /// Full-committee commit vote templates for each standalone lane proposal.
+    pub(super) lane_block_commit_vote_plans: Vec<LaneBlockVotePlan>,
 }
 
 /// Error returned when lane-local slots cannot be derived from lane tips.
@@ -312,6 +452,13 @@ pub(super) enum LaneBlockTipPlanError {
         expected: DataSpaceId,
         /// Dataspace declared by the known tip.
         actual: DataSpaceId,
+    },
+    /// Two known tips at the same lane-local height carry different descriptor hashes.
+    ConflictingLaneTipDescriptorHash {
+        /// Lane being planned.
+        lane_id: LaneId,
+        /// Conflicting lane-local tip height.
+        latest_lane_block_height: u64,
     },
 }
 
@@ -380,6 +527,15 @@ pub(super) enum LaneBlockSubjectError {
         /// Candidate index that could not be represented as `u64`.
         index: usize,
     },
+    /// Accepted candidate index does not have a matching transaction hash.
+    CandidateHashIndexOutOfBounds {
+        /// Lane being planned.
+        lane_id: LaneId,
+        /// Referenced accepted candidate index.
+        index: usize,
+        /// Number of transaction hashes supplied for the fetched candidate batch.
+        candidate_hashes: usize,
+    },
     /// Canonical subject preimage encoding failed.
     Encode,
 }
@@ -410,6 +566,15 @@ pub(super) enum LanePayloadOwnershipError {
         lane_id: LaneId,
         /// Candidate index that could not be represented as `u64`.
         index: usize,
+    },
+    /// Candidate index and transaction-hash lists have different lengths.
+    CandidateHashCountMismatch {
+        /// Lane being planned.
+        lane_id: LaneId,
+        /// Number of candidate indices carried by the subject.
+        candidate_indices: usize,
+        /// Number of transaction hashes carried by the subject.
+        candidate_hashes: usize,
     },
     /// Block subject digest does not match its canonical preimage.
     SubjectHashMismatch {
@@ -456,6 +621,103 @@ pub(super) enum LanePayloadPlanError {
     Subjects(LaneBlockSubjectError),
     /// DA/RBC ownership identities could not be derived from the subjects.
     Ownerships(LanePayloadOwnershipError),
+    /// Planner stages produced mismatched per-lane descriptors.
+    InconsistentEntry {
+        /// Lane whose descriptor could not be assembled consistently.
+        lane_id: LaneId,
+    },
+    /// Accepted candidate index does not have a matching transaction hash.
+    CandidateHashIndexOutOfBounds {
+        /// Lane whose accepted work references a missing hash.
+        lane_id: LaneId,
+        /// Referenced accepted candidate index.
+        index: usize,
+        /// Number of transaction hashes supplied for the fetched candidate batch.
+        candidate_hashes: usize,
+    },
+    /// Lane-local vote templates could not be derived from a proposal artifact.
+    VotePlans(LaneBlockVotePlanError),
+}
+
+/// Error returned when lane-local votes cannot be planned safely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LaneBlockVotePlanError {
+    /// Lane proposal votes only certify prepare or commit phases.
+    InvalidPhase {
+        /// Rejected certificate phase.
+        phase: CertPhase,
+    },
+    /// Proposal fields do not agree with the embedded descriptor, subject, or ownership.
+    InconsistentProposal {
+        /// Lane whose proposal is internally inconsistent.
+        lane_id: LaneId,
+    },
+    /// Descriptor validator set is empty.
+    EmptyValidatorSet {
+        /// Lane whose descriptor has no validators.
+        lane_id: LaneId,
+    },
+    /// Descriptor validator set is not sorted canonically.
+    ValidatorSetNotCanonical {
+        /// Lane whose descriptor has a non-canonical validator set.
+        lane_id: LaneId,
+    },
+    /// Descriptor validator set contains a duplicate peer.
+    DuplicateValidator {
+        /// Lane whose descriptor repeats a validator.
+        lane_id: LaneId,
+    },
+    /// Descriptor validator count does not fit the relay quorum format.
+    ValidatorCountOverflow {
+        /// Lane whose validator set is too large.
+        lane_id: LaneId,
+    },
+    /// Descriptor quorum does not match the validator set.
+    InvalidQuorum {
+        /// Lane with the invalid quorum.
+        lane_id: LaneId,
+        /// Number of validators in the descriptor set.
+        validator_count: u32,
+        /// Required quorum threshold.
+        min_quorum: u32,
+    },
+    /// Descriptor hash does not match the embedded descriptor fields.
+    DescriptorHashMismatch {
+        /// Lane whose descriptor hash mismatched.
+        lane_id: LaneId,
+        /// Digest recomputed from the descriptor fields.
+        expected: Hash,
+        /// Digest carried by the descriptor.
+        actual: Hash,
+    },
+    /// Proposal hash does not match the embedded proposal fields.
+    ProposalHashMismatch {
+        /// Lane whose proposal hash mismatched.
+        lane_id: LaneId,
+        /// Digest recomputed from the proposal fields.
+        expected: Hash,
+        /// Digest carried by the proposal.
+        actual: Hash,
+    },
+    /// Signer is not a member of the descriptor validator set.
+    SignerNotInCommittee {
+        /// Lane whose committee rejected the signer.
+        lane_id: LaneId,
+    },
+    /// A signer was supplied more than once for the same proposal phase.
+    DuplicateSigner {
+        /// Lane whose vote set repeated a signer.
+        lane_id: LaneId,
+    },
+    /// Distinct signer count is below the descriptor quorum.
+    InsufficientVoteQuorum {
+        /// Lane whose vote set is below quorum.
+        lane_id: LaneId,
+        /// Distinct votes observed.
+        observed: u32,
+        /// Required quorum threshold.
+        min_quorum: u32,
+    },
 }
 
 /// Error returned when a lane-local consensus domain cannot be derived safely.
@@ -701,40 +963,13 @@ struct LaneAcceptedWork {
     candidate_indices: Vec<usize>,
 }
 
-#[derive(Clone, Debug, Encode)]
-struct LaneBlockSubjectPreimage {
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
+#[derive(Clone, Debug)]
+struct LaneBlockProposalVoteContext {
     candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct LanePayloadOwnershipPreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct LaneRbcInstancePreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    payload_ownership_hash: Hash,
+    candidate_hashes: Vec<Hash>,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_count: u32,
+    min_quorum: u32,
 }
 
 /// Derive lane-local vote/QC domains for accepted work in a scheduled batch.
@@ -884,14 +1119,42 @@ pub(super) fn plan_latest_lane_block_tips_with_reset_heights(
             });
         }
         let floor_height = reset_height.unwrap_or(0);
+        let latest_lane_block_height = tip.latest_lane_block_height.max(floor_height);
+        let latest_lane_block_descriptor_hash = if latest_lane_block_height
+            == tip.latest_lane_block_height
+            && reset_height.is_none_or(|height| tip.latest_lane_block_height > height)
+        {
+            tip.latest_lane_block_descriptor_hash
+        } else {
+            None
+        };
         let floored_tip = LaneBlockTip {
-            latest_lane_block_height: tip.latest_lane_block_height.max(floor_height),
+            latest_lane_block_height,
+            latest_lane_block_descriptor_hash,
             ..*tip
         };
         match latest_by_lane.entry(tip.lane_id) {
             Entry::Occupied(mut entry) => {
                 if floored_tip.latest_lane_block_height > entry.get().latest_lane_block_height {
                     entry.insert(floored_tip);
+                } else if floored_tip.latest_lane_block_height
+                    == entry.get().latest_lane_block_height
+                {
+                    match (
+                        entry.get().latest_lane_block_descriptor_hash,
+                        floored_tip.latest_lane_block_descriptor_hash,
+                    ) {
+                        (Some(existing), Some(incoming)) if existing != incoming => {
+                            return Err(LaneBlockTipPlanError::ConflictingLaneTipDescriptorHash {
+                                lane_id: tip.lane_id,
+                                latest_lane_block_height: floored_tip.latest_lane_block_height,
+                            });
+                        }
+                        (None, Some(_)) => {
+                            entry.insert(floored_tip);
+                        }
+                        _ => {}
+                    }
                 }
             }
             Entry::Vacant(entry) => {
@@ -912,6 +1175,7 @@ pub(super) fn plan_latest_lane_block_tips_with_reset_heights(
                     lane_id,
                     dataspace_id: domain.dataspace_id,
                     latest_lane_block_height: baseline,
+                    latest_lane_block_descriptor_hash: None,
                 })
         })
         .collect())
@@ -995,6 +1259,7 @@ pub(super) fn plan_next_lane_block_slots(
 #[cfg(test)]
 fn plan_lane_block_subjects(
     domains: &[LaneConsensusDomain],
+    candidate_hashes: &[Hash],
     lane_block_height: u64,
     lane_block_view: u64,
 ) -> Result<Vec<LaneBlockSubject>, LaneBlockSubjectError> {
@@ -1015,7 +1280,7 @@ fn plan_lane_block_subjects(
             lane_block_view,
         })
         .collect::<Vec<_>>();
-    plan_lane_block_subjects_for_slots(domains, &slots)
+    plan_lane_block_subjects_for_slots(domains, candidate_hashes, &slots)
 }
 
 /// Derive deterministic lane block subjects from explicit lane-local slots.
@@ -1027,6 +1292,7 @@ fn plan_lane_block_subjects(
 /// compatibility path.
 pub(super) fn plan_lane_block_subjects_for_slots(
     domains: &[LaneConsensusDomain],
+    candidate_hashes: &[Hash],
     slots: &[LaneBlockSlot],
 ) -> Result<Vec<LaneBlockSubject>, LaneBlockSubjectError> {
     let mut slots_by_lane = BTreeMap::new();
@@ -1079,6 +1345,8 @@ pub(super) fn plan_lane_block_subjects_for_slots(
 
         let mut seen_indices = BTreeSet::new();
         let mut candidate_indices = Vec::with_capacity(domain.accepted_candidate_indices.len());
+        let mut accepted_transaction_hashes =
+            Vec::with_capacity(domain.accepted_candidate_indices.len());
         for index in domain.accepted_candidate_indices.iter().copied() {
             if !seen_indices.insert(index) {
                 return Err(LaneBlockSubjectError::DuplicateCandidateIndex {
@@ -1092,25 +1360,33 @@ pub(super) fn plan_lane_block_subjects_for_slots(
                     index,
                 }
             })?);
+            let hash = candidate_hashes.get(index).copied().ok_or(
+                LaneBlockSubjectError::CandidateHashIndexOutOfBounds {
+                    lane_id: domain.lane_id,
+                    index,
+                    candidate_hashes: candidate_hashes.len(),
+                },
+            )?;
+            accepted_transaction_hashes.push(hash);
         }
 
-        let preimage = LaneBlockSubjectPreimage {
-            version: 1,
-            lane_id: domain.lane_id,
-            dataspace_id: domain.dataspace_id,
-            lane_block_height: slot.lane_block_height,
-            lane_block_view: slot.lane_block_view,
-            candidate_indices,
-            qc_mode_tag: domain.qc_mode_tag.clone(),
-        };
-        let subject_hash =
-            Hash::new(norito::to_bytes(&preimage).map_err(|_| LaneBlockSubjectError::Encode)?);
+        let subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
+            domain.lane_id,
+            domain.dataspace_id,
+            slot.lane_block_height,
+            slot.lane_block_view,
+            &candidate_indices,
+            &accepted_transaction_hashes,
+            &domain.qc_mode_tag,
+        )
+        .map_err(|_| LaneBlockSubjectError::Encode)?;
         subjects.push(LaneBlockSubject {
             lane_id: domain.lane_id,
             dataspace_id: domain.dataspace_id,
             lane_block_height: slot.lane_block_height,
             lane_block_view: slot.lane_block_view,
             accepted_candidate_indices: domain.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes,
             qc_mode_tag: domain.qc_mode_tag.clone(),
             subject_hash,
         });
@@ -1162,6 +1438,13 @@ pub(super) fn plan_lane_payload_ownership(
                 lane_id: subject.lane_id,
             });
         }
+        if subject.accepted_candidate_indices.len() != subject.accepted_transaction_hashes.len() {
+            return Err(LanePayloadOwnershipError::CandidateHashCountMismatch {
+                lane_id: subject.lane_id,
+                candidate_indices: subject.accepted_candidate_indices.len(),
+                candidate_hashes: subject.accepted_transaction_hashes.len(),
+            });
+        }
 
         let mut seen_indices = BTreeSet::new();
         let mut candidate_indices = Vec::with_capacity(subject.accepted_candidate_indices.len());
@@ -1180,18 +1463,16 @@ pub(super) fn plan_lane_payload_ownership(
             })?);
         }
 
-        let expected_subject_hash = Hash::new(
-            norito::to_bytes(&LaneBlockSubjectPreimage {
-                version: 1,
-                lane_id: subject.lane_id,
-                dataspace_id: subject.dataspace_id,
-                lane_block_height: subject.lane_block_height,
-                lane_block_view: subject.lane_block_view,
-                candidate_indices: candidate_indices.clone(),
-                qc_mode_tag: subject.qc_mode_tag.clone(),
-            })
-            .map_err(|_| LanePayloadOwnershipError::Encode)?,
-        );
+        let expected_subject_hash = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
+            subject.lane_id,
+            subject.dataspace_id,
+            subject.lane_block_height,
+            subject.lane_block_view,
+            &candidate_indices,
+            &subject.accepted_transaction_hashes,
+            &subject.qc_mode_tag,
+        )
+        .map_err(|_| LanePayloadOwnershipError::Encode)?;
         if expected_subject_hash != subject.subject_hash {
             return Err(LanePayloadOwnershipError::SubjectHashMismatch {
                 lane_id: subject.lane_id,
@@ -1215,39 +1496,33 @@ pub(super) fn plan_lane_payload_ownership(
             });
         }
 
-        let payload_ownership_hash = Hash::new(
-            norito::to_bytes(&LanePayloadOwnershipPreimage {
-                purpose: "nexus:lane-payload-ownership:v1".to_string(),
-                version: 1,
-                lane_id: subject.lane_id,
-                dataspace_id: subject.dataspace_id,
-                lane_block_height: subject.lane_block_height,
-                lane_block_view: subject.lane_block_view,
-                subject_hash: subject.subject_hash,
-                candidate_indices,
-                qc_mode_tag: subject.qc_mode_tag.clone(),
-            })
-            .map_err(|_| LanePayloadOwnershipError::Encode)?,
-        );
+        let payload_ownership_hash =
+            SumeragiLanePayloadOwnership::compute_replay_payload_ownership_hash(
+                subject.lane_id,
+                subject.dataspace_id,
+                subject.lane_block_height,
+                subject.lane_block_view,
+                subject.subject_hash,
+                &candidate_indices,
+                &subject.accepted_transaction_hashes,
+                &subject.qc_mode_tag,
+            )
+            .map_err(|_| LanePayloadOwnershipError::Encode)?;
         if !seen_payload_ownership_hashes.insert(payload_ownership_hash) {
             return Err(LanePayloadOwnershipError::DuplicatePayloadOwnershipHash {
                 payload_ownership_hash,
             });
         }
 
-        let rbc_instance_hash = Hash::new(
-            norito::to_bytes(&LaneRbcInstancePreimage {
-                purpose: "nexus:lane-rbc-instance:v1".to_string(),
-                version: 1,
-                lane_id: subject.lane_id,
-                dataspace_id: subject.dataspace_id,
-                lane_block_height: subject.lane_block_height,
-                lane_block_view: subject.lane_block_view,
-                subject_hash: subject.subject_hash,
-                payload_ownership_hash,
-            })
-            .map_err(|_| LanePayloadOwnershipError::Encode)?,
-        );
+        let rbc_instance_hash = SumeragiLanePayloadOwnership::compute_replay_rbc_instance_hash(
+            subject.lane_id,
+            subject.dataspace_id,
+            subject.lane_block_height,
+            subject.lane_block_view,
+            subject.subject_hash,
+            payload_ownership_hash,
+        )
+        .map_err(|_| LanePayloadOwnershipError::Encode)?;
         if !seen_rbc_instance_hashes.insert(rbc_instance_hash) {
             return Err(LanePayloadOwnershipError::DuplicateRbcInstanceHash { rbc_instance_hash });
         }
@@ -1260,6 +1535,7 @@ pub(super) fn plan_lane_payload_ownership(
             subject_hash: subject.subject_hash,
             qc_mode_tag: subject.qc_mode_tag.clone(),
             accepted_candidate_indices: subject.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: subject.accepted_transaction_hashes.clone(),
             payload_ownership_hash,
             rbc_instance_hash,
         });
@@ -1286,6 +1562,7 @@ pub(super) fn plan_lane_payload_ownership(
 pub(super) fn plan_lane_payload(
     domains: &[LaneConsensusDomain],
     known_tips: &[LaneBlockTip],
+    candidate_hashes: &[Hash],
     compatibility_latest_lane_block_height: u64,
     reset_heights: &BTreeMap<LaneId, u64>,
     lane_block_view: u64,
@@ -1299,17 +1576,528 @@ pub(super) fn plan_lane_payload(
     .map_err(LanePayloadPlanError::Tips)?;
     let slots = plan_next_lane_block_slots(domains, &lane_tips, lane_block_view)
         .map_err(LanePayloadPlanError::Slots)?;
-    let subjects = plan_lane_block_subjects_for_slots(domains, &slots)
+    let subjects = plan_lane_block_subjects_for_slots(domains, candidate_hashes, &slots)
         .map_err(LanePayloadPlanError::Subjects)?;
     let ownerships =
         plan_lane_payload_ownership(&subjects).map_err(LanePayloadPlanError::Ownerships)?;
+    let entries = build_lane_payload_plan_entries(
+        domains,
+        &lane_tips,
+        &slots,
+        &subjects,
+        &ownerships,
+        candidate_hashes,
+    )?;
+    let lane_block_proposals = entries
+        .iter()
+        .map(|entry| entry.lane_block_proposal.clone())
+        .collect();
+    let lane_block_proposal_artifacts = entries
+        .iter()
+        .map(|entry| entry.lane_block_proposal.artifact.clone())
+        .collect();
+    let lane_block_prepare_vote_plans = entries
+        .iter()
+        .map(|entry| {
+            plan_lane_block_vote_quorum(
+                &entry.lane_block_proposal,
+                CertPhase::Prepare,
+                &entry.block_descriptor.validator_set,
+            )
+            .map_err(LanePayloadPlanError::VotePlans)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let lane_block_commit_vote_plans = entries
+        .iter()
+        .map(|entry| {
+            plan_lane_block_vote_quorum(
+                &entry.lane_block_proposal,
+                CertPhase::Commit,
+                &entry.block_descriptor.validator_set,
+            )
+            .map_err(LanePayloadPlanError::VotePlans)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(LanePayloadPlan {
+        entries,
         lane_tips,
         slots,
         subjects,
         ownerships,
+        lane_block_proposals,
+        lane_block_proposal_artifacts,
+        lane_block_prepare_vote_plans,
+        lane_block_commit_vote_plans,
     })
+}
+
+fn build_lane_payload_plan_entries(
+    domains: &[LaneConsensusDomain],
+    lane_tips: &[LaneBlockTip],
+    slots: &[LaneBlockSlot],
+    subjects: &[LaneBlockSubject],
+    ownerships: &[LanePayloadOwnership],
+    candidate_hashes: &[Hash],
+) -> Result<Vec<LanePayloadPlanEntry>, LanePayloadPlanError> {
+    let tips_by_lane = lane_tips
+        .iter()
+        .map(|tip| (tip.lane_id, tip))
+        .collect::<BTreeMap<_, _>>();
+    let slots_by_lane = slots
+        .iter()
+        .map(|slot| (slot.lane_id, slot))
+        .collect::<BTreeMap<_, _>>();
+    let subjects_by_lane = subjects
+        .iter()
+        .map(|subject| (subject.lane_id, subject))
+        .collect::<BTreeMap<_, _>>();
+    let ownerships_by_lane = ownerships
+        .iter()
+        .map(|ownership| (ownership.lane_id, ownership))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut entries = Vec::with_capacity(domains.len());
+    for domain in domains {
+        let tip = tips_by_lane.get(&domain.lane_id).copied().ok_or(
+            LanePayloadPlanError::InconsistentEntry {
+                lane_id: domain.lane_id,
+            },
+        )?;
+        let slot = slots_by_lane.get(&domain.lane_id).copied().ok_or(
+            LanePayloadPlanError::InconsistentEntry {
+                lane_id: domain.lane_id,
+            },
+        )?;
+        let subject = subjects_by_lane.get(&domain.lane_id).copied().ok_or(
+            LanePayloadPlanError::InconsistentEntry {
+                lane_id: domain.lane_id,
+            },
+        )?;
+        let ownership = ownerships_by_lane.get(&domain.lane_id).copied().ok_or(
+            LanePayloadPlanError::InconsistentEntry {
+                lane_id: domain.lane_id,
+            },
+        )?;
+
+        let expected_next_height = tip.latest_lane_block_height.checked_add(1).ok_or(
+            LanePayloadPlanError::InconsistentEntry {
+                lane_id: domain.lane_id,
+            },
+        )?;
+        let accepted_transaction_hashes = domain
+            .accepted_candidate_indices
+            .iter()
+            .map(|index| {
+                candidate_hashes.get(*index).copied().ok_or(
+                    LanePayloadPlanError::CandidateHashIndexOutOfBounds {
+                        lane_id: domain.lane_id,
+                        index: *index,
+                        candidate_hashes: candidate_hashes.len(),
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let is_consistent = tip.dataspace_id == domain.dataspace_id
+            && slot.dataspace_id == domain.dataspace_id
+            && slot.lane_block_height == expected_next_height
+            && subject.dataspace_id == domain.dataspace_id
+            && subject.lane_block_height == slot.lane_block_height
+            && subject.lane_block_view == slot.lane_block_view
+            && subject.accepted_candidate_indices == domain.accepted_candidate_indices
+            && subject.accepted_transaction_hashes == accepted_transaction_hashes
+            && subject.qc_mode_tag == domain.qc_mode_tag
+            && ownership.dataspace_id == subject.dataspace_id
+            && ownership.lane_block_height == subject.lane_block_height
+            && ownership.lane_block_view == subject.lane_block_view
+            && ownership.subject_hash == subject.subject_hash
+            && ownership.qc_mode_tag == subject.qc_mode_tag
+            && ownership.accepted_candidate_indices == subject.accepted_candidate_indices
+            && ownership.accepted_transaction_hashes == subject.accepted_transaction_hashes;
+        if !is_consistent {
+            return Err(LanePayloadPlanError::InconsistentEntry {
+                lane_id: domain.lane_id,
+            });
+        }
+        for index in domain.accepted_candidate_indices.iter().copied() {
+            u64::try_from(index).map_err(|_| LanePayloadPlanError::InconsistentEntry {
+                lane_id: domain.lane_id,
+            })?;
+        }
+        let mut block_descriptor = LaneBlockDescriptor {
+            lane_id: domain.lane_id,
+            dataspace_id: domain.dataspace_id,
+            previous_lane_block_height: tip.latest_lane_block_height,
+            previous_lane_block_descriptor_hash: tip.latest_lane_block_descriptor_hash,
+            lane_block_height: slot.lane_block_height,
+            lane_block_view: slot.lane_block_view,
+            subject_hash: subject.subject_hash,
+            payload_ownership_hash: ownership.payload_ownership_hash,
+            rbc_instance_hash: ownership.rbc_instance_hash,
+            accepted_candidate_indices: domain.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: accepted_transaction_hashes.clone(),
+            validator_set: domain.validator_set.clone(),
+            quorum: domain.quorum,
+            qc_mode_tag: domain.qc_mode_tag.clone(),
+            descriptor_hash: Hash::prehashed([0_u8; Hash::LENGTH]),
+        };
+        block_descriptor.descriptor_hash =
+            lane_block_descriptor_artifact(&block_descriptor).computed_descriptor_hash();
+        let lane_block_proposal =
+            build_lane_block_proposal(domain.lane_id, &block_descriptor, subject, ownership)?;
+
+        entries.push(LanePayloadPlanEntry {
+            domain: domain.clone(),
+            tip: *tip,
+            slot: *slot,
+            subject: (*subject).clone(),
+            ownership: (*ownership).clone(),
+            accepted_transaction_hashes,
+            block_descriptor,
+            lane_block_proposal,
+        });
+    }
+
+    entries.sort_by_key(|entry| entry.domain.lane_id);
+    Ok(entries)
+}
+
+fn build_lane_block_proposal(
+    lane_id: LaneId,
+    block_descriptor: &LaneBlockDescriptor,
+    subject: &LaneBlockSubject,
+    ownership: &LanePayloadOwnership,
+) -> Result<LaneBlockProposal, LanePayloadPlanError> {
+    let descriptor_candidate_hashes = block_descriptor
+        .accepted_transaction_hashes
+        .iter()
+        .copied()
+        .collect::<Vec<_>>();
+    for index in block_descriptor.accepted_candidate_indices.iter().copied() {
+        u64::try_from(index).map_err(|_| LanePayloadPlanError::InconsistentEntry { lane_id })?;
+    }
+    let is_consistent = block_descriptor.lane_id == subject.lane_id
+        && block_descriptor.dataspace_id == subject.dataspace_id
+        && block_descriptor.lane_block_height == subject.lane_block_height
+        && block_descriptor.lane_block_view == subject.lane_block_view
+        && block_descriptor.subject_hash == subject.subject_hash
+        && block_descriptor.payload_ownership_hash == ownership.payload_ownership_hash
+        && block_descriptor.rbc_instance_hash == ownership.rbc_instance_hash
+        && block_descriptor.accepted_candidate_indices == subject.accepted_candidate_indices
+        && block_descriptor.accepted_candidate_indices == ownership.accepted_candidate_indices
+        && descriptor_candidate_hashes == subject.accepted_transaction_hashes
+        && descriptor_candidate_hashes == ownership.accepted_transaction_hashes
+        && block_descriptor.qc_mode_tag == subject.qc_mode_tag
+        && block_descriptor.qc_mode_tag == ownership.qc_mode_tag
+        && ownership.lane_id == subject.lane_id
+        && ownership.dataspace_id == subject.dataspace_id
+        && ownership.lane_block_height == subject.lane_block_height
+        && ownership.lane_block_view == subject.lane_block_view
+        && ownership.subject_hash == subject.subject_hash;
+    if !is_consistent {
+        return Err(LanePayloadPlanError::InconsistentEntry { lane_id });
+    }
+
+    let artifact_descriptor = lane_block_descriptor_artifact(block_descriptor);
+    let mut artifact = LaneBlockProposalV1 {
+        descriptor: artifact_descriptor,
+        proposal_hash: Hash::prehashed([0_u8; Hash::LENGTH]),
+    };
+    let proposal_hash = artifact.computed_proposal_hash();
+    artifact.proposal_hash = proposal_hash;
+
+    Ok(LaneBlockProposal {
+        block_descriptor: block_descriptor.clone(),
+        subject: subject.clone(),
+        ownership: ownership.clone(),
+        proposal_hash,
+        artifact,
+    })
+}
+
+fn lane_block_descriptor_artifact(descriptor: &LaneBlockDescriptor) -> LaneBlockDescriptorV1 {
+    let accepted_candidate_indices = descriptor
+        .accepted_candidate_indices
+        .iter()
+        .copied()
+        .map(|index| u64::try_from(index).expect("descriptor candidate index already checked"))
+        .collect::<Vec<_>>();
+    LaneBlockDescriptorV1 {
+        lane_id: descriptor.lane_id,
+        dataspace_id: descriptor.dataspace_id,
+        previous_lane_block_height: descriptor.previous_lane_block_height,
+        previous_lane_block_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+        lane_block_height: descriptor.lane_block_height,
+        lane_block_view: descriptor.lane_block_view,
+        subject_hash: descriptor.subject_hash,
+        payload_ownership_hash: descriptor.payload_ownership_hash,
+        rbc_instance_hash: descriptor.rbc_instance_hash,
+        accepted_candidate_indices,
+        accepted_transaction_hashes: descriptor.accepted_transaction_hashes.clone(),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&descriptor.validator_set),
+        validator_set: descriptor.validator_set.clone(),
+        validator_count: descriptor.quorum.validator_count,
+        min_quorum: descriptor.quorum.min_quorum,
+        qc_mode_tag: descriptor.qc_mode_tag.clone(),
+        descriptor_hash: descriptor.descriptor_hash,
+    }
+}
+
+/// Build a single lane-local vote for a standalone proposal and signer.
+pub(super) fn plan_lane_block_vote(
+    proposal: &LaneBlockProposal,
+    phase: CertPhase,
+    signer: &PeerId,
+) -> Result<LaneBlockVote, LaneBlockVotePlanError> {
+    let (mut votes, _) =
+        plan_lane_block_votes_with_context(proposal, phase, std::slice::from_ref(signer))?;
+    votes
+        .pop()
+        .ok_or(LaneBlockVotePlanError::SignerNotInCommittee {
+            lane_id: proposal.block_descriptor.lane_id,
+        })
+}
+
+/// Build deterministic lane-local votes for the supplied signers.
+///
+/// Returned votes are sorted by descriptor signer index. The signable digest is
+/// common across all returned votes for a given proposal and phase.
+pub(super) fn plan_lane_block_votes(
+    proposal: &LaneBlockProposal,
+    phase: CertPhase,
+    signers: &[PeerId],
+) -> Result<Vec<LaneBlockVote>, LaneBlockVotePlanError> {
+    if let [signer] = signers {
+        return plan_lane_block_vote(proposal, phase, signer).map(|vote| vec![vote]);
+    }
+    let (votes, _) = plan_lane_block_votes_with_context(proposal, phase, signers)?;
+    Ok(votes)
+}
+
+/// Build a quorum-ready lane-local vote plan for a proposal phase.
+pub(super) fn plan_lane_block_vote_quorum(
+    proposal: &LaneBlockProposal,
+    phase: CertPhase,
+    signers: &[PeerId],
+) -> Result<LaneBlockVotePlan, LaneBlockVotePlanError> {
+    let votes = plan_lane_block_votes(proposal, phase, signers)?;
+    let context = validate_lane_block_proposal_for_vote(proposal)?;
+    let observed = u32::try_from(votes.len()).unwrap_or(context.validator_count);
+    if observed < context.min_quorum {
+        return Err(LaneBlockVotePlanError::InsufficientVoteQuorum {
+            lane_id: proposal.block_descriptor.lane_id,
+            observed,
+            min_quorum: context.min_quorum,
+        });
+    }
+
+    Ok(LaneBlockVotePlan {
+        phase,
+        proposal_hash: proposal.proposal_hash,
+        descriptor_hash: proposal.block_descriptor.descriptor_hash,
+        validator_set_hash: context.validator_set_hash,
+        min_quorum: context.min_quorum,
+        votes,
+    })
+}
+
+fn plan_lane_block_votes_with_context(
+    proposal: &LaneBlockProposal,
+    phase: CertPhase,
+    signers: &[PeerId],
+) -> Result<(Vec<LaneBlockVote>, LaneBlockProposalVoteContext), LaneBlockVotePlanError> {
+    validate_lane_block_vote_phase(phase)?;
+    let context = validate_lane_block_proposal_for_vote(proposal)?;
+    let body = lane_block_vote_body(proposal, phase, &context);
+    let signing_hash = Hash::new(body.signature_preimage());
+    let mut seen_signers = BTreeSet::new();
+    let mut votes = Vec::with_capacity(signers.len());
+
+    for signer in signers {
+        if !seen_signers.insert(signer) {
+            return Err(LaneBlockVotePlanError::DuplicateSigner {
+                lane_id: proposal.block_descriptor.lane_id,
+            });
+        }
+        let signer_index = proposal
+            .block_descriptor
+            .validator_set
+            .iter()
+            .position(|validator| validator == signer)
+            .ok_or(LaneBlockVotePlanError::SignerNotInCommittee {
+                lane_id: proposal.block_descriptor.lane_id,
+            })
+            .and_then(|index| {
+                u32::try_from(index).map_err(|_| LaneBlockVotePlanError::ValidatorCountOverflow {
+                    lane_id: proposal.block_descriptor.lane_id,
+                })
+            })?;
+        votes.push(LaneBlockVote {
+            phase,
+            lane_id: proposal.block_descriptor.lane_id,
+            dataspace_id: proposal.block_descriptor.dataspace_id,
+            lane_block_height: proposal.block_descriptor.lane_block_height,
+            lane_block_view: proposal.block_descriptor.lane_block_view,
+            proposal_hash: proposal.proposal_hash,
+            descriptor_hash: proposal.block_descriptor.descriptor_hash,
+            validator_set_hash: context.validator_set_hash,
+            signer_index,
+            signer: signer.clone(),
+            body: body.clone(),
+            signing_hash,
+        });
+    }
+
+    votes.sort_by_key(|vote| vote.signer_index);
+    Ok((votes, context))
+}
+
+fn validate_lane_block_vote_phase(phase: CertPhase) -> Result<(), LaneBlockVotePlanError> {
+    match phase {
+        CertPhase::Prepare | CertPhase::Commit => Ok(()),
+        CertPhase::NewView => Err(LaneBlockVotePlanError::InvalidPhase { phase }),
+    }
+}
+
+fn validate_lane_block_proposal_for_vote(
+    proposal: &LaneBlockProposal,
+) -> Result<LaneBlockProposalVoteContext, LaneBlockVotePlanError> {
+    let descriptor = &proposal.block_descriptor;
+    let lane_id = descriptor.lane_id;
+    let descriptor_candidate_hashes = descriptor
+        .accepted_transaction_hashes
+        .iter()
+        .copied()
+        .map(Hash::from)
+        .collect::<Vec<_>>();
+    let candidate_indices = descriptor
+        .accepted_candidate_indices
+        .iter()
+        .copied()
+        .map(|index| {
+            u64::try_from(index)
+                .map_err(|_| LaneBlockVotePlanError::InconsistentProposal { lane_id })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let is_consistent = descriptor.lane_id == proposal.subject.lane_id
+        && descriptor.dataspace_id == proposal.subject.dataspace_id
+        && descriptor.lane_block_height == proposal.subject.lane_block_height
+        && descriptor.lane_block_view == proposal.subject.lane_block_view
+        && descriptor.subject_hash == proposal.subject.subject_hash
+        && descriptor.payload_ownership_hash == proposal.ownership.payload_ownership_hash
+        && descriptor.rbc_instance_hash == proposal.ownership.rbc_instance_hash
+        && descriptor.accepted_candidate_indices == proposal.subject.accepted_candidate_indices
+        && descriptor.accepted_candidate_indices == proposal.ownership.accepted_candidate_indices
+        && descriptor_candidate_hashes == proposal.subject.accepted_transaction_hashes
+        && descriptor_candidate_hashes == proposal.ownership.accepted_transaction_hashes
+        && descriptor.qc_mode_tag == proposal.subject.qc_mode_tag
+        && descriptor.qc_mode_tag == proposal.ownership.qc_mode_tag
+        && proposal.ownership.lane_id == proposal.subject.lane_id
+        && proposal.ownership.dataspace_id == proposal.subject.dataspace_id
+        && proposal.ownership.lane_block_height == proposal.subject.lane_block_height
+        && proposal.ownership.lane_block_view == proposal.subject.lane_block_view
+        && proposal.ownership.subject_hash == proposal.subject.subject_hash;
+    if !is_consistent {
+        return Err(LaneBlockVotePlanError::InconsistentProposal { lane_id });
+    }
+
+    if descriptor.validator_set.is_empty() {
+        return Err(LaneBlockVotePlanError::EmptyValidatorSet { lane_id });
+    }
+    let validator_count = u32::try_from(descriptor.validator_set.len())
+        .map_err(|_| LaneBlockVotePlanError::ValidatorCountOverflow { lane_id })?;
+    let mut canonical_validator_set = descriptor.validator_set.clone();
+    canonical_validator_set.sort();
+    if canonical_validator_set != descriptor.validator_set {
+        return Err(LaneBlockVotePlanError::ValidatorSetNotCanonical { lane_id });
+    }
+    for pair in canonical_validator_set.windows(2) {
+        if pair[0] == pair[1] {
+            return Err(LaneBlockVotePlanError::DuplicateValidator { lane_id });
+        }
+    }
+    if descriptor.quorum.validator_count != validator_count
+        || descriptor.quorum.min_quorum == 0
+        || descriptor.quorum.min_quorum > validator_count
+    {
+        return Err(LaneBlockVotePlanError::InvalidQuorum {
+            lane_id,
+            validator_count,
+            min_quorum: descriptor.quorum.min_quorum,
+        });
+    }
+
+    let expected_descriptor_hash =
+        lane_block_descriptor_artifact(descriptor).computed_descriptor_hash();
+    if expected_descriptor_hash != descriptor.descriptor_hash {
+        return Err(LaneBlockVotePlanError::DescriptorHashMismatch {
+            lane_id,
+            expected: expected_descriptor_hash,
+            actual: descriptor.descriptor_hash,
+        });
+    }
+    let expected_artifact_descriptor = lane_block_descriptor_artifact(descriptor);
+    if proposal.artifact.descriptor != expected_artifact_descriptor {
+        return Err(LaneBlockVotePlanError::InconsistentProposal { lane_id });
+    }
+    let artifact_descriptor_hash = proposal.artifact.descriptor.computed_descriptor_hash();
+    if artifact_descriptor_hash != descriptor.descriptor_hash {
+        return Err(LaneBlockVotePlanError::DescriptorHashMismatch {
+            lane_id,
+            expected: artifact_descriptor_hash,
+            actual: descriptor.descriptor_hash,
+        });
+    }
+
+    let expected_proposal_hash = proposal.artifact.computed_proposal_hash();
+    if expected_proposal_hash != proposal.proposal_hash {
+        return Err(LaneBlockVotePlanError::ProposalHashMismatch {
+            lane_id,
+            expected: expected_proposal_hash,
+            actual: proposal.proposal_hash,
+        });
+    }
+    if proposal.artifact.proposal_hash != proposal.proposal_hash {
+        return Err(LaneBlockVotePlanError::ProposalHashMismatch {
+            lane_id,
+            expected: proposal.proposal_hash,
+            actual: proposal.artifact.proposal_hash,
+        });
+    }
+    let artifact_proposal_hash = proposal.artifact.computed_proposal_hash();
+    if artifact_proposal_hash != proposal.proposal_hash {
+        return Err(LaneBlockVotePlanError::ProposalHashMismatch {
+            lane_id,
+            expected: artifact_proposal_hash,
+            actual: proposal.proposal_hash,
+        });
+    }
+
+    let validator_set_hash = HashOf::new(&descriptor.validator_set);
+
+    Ok(LaneBlockProposalVoteContext {
+        candidate_indices,
+        candidate_hashes: descriptor_candidate_hashes,
+        validator_set_hash,
+        validator_count,
+        min_quorum: descriptor.quorum.min_quorum,
+    })
+}
+
+fn lane_block_vote_body(
+    proposal: &LaneBlockProposal,
+    phase: CertPhase,
+    context: &LaneBlockProposalVoteContext,
+) -> LaneBlockVoteBodyV1 {
+    let body = proposal.artifact.vote_body(phase);
+    debug_assert_eq!(body.accepted_candidate_indices, context.candidate_indices);
+    debug_assert_eq!(body.accepted_transaction_hashes, context.candidate_hashes);
+    debug_assert_eq!(body.validator_set_hash, context.validator_set_hash);
+    debug_assert_eq!(body.validator_count, context.validator_count);
+    debug_assert_eq!(body.min_quorum, context.min_quorum);
+    body
 }
 
 fn accepted_work_by_lane(
@@ -1496,9 +2284,12 @@ mod tests {
         LaneConfig as ActualLaneConfig, LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule,
     };
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::nexus::{
-        AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
-        LaneCatalog, LaneConfig, LaneId,
+    use iroha_data_model::{
+        block::consensus::SumeragiLanePayloadOwnership,
+        nexus::{
+            AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, DataSpaceCatalog, DataSpaceId,
+            LaneCatalog, LaneConfig, LaneId,
+        },
     };
 
     use super::*;
@@ -1627,6 +2418,39 @@ mod tests {
         PeerId::new(key_pair.public_key().clone())
     }
 
+    fn tx_hash(seed: u8) -> Hash {
+        Hash::prehashed([seed; Hash::LENGTH])
+    }
+
+    fn tx_hashes(count: usize) -> Vec<Hash> {
+        (0..count)
+            .map(|index| tx_hash(u8::try_from(index + 1).expect("test hash seed fits u8")))
+            .collect()
+    }
+
+    fn lane_tip(lane: u32, dataspace: u64, latest_lane_block_height: u64) -> LaneBlockTip {
+        LaneBlockTip {
+            lane_id: LaneId::new(lane),
+            dataspace_id: DataSpaceId::new(dataspace),
+            latest_lane_block_height,
+            latest_lane_block_descriptor_hash: None,
+        }
+    }
+
+    fn lane_tip_with_descriptor(
+        lane: u32,
+        dataspace: u64,
+        latest_lane_block_height: u64,
+        descriptor_seed: u8,
+    ) -> LaneBlockTip {
+        LaneBlockTip {
+            latest_lane_block_descriptor_hash: Some(Hash::prehashed(
+                [descriptor_seed; Hash::LENGTH],
+            )),
+            ..lane_tip(lane, dataspace, latest_lane_block_height)
+        }
+    }
+
     fn committee(
         lane: u32,
         dataspace: u64,
@@ -1639,6 +2463,30 @@ mod tests {
             validators,
             min_quorum,
         }
+    }
+
+    fn lane_block_proposal_with_committee(
+        validators: Vec<PeerId>,
+        min_quorum: Option<u32>,
+    ) -> LaneBlockProposal {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(1, 11, validators, min_quorum)],
+            "permissioned",
+        )
+        .expect("lane consensus domain");
+        let plan = plan_lane_payload(
+            &domains,
+            &[lane_tip_with_descriptor(1, 11, 3, 0xA7)],
+            &[tx_hash(0xC7)],
+            3,
+            &BTreeMap::new(),
+            2,
+        )
+        .expect("lane payload plan");
+        plan.entries[0].lane_block_proposal.clone()
     }
 
     #[test]
@@ -2314,7 +3162,8 @@ mod tests {
         )
         .expect("lane consensus domains");
 
-        let subjects = plan_lane_block_subjects(&domains, 42, 7).expect("lane block subjects");
+        let subjects =
+            plan_lane_block_subjects(&domains, &tx_hashes(4), 42, 7).expect("lane block subjects");
 
         assert_eq!(subjects.len(), 2);
         assert_eq!(subjects[0].lane_id, LaneId::new(1));
@@ -2331,20 +3180,20 @@ mod tests {
             )
         );
 
-        let view_drift =
-            plan_lane_block_subjects(&domains, 42, 8).expect("lane block subjects with view drift");
+        let view_drift = plan_lane_block_subjects(&domains, &tx_hashes(4), 42, 8)
+            .expect("lane block subjects with view drift");
         assert_ne!(subjects[0].subject_hash, view_drift[0].subject_hash);
 
         let mut reordered_work = domains.clone();
         reordered_work[0].accepted_candidate_indices.reverse();
-        let reordered_subjects =
-            plan_lane_block_subjects(&reordered_work, 42, 7).expect("reordered subjects");
+        let reordered_subjects = plan_lane_block_subjects(&reordered_work, &tx_hashes(4), 42, 7)
+            .expect("reordered subjects");
         assert_ne!(subjects[0].subject_hash, reordered_subjects[0].subject_hash);
 
         let mut mode_drift = domains.clone();
         mode_drift[0].qc_mode_tag.push_str("::tampered");
-        let mode_drift_subjects =
-            plan_lane_block_subjects(&mode_drift, 42, 7).expect("mode drift subjects");
+        let mode_drift_subjects = plan_lane_block_subjects(&mode_drift, &tx_hashes(4), 42, 7)
+            .expect("mode drift subjects");
         assert_ne!(
             subjects[0].subject_hash,
             mode_drift_subjects[0].subject_hash
@@ -2368,9 +3217,10 @@ mod tests {
         let mut reversed_domains = domains.clone();
         reversed_domains.reverse();
 
-        let subjects = plan_lane_block_subjects(&domains, 3, 4).expect("lane block subjects");
-        let reversed_subjects =
-            plan_lane_block_subjects(&reversed_domains, 3, 4).expect("reversed subjects");
+        let subjects =
+            plan_lane_block_subjects(&domains, &tx_hashes(2), 3, 4).expect("lane block subjects");
+        let reversed_subjects = plan_lane_block_subjects(&reversed_domains, &tx_hashes(2), 3, 4)
+            .expect("reversed subjects");
 
         assert_eq!(
             subjects
@@ -2420,8 +3270,8 @@ mod tests {
             },
         ];
 
-        let subjects =
-            plan_lane_block_subjects_for_slots(&domains, &slots).expect("slotted subjects");
+        let subjects = plan_lane_block_subjects_for_slots(&domains, &tx_hashes(4), &slots)
+            .expect("slotted subjects");
 
         assert_eq!(subjects.len(), 2);
         assert_eq!(subjects[0].lane_id, LaneId::new(1));
@@ -2431,8 +3281,8 @@ mod tests {
         assert_eq!(subjects[1].lane_block_height, 4);
         assert_eq!(subjects[1].lane_block_view, 8);
 
-        let global_subjects =
-            plan_lane_block_subjects(&domains, 10, 1).expect("global compatibility subjects");
+        let global_subjects = plan_lane_block_subjects(&domains, &tx_hashes(4), 10, 1)
+            .expect("global compatibility subjects");
         assert_eq!(subjects[0].subject_hash, global_subjects[0].subject_hash);
         assert_ne!(subjects[1].subject_hash, global_subjects[1].subject_hash);
     }
@@ -2451,23 +3301,7 @@ mod tests {
             "permissioned",
         )
         .expect("lane consensus domains");
-        let lane_tips = vec![
-            LaneBlockTip {
-                lane_id: LaneId::new(2),
-                dataspace_id: DataSpaceId::new(22),
-                latest_lane_block_height: 3,
-            },
-            LaneBlockTip {
-                lane_id: LaneId::new(7),
-                dataspace_id: DataSpaceId::new(77),
-                latest_lane_block_height: 31,
-            },
-            LaneBlockTip {
-                lane_id: LaneId::new(1),
-                dataspace_id: DataSpaceId::new(11),
-                latest_lane_block_height: 9,
-            },
-        ];
+        let lane_tips = vec![lane_tip(2, 22, 3), lane_tip(7, 77, 31), lane_tip(1, 11, 9)];
 
         let slots =
             plan_next_lane_block_slots(&domains, &lane_tips, 5).expect("next lane block slots");
@@ -2491,8 +3325,8 @@ mod tests {
             "slot planning must ignore idle lane tips and sort active slots deterministically"
         );
 
-        let subjects =
-            plan_lane_block_subjects_for_slots(&domains, &slots).expect("slotted subjects");
+        let subjects = plan_lane_block_subjects_for_slots(&domains, &tx_hashes(4), &slots)
+            .expect("slotted subjects");
         assert_eq!(subjects[0].lane_block_height, 10);
         assert_eq!(subjects[1].lane_block_height, 4);
         assert_ne!(
@@ -2513,16 +3347,9 @@ mod tests {
                 "permissioned",
             ),
         };
-        let new_lane_slots = plan_next_lane_block_slots(
-            &[new_lane_domain],
-            &[LaneBlockTip {
-                lane_id: LaneId::new(8),
-                dataspace_id: DataSpaceId::new(88),
-                latest_lane_block_height: 0,
-            }],
-            0,
-        )
-        .expect("new lane first slot");
+        let new_lane_slots =
+            plan_next_lane_block_slots(&[new_lane_domain], &[lane_tip(8, 88, 0)], 0)
+                .expect("new lane first slot");
         assert_eq!(new_lane_slots[0].lane_block_height, 1);
     }
 
@@ -2540,21 +3367,18 @@ mod tests {
             "permissioned",
         )
         .expect("lane consensus domains");
-        let known_tips = vec![
-            LaneBlockTip {
-                lane_id: LaneId::new(2),
-                dataspace_id: DataSpaceId::new(22),
-                latest_lane_block_height: 0,
-            },
-            LaneBlockTip {
-                lane_id: LaneId::new(1),
-                dataspace_id: DataSpaceId::new(11),
-                latest_lane_block_height: 7,
-            },
-        ];
+        let known_tips = vec![lane_tip(2, 22, 0), lane_tip_with_descriptor(1, 11, 7, 0x71)];
+        let candidate_hashes = vec![tx_hash(0xA0), tx_hash(0xA1), tx_hash(0xA2)];
 
-        let plan =
-            plan_lane_payload(&domains, &known_tips, 99, &BTreeMap::new(), 5).expect("lane plan");
+        let plan = plan_lane_payload(
+            &domains,
+            &known_tips,
+            &candidate_hashes,
+            99,
+            &BTreeMap::new(),
+            5,
+        )
+        .expect("lane plan");
 
         assert_eq!(
             plan.lane_tips,
@@ -2563,11 +3387,13 @@ mod tests {
                     lane_id: LaneId::new(1),
                     dataspace_id: DataSpaceId::new(11),
                     latest_lane_block_height: 7,
+                    latest_lane_block_descriptor_hash: Some(Hash::prehashed([0x71; Hash::LENGTH])),
                 },
                 LaneBlockTip {
                     lane_id: LaneId::new(2),
                     dataspace_id: DataSpaceId::new(22),
                     latest_lane_block_height: 0,
+                    latest_lane_block_descriptor_hash: None,
                 },
             ]
         );
@@ -2617,12 +3443,634 @@ mod tests {
             ]
         );
         assert_eq!(
+            plan.entries
+                .iter()
+                .map(|entry| (
+                    entry.domain.lane_id,
+                    entry.tip.latest_lane_block_height,
+                    entry.slot.lane_block_height,
+                    entry.subject.subject_hash,
+                    entry.ownership.subject_hash,
+                    entry.accepted_transaction_hashes.clone(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    LaneId::new(1),
+                    7,
+                    8,
+                    plan.subjects[0].subject_hash,
+                    plan.ownerships[0].subject_hash,
+                    vec![candidate_hashes[2], candidate_hashes[0]],
+                ),
+                (
+                    LaneId::new(2),
+                    0,
+                    1,
+                    plan.subjects[1].subject_hash,
+                    plan.ownerships[1].subject_hash,
+                    vec![candidate_hashes[1]],
+                ),
+            ],
+            "standalone lane descriptors must group matching tip, slot, subject, ownership, and transaction hashes"
+        );
+        assert_eq!(
+            plan.lane_block_proposals,
+            plan.entries
+                .iter()
+                .map(|entry| entry.lane_block_proposal.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            plan.lane_block_proposal_artifacts,
+            plan.entries
+                .iter()
+                .map(|entry| entry.lane_block_proposal.artifact.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(plan.lane_block_prepare_vote_plans.len(), plan.entries.len());
+        assert_eq!(plan.lane_block_commit_vote_plans.len(), plan.entries.len());
+        assert_eq!(
+            plan.entries[0].domain.validator_set,
+            domains[0].validator_set
+        );
+        assert_eq!(plan.entries[0].subject, plan.subjects[0]);
+        assert_eq!(plan.entries[0].ownership, plan.ownerships[0]);
+        let first_descriptor = &plan.entries[0].block_descriptor;
+        assert_eq!(first_descriptor.lane_id, LaneId::new(1));
+        assert_eq!(first_descriptor.dataspace_id, DataSpaceId::new(11));
+        assert_eq!(first_descriptor.previous_lane_block_height, 7);
+        assert_eq!(
+            first_descriptor.previous_lane_block_descriptor_hash,
+            Some(Hash::prehashed([0x71; Hash::LENGTH]))
+        );
+        assert_eq!(first_descriptor.lane_block_height, 8);
+        assert_eq!(first_descriptor.lane_block_view, 5);
+        assert_eq!(first_descriptor.subject_hash, plan.subjects[0].subject_hash);
+        assert_eq!(
+            first_descriptor.payload_ownership_hash,
+            plan.ownerships[0].payload_ownership_hash
+        );
+        assert_eq!(
+            first_descriptor.rbc_instance_hash,
+            plan.ownerships[0].rbc_instance_hash
+        );
+        assert_eq!(first_descriptor.accepted_candidate_indices, vec![2, 0]);
+        assert_eq!(
+            first_descriptor.accepted_transaction_hashes,
+            vec![candidate_hashes[2], candidate_hashes[0]]
+        );
+        assert_eq!(first_descriptor.validator_set, domains[0].validator_set);
+        assert_eq!(first_descriptor.quorum, domains[0].quorum);
+        assert_eq!(first_descriptor.qc_mode_tag, domains[0].qc_mode_tag);
+        let first_proposal = &plan.entries[0].lane_block_proposal;
+        assert_eq!(&first_proposal.block_descriptor, first_descriptor);
+        assert_eq!(first_proposal.subject, plan.subjects[0]);
+        assert_eq!(first_proposal.ownership, plan.ownerships[0]);
+        assert_eq!(
+            first_proposal.artifact.descriptor.descriptor_hash,
+            first_descriptor.descriptor_hash
+        );
+        assert_eq!(
+            first_proposal.artifact.computed_proposal_hash(),
+            first_proposal.proposal_hash
+        );
+        assert_ne!(
+            first_proposal.proposal_hash,
+            first_descriptor.descriptor_hash
+        );
+        assert_ne!(first_proposal.proposal_hash, first_descriptor.subject_hash);
+        assert_ne!(
+            first_descriptor.descriptor_hash,
+            first_descriptor.subject_hash
+        );
+        let first_prepare_votes = &plan.lane_block_prepare_vote_plans[0];
+        let first_commit_votes = &plan.lane_block_commit_vote_plans[0];
+        assert_eq!(first_prepare_votes.phase, CertPhase::Prepare);
+        assert_eq!(first_commit_votes.phase, CertPhase::Commit);
+        assert_eq!(
+            first_prepare_votes.proposal_hash,
+            first_proposal.proposal_hash
+        );
+        assert_eq!(
+            first_commit_votes.proposal_hash,
+            first_proposal.proposal_hash
+        );
+        assert_eq!(
+            first_prepare_votes.descriptor_hash,
+            first_descriptor.descriptor_hash
+        );
+        assert_eq!(
+            first_prepare_votes.votes.len(),
+            first_descriptor.validator_set.len()
+        );
+        assert_eq!(
+            first_prepare_votes.votes[0].body,
+            first_proposal.artifact.vote_body(CertPhase::Prepare)
+        );
+        assert_eq!(
+            first_commit_votes.votes[0].body,
+            first_proposal.artifact.vote_body(CertPhase::Commit)
+        );
+        assert_eq!(
+            first_prepare_votes
+                .votes
+                .iter()
+                .map(|vote| vote.signer_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "full-committee vote templates should follow canonical signer order"
+        );
+        assert!(
+            first_prepare_votes
+                .votes
+                .windows(2)
+                .all(|votes| votes[0].signing_hash == votes[1].signing_hash),
+            "prepare vote signing hash must be common across signers"
+        );
+        assert_ne!(
+            first_prepare_votes.votes[0].signing_hash, first_commit_votes.votes[0].signing_hash,
+            "prepare and commit vote templates must not share a signable digest"
+        );
+        assert_eq!(
             plan.subjects[0].subject_hash,
             plan.ownerships[0].subject_hash
         );
         assert_ne!(
             plan.ownerships[0].payload_ownership_hash,
             plan.ownerships[0].rbc_instance_hash
+        );
+
+        for entry in &plan.entries {
+            let ownership = &entry.ownership;
+            let wire_ownership = SumeragiLanePayloadOwnership {
+                proposal_height: 10,
+                proposal_view: entry.slot.lane_block_view,
+                lane_id: ownership.lane_id,
+                dataspace_id: ownership.dataspace_id,
+                lane_block_height: ownership.lane_block_height,
+                lane_block_view: ownership.lane_block_view,
+                subject_hash: ownership.subject_hash,
+                qc_mode_tag: ownership.qc_mode_tag.clone(),
+                accepted_candidate_indices: ownership
+                    .accepted_candidate_indices
+                    .iter()
+                    .map(|index| u64::try_from(*index).expect("candidate index fits u64"))
+                    .collect(),
+                accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
+                previous_lane_block_height: entry.block_descriptor.previous_lane_block_height,
+                previous_lane_block_descriptor_hash: entry
+                    .block_descriptor
+                    .previous_lane_block_descriptor_hash,
+                lane_block_descriptor_hash: Some(entry.block_descriptor.descriptor_hash),
+                lane_block_descriptor_validator_set: entry.block_descriptor.validator_set.clone(),
+                lane_block_descriptor_validator_count: entry
+                    .block_descriptor
+                    .quorum
+                    .validator_count,
+                lane_block_descriptor_min_quorum: entry.block_descriptor.quorum.min_quorum,
+                payload_ownership_hash: ownership.payload_ownership_hash,
+                rbc_instance_hash: ownership.rbc_instance_hash,
+            };
+
+            wire_ownership
+                .validate_replay_material()
+                .expect("scheduler wire ownership should validate replay material");
+        }
+    }
+
+    #[test]
+    fn lane_block_descriptor_binds_committee_without_changing_payload_identity() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let candidate_hashes = vec![tx_hash(0xA9)];
+        let known_tips = vec![lane_tip(1, 11, 3)];
+        let domains_a = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(
+                1,
+                11,
+                vec![test_peer(1), test_peer(2), test_peer(3)],
+                None,
+            )],
+            "permissioned",
+        )
+        .expect("lane consensus domain");
+        let domains_b = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(
+                1,
+                11,
+                vec![test_peer(4), test_peer(5), test_peer(6)],
+                None,
+            )],
+            "permissioned",
+        )
+        .expect("lane consensus domain");
+
+        let plan_a = plan_lane_payload(
+            &domains_a,
+            &known_tips,
+            &candidate_hashes,
+            99,
+            &BTreeMap::new(),
+            2,
+        )
+        .expect("lane plan with first committee");
+        let plan_b = plan_lane_payload(
+            &domains_b,
+            &known_tips,
+            &candidate_hashes,
+            99,
+            &BTreeMap::new(),
+            2,
+        )
+        .expect("lane plan with second committee");
+
+        assert_eq!(
+            plan_a.entries[0].subject.subject_hash, plan_b.entries[0].subject.subject_hash,
+            "lane-local payload identity does not include committee membership"
+        );
+        assert_eq!(
+            plan_a.entries[0].ownership.payload_ownership_hash,
+            plan_b.entries[0].ownership.payload_ownership_hash
+        );
+        assert_ne!(
+            plan_a.entries[0].block_descriptor.validator_set,
+            plan_b.entries[0].block_descriptor.validator_set
+        );
+        assert_ne!(
+            plan_a.entries[0].block_descriptor.descriptor_hash,
+            plan_b.entries[0].block_descriptor.descriptor_hash,
+            "standalone descriptor must bind the lane-local voting committee"
+        );
+        assert_ne!(
+            plan_a.entries[0].lane_block_proposal.proposal_hash,
+            plan_b.entries[0].lane_block_proposal.proposal_hash,
+            "standalone proposal identity must bind the voting committee through the descriptor"
+        );
+    }
+
+    #[test]
+    fn lane_block_descriptor_binds_predecessor_descriptor_without_changing_payload_identity() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let candidate_hashes = vec![tx_hash(0xAA)];
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(
+                1,
+                11,
+                vec![test_peer(1), test_peer(2), test_peer(3)],
+                None,
+            )],
+            "permissioned",
+        )
+        .expect("lane consensus domain");
+
+        let plan_a = plan_lane_payload(
+            &domains,
+            &[lane_tip_with_descriptor(1, 11, 3, 0xA1)],
+            &candidate_hashes,
+            99,
+            &BTreeMap::new(),
+            2,
+        )
+        .expect("lane plan with first predecessor descriptor");
+        let plan_b = plan_lane_payload(
+            &domains,
+            &[lane_tip_with_descriptor(1, 11, 3, 0xA2)],
+            &candidate_hashes,
+            99,
+            &BTreeMap::new(),
+            2,
+        )
+        .expect("lane plan with second predecessor descriptor");
+
+        assert_eq!(
+            plan_a.entries[0].subject.subject_hash, plan_b.entries[0].subject.subject_hash,
+            "lane-local payload identity is independent of predecessor descriptor material"
+        );
+        assert_eq!(
+            plan_a.entries[0].ownership.payload_ownership_hash,
+            plan_b.entries[0].ownership.payload_ownership_hash
+        );
+        assert_ne!(
+            plan_a.entries[0]
+                .block_descriptor
+                .previous_lane_block_descriptor_hash,
+            plan_b.entries[0]
+                .block_descriptor
+                .previous_lane_block_descriptor_hash
+        );
+        assert_ne!(
+            plan_a.entries[0].block_descriptor.descriptor_hash,
+            plan_b.entries[0].block_descriptor.descriptor_hash,
+            "standalone descriptor must bind the predecessor lane descriptor"
+        );
+        assert_ne!(
+            plan_a.entries[0].lane_block_proposal.proposal_hash,
+            plan_b.entries[0].lane_block_proposal.proposal_hash,
+            "standalone proposal identity must bind predecessor descriptor lineage"
+        );
+    }
+
+    #[test]
+    fn lane_payload_plan_entries_reject_internal_stage_drift() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(1, 11, validators, None)],
+            "permissioned",
+        )
+        .expect("lane consensus domain");
+        let candidate_hashes = vec![tx_hash(0xB0)];
+        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 4, &BTreeMap::new(), 2)
+            .expect("lane plan");
+        let mut tampered_ownerships = plan.ownerships.clone();
+        tampered_ownerships[0].accepted_candidate_indices.push(99);
+
+        let err = build_lane_payload_plan_entries(
+            &domains,
+            &plan.lane_tips,
+            &plan.slots,
+            &plan.subjects,
+            &tampered_ownerships,
+            &candidate_hashes,
+        )
+        .expect_err("entry builder must reject mismatched ownership descriptors");
+
+        assert_eq!(
+            err,
+            LanePayloadPlanError::InconsistentEntry {
+                lane_id: LaneId::new(1)
+            }
+        );
+    }
+
+    #[test]
+    fn lane_block_proposal_rejects_descriptor_subject_drift() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(1, 11, validators, None)],
+            "permissioned",
+        )
+        .expect("lane consensus domain");
+        let candidate_hashes = vec![tx_hash(0xB1)];
+        let plan = plan_lane_payload(&domains, &[], &candidate_hashes, 4, &BTreeMap::new(), 2)
+            .expect("lane plan");
+        let mut descriptor = plan.entries[0].block_descriptor.clone();
+        descriptor.subject_hash = Hash::prehashed([0xE1; Hash::LENGTH]);
+
+        let err = build_lane_block_proposal(
+            descriptor.lane_id,
+            &descriptor,
+            &plan.entries[0].subject,
+            &plan.entries[0].ownership,
+        )
+        .expect_err("proposal builder must reject descriptor/subject drift");
+
+        assert_eq!(
+            err,
+            LanePayloadPlanError::InconsistentEntry {
+                lane_id: LaneId::new(1)
+            }
+        );
+    }
+
+    #[test]
+    fn lane_block_vote_plan_sorts_signers_and_uses_common_signing_hash() {
+        let proposal = lane_block_proposal_with_committee(
+            vec![test_peer(3), test_peer(1), test_peer(2)],
+            Some(2),
+        );
+        let validators = proposal.block_descriptor.validator_set.clone();
+        let vote_plan = plan_lane_block_vote_quorum(
+            &proposal,
+            CertPhase::Prepare,
+            &[validators[2].clone(), validators[0].clone()],
+        )
+        .expect("prepare vote quorum");
+
+        assert_eq!(vote_plan.phase, CertPhase::Prepare);
+        assert_eq!(vote_plan.proposal_hash, proposal.proposal_hash);
+        assert_eq!(
+            vote_plan.descriptor_hash,
+            proposal.block_descriptor.descriptor_hash
+        );
+        assert_eq!(vote_plan.min_quorum, 2);
+        assert_eq!(
+            vote_plan
+                .votes
+                .iter()
+                .map(|vote| vote.signer_index)
+                .collect::<Vec<_>>(),
+            vec![0, 2],
+            "votes must be sorted by descriptor signer index, not input order"
+        );
+        assert_eq!(
+            vote_plan.votes[0].signing_hash,
+            vote_plan.votes[1].signing_hash
+        );
+        assert_eq!(
+            vote_plan.votes[0].validator_set_hash,
+            vote_plan.validator_set_hash
+        );
+        assert_eq!(vote_plan.votes[0].lane_id, LaneId::new(1));
+        assert_eq!(vote_plan.votes[0].dataspace_id, DataSpaceId::new(11));
+        assert_eq!(vote_plan.votes[0].lane_block_height, 4);
+        assert_eq!(vote_plan.votes[0].lane_block_view, 2);
+
+        let single_vote = plan_lane_block_vote(&proposal, CertPhase::Prepare, &validators[1])
+            .expect("single lane vote");
+        assert_eq!(
+            single_vote.signing_hash, vote_plan.votes[0].signing_hash,
+            "signer-local transport fields must stay outside the signable digest"
+        );
+
+        let commit_votes = plan_lane_block_votes(
+            &proposal,
+            CertPhase::Commit,
+            &[validators[0].clone(), validators[1].clone()],
+        )
+        .expect("commit votes");
+        assert_ne!(
+            commit_votes[0].signing_hash, vote_plan.votes[0].signing_hash,
+            "prepare and commit votes must be domain-separated"
+        );
+    }
+
+    #[test]
+    fn lane_block_vote_plan_rejects_invalid_phase_and_under_quorum() {
+        let proposal = lane_block_proposal_with_committee(
+            vec![test_peer(1), test_peer(2), test_peer(3)],
+            Some(2),
+        );
+        let validators = proposal.block_descriptor.validator_set.clone();
+
+        assert_eq!(
+            plan_lane_block_vote(&proposal, CertPhase::NewView, &validators[0]),
+            Err(LaneBlockVotePlanError::InvalidPhase {
+                phase: CertPhase::NewView,
+            })
+        );
+        assert_eq!(
+            plan_lane_block_vote_quorum(
+                &proposal,
+                CertPhase::Prepare,
+                std::slice::from_ref(&validators[0]),
+            ),
+            Err(LaneBlockVotePlanError::InsufficientVoteQuorum {
+                lane_id: LaneId::new(1),
+                observed: 1,
+                min_quorum: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn lane_block_vote_plan_rejects_duplicate_and_unknown_signers() {
+        let proposal = lane_block_proposal_with_committee(
+            vec![test_peer(1), test_peer(2), test_peer(3)],
+            Some(2),
+        );
+        let validators = proposal.block_descriptor.validator_set.clone();
+
+        assert_eq!(
+            plan_lane_block_votes(
+                &proposal,
+                CertPhase::Prepare,
+                &[validators[0].clone(), validators[0].clone()],
+            ),
+            Err(LaneBlockVotePlanError::DuplicateSigner {
+                lane_id: LaneId::new(1),
+            })
+        );
+        assert_eq!(
+            plan_lane_block_vote(&proposal, CertPhase::Prepare, &test_peer(99)),
+            Err(LaneBlockVotePlanError::SignerNotInCommittee {
+                lane_id: LaneId::new(1),
+            })
+        );
+    }
+
+    #[test]
+    fn lane_block_vote_plan_rejects_tampered_descriptor_and_proposal_hashes() {
+        let proposal = lane_block_proposal_with_committee(
+            vec![test_peer(1), test_peer(2), test_peer(3)],
+            Some(2),
+        );
+        let signer = proposal.block_descriptor.validator_set[0].clone();
+
+        let mut descriptor_tampered = proposal.clone();
+        let actual_descriptor = Hash::prehashed([0xD1; Hash::LENGTH]);
+        descriptor_tampered.block_descriptor.descriptor_hash = actual_descriptor;
+        let descriptor_err =
+            plan_lane_block_vote(&descriptor_tampered, CertPhase::Prepare, &signer)
+                .expect_err("descriptor hash drift must be rejected");
+        assert!(matches!(
+            descriptor_err,
+            LaneBlockVotePlanError::DescriptorHashMismatch {
+                lane_id,
+                actual,
+                ..
+            } if lane_id == LaneId::new(1) && actual == actual_descriptor
+        ));
+
+        let mut proposal_tampered = proposal;
+        let actual_proposal = Hash::prehashed([0xD2; Hash::LENGTH]);
+        proposal_tampered.proposal_hash = actual_proposal;
+        let proposal_err = plan_lane_block_vote(&proposal_tampered, CertPhase::Prepare, &signer)
+            .expect_err("proposal hash drift must be rejected");
+        assert!(matches!(
+            proposal_err,
+            LaneBlockVotePlanError::ProposalHashMismatch {
+                lane_id,
+                actual,
+                ..
+            } if lane_id == LaneId::new(1) && actual == actual_proposal
+        ));
+    }
+
+    #[test]
+    fn lane_block_vote_plan_rejects_tampered_public_artifact() {
+        let proposal = lane_block_proposal_with_committee(
+            vec![test_peer(1), test_peer(2), test_peer(3)],
+            Some(2),
+        );
+        let signer = proposal.block_descriptor.validator_set[0].clone();
+
+        let mut descriptor_artifact_tampered = proposal.clone();
+        descriptor_artifact_tampered
+            .artifact
+            .descriptor
+            .validator_set_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0xE1; Hash::LENGTH]));
+        assert_eq!(
+            plan_lane_block_vote(&descriptor_artifact_tampered, CertPhase::Prepare, &signer),
+            Err(LaneBlockVotePlanError::InconsistentProposal {
+                lane_id: LaneId::new(1),
+            })
+        );
+
+        let mut proposal_artifact_tampered = proposal;
+        let actual = Hash::prehashed([0xE2; Hash::LENGTH]);
+        proposal_artifact_tampered.artifact.proposal_hash = actual;
+        assert_eq!(
+            plan_lane_block_vote(&proposal_artifact_tampered, CertPhase::Prepare, &signer),
+            Err(LaneBlockVotePlanError::ProposalHashMismatch {
+                lane_id: LaneId::new(1),
+                expected: proposal_artifact_tampered.proposal_hash,
+                actual,
+            })
+        );
+    }
+
+    #[test]
+    fn lane_block_vote_plan_rejects_noncanonical_descriptor_validator_set() {
+        let mut proposal = lane_block_proposal_with_committee(
+            vec![test_peer(1), test_peer(2), test_peer(3)],
+            Some(2),
+        );
+        let signer = proposal.block_descriptor.validator_set[0].clone();
+        proposal.block_descriptor.validator_set.swap(0, 1);
+
+        assert_eq!(
+            plan_lane_block_vote(&proposal, CertPhase::Prepare, &signer),
+            Err(LaneBlockVotePlanError::ValidatorSetNotCanonical {
+                lane_id: LaneId::new(1),
+            })
+        );
+    }
+
+    #[test]
+    fn lane_payload_plan_rejects_missing_candidate_hash_for_accepted_index() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11), (1, 11)]);
+        let validators = vec![test_peer(1), test_peer(2), test_peer(3)];
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[1]),
+            &[committee(1, 11, validators, None)],
+            "permissioned",
+        )
+        .expect("lane consensus domain");
+
+        let err = plan_lane_payload(&domains, &[], &[tx_hash(0xC0)], 4, &BTreeMap::new(), 2)
+            .expect_err("accepted candidate without transaction hash must fail closed");
+
+        assert_eq!(
+            err,
+            LanePayloadPlanError::Subjects(LaneBlockSubjectError::CandidateHashIndexOutOfBounds {
+                lane_id: LaneId::new(1),
+                index: 1,
+                candidate_hashes: 1,
+            })
         );
     }
 
@@ -2640,11 +4088,8 @@ mod tests {
 
         let err = plan_lane_payload(
             &domains,
-            &[LaneBlockTip {
-                lane_id: LaneId::new(1),
-                dataspace_id: DataSpaceId::new(99),
-                latest_lane_block_height: 4,
-            }],
+            &[lane_tip(1, 99, 4)],
+            &[tx_hash(0xD0)],
             3,
             &BTreeMap::new(),
             0,
@@ -2677,26 +4122,10 @@ mod tests {
         )
         .expect("lane consensus domains");
         let known_tips = vec![
-            LaneBlockTip {
-                lane_id: LaneId::new(1),
-                dataspace_id: DataSpaceId::new(11),
-                latest_lane_block_height: 4,
-            },
-            LaneBlockTip {
-                lane_id: LaneId::new(7),
-                dataspace_id: DataSpaceId::new(77),
-                latest_lane_block_height: 99,
-            },
-            LaneBlockTip {
-                lane_id: LaneId::new(1),
-                dataspace_id: DataSpaceId::new(11),
-                latest_lane_block_height: 8,
-            },
-            LaneBlockTip {
-                lane_id: LaneId::new(3),
-                dataspace_id: DataSpaceId::new(33),
-                latest_lane_block_height: 0,
-            },
+            lane_tip(1, 11, 4),
+            lane_tip(7, 77, 99),
+            lane_tip_with_descriptor(1, 11, 8, 0x81),
+            lane_tip(3, 33, 0),
         ];
 
         let tips = plan_latest_lane_block_tips_with_reset_heights(
@@ -2710,23 +4139,45 @@ mod tests {
         assert_eq!(
             tips,
             vec![
-                LaneBlockTip {
-                    lane_id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::new(11),
-                    latest_lane_block_height: 8,
-                },
-                LaneBlockTip {
-                    lane_id: LaneId::new(2),
-                    dataspace_id: DataSpaceId::new(22),
-                    latest_lane_block_height: 41,
-                },
-                LaneBlockTip {
-                    lane_id: LaneId::new(3),
-                    dataspace_id: DataSpaceId::new(33),
-                    latest_lane_block_height: 0,
-                },
+                lane_tip_with_descriptor(1, 11, 8, 0x81),
+                lane_tip(2, 22, 41),
+                lane_tip(3, 33, 0),
             ],
             "tip reducer should keep the latest active-lane tip, ignore idle-lane tips, and fill compatibility tips"
+        );
+    }
+
+    #[test]
+    fn latest_lane_block_tips_reject_conflicting_descriptor_hashes_at_same_height() {
+        let routing = routing_for_lane_dataspaces(&[(1, 11)]);
+        let domains = plan_lane_consensus_domains(
+            &routing,
+            &accepted_schedule(&[0]),
+            &[committee(
+                1,
+                11,
+                vec![test_peer(1), test_peer(2), test_peer(3)],
+                None,
+            )],
+            "permissioned",
+        )
+        .expect("lane consensus domains");
+
+        assert_eq!(
+            plan_latest_lane_block_tips_with_reset_heights(
+                &domains,
+                &[
+                    lane_tip_with_descriptor(1, 11, 8, 0xB1),
+                    lane_tip_with_descriptor(1, 11, 8, 0xB2),
+                ],
+                3,
+                &BTreeMap::new(),
+            ),
+            Err(LaneBlockTipPlanError::ConflictingLaneTipDescriptorHash {
+                lane_id: LaneId::new(1),
+                latest_lane_block_height: 8,
+            }),
+            "same-height lane tips with different predecessor descriptors must fail closed"
         );
     }
 
@@ -2746,21 +4197,9 @@ mod tests {
         )
         .expect("lane consensus domains");
         let known_tips = vec![
-            LaneBlockTip {
-                lane_id: LaneId::new(1),
-                dataspace_id: DataSpaceId::new(11),
-                latest_lane_block_height: 4,
-            },
-            LaneBlockTip {
-                lane_id: LaneId::new(2),
-                dataspace_id: DataSpaceId::new(99),
-                latest_lane_block_height: 5,
-            },
-            LaneBlockTip {
-                lane_id: LaneId::new(3),
-                dataspace_id: DataSpaceId::new(33),
-                latest_lane_block_height: 12,
-            },
+            lane_tip_with_descriptor(1, 11, 4, 0x91),
+            lane_tip_with_descriptor(2, 99, 5, 0x92),
+            lane_tip_with_descriptor(3, 33, 12, 0x93),
         ];
         let reset_heights = BTreeMap::from([
             (LaneId::new(1), 9),
@@ -2779,21 +4218,9 @@ mod tests {
         assert_eq!(
             tips,
             vec![
-                LaneBlockTip {
-                    lane_id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::new(11),
-                    latest_lane_block_height: 9,
-                },
-                LaneBlockTip {
-                    lane_id: LaneId::new(2),
-                    dataspace_id: DataSpaceId::new(22),
-                    latest_lane_block_height: 6,
-                },
-                LaneBlockTip {
-                    lane_id: LaneId::new(3),
-                    dataspace_id: DataSpaceId::new(33),
-                    latest_lane_block_height: 12,
-                },
+                lane_tip(1, 11, 9),
+                lane_tip(2, 22, 6),
+                lane_tip_with_descriptor(3, 33, 12, 0x93),
             ],
             "reset watermarks floor stale same-dataspace tips, ignore stale old-incarnation mismatches, and preserve newer tips"
         );
@@ -2834,11 +4261,7 @@ mod tests {
         assert_eq!(
             plan_latest_lane_block_tips_with_reset_heights(
                 &domains,
-                &[LaneBlockTip {
-                    lane_id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::new(99),
-                    latest_lane_block_height: 7,
-                }],
+                &[lane_tip(1, 99, 7)],
                 3,
                 &reset_heights,
             ),
@@ -2883,11 +4306,7 @@ mod tests {
         assert_eq!(
             plan_latest_lane_block_tips_with_reset_heights(
                 &domains,
-                &[LaneBlockTip {
-                    lane_id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::new(99),
-                    latest_lane_block_height: 7,
-                }],
+                &[lane_tip(1, 99, 7)],
                 9,
                 &BTreeMap::new(),
             ),
@@ -2914,11 +4333,7 @@ mod tests {
             "permissioned",
         )
         .expect("lane consensus domains");
-        let tip = LaneBlockTip {
-            lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::new(11),
-            latest_lane_block_height: 7,
-        };
+        let tip = lane_tip(1, 11, 7);
 
         assert_eq!(
             plan_next_lane_block_slots(&domains, &[], 0),
@@ -2991,14 +4406,14 @@ mod tests {
         };
 
         assert_eq!(
-            plan_lane_block_subjects_for_slots(&domains, &[]),
+            plan_lane_block_subjects_for_slots(&domains, &tx_hashes(1), &[]),
             Err(LaneBlockSubjectError::MissingLaneSlot {
                 lane_id: LaneId::new(1),
             })
         );
 
         assert_eq!(
-            plan_lane_block_subjects_for_slots(&domains, &[slot, slot]),
+            plan_lane_block_subjects_for_slots(&domains, &tx_hashes(1), &[slot, slot]),
             Err(LaneBlockSubjectError::DuplicateLaneSlot {
                 lane_id: LaneId::new(1),
             })
@@ -3009,7 +4424,7 @@ mod tests {
             ..slot
         };
         assert_eq!(
-            plan_lane_block_subjects_for_slots(&domains, &[mismatched_dataspace]),
+            plan_lane_block_subjects_for_slots(&domains, &tx_hashes(1), &[mismatched_dataspace]),
             Err(LaneBlockSubjectError::LaneSlotDataspaceMismatch {
                 lane_id: LaneId::new(1),
                 expected: DataSpaceId::new(11),
@@ -3024,7 +4439,7 @@ mod tests {
             lane_block_view: 0,
         };
         assert_eq!(
-            plan_lane_block_subjects_for_slots(&domains, &[slot, unexpected]),
+            plan_lane_block_subjects_for_slots(&domains, &tx_hashes(1), &[slot, unexpected]),
             Err(LaneBlockSubjectError::UnexpectedLaneSlot {
                 lane_id: LaneId::new(2),
             })
@@ -3045,7 +4460,9 @@ mod tests {
             "permissioned",
         )
         .expect("lane consensus domains");
-        let subjects = plan_lane_block_subjects(&domains, 42, 7).expect("lane block subjects");
+        let candidate_hashes = tx_hashes(4);
+        let subjects = plan_lane_block_subjects(&domains, &candidate_hashes, 42, 7)
+            .expect("lane block subjects");
 
         let ownerships = plan_lane_payload_ownership(&subjects).expect("lane payload ownership");
 
@@ -3056,13 +4473,17 @@ mod tests {
         assert_eq!(ownerships[0].lane_block_view, 7);
         assert_eq!(ownerships[0].subject_hash, subjects[0].subject_hash);
         assert_eq!(ownerships[0].accepted_candidate_indices, vec![2, 0]);
+        assert_eq!(
+            ownerships[0].accepted_transaction_hashes,
+            vec![candidate_hashes[2], candidate_hashes[0]]
+        );
         assert_ne!(
             ownerships[0].payload_ownership_hash,
             ownerships[0].rbc_instance_hash
         );
 
-        let view_drift_subjects =
-            plan_lane_block_subjects(&domains, 42, 8).expect("lane block subjects with view drift");
+        let view_drift_subjects = plan_lane_block_subjects(&domains, &candidate_hashes, 42, 8)
+            .expect("lane block subjects with view drift");
         let view_drift_ownerships =
             plan_lane_payload_ownership(&view_drift_subjects).expect("view drift ownership");
         assert_ne!(
@@ -3074,10 +4495,31 @@ mod tests {
             view_drift_ownerships[0].rbc_instance_hash
         );
 
+        let hash_drift_candidate_hashes =
+            vec![tx_hash(0xE0), tx_hash(0xE1), tx_hash(0xE2), tx_hash(0xE3)];
+        let hash_drift_subjects =
+            plan_lane_block_subjects(&domains, &hash_drift_candidate_hashes, 42, 7)
+                .expect("hash drift subjects");
+        let hash_drift_ownerships =
+            plan_lane_payload_ownership(&hash_drift_subjects).expect("hash drift ownership");
+        assert_ne!(
+            subjects[0].subject_hash,
+            hash_drift_subjects[0].subject_hash
+        );
+        assert_ne!(
+            ownerships[0].payload_ownership_hash,
+            hash_drift_ownerships[0].payload_ownership_hash
+        );
+        assert_ne!(
+            ownerships[0].rbc_instance_hash,
+            hash_drift_ownerships[0].rbc_instance_hash
+        );
+
         let mut reordered_work = domains.clone();
         reordered_work[0].accepted_candidate_indices.reverse();
         let reordered_subjects =
-            plan_lane_block_subjects(&reordered_work, 42, 7).expect("reordered subjects");
+            plan_lane_block_subjects(&reordered_work, &candidate_hashes, 42, 7)
+                .expect("reordered subjects");
         let reordered_ownerships =
             plan_lane_payload_ownership(&reordered_subjects).expect("reordered ownership");
         assert_ne!(
@@ -3104,7 +4546,8 @@ mod tests {
             "permissioned",
         )
         .expect("lane consensus domains");
-        let subjects = plan_lane_block_subjects(&domains, 3, 4).expect("lane block subjects");
+        let subjects =
+            plan_lane_block_subjects(&domains, &tx_hashes(2), 3, 4).expect("lane block subjects");
         let mut reversed_subjects = subjects.clone();
         reversed_subjects.reverse();
 
@@ -3156,7 +4599,8 @@ mod tests {
             "permissioned",
         )
         .expect("lane consensus domains");
-        let subjects = plan_lane_block_subjects(&domains, 9, 2).expect("lane block subjects");
+        let subjects =
+            plan_lane_block_subjects(&domains, &tx_hashes(1), 9, 2).expect("lane block subjects");
         let mut malformed = subjects[0].clone();
 
         malformed.qc_mode_tag = " ".to_string();
@@ -3177,7 +4621,19 @@ mod tests {
         );
 
         malformed = subjects[0].clone();
+        malformed.accepted_transaction_hashes.clear();
+        assert_eq!(
+            plan_lane_payload_ownership(&[malformed.clone()]),
+            Err(LanePayloadOwnershipError::CandidateHashCountMismatch {
+                lane_id: LaneId::new(1),
+                candidate_indices: 1,
+                candidate_hashes: 0,
+            })
+        );
+
+        malformed = subjects[0].clone();
         malformed.accepted_candidate_indices.push(0);
+        malformed.accepted_transaction_hashes.push(tx_hash(0xF0));
         assert_eq!(
             plan_lane_payload_ownership(&[malformed.clone()]),
             Err(LanePayloadOwnershipError::DuplicateCandidateIndex {
@@ -3227,7 +4683,7 @@ mod tests {
 
         malformed.qc_mode_tag = " ".to_string();
         assert_eq!(
-            plan_lane_block_subjects(&[malformed.clone()], 1, 0),
+            plan_lane_block_subjects(&[malformed.clone()], &tx_hashes(1), 1, 0),
             Err(LaneBlockSubjectError::BlankQcModeTag {
                 lane_id: LaneId::new(1),
             })
@@ -3237,7 +4693,7 @@ mod tests {
         malformed.accepted_candidate_indices.clear();
         malformed.accepted_candidates = 0;
         assert_eq!(
-            plan_lane_block_subjects(&[malformed.clone()], 1, 0),
+            plan_lane_block_subjects(&[malformed.clone()], &tx_hashes(1), 1, 0),
             Err(LaneBlockSubjectError::EmptyCandidateSet {
                 lane_id: LaneId::new(1),
             })
@@ -3246,7 +4702,7 @@ mod tests {
         malformed = domains[0].clone();
         malformed.accepted_candidates = 2;
         assert_eq!(
-            plan_lane_block_subjects(&[malformed.clone()], 1, 0),
+            plan_lane_block_subjects(&[malformed.clone()], &tx_hashes(1), 1, 0),
             Err(LaneBlockSubjectError::CandidateCountMismatch {
                 lane_id: LaneId::new(1),
                 accepted_candidates: 2,
@@ -3258,7 +4714,7 @@ mod tests {
         malformed.accepted_candidate_indices.push(0);
         malformed.accepted_candidates = malformed.accepted_candidate_indices.len();
         assert_eq!(
-            plan_lane_block_subjects(&[malformed.clone()], 1, 0),
+            plan_lane_block_subjects(&[malformed.clone()], &tx_hashes(1), 1, 0),
             Err(LaneBlockSubjectError::DuplicateCandidateIndex {
                 lane_id: LaneId::new(1),
                 index: 0,
@@ -3266,7 +4722,21 @@ mod tests {
         );
 
         assert_eq!(
-            plan_lane_block_subjects(&[domains[0].clone(), domains[0].clone()], 1, 0),
+            plan_lane_block_subjects(&[domains[0].clone()], &[], 1, 0),
+            Err(LaneBlockSubjectError::CandidateHashIndexOutOfBounds {
+                lane_id: LaneId::new(1),
+                index: 0,
+                candidate_hashes: 0,
+            })
+        );
+
+        assert_eq!(
+            plan_lane_block_subjects(
+                &[domains[0].clone(), domains[0].clone()],
+                &tx_hashes(1),
+                1,
+                0
+            ),
             Err(LaneBlockSubjectError::DuplicateLaneDomain {
                 lane_id: LaneId::new(1),
             })

@@ -53,10 +53,10 @@ fixtures и выпускает следующие файлы в `fixtures/sorafs
 
 ### Политика подписей
 
-Регенерация fixtures **должна** включать валидную подпись совета. Генератор
-отклоняет неподписанный вывод, если явно не передан `--allow-unsigned` (предназначен
-только для локальных экспериментов). Конверты подписей append-only и
-дедуплицируются по подписанту.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 Чтобы добавить подпись совета:
 

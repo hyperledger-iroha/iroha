@@ -25,6 +25,7 @@ NOW_UNIX = 1_800_300_000
 GENERATED_AT = NOW_UNIX - 120
 DIGEST = "ab" * 32
 DIGEST_2 = "cd" * 32
+DIGEST_3 = "ef" * 32
 
 
 def payload_kinds() -> list[str]:
@@ -524,6 +525,57 @@ def test_all_policy_bound_artifacts_reject_publisher_policy_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_public_head_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload["public_head_cid_hex"] = DIGEST_3
+    write_json(tmp_path / "publisher-service-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_public_head_cids"] == []
+    assert (
+        "valid_public_head_cids must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publisher_service()
+    payload["policy_digest_hex"] = DIGEST_3
+    write_json(tmp_path / "publisher-service-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_checkpoint_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = operator_recovery()
+    payload["checkpoint_digest_hex"] = DIGEST_3
+    write_json(tmp_path / "operator-recovery-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_checkpoint_digests"] == []
+    assert (
+        "valid_checkpoint_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_stale_publisher_head_does_not_anchor_bound_evidence(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
@@ -759,6 +811,46 @@ def test_ipfs_payload_kinds_must_not_include_unknown_values(tmp_path: Path) -> N
     artifact = payload["required"]["ipfs_ipns_e2e"]["artifacts"][0]
     assert artifact["valid"] is False
     assert "payload_kinds must not include unknown values" in artifact["errors"]
+
+
+def test_payload_kinds_reject_trim_normalized_and_unicode_variants(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        ("ingest_service", "ingest-service.json", ingest_service, "source_count"),
+        (
+            "publisher_service",
+            "publisher-service.json",
+            publisher_service,
+            "payload_kind_count",
+        ),
+        ("ipfs_ipns_e2e", "ipfs-ipns-e2e.json", ipfs_ipns_e2e, "payload_kind_count"),
+    )
+    suffixes = (" ", "\u200d", "\u202e")
+
+    for artifact_kind, filename, factory, count_field in cases:
+        for suffix_index, suffix in enumerate(suffixes):
+            root = tmp_path / f"{artifact_kind}-{suffix_index}"
+            root.mkdir()
+            write_complete_evidence(root)
+            payload = factory()
+            bad_value = payload["payload_kinds"][0] + suffix
+            payload["payload_kinds"].append(bad_value)
+            payload[count_field] = len(payload["payload_kinds"])
+            write_json(root / filename, payload)
+            summary = root / "summary.json"
+
+            assert run_gate(root, "--summary-out", str(summary)) == 1
+
+            summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+            artifact = summary_payload["required"][artifact_kind]["artifacts"][0]
+            errors = artifact["errors"]
+            rendered_errors = json.dumps(errors, ensure_ascii=True)
+            escaped_value = bad_value.encode("unicode_escape").decode("ascii")
+            assert artifact["valid"] is False
+            assert "payload_kinds must not include unknown values" in errors
+            assert bad_value not in rendered_errors
+            assert escaped_value not in rendered_errors
 
 
 def test_raw_payload_leakage_fails(tmp_path: Path) -> None:

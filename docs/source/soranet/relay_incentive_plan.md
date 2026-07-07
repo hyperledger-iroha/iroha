@@ -150,9 +150,9 @@ Before Sora Parliament authorises automatic payouts, the operations lead must co
       Parliament hash and fails daemon runs that encounter missing approvals, while the summaries
       print the hash for every payout row.【crates/iroha_cli/src/commands/sorafs.rs:3314】【crates/iroha_cli/src/commands/sorafs.rs:4470】
 
-Running with `--allow-missing-budget-approval` is reserved for lab/staging replays; production
-daemons/shadow-runs should keep the default enforcement so the `expected_budget_approval` hash stays
-present and the `missing_budget_approval` / `mismatched_budget_approval` counters remain at zero.
+Missing `budget_approval_id` is rejected unconditionally, including lab/staging replays and
+shadow-runs. Replay fixtures must carry the signed Parliament hash used by the expected budget
+approval, keeping the `missing_budget_approval` / `mismatched_budget_approval` counters at zero.
 
 Use `iroha app sorafs incentives service audit --scope all --config <daemon.json> --state <state.json>`
 to gate both bond and budget readiness. The budget scope fails when a payout is missing or carrying

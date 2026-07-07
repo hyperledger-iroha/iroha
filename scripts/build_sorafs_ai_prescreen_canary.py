@@ -19,6 +19,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from check_sorafs_ai_prescreen_rollout_evidence import (  # noqa: E402
+    ALLOWED_NOTIFICATION_ACTIONS,
     ALLOWED_PRESCREEN_VERDICTS,
     COMMITTEE_RESULT_LABEL_ERROR,
     COMMITTEE_RESULT_LABEL_PATTERN,
@@ -53,7 +54,16 @@ from sorafs_checker_preflight import (  # noqa: E402
     write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
-from sorafs_path_identity import path_diagnostic_label  # noqa: E402
+from sorafs_path_identity import (  # noqa: E402
+    diagnostic_text_is_canonical,
+    error_diagnostic_label,
+    path_diagnostic_label,
+)
+from sorafs_evidence_validation import (  # noqa: E402
+    forbidden_non_production_markers,
+    require_rollout_deployment_id,
+    require_rollout_environment,
+)
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
@@ -84,6 +94,9 @@ CANARY_URL_ARG_ERROR = (
     "separators, drive prefixes, URI-scheme-like host/path tokens, or "
     "secret-looking host/path components"
 )
+CANARY_BASE_URL_ARG_ERROR = (
+    "SoraFS AI pre-screen canary base URL arguments must not end with a slash"
+)
 CANARY_PATH_ARG_ERROR = (
     "SoraFS AI pre-screen canary path arguments must be archive-relative without "
     "absolute, empty, current, parent, encoded, URI-scheme-like, or "
@@ -92,14 +105,11 @@ CANARY_PATH_ARG_ERROR = (
 
 
 def split_csv_values(values: Sequence[str]) -> list[str]:
-    """Split repeated comma-separated CLI values into canonical strings."""
+    """Split repeated comma-separated CLI values into exact strings."""
 
     items: list[str] = []
     for value in values:
-        for item in value.split(","):
-            stripped = item.strip()
-            if stripped:
-                items.append(stripped)
+        items.extend(value.split(","))
     return items
 
 
@@ -156,11 +166,7 @@ def validate_reviewed_inventory(
         if pattern is not None and isinstance(item, str):
             if pattern.fullmatch(item) is None:
                 errors.append(label_error or f"{option} uses an invalid label")
-            forbidden = sorted(
-                marker
-                for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-                if marker in re.split(r"[^a-z0-9]+", item)
-            )
+            forbidden = forbidden_non_production_markers(item, FORBIDDEN_INVENTORY_LABEL_MARKERS)
             if forbidden:
                 errors.append(
                     f"{option}[{index}] must not contain non-production markers "
@@ -193,8 +199,6 @@ def validate_governance_edges(
             errors.append("--governance-edge values must use <producer>:<name>")
             continue
         producer, name = item.split(":", 1)
-        producer = producer.strip()
-        name = name.strip()
         validate_canonical_string(
             producer,
             label=f"--governance-edge[{index}].producer",
@@ -207,11 +211,7 @@ def validate_governance_edges(
         )
         if name and GOVERNANCE_EDGE_LABEL_PATTERN.fullmatch(name) is None:
             errors.append(GOVERNANCE_EDGE_LABEL_ERROR)
-        forbidden = sorted(
-            marker
-            for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-            if marker in re.split(r"[^a-z0-9]+", name)
-        )
+        forbidden = forbidden_non_production_markers(name, FORBIDDEN_INVENTORY_LABEL_MARKERS)
         if forbidden:
             errors.append(
                 f"--governance-edge[{index}].name must not contain "
@@ -275,14 +275,9 @@ def validate_hex(
 
 
 def validate_canonical_string(value: str | None, *, label: str, errors: list[str]) -> None:
-    """Require a non-empty canonical string without control characters."""
+    """Require a non-empty canonical string without control/format text."""
 
-    if (
-        not isinstance(value, str)
-        or not value.strip()
-        or value != value.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-    ):
+    if not diagnostic_text_is_canonical(value):
         errors.append(f"{label} must be a non-empty canonical string")
 
 
@@ -292,6 +287,7 @@ def validate_canary_url(
     label: str,
     errors: list[str],
     required: bool,
+    base_url: bool = False,
 ) -> None:
     """Require a canary URL to be canonical and safe for evidence payloads."""
 
@@ -304,6 +300,10 @@ def validate_canary_url(
     if not runner_url_arg_is_plan_safe(value):
         if CANARY_URL_ARG_ERROR not in errors:
             errors.append(CANARY_URL_ARG_ERROR)
+        return
+    if base_url and value.endswith("/"):
+        if CANARY_BASE_URL_ARG_ERROR not in errors:
+            errors.append(CANARY_BASE_URL_ARG_ERROR)
 
 
 def validate_canary_path_label(
@@ -332,11 +332,7 @@ def validate_workflow_id_arg(value: str | None, *, errors: list[str]) -> None:
     if WORKFLOW_ID_PATTERN.fullmatch(value) is None:
         errors.append(WORKFLOW_ID_ERROR.replace("workflow_id", "--workflow-id"))
         return
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_WORKFLOW_ID_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_WORKFLOW_ID_MARKERS)
     if forbidden:
         errors.append(
             f"--workflow-id must not contain non-production markers {forbidden}"
@@ -355,11 +351,7 @@ def validate_subject_arg(value: str | None, *, errors: list[str]) -> None:
     subject_tokens = frozenset(
         token for token in re.split(r"[^a-z0-9]+", value) if token
     )
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_SUBJECT_REFERENCE_MARKERS
-        if marker in subject_tokens
-    )
+    forbidden = forbidden_non_production_markers(subject_tokens, FORBIDDEN_SUBJECT_REFERENCE_MARKERS)
     if forbidden:
         errors.append(f"--subject must not contain non-production markers {forbidden}")
 
@@ -523,9 +515,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "source": "sorafs_cli",
                 "runner_url": args.runner_url,
                 "status_url": args.runner_status_url
-                or f"{args.runner_url.rstrip('/')}/v1/sorafs/moderation/runner/status",
+                or f"{args.runner_url}/v1/sorafs/moderation/runner/status",
                 "screen_url": args.runner_screen_url
-                or f"{args.runner_url.rstrip('/')}/v1/sorafs/moderation/runner/screen",
+                or f"{args.runner_url}/v1/sorafs/moderation/runner/screen",
                 "manifest_id_hex": args.manifest_id_hex,
                 "runner_hash_hex": args.runner_hash_hex,
                 "subject": args.subject,
@@ -544,9 +536,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                 "source": "sorafs_cli",
                 "committee_url": args.committee_url,
                 "status_url": args.committee_status_url
-                or f"{args.committee_url.rstrip('/')}/v1/sorafs/moderation/committee/status",
+                or f"{args.committee_url}/v1/sorafs/moderation/committee/status",
                 "aggregate_url": args.committee_aggregate_url
-                or f"{args.committee_url.rstrip('/')}/v1/sorafs/moderation/committee/aggregate",
+                or f"{args.committee_url}/v1/sorafs/moderation/committee/aggregate",
                 "manifest_id_hex": args.manifest_id_hex,
                 "runner_hash_hex": args.runner_hash_hex,
                 "quorum": args.quorum,
@@ -689,8 +681,16 @@ def validate_common_inputs(args: argparse.Namespace, errors: list[str]) -> None:
     """Validate inputs shared by every generated canary."""
 
     validate_output_path(args.out, errors)
-    validate_canonical_string(args.deployment_id, label="--deployment-id", errors=errors)
-    validate_canonical_string(args.environment, label="--environment", errors=errors)
+    require_rollout_deployment_id(
+        {"--deployment-id": args.deployment_id},
+        errors,
+        field="--deployment-id",
+    )
+    require_rollout_environment(
+        {"--environment": args.environment},
+        errors,
+        field="--environment",
+    )
     validate_hex(args.body_digest_hex, length=HEX64_LEN, option="--body-digest-hex", errors=errors)
     if args.policy_digest_hex is not None:
         validate_hex(
@@ -774,6 +774,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             label="--runner-url",
             errors=errors,
             required=True,
+            base_url=True,
         )
         validate_canary_url(
             args.runner_status_url,
@@ -795,6 +796,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             label="--committee-url",
             errors=errors,
             required=True,
+            base_url=True,
         )
         validate_canary_url(
             args.committee_status_url,
@@ -836,6 +838,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             label="--operator-url",
             errors=errors,
             required=True,
+            base_url=True,
         )
         validate_hex(
             args.workflow_digest_hex,
@@ -881,6 +884,12 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             label="--manifest-path",
             errors=errors,
         )
+        validate_canonical_string(args.case_id, label="--case-id", errors=errors)
+        validate_canonical_string(args.round_id, label="--round-id", errors=errors)
+        if args.probe_count < len(ALLOWED_NOTIFICATION_ACTIONS):
+            errors.append(
+                "--probe-count must cover both shipped notification actions"
+            )
     elif args.kind == "commit_reveal_executor":
         require_kind_options(
             args,
@@ -898,6 +907,7 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
             label="--execution-summary-path",
             errors=errors,
         )
+        validate_canonical_string(args.bundle_dir, label="--bundle-dir", errors=errors)
         validate_canonical_string(
             args.service_name,
             label="--service-name",
@@ -905,6 +915,15 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         )
         if args.service_name != REQUIRED_EXECUTOR_SERVICE_NAME:
             errors.append("--service-name must match the reviewed executor service")
+        if (
+            args.action_count
+            != args.commit_action_count
+            + args.reveal_action_count
+            + args.tally_action_count
+        ):
+            errors.append(
+                "--action-count must equal commit, reveal, and tally action counts"
+            )
     elif args.kind == "transparency_publication":
         require_kind_options(
             args,
@@ -1004,8 +1023,11 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
     try:
         parent.mkdir(parents=True, exist_ok=True)
     except (OSError, RuntimeError) as error:
-        del error
-        return [f"--out parent `{path_diagnostic_label(parent)}` cannot be created"]
+        parent_label = path_diagnostic_label(parent)
+        return [
+            f"--out parent `{parent_label}` cannot be created: "
+            f"{error_diagnostic_label(error, path_label=parent_label)}"
+        ]
     tmp_name = f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     tmp_path = parent / tmp_name
     fd = -1
@@ -1024,7 +1046,7 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if parent_sync_errors:
             return parent_sync_errors
     except (OSError, RuntimeError) as error:
-        del error
+        path_label = path_diagnostic_label(path)
         try:
             if fd >= 0:
                 os.close(fd)
@@ -1035,7 +1057,10 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
                 pass
             except (OSError, RuntimeError):
                 pass
-        return [f"--out `{path_diagnostic_label(path)}` cannot be written"]
+        return [
+            f"--out `{path_label}` cannot be written: "
+            f"{error_diagnostic_label(error, path_label=path_label)}"
+        ]
     return []
 
 
@@ -1081,7 +1106,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--route-status-code", type=positive_int_arg, default=200)
     parser.add_argument("--notification-status-code", type=positive_int_arg, default=202)
     parser.add_argument("--publication-status-code", type=positive_int_arg, default=201)
-    parser.add_argument("--probe-count", type=positive_int_arg, default=1)
+    parser.add_argument(
+        "--probe-count",
+        type=positive_int_arg,
+        default=len(ALLOWED_NOTIFICATION_ACTIONS),
+    )
     parser.add_argument("--body-bytes", type=positive_int_arg, default=128)
     parser.add_argument("--request-bytes", type=positive_int_arg, default=128)
     parser.add_argument("--response-bytes", type=positive_int_arg, default=16)

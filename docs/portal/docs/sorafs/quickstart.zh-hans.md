@@ -28,12 +28,12 @@ translator: machine-google-reviewed
 
 ## 1. 刷新确定性装置
 
-重新生成规范的 SF-1 分块向量。该命令还发出有符号的
-提供 `--signing-key` 时的舱单信封；使用 `--allow-unsigned`
-仅在本地开发期间。
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 ```bash
-cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
+cargo run -p sorafs_chunker --bin export_vectors -- --signing-key=<ed25519-private-key-hex>
 ```
 
 输出：
@@ -78,7 +78,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 查看 `/tmp/docs.report.json`：
@@ -88,9 +88,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – 在清单信封中签名的 BLAKE3 摘要。
 - `chunk_fetch_specs[]` – 协调器的有序获取指令。
 
-准备好提供真实签名时，添加 `--signing-key` 和 `--signer`
-论据。该命令在写入之前验证每个 Ed25519 签名
-信封。
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. 模拟多提供商检索
 

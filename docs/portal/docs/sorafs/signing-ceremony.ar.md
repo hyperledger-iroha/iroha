@@ -70,8 +70,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-مرر `--manifest` اذا كان manifest في عنوان مختلف. يتم رفض envelopes غير الموقعة الا اذا
-تم ضبط `--allow-unsigned` لاختبارات smoke المحلية.
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - عند التحقق من manifest عبر بوابة staging، استهدف Torii بدلا من payloads المحلية:
 

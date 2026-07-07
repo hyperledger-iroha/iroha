@@ -53,10 +53,10 @@ fixtures et émet les fichiers suivants sous `fixtures/sorafs_chunker/` :
 
 ### Politique de signature
 
-La régénération des fixtures **doit** inclure une signature valide du conseil. Le générateur
-rejette la sortie non signée sauf si `--allow-unsigned` est passé explicitement (prévu
-uniquement pour l'expérimentation locale). Les enveloppes de signature sont append-only et
-sont dédupliquées par signataire.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 Pour ajouter une signature du conseil :
 

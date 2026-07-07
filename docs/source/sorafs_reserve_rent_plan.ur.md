@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_reserve_rent_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7b6532037723d1359975b367786db45c08cf054a2b4b25b8d64d6f26f0d69117
+source_hash: 2e07bf375b8f0b72d9e8a9258711867e801d8f4edb5475b673fa130ad57a5f8c
 source_last_modified: 2026-07-05T01:29:59.210412+00:00
 translation_last_reviewed: 2026-07-05
 source_mtime: 2026-07-05T01:29:59.210412+00:00
@@ -532,8 +532,7 @@ reviewed `policy_digest_hex`, `matrix_digest_hex`, `ledger_digest_hex`,
 `scheduled_lifecycle_canary_defaulted_provider_count` inside
 `valid_provider_bakes`, so the final production-readiness gate can validate the
 staged bake against the same policy/matrix/ledger tuple and scheduler canary
-metadata that the rollout checker accepted. The aggregate production-readiness
-gate also preserves the full policy/matrix/ledger chain: policies in
+metadata that the rollout checker accepted. The reserve-rent gate fail-closes when more than one valid policy, policy/matrix, or policy/matrix/ledger anchor appears, and clears the mixed `valid_policy_digests`, `valid_policy_matrix_bindings`, or `valid_policy_matrix_ledger_bindings` set before aggregate promotion can report ready. The aggregate production-readiness gate also preserves the full policy/matrix/ledger chain: policies in
 `valid_policy_matrix_bindings` must appear in `valid_policy_digests`, ledger
 binding policy/matrix pairs must appear in `valid_policy_matrix_bindings`, and
 provider-bake policy/matrix/ledger tuples must appear in
@@ -648,8 +647,7 @@ the quote matrix binds to a valid policy
 `policy_digest_hex`, the ledger binds to that policy/matrix tuple, and
 lifecycle, route, movement, credit-line, appeal, metrics, provider-bake, and
 governance artifacts all carry the same payload-free
-`policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple. The
-aggregate production-readiness gate also preserves that chain by requiring
+`policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple. The reserve-rent gate fail-closes when more than one valid policy, policy/matrix, or policy/matrix/ledger anchor appears, and clears the mixed `valid_policy_digests`, `valid_policy_matrix_bindings`, or `valid_policy_matrix_ledger_bindings` set before aggregate promotion can report ready. The aggregate production-readiness gate also preserves that chain by requiring
 policies in `valid_policy_matrix_bindings` to appear in `valid_policy_digests`,
 ledger binding policy/matrix pairs to appear in `valid_policy_matrix_bindings`,
 and provider-bake policy/matrix/ledger tuples to appear in

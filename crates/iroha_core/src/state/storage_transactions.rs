@@ -7,7 +7,10 @@ use std::{
     collections::{BTreeMap, HashSet},
     hash::Hash,
     num::NonZeroUsize,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use arc_swap::ArcSwapOption;
@@ -23,6 +26,7 @@ use parking_lot::{Mutex, RawMutex, lock_api::MutexGuard};
 
 type Key = HashOf<SignedTransaction>;
 type Value = NonZeroUsize;
+type DirectGeneration = u64;
 
 /// Multi-version append-only key value storage for transactions
 /// This is analogue of [`mv::storage::Storage`] or `HashMap<Key, Value>`.
@@ -43,6 +47,10 @@ pub struct TransactionsStorage {
     /// lower than the current latest block) so that stale transactions are
     /// discarded after rollbacks.
     blocks: DashMap<Key, Value>,
+    /// Transaction memberships committed by direct, non-canonical lane-block
+    /// application. These entries do not advance `latest_block`.
+    direct_committed: DashMap<Key, DirectMembership>,
+    direct_commit_generation: AtomicU64,
     write_lock: Mutex<()>,
 }
 
@@ -54,6 +62,12 @@ struct BlockInfo {
     height: NonZeroUsize,
 }
 
+#[derive(Clone, Copy)]
+struct DirectMembership {
+    height: Value,
+    generation: DirectGeneration,
+}
+
 impl TransactionsStorage {
     /// Construct new [`Self`]
     #[allow(clippy::new_without_default)]
@@ -61,6 +75,8 @@ impl TransactionsStorage {
         Self {
             latest_block: ArcSwapOption::empty(),
             blocks: DashMap::new(),
+            direct_committed: DashMap::new(),
+            direct_commit_generation: AtomicU64::new(0),
             write_lock: Mutex::new(()),
         }
     }
@@ -70,6 +86,8 @@ impl TransactionsStorage {
         TransactionsView {
             latest_block: self.latest_block.load_full(),
             blocks: &self.blocks,
+            direct_committed: &self.direct_committed,
+            direct_generation: self.direct_commit_generation.load(Ordering::Acquire),
         }
     }
 
@@ -79,6 +97,34 @@ impl TransactionsStorage {
             .load()
             .as_ref()
             .map_or(0, |block| block.height.get())
+    }
+
+    /// Record transaction hashes committed by a non-canonical state application.
+    ///
+    /// Direct standalone lane-block application mutates WSV without appending a
+    /// canonical block hash. These hashes must still be visible to duplicate
+    /// admission checks, but they must not advance the transaction store's
+    /// latest canonical block height.
+    pub(crate) fn record_direct_committed_membership(
+        &self,
+        transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
+        height: NonZeroUsize,
+    ) {
+        let _guard = self.write_lock.lock();
+        let generation = self
+            .direct_commit_generation
+            .load(Ordering::Relaxed)
+            .saturating_add(1);
+        let mut recorded = false;
+        for transaction in transactions {
+            self.direct_committed
+                .insert(transaction, DirectMembership { height, generation });
+            recorded = true;
+        }
+        if recorded {
+            self.direct_commit_generation
+                .store(generation, Ordering::Release);
+        }
     }
 
     /// Create block to aggregate updates
@@ -96,6 +142,8 @@ impl TransactionsStorage {
         TransactionsBlock {
             latest_block_ref: &self.latest_block,
             blocks_ref: &self.blocks,
+            direct_committed_ref: &self.direct_committed,
+            direct_generation: self.direct_commit_generation.load(Ordering::Acquire),
             _guard: guard,
             revert,
             current_block: None,
@@ -116,6 +164,20 @@ pub trait TransactionsReadOnly {
 mod view {
     use super::*;
 
+    pub(super) fn get_direct_committed<Q>(
+        direct_committed: &DashMap<Key, DirectMembership>,
+        direct_generation: DirectGeneration,
+        key: &Q,
+    ) -> Option<Value>
+    where
+        Key: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        direct_committed.get(key).and_then(|membership| {
+            (membership.generation <= direct_generation).then_some(membership.height)
+        })
+    }
+
     /// Consistent view of the storage at the certain version
     #[derive(Clone)]
     pub struct TransactionsView<'storage> {
@@ -123,6 +185,8 @@ mod view {
         /// Some transactions may be added to the map after `Self` is created,
         /// but for us exists only transactions with `height < latest_block.height`
         pub(super) blocks: &'storage DashMap<Key, Value>,
+        pub(super) direct_committed: &'storage DashMap<Key, DirectMembership>,
+        pub(super) direct_generation: DirectGeneration,
     }
 
     impl TransactionsReadOnly for TransactionsView<'_> {
@@ -131,18 +195,23 @@ mod view {
             Key: Borrow<Q>,
             Q: Hash + Eq + ?Sized,
         {
-            let Some(block) = &self.latest_block else {
-                return None;
-            };
-            let block_height = block.height;
-            if block.transactions.contains(key) {
-                return Some(block_height);
+            if let Some(block) = &self.latest_block {
+                let block_height = block.height;
+                if block.transactions.contains(key) {
+                    return Some(block_height);
+                }
+
+                if let Some(height) = self
+                    .blocks
+                    .get(key)
+                    .map(|h| *h)
+                    .filter(|&h| h < block_height)
+                {
+                    return Some(height);
+                }
             }
 
-            self.blocks
-                .get(key)
-                .map(|h| *h)
-                .filter(|&h| h < block_height)
+            get_direct_committed(self.direct_committed, self.direct_generation, key)
         }
     }
 
@@ -160,6 +229,7 @@ pub use view::TransactionsView;
 
 /// Module for [`TransactionsBlock`] and it's related impls
 mod block {
+    use super::view::get_direct_committed;
     use super::*;
 
     /// Batched update to the storage that can be reverted later.
@@ -199,6 +269,8 @@ mod block {
         /// References to [`TransactionsStorage`] struct
         pub(super) latest_block_ref: &'storage ArcSwapOption<BlockInfo>,
         pub(super) blocks_ref: &'storage DashMap<Key, Value>,
+        pub(super) direct_committed_ref: &'storage DashMap<Key, DirectMembership>,
+        pub(super) direct_generation: DirectGeneration,
         pub(super) _guard: MutexGuard<'storage, RawMutex, ()>,
 
         /// Own fields
@@ -333,7 +405,9 @@ mod block {
                 return Some(block.height);
             }
 
-            self.blocks_ref.get(key).map(|height| *height)
+            self.blocks_ref.get(key).map(|height| *height).or_else(|| {
+                get_direct_committed(self.direct_committed_ref, self.direct_generation, key)
+            })
         }
     }
 }
@@ -361,6 +435,18 @@ mod serialization {
             map.insert(*entry.key(), *entry.value());
         }
         JsonSerializeTrait::json_serialize(&map, out);
+        out.push(',');
+        json::write_json_string("direct_committed", out);
+        out.push(':');
+        let mut direct_map = BTreeMap::new();
+        #[allow(clippy::explicit_iter_loop)]
+        for entry in view.direct_committed.iter() {
+            let membership = *entry.value();
+            if membership.generation <= view.direct_generation {
+                direct_map.insert(*entry.key(), membership.height);
+            }
+        }
+        JsonSerializeTrait::json_serialize(&direct_map, out);
         out.push('}');
     }
 
@@ -391,6 +477,7 @@ mod serialization {
             let blocks_value = map
                 .remove("blocks")
                 .ok_or_else(|| json::Error::missing_field("blocks"))?;
+            let direct_committed_value = map.remove("direct_committed");
 
             let latest_block = match latest_block_value {
                 json::Value::Null => None,
@@ -422,9 +509,37 @@ mod serialization {
                 dash.clear();
             }
 
+            let direct_dash = DashMap::new();
+            if let Some(direct_committed_value) = direct_committed_value {
+                let json::Value::Object(entries) = direct_committed_value else {
+                    return Err(json::Error::InvalidField {
+                        field: "direct_committed".into(),
+                        message: "expected object".into(),
+                    });
+                };
+                for (key_str, value_value) in entries {
+                    let key = Key::decode_json_key(&key_str).map_err(|err| {
+                        json::Error::Message(format!(
+                            "invalid direct transaction hash `{key_str}`: {err}"
+                        ))
+                    })?;
+                    let height: Value = json::value::from_value(value_value)?;
+                    direct_dash.insert(
+                        key,
+                        DirectMembership {
+                            height,
+                            generation: 1,
+                        },
+                    );
+                }
+            }
+            let direct_generation = u64::from(!direct_dash.is_empty());
+
             Ok(TransactionsStorage {
                 latest_block: ArcSwapOption::from(latest_block),
                 blocks: dash,
+                direct_committed: direct_dash,
+                direct_commit_generation: AtomicU64::new(direct_generation),
                 write_lock: Mutex::new(()),
             })
         }
@@ -739,6 +854,86 @@ mod tests {
         block.commit().unwrap();
 
         assert_eq!(storage.latest_height(), value.get());
+    }
+
+    #[test]
+    fn direct_committed_membership_is_visible_without_canonical_height() {
+        let [key] = get_keys();
+        let [height] = get_values();
+        let storage = TransactionsStorage::new();
+
+        storage.record_direct_committed_membership([key], height);
+
+        assert_eq!(storage.latest_height(), 0);
+        assert_eq!(storage.view().get(&key), Some(height));
+    }
+
+    #[test]
+    fn direct_committed_membership_preserves_existing_view_snapshot() {
+        let [key] = get_keys();
+        let [height] = get_values();
+        let storage = TransactionsStorage::new();
+        let view_before_direct_commit = storage.view();
+
+        storage.record_direct_committed_membership([key], height);
+
+        assert_eq!(view_before_direct_commit.get(&key), None);
+        assert_eq!(storage.view().get(&key), Some(height));
+    }
+
+    #[test]
+    fn direct_committed_membership_survives_canonical_revert() {
+        let [direct_key, canonical_key, reverted_key, replacement_key] = get_keys();
+        let [height1, height2] = get_values();
+        let storage = TransactionsStorage::new();
+
+        storage.record_direct_committed_membership([direct_key], height2);
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[canonical_key], height1);
+            block.commit().unwrap();
+        }
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[reverted_key], height2);
+            block.commit().unwrap();
+        }
+        {
+            let mut block = storage.block_and_revert();
+            insert_keys(&mut block, &[replacement_key], height2);
+            block.commit().unwrap();
+        }
+
+        let view = storage.view();
+        assert_eq!(view.get(&direct_key), Some(height2));
+        assert_eq!(view.get(&canonical_key), Some(height1));
+        assert_eq!(view.get(&replacement_key), Some(height2));
+        assert_eq!(view.get(&reverted_key), None);
+    }
+
+    #[test]
+    fn direct_committed_membership_roundtrips_through_json() {
+        let [key] = get_keys();
+        let [height] = get_values();
+        let storage = TransactionsStorage::new();
+
+        storage.record_direct_committed_membership([key], height);
+
+        let json = norito::json::to_json(&storage.view()).unwrap();
+        let restored: TransactionsStorage = norito::json::from_str(&json).unwrap();
+
+        assert_eq!(restored.latest_height(), 0);
+        assert_eq!(restored.view().get(&key), Some(height));
+    }
+
+    #[test]
+    fn direct_committed_membership_defaults_empty_for_legacy_json() {
+        let storage: TransactionsStorage =
+            norito::json::from_str(r#"{"latest_block":null,"blocks":{}}"#).unwrap();
+
+        assert_eq!(storage.latest_height(), 0);
+        assert!(storage.view().direct_committed.is_empty());
     }
 
     #[test]

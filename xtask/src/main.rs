@@ -780,6 +780,26 @@ fn parse_u64_flag(raw: &str, flag: &str) -> Result<u64, Box<dyn Error>> {
     Ok(parsed)
 }
 
+fn validate_sorafs_adoption_override_id(raw: &str) -> Result<(), Box<dyn Error>> {
+    let mut chars = raw.chars();
+    let Some(first) = chars.next() else {
+        return Err(
+            "--adoption-override-id must be 3-128 characters and start with alphanumeric".into(),
+        );
+    };
+    if raw.len() < 3 || raw.len() > 128 || !first.is_ascii_alphanumeric() {
+        return Err(
+            "--adoption-override-id must be 3-128 characters and start with alphanumeric".into(),
+        );
+    }
+    if !chars
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | ':' | '@' | '+' | '-'))
+    {
+        return Err("--adoption-override-id may contain only [A-Za-z0-9._:@+-] characters".into());
+    }
+    Ok(())
+}
+
 fn unix_timestamp_now() -> Result<u64, Box<dyn Error>> {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => Ok(duration.as_secs()),
@@ -3109,6 +3129,7 @@ where
             let mut require_telemetry_region = false;
             let mut allow_implicit_metadata = false;
             let mut require_direct_only = false;
+            let mut adoption_override_id: Option<String> = None;
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
                     "--scoreboard" => {
@@ -3153,6 +3174,13 @@ where
                     "--require-direct-only" => {
                         require_direct_only = true;
                     }
+                    "--adoption-override-id" | "--override-id" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --adoption-override-id".into());
+                        };
+                        validate_sorafs_adoption_override_id(&value)?;
+                        adoption_override_id = Some(value);
+                    }
                     "--report" | "--report-out" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --report".into());
@@ -3165,6 +3193,12 @@ where
                         );
                     }
                 }
+            }
+            if (allow_single_source || !require_positive_weight) && adoption_override_id.is_none() {
+                return Err(
+                    "sorafs-adoption-check relaxation flags (--allow-single-source/--allow-zero-weight) require --adoption-override-id <incident-or-approval-id>"
+                        .into(),
+                );
             }
             Ok(CommandKind::SorafsAdoptionCheck {
                 options: sorafs::AdoptionCheckOptions {
@@ -12180,7 +12214,7 @@ fn print_usage() {
         "    Validate docs portal gateway binding artefacts before attaching them to DG-3 change tickets. Confirms Sora-Name/Proof headers, route metadata, and proof payloads match the expected alias/content CID."
     );
     eprintln!(
-        "  cargo xtask sorafs-adoption-check [--scoreboard <path>] [--summary <path>] [--min-providers <count>] [--allow-zero-weight] [--allow-single-source] [--allow-implicit-metadata] [--require-direct-only] [--require-telemetry] [--require-telemetry-region] [--report <path>]"
+        "  cargo xtask sorafs-adoption-check [--scoreboard <path>] [--summary <path>] [--min-providers <count>] [--allow-zero-weight] [--allow-single-source] [--adoption-override-id <id>] [--allow-implicit-metadata] [--require-direct-only] [--require-telemetry] [--require-telemetry-region] [--report <path>]"
     );
     eprintln!(
         "    Validate multi-source adoption evidence by inspecting persisted orchestrator scoreboards and summaries."
@@ -12541,6 +12575,63 @@ mod tests {
     fn soranet_fixture_default_path_points_into_tests() {
         let default = soranet::default_fixture_dir(&workspace_root());
         assert!(default.ends_with("tests/interop/soranet/capabilities"));
+    }
+
+    #[test]
+    fn parse_sorafs_adoption_check_rejects_relaxation_without_override_id() {
+        let args = ["xtask", "sorafs-adoption-check", "--allow-single-source"];
+        let iter = args.into_iter().map(String::from);
+        let err = match parse_command(iter) {
+            Ok(_) => panic!("relaxation flag must require an override id"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("require --adoption-override-id"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn parse_sorafs_adoption_check_rejects_malformed_override_id() {
+        let args = [
+            "xtask",
+            "sorafs-adoption-check",
+            "--allow-zero-weight",
+            "--adoption-override-id",
+            "bad id",
+        ];
+        let iter = args.into_iter().map(String::from);
+        let err = match parse_command(iter) {
+            Ok(_) => panic!("malformed override id must fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("may contain only"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[test]
+    fn parse_sorafs_adoption_check_accepts_relaxation_with_override_id() {
+        let args = [
+            "xtask",
+            "sorafs-adoption-check",
+            "--allow-single-source",
+            "--allow-zero-weight",
+            "--adoption-override-id",
+            "INC-2026-07-DIRECT",
+        ];
+        let iter = args.into_iter().map(String::from);
+        let command = parse_command(iter).expect("valid override id should parse");
+        match command {
+            CommandKind::SorafsAdoptionCheck { options, .. } => {
+                assert!(options.allow_single_source_fallback);
+                assert!(!options.require_positive_weight);
+            }
+            _ => panic!("expected sorafs-adoption-check command"),
+        }
     }
 
     #[test]

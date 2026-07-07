@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs/signing_ceremony.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 474e9259f3ff5bc814c371ce46a6382577af736da3e59a2d9e5b014f9ea2b994
+source_hash: 1afdd94c82f6206ac50f66f6a753cb9fa8838f76df04dbb3be6ea6e5e38715ea
 source_last_modified: "2026-01-04T10:50:53.670573+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -69,8 +69,8 @@ offline process and how developers interact with it.
   ```
 
   Pass `--manifest` if the manifest lives at a different URL or path. The
-  command refuses unsigned envelopes unless `--allow-unsigned` is provided for
-  local smoke runs.
+  command refuses unsigned envelopes; use the Parliament-published envelope or a
+  locally generated council-signed envelope for smoke runs.
   When validating the published manifest against a staging gateway, point
   `sorafs-fetch` at the Torii host instead of local payloads:
 

@@ -28,9 +28,9 @@ translator: machine-google-reviewed
 
 ## 1. གཏན་འབེབས་ཀྱི་སྒྲིག་སྟངས་གསར་བསྐྲུན།
 
-ཁྲིམས་ལུགས་ཀྱི་ SF-1 ཆ་ཤས་ཀྱི་ནད་འབུཔ་ཚུ་ ལོག་བཟོ་ནི། བརྡ་བཀོད་ཀྱིས་ཡང་མིང་རྟགས་བཀོད་ཡོདཔ།
-`--signing-key` བཀྲམ་སྤེལ་འབད་བའི་སྐབས་ གསལ་སྟོན་གྱི་ ཡིག་ཆ་ཚུ། `--allow-unsigned` ལག་ལེན་འཐབ།
-ས་གནས་གོང་འཕེལ་གྱི་སྐབས་ལུ་རྐྱངམ་ཅིག་ཨིན།
+Regenerate the canonical SF-1 chunking vectors. The command verifies the
+existing council signature file, or appends a signature when `--signing-key` is
+supplied.
 
 I18NF0000004X
 
@@ -76,7 +76,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --manifest-out=/tmp/docs.manifest \
   --manifest-signatures-out=/tmp/docs.manifest_signatures.json \
   --json-out=/tmp/docs.report.json \
-  --allow-unsigned
+  --council-signature=<signerhex>:<signaturehex>
 ```
 
 བསྐྱར་ཞིབ་ `/tmp/docs.report.json` གི་དོན་ལུ་:
@@ -86,9 +86,9 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
 - `manifest.manifest_blake3` – BLAKE3 བཞུ་རྫས་ གསལ་སྟོན་ཡིག་ཤུབས་ནང་ མཚན་རྟགས་བཀོད་ཡོདཔ།
 - `chunk_fetch_specs[]` – སྙན་ཆའི་སྡེ་ཚན་ཚུ་གི་དོན་ལུ་ བཀོད་རྒྱ་ཚུ་ བཀོད་སྒྲིག་འབད་ཡོདཔ་ཨིན།
 
-མཚན་རྟགས་ངོ་མ་བཀྲམ་སྤེལ་འབད་ནི་ལུ་གྲ་སྒྲིག་ཡོད་པའི་སྐབས་ I18NI000000030X དང་ `--signer` ཁ་སྐོང་འབད།
-རྩོད་པ་ཚུ། བརྡ་བཀོད་འདི་གིས་ འདི་འབྲི་མ་ཚར་བའི་ཧེ་མ་ Ed25519 མཚན་རྟགས་རེ་རེ་བཞིན་བདེན་དཔང་འབདཝ་ཨིན།
-ཡིག༌ཤུབས།
+The `--council-signature` value must be a reviewed council signer public key and
+Ed25519 signature pair. The command verifies every Ed25519 signature before
+writing the envelope.
 
 ## 4. སྣ་མང་མཁོ་སྤྲོད་པ་བསྐྱར་བཟོ་འབད་ནི།
 

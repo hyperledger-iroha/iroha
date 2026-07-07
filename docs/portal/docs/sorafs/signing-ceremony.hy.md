@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Անցեք `--manifest`, եթե մանիֆեստն ապրում է այլ URL-ով: Չստորագրված ծրարներ
-մերժվում են, եթե `--allow-unsigned`-ը սահմանված չէ տեղական ծխի վազքների համար:
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - Երբ մանիֆեստը հաստատում եք բեմական դարպասի միջոցով, թիրախավորեք Torii-ի փոխարեն
   տեղական ծանրաբեռնվածություն.

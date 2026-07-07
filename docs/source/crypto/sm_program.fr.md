@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T18:50:10.586502+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ déploiements mixtes où les observateurs Ed25519 uniquement se connectent à de
 connecté à `WARN`, mais les nœuds de consensus doivent conserver les valeurs par défaut activées pour éviter toute erreur accidentelle.
 divergence entre les pairs conscients du SM et ceux handicapés par le SM.
 La CLI fait apparaître ces bascules via la mise à jour de la poignée de main de l'application `iroha_cli sorafs
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
+--require-sm-handshake-match` and `--require-sm-openssl-preview-match`, or the matching `--require-*`
 drapeaux pour rétablir une application stricte.#### Aperçu d'OpenSSL/Tongsuo (`sm-ffi-openssl`)
 - **Portée.** Crée un shim de fournisseur en version préliminaire uniquement (`OpenSslProvider`) qui valide la disponibilité du runtime OpenSSL et expose le hachage SM3 soutenu par OpenSSL, la vérification SM2 et le cryptage/déchiffrement SM4-GCM tout en restant opt-in. Les binaires Consensus doivent continuer à utiliser le chemin RustCrypto ; le backend FFI est strictement opt-in pour les pilotes de vérification/signature de bord.
 - **Conditions préalables de construction.** Compilez avec `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` et assurez les liens de la chaîne d'outils avec OpenSSL/Tongsuo 3.0+ (`libcrypto` avec prise en charge SM2/SM3/SM4). Les liens statiques sont déconseillés ; privilégiez les bibliothèques dynamiques gérées par l'opérateur.

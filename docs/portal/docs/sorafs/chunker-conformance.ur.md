@@ -49,7 +49,10 @@ Reference implementation: `sorafs_chunker::chunk_bytes_with_digests_profile`.
 
 ### Signing policy
 
-Fixture regeneration **لازم** طور پر valid council signature شامل کرے۔ generator unsigned output کو reject کرتا ہے جب تک `--allow-unsigned` واضح طور پر نہ دیا جائے (صرف مقامی تجربات کے لیے)۔ Signature envelopes append-only ہوتے ہیں اور signer کے لحاظ سے deduplicate ہوتے ہیں۔
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 Council signature شامل کرنے کے لیے:
 

@@ -53,10 +53,10 @@ SDK дээрх бэхэлгээний хэрэглэгчид синхрончл�
 
 ### Гарын үсэг зурах бодлого
 
-Бэхэлгээний нөхөн сэргээлт нь **заавал** хүчинтэй зөвлөлийн гарын үсгийг агуулсан байх ёстой. Генератор
-`--allow-unsigned` тодорхой дамжуулагдаагүй тохиолдолд гарын үсэг зураагүй гаралтыг үгүйсгэдэг (зориулалттай)
-зөвхөн орон нутгийн туршилтанд). Гарын үсэг бүхий дугтуйг зөвхөн хавсаргах боломжтой
-гарын үсэг зурсан хүн бүрт давхардсан.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 Зөвлөлийн гарын үсэг нэмэхийн тулд:
 

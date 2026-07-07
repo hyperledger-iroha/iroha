@@ -53,9 +53,10 @@ fixtures ويصدر الملفات التالية ضمن `fixtures/sorafs_chunke
 
 ### سياسة التوقيع
 
-يجب أن تشمل إعادة توليد fixtures توقيعاً صالحاً من المجلس. يرفض المولد
-الإخراج غير الموقّع ما لم يتم تمرير `--allow-unsigned` صراحة (مخصص
-للتجارب المحلية فقط). أظرف التوقيع append-only ويتم إزالة التكرارات حسب الموقّع.
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 لإضافة توقيع من المجلس:
 

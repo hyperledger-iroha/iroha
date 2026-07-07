@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-07-04
+Last updated: 2026-07-06
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -6367,10 +6367,94 @@ redistributable schemas, and official trust/revocation bundles.
   lane-local state. The scheduler now exposes a composed lane payload planner
   that reduces known tips, applies reset watermarks, assigns next lane-local
   slots, derives subjects, and validates DA/RBC ownership in one reusable step
-  shared by preview and final proposal assembly. Remaining work is to have the
-  full per-lane proposal/vote scheduler produce, execute, QC-seal, and replay
-  standalone lane blocks from those artifacts instead of relying on the global
-  proposal path.
+  shared by preview and final proposal assembly. That planner now emits
+  invariant-checked per-lane descriptors carrying the domain, selected tip,
+  next slot, subject, ownership, and accepted transaction hashes together,
+  and canonical lane subject/ownership hashes now bind the accepted transaction
+  hash sequence that validators recompute from execution-context entrypoints.
+  The handoff entries also include a Norito-backed lane block descriptor hash
+  that binds the predecessor lane height, accepted work, DA/RBC ownership,
+  optional predecessor descriptor hash, validator set, quorum, and QC mode tag
+  for standalone proposal/vote replay. The same plan output now includes an
+  explicit standalone lane-block proposal artifact and proposal hash for each
+  descriptor, while the live global proposal path remains unchanged. The
+  proposal artifact is now a canonical consensus data-model payload
+  (`LaneBlockDescriptorV1`/`LaneBlockProposalV1`) that derives the proposal hash
+  and the prepare/commit vote bodies validators sign.
+  Artifact-backed proposal tips now carry the predecessor descriptor hash
+  forward, reset-floored synthetic tips clear stale predecessor hashes, and
+  same-height tips with conflicting descriptor hashes fail closed instead of
+  letting the standalone lane chain choose an ambiguous predecessor.
+  Relay-backed proposal tips carry predecessor descriptor hashes only from
+  merge-admissible relays, and the relay FastPQ claim plus merge-hint root both
+  bind that descriptor metadata.
+  Proposal execution contexts and Kura lane artifacts now carry that descriptor
+  hash plus replay material with each lane payload ownership: accepted
+  transaction hashes, predecessor lane height, predecessor descriptor hash when
+  known, canonical validator set, validator count, and quorum. Validators first
+  bind those fields to committed route/candidate hashes, topology or lane
+  authority, and QC mode tag, then share the same embedded replay-hash verifier
+  as Kura artifact reads before accepting committed ownerships or persisted
+  sidecars as lane tips. Both paths reject lane ownerships that omit the
+  descriptor, reuse another lane identity hash, drift in replay material, claim
+  a predecessor descriptor for the genesis predecessor, or carry a descriptor
+  built over a different committee or predecessor.
+  The plan also emits full-committee prepare and commit vote templates carrying
+  canonical `LaneBlockVoteBodyV1` payloads whose signer-independent preimage
+  binds proposal hash, descriptor hash, lane coordinates, subject, DA/RBC
+  ownership, accepted transaction hashes, validator-set hash, quorum, and QC
+  mode tag. `iroha_core::lane_consensus` now validates signed BLS lane votes
+  and aggregates deterministic `LaneBlockQcV1` certificates while rejecting
+  malformed bodies, validator-set hash drift, non-canonical committees,
+  duplicate/unknown signers, non-BLS signers, body drift, invalid signatures,
+  and under-quorum vote sets. This gives the standalone scheduler a lane-local
+  block handoff and QC construction surface instead of parallel vectors or
+  fetched-batch indices alone. The core lane-consensus helper also validates
+  standalone proposal artifacts before session insertion, rejecting malformed
+  work, invalid predecessor shape, non-canonical or duplicate committees,
+  validator-set hash drift, descriptor hash drift, and proposal hash drift.
+  Lane-local proposal, vote, and QC artifacts now also have explicit
+  `BlockMessage` transport variants, consensus-status labels, fail-closed
+  main-loop handlers, and a bounded lane-session cache. The handlers validate
+  proposal shape, signed vote ingress, QC structure, signer PoPs, and
+  pre-aggregated QC signatures before caching valid artifacts as deferred
+  `payload_unapplied` work; exact replays are deduplicated, conflicts fail
+  closed, out-of-order artifacts are reconciled when their proposal arrives,
+  and lane-local messages bypass the global height/view future-window gate
+  because their heights are independent lane heights rather than global block
+  heights. Locally sealed QCs are now handed to background broadcast once,
+  while inbound QCs are cached without echoing, and sessions with a matching
+  proposal plus prepare/commit QCs are moved through a bounded actor-owned
+  committed-session staging queue for lane-block application. That staging
+  queue now publishes a bounded Sumeragi/Torii status surface with
+  descriptor/proposal hashes and compact prepare/commit QC summaries for
+  operator rollout evidence. Final proposal assembly now broadcasts finalized
+  lane-block proposals plus the local BLS prepare vote after stale-proposal
+  checks pass, and validated prepare QCs now unlock a one-shot local BLS commit
+  vote broadcast that is cached locally for commit-QC sealing. Queued committed
+  sessions now feed proposal-planning lane tips with the committed descriptor
+  hash, allowing subsequent lane-local slots to advance from sealed QCs before
+  durable standalone execution is complete. Certified standalone lane-block
+  sessions are now also persisted as Norito-framed Kura sidecars with
+  proposal/prepare-QC/commit-QC plus signer-PoP aggregate validation and
+  reloaded into proposal-planning lane tips and the bounded committed-session
+  queue/status surface after restart. The status surface now reports
+  certified-only sessions as `awaiting_executable_payload` and uses Kura's
+  canonical block body plus the lane ownership sidecar to advance recoverable
+  sessions to `payload_available_awaiting_executor`; Kura also persists the
+  recovered proposal, artifact, entrypoint hashes, and verified accepted
+  entrypoints as a durable execution-input sidecar, advancing those handoffs to
+  `payload_recovered_awaiting_state_application`. When canonical block results
+  are already present, Kura also records a durable application-receipt sidecar
+  with the certified proposal, ownership artifact, canonical block height/hash,
+  accepted entrypoint indices/hashes, and committed `TransactionResult`s,
+  advancing those sessions to `state_applied_by_canonical_block` only for
+  canonical receipts. The committed-session queue now also applies clean
+  current-tip direct preflights into world state with durable idempotence
+  markers, persists direct execution receipts after state commit, reports those
+  sessions as `state_applied_by_direct_execution`, repairs missing receipts
+  from committed markers, and replays durable direct receipts into state on
+  restart.
 - Add a multi-peer integration corridor proving two active lanes can advance at
   different heights, produce lane-domain QCs, upgrade FastPQ relay proofs, and
   merge without waiting for an idle configured lane. Unit-level restart/replay
@@ -6381,8 +6465,129 @@ redistributable schemas, and official trust/revocation bundles.
   lanes resume after their previous incarnation, including proposal-path stale
   old-incarnation tip coverage. Lane reset also prunes lane-scoped operator
   status snapshots so retired/recreated lanes do not keep stale activity,
-  commitment, relay, payload-ownership, or governance status. The remaining
-  breadth is the multi-peer corridor.
+  commitment, relay, payload-ownership, or governance status. The autoscale
+  soak reporter now records quorum-required maxima, successful scale-out
+  minimum peer counts, required scale-in cycle counts, required scale-in quorum
+  minima, and optional scale-in cycle counts so rollout summaries expose the
+  quorum evidence instead of only aggregate miss counters. The remaining
+  breadth is the multi-peer corridor; the 2026-07-06 four-peer strict autoscale
+  expand/contract localnet blocker is closed after lane payload ownership
+  replay was routed through canonical data-model entrypoint-hash helpers. The
+  strict run now observes load application, deterministic scale-out quorum,
+  strict lane status quorum, and scale-in across all four peers in cycle 1.
+  Committed standalone lane-block summaries are also exported through the
+  canonical Norito status payload, and the localnet corridor parser treats them
+  as expansion/progress evidence only after both prepare and commit QC signer
+  counts satisfy the lane quorum and their execution status is not a rejected
+  direct preflight. Kura now centralizes the direct-applier readiness predicate:
+  a recovered input is exposed only after predecessor application is receipted
+  without a preflight conflict, the current local state tip has a clean matching
+  preflight, no receipt or preflight conflict exists, and the lane block has not
+  already been applied.
+  Direct application markers are part of normal and tiered WSV snapshots, and
+  lane lifecycle reset paths now prune markers for retired, replaced, migrated,
+  or autoscale-retired lanes, so cold-tier snapshots preserve
+  direct-application idempotence across restarts without leaking markers across
+  lane incarnations. Direct receipt repair/replay also rejects inactive
+  lane/dataspace routing evidence before mutating Kura or WSV state. Recovered
+  direct execution inputs reject duplicate entrypoints, signed transactions, and
+  sealed commitments before any state execution is staged. Direct application
+  records accepted transaction hashes in a non-canonical membership index so
+  duplicate admission checks see direct WSV effects without advancing canonical
+  transaction height; marker repair and receipt replay backfill that index when
+  durable direct-application evidence already exists. Partial direct-membership
+  repair now inserts only missing hashes, preserving existing direct membership
+  heights when another hash in the same receipt still needs backfill.
+  Nexus-active lane-block queueing also prunes in-memory lane-block
+  proposal/QC sessions and committed-lane execution queue entries against the
+  current active `(LaneId, DataSpaceId)` routes before status publication, so
+  retired or recreated lane sessions cannot keep stale slot claims or committed
+  status alive in actor memory.
+  Certified lane-block sidecar snapshots also honor lane reset watermarks:
+  stale same-lane sidecars at or below the reset height no longer seed
+  proposal tips, restart execution queues, or autoscale unapplied-progress
+  checks, while fresh post-reset sidecars remain visible. Sumeragi startup
+  preloads the persisted DA reset journal before certified sidecar recovery.
+  Direct application marker scale-in guards now apply the same reset-watermark
+  boundary per queried lane, so stale key or marker evidence reintroduced
+  after lifecycle cleanup cannot block fresh-lane scale-in, while fresh
+  post-reset unrepaired markers and malformed key/payload rows still block
+  destruction. Autoscale commit also re-prunes lane-scoped block-local cleanup
+  state immediately before publishing the world block, covering AXT replay
+  rows, DA pin indexes, direct application markers, public-lane
+  validators/economics, and verified relay contract storage, then repeats
+  durable cleanup in committed storage so late inserts after lifecycle staging
+  cannot survive scale-in for retired lanes.
+  Autoscale scale-in now also refuses to retire lanes with committed direct
+  application markers that lack matching durable direct-execution receipts,
+  both when selecting deterministic retire candidates and when revalidating a
+  staged lifecycle at commit. Malformed marker storage keys are treated as
+  unrepaired even when the marker payload has a durable direct receipt, so
+  scale-in cannot prune retained-lane idempotence evidence through a forged key.
+  Direct receipt repair now also treats the marker storage key as committed
+  evidence and refuses malformed key/payload rows instead of promoting them
+  into durable Kura receipts or direct transaction membership. Existing direct
+  markers also cannot let durable receipts for inactive lane/dataspace routes
+  backfill non-canonical transaction membership after lane retirement.
+  Autoscale localnet cycle outcomes and soak artifacts now also preserve
+  direct-applied committed lane-block peer counts separately from generic
+  committed progress, so rollout review can distinguish direct WSV application
+  from canonical application and other expansion signals. The rollout parser
+  now also rejects conflicting latest committed-lane status rows for the same
+  lane height/view instead of choosing one by dataspace id, while preserving
+  exact duplicate rows as idempotent evidence, and treats ambiguous or
+  certified elastic-lane committed-block evidence as non-idle for scale-in.
+  Duplicate elastic-lane status rows are also malformed destruction evidence
+  rather than proof that the lane is absent. Ambiguous baseline lane evidence
+  for status, commitments, committed blocks, or validators cannot be repaired
+  by later clean rows into fresh expansion proof. Lane-specific transition-log
+  evidence is counted by unambiguous transition height instead of raw matching
+  lines, so exact duplicate same-height rows are idempotent and conflicting
+  same-height rows remain visible as ambiguous evidence that blocks fresh
+  scale-out/scale-in delta quorum from either the baseline or current snapshot.
+  Elastic-lane storage fallback now requires structural growth (file count,
+  total bytes, or first presence) instead of metadata-only mtime movement.
+  Sumeragi lane-commitment summaries use the same latest-unambiguous rule so conflicting
+  latest rows cannot fake current activity, post-baseline progress, or
+  post-baseline declaration transitions, and stale positive rows cannot
+  override a newer idle commitment. Ambiguous commitment rows also cannot prove
+  scale-in idleness.
+  Public lane-validator summaries now fail closed for conflicting duplicate
+  rows in both directions: ambiguous live/terminal rows do not create expansion
+  evidence and do not prove scale-in idleness. The lane-local
+  session cache also protects quorum-certified prepare+commit QC sessions from
+  ordinary cache eviction until the executor boundary drains them, so
+  committed-lane queue backpressure cannot silently drop certified lane
+  progress. Sumeragi tick also redrives the committed-lane executor queue,
+  records receipt-backed progress for already pending sessions, and admits
+  protected committed cache entries once queue capacity is freed, so
+  backpressure recovery no longer depends on a fresh lane-block network
+  message. Same-tick committed-lane status now merges newly recorded
+  applied-receipt evidence with the final post-prune queue snapshot, keeping
+  rollout telemetry accurate across that recovery transition. Startup status
+  also merges the latest durable application-receipted certified sidecar per
+  active lane with the in-memory pending queue, so restarted peers keep
+  publishing applied committed-lane evidence for both canonical block receipts
+  and direct execution receipts even when already receipted sessions are
+  skipped by execution hydration. The broader multi-peer
+  independent-lane corridor remains the
+  remaining breadth.
+  Kura now has a direct-execution lane application receipt format for clean
+  direct preflight evidence tied to a committed state hash, so direct
+  lane-state application can persist durable evidence without reusing the
+  canonical global-block receipt semantics.
+  Queue-generated direct preflights are now bound to the canonical committed WSV
+  snapshot hash rather than only the block tip, preventing stale preflight
+  evidence from surviving a direct WSV mutation that does not advance the
+  canonical block journal.
+  The committed-session queue is now receipt-backed rather than purely sticky:
+  it releases capacity only after Kura validates a durable application receipt,
+  and restart hydration skips already application-receipted certified sidecars
+  so stale applied work cannot crowd out unapplied committed lane blocks. Kura
+  now also revalidates recovered execution-input sidecars against the current
+  canonical lane payload artifact and proposal block before exposing them to
+  standalone direct application, rejecting stale recovered inputs after
+  canonical artifact drift.
 
 ## Cross-dataspace AMX follow-ups
 

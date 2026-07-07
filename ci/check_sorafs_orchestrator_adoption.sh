@@ -149,6 +149,58 @@ PY
   BURN_IN_LOG_LIST="$(printf "%s\n" "${BURN_IN_LOGS[@]}")"
 fi
 
+declare -a ADOPTION_FLAGS=()
+if [[ -n "${XTASK_SORAFS_ADOPTION_FLAGS:-}" ]]; then
+  while IFS= read -r flag; do
+    if [[ -n "${flag}" ]]; then
+      ADOPTION_FLAGS+=("${flag}")
+    fi
+  done < <(
+    XTASK_SORAFS_ADOPTION_FLAGS_INPUT="${XTASK_SORAFS_ADOPTION_FLAGS}" python3 <<'PY'
+import os
+import shlex
+
+flags = os.environ.get("XTASK_SORAFS_ADOPTION_FLAGS_INPUT", "")
+try:
+    parts = shlex.split(flags)
+except ValueError as exc:  # unmatched quotes, etc.
+    raise SystemExit(f"[sorafs-adoption] failed to parse XTASK_SORAFS_ADOPTION_FLAGS: {exc}") from exc
+for part in parts:
+    print(part)
+PY
+  )
+fi
+relaxing_adoption_override=0
+if (( ${#ADOPTION_FLAGS[@]} )); then
+  for flag in "${ADOPTION_FLAGS[@]}"; do
+    case "${flag}" in
+      --allow-single-source|--allow-zero-weight)
+        relaxing_adoption_override=1
+        ;;
+    esac
+  done
+fi
+if [[ ${relaxing_adoption_override} -eq 1 ]]; then
+  if [[ -z "${SORAFS_ADOPTION_OVERRIDE_ID:-}" ]]; then
+    echo "[sorafs-adoption] relaxing XTASK_SORAFS_ADOPTION_FLAGS require SORAFS_ADOPTION_OVERRIDE_ID" >&2
+    exit 1
+  fi
+  if [[ ! "${SORAFS_ADOPTION_OVERRIDE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._:@+-]{2,127}$ ]]; then
+    echo "[sorafs-adoption] SORAFS_ADOPTION_OVERRIDE_ID must be 3-128 characters of [A-Za-z0-9._:@+-] and start with alphanumeric" >&2
+    exit 1
+  fi
+  adoption_override_flag_present=0
+  for flag in "${ADOPTION_FLAGS[@]}"; do
+    if [[ "${flag}" == "--adoption-override-id" || "${flag}" == "--override-id" ]]; then
+      adoption_override_flag_present=1
+      break
+    fi
+  done
+  if [[ ${adoption_override_flag_present} -eq 0 ]]; then
+    ADOPTION_FLAGS+=("--adoption-override-id" "${SORAFS_ADOPTION_OVERRIDE_ID}")
+  fi
+fi
+
 mkdir -p "${RUN_DIR}"
 ln -sfn "${RUN_DIR}" "${ARTIFACT_ROOT}/latest"
 
@@ -365,28 +417,6 @@ require_nonempty_file "${CHUNK_RECEIPTS_PATH}" "chunk receipts output"
 
 MIN_ELIGIBLE="${MIN_PROVIDERS:-2}"
 echo "[sorafs-adoption] validating scoreboard (${MIN_ELIGIBLE} eligible providers required)..."
-# shellcheck disable=SC2206
-declare -a ADOPTION_FLAGS=()
-if [[ -n "${XTASK_SORAFS_ADOPTION_FLAGS:-}" ]]; then
-  while IFS= read -r flag; do
-    if [[ -n "${flag}" ]]; then
-      ADOPTION_FLAGS+=("${flag}")
-    fi
-  done < <(
-    XTASK_SORAFS_ADOPTION_FLAGS_INPUT="${XTASK_SORAFS_ADOPTION_FLAGS}" python3 <<'PY'
-import os
-import shlex
-
-flags = os.environ.get("XTASK_SORAFS_ADOPTION_FLAGS_INPUT", "")
-try:
-    parts = shlex.split(flags)
-except ValueError as exc:  # unmatched quotes, etc.
-    raise SystemExit(f"[sorafs-adoption] failed to parse XTASK_SORAFS_ADOPTION_FLAGS: {exc}") from exc
-for part in parts:
-    print(part)
-PY
-  )
-fi
 if [[ ${ALLOW_IMPLICIT_PROVIDER_METADATA:-0} -eq 1 ]]; then
   needs_flag=1
   if (( ${#ADOPTION_FLAGS[@]} )); then

@@ -14,7 +14,7 @@ translation_last_reviewed: "2026-01-30"
 Este runbook cierra el follow-up de **Decentralized DNS & Gateway** trazado en
 `roadmap.md` al detallar cómo los tres owners responsables coordinan la
 automatización DNS, promoción de alias, muestreo de telemetría y drills de
-rollback antes del kickoff del 2025‑03‑03. Complementa el tracker de asistencia
+rollback para cada ventana de cutover DNS gobernada. Complementa el tracker de asistencia
 (`docs/source/sorafs_gateway_dns_design_attendance.md`), el pre-read y el
 snapshot de telemetría GAR, y debe actualizarse cuando cambien las herramientas
 referenciadas o los buckets de evidencia.
@@ -31,8 +31,8 @@ referenciadas o los buckets de evidencia.
 
 | Ventana | Owner(s) | Checklist | Evidencia |
 |--------|----------|-----------|----------|
-| T‑14 días | Tooling WG + Docs/DevRel | Build del portal, correr el packaging script en modo dry-run y emitir el descriptor de cutover DNS.<br>`npm ci && npm run build && ./docs/portal/scripts/sorafs-pin-release.sh --skip-submit --dns-change-ticket OPS-XXXX --dns-cutover-window 2025-03-03T16:00Z/2025-03-03T16:30Z --dns-hostname docs.sora.link --dns-zone sora.link --ops-contact ops.lead@soranet --cache-purge-endpoint https://cache.api/purge --cache-purge-auth-env CACHE_PURGE_TOKEN --previous-dns-plan artifacts/sorafs/previous.dns-cutover.json` | `artifacts/sorafs/portal.pin.report.json`, `artifacts/sorafs/portal.additional_assets.json`, `artifacts/sorafs/portal.dns-cutover.json`, `artifacts/sorafs/portal.gateway.binding.json`, `artifacts/sorafs/portal.gateway.headers.txt`, `artifacts/sorafs/gateway.route_plan.json`, `artifacts/sorafs/checksums.sha256`, ticket de deploy del portal |
-| T‑10 días | Ops Lead | Actualizar el skeleton del zonefile según `docs/source/sns/governance_playbook.md`, guardar en `artifacts/sns/zonefiles/<zone>/<version>.json`, y verificar que el resolver tome los nuevos registros:<br>`cargo run -p soradns-resolver -- --config ops/soradns/resolver.staging.json`<br>`python3 scripts/sns_zonefile_skeleton.py --cutover-plan artifacts/sorafs/portal.dns-cutover.json --out artifacts/sns/zonefiles/sora.link/20250303.docs.sora.json --resolver-snippet-out ops/soradns/static_zones.docs.json --ipv4 <gateway-ip> --ttl 600 --zonefile-version 20250303.docs.sora --effective-at 2025-03-03T16:00Z --gar-digest <gar-digest-hex> --freeze-state soft --freeze-ticket SNS-DF-XXXX --freeze-expires-at 2025-03-10T12:00Z --freeze-note "guardian review" --txt ChangeTicket=OPS-XXXX` | JSON de zonefile, log de sync del resolver, commit hash de `ops/soradns/resolver.staging.json` |
+| T‑14 días | Tooling WG + Docs/DevRel | Build del portal, correr el packaging script en modo dry-run y emitir el descriptor de cutover DNS.<br>`npm ci && npm run build && ./docs/portal/scripts/sorafs-pin-release.sh --skip-submit --dns-change-ticket OPS-4242 --dns-cutover-window "$DNS_CUTOVER_WINDOW" --dns-hostname docs.sora.link --dns-zone sora.link --ops-contact ops.lead@soranet --cache-purge-endpoint https://cache.api/purge --cache-purge-auth-env CACHE_PURGE_TOKEN --previous-dns-plan artifacts/sorafs/previous.dns-cutover.json` | `artifacts/sorafs/portal.pin.report.json`, `artifacts/sorafs/portal.additional_assets.json`, `artifacts/sorafs/portal.dns-cutover.json`, `artifacts/sorafs/portal.gateway.binding.json`, `artifacts/sorafs/portal.gateway.headers.txt`, `artifacts/sorafs/gateway.route_plan.json`, `artifacts/sorafs/checksums.sha256`, ticket de deploy del portal |
+| T‑10 días | Ops Lead | Actualizar el skeleton del zonefile según `docs/source/sns/governance_playbook.md`, guardar en `artifacts/sns/zonefiles/<zone>/<version>.json`, y verificar que el resolver tome los nuevos registros:<br>`cargo run -p soradns-resolver -- --config ops/soradns/resolver.staging.json`<br>`python3 scripts/sns_zonefile_skeleton.py --cutover-plan artifacts/sorafs/portal.dns-cutover.json --out artifacts/sns/zonefiles/sora.link/ops-4242.docs.sora.json --resolver-snippet-out ops/soradns/static_zones.docs.json --ipv4 <gateway-ip> --ttl 600 --zonefile-version ops-4242.docs.sora --effective-at "$DNS_CUTOVER_START" --gar-digest <gar-digest-hex> --freeze-state soft --freeze-ticket SNS-DF-4242 --freeze-expires-at "$DNS_FREEZE_EXPIRES_AT" --freeze-note "guardian review" --txt ChangeTicket=OPS-4242` | JSON de zonefile, log de sync del resolver, commit hash de `ops/soradns/resolver.staging.json` |
 
 El helper ahora estampa metadata `zonefile.{name,version,ttl,effective_at,cid,gar_digest,proof}` junto a
 `static_zone`. Apunta siempre `--effective-at` al inicio de la ventana de cutover, fija
@@ -42,7 +42,7 @@ la automatización de firmado (o pásalo manualmente una vez el sobre GAR esté 
 ese caso copia el literal de proof desde la entrada del runbook del gateway para que la evidencia
 Torii/resolver coincida con el bundle GAR.
 | T‑7 días | QA Guild + Security | Capturar snapshot de telemetría GAR, regenerar scrape Prometheus y actualizar la nota de telemetría GAR:<br>`scripts/telemetry/run_soradns_transparency_tail.sh --log /var/log/soradns/transparency.log --metrics-output docs/source/sorafs_gateway_dns_design_metrics_$(date +%Y%m%d).prom --format jsonl` | `docs/source/sorafs_gateway_dns_design_gar_telemetry.md` actualizado, nuevo artefacto `.prom`, screenshot de alerta |
-| T‑5 días | Ops Lead + Docs | Agendar el ensayo DNS/GAR vía el drill logger:<br>`scripts/telemetry/schedule_soradns_ir_drill.sh --date 2025-02-27 --log ops/drill-log.md --notes "DNS automation rehearsal for kickoff"` | Entrada en `ops/drill-log.md`, invitación de calendario |
+| T‑5 días | Ops Lead + Docs | Agendar el ensayo DNS/GAR vía el drill logger:<br>`scripts/telemetry/schedule_soradns_ir_drill.sh --date "$DNS_REHEARSAL_DATE" --log ops/drill-log.md --notes "DNS automation rehearsal for cutover"` | Entrada en `ops/drill-log.md`, invitación de calendario |
 | T‑2 días | Todos los owners | Revisar `artifacts/sorafs/portal.dns-cutover.json`, confirmar `change_ticket`, `cutover_window`, alias namespace/name, bloque de purge (endpoint/payload/auth var), metadata de rollback, el `gateway_binding` embebido (CID de contenido + plantilla de headers) y el nuevo stanza `route_plan` (path, headers primarios + rollback). Re-ejecutar `iroha app sorafs gateway route-plan …` (o `scripts/sorafs-gateway route plan …` desde CI) para que `artifacts/sorafs_gateway/route_plan.json` más las plantillas de headers (`gateway.route.headers.txt`, `gateway.route.rollback.headers.txt` si aplica) reflejen el manifiesto final. Adjuntar el descriptor + bundle de headers/route plan al ticket de rollout y al hilo de Slack. | Comentario del ticket de rollout con diff del descriptor + route plan |
 
 > **Nuevo paso de validación SN-7:** El script de packaging ejecuta
@@ -77,7 +77,7 @@ Torii/resolver coincida con el bundle GAR.
 node docs/portal/scripts/generate-dns-cutover-plan.mjs \
   --pin-report artifacts/sorafs/portal.pin.report.json \
   --change-ticket OPS-4242 \
-  --cutover-window 2025-03-03T16:00Z/2025-03-03T16:30Z \
+  --cutover-window "$DNS_CUTOVER_WINDOW" \
   --dns-hostname docs.sora.link \
   --dns-zone sora.link \
   --ops-contact ops.lead@soranet \
@@ -104,10 +104,10 @@ node docs/portal/scripts/generate-dns-cutover-plan.mjs \
      --resolver-snippet-out ops/soradns/static_zones.<alias>.json \
      --ipv4 <gateway-ip> --ipv6 <gateway-ipv6> --ttl 600 \
      --freeze-state <soft|hard|thawing|monitoring|emergency> \
-     --freeze-ticket SNS-DF-XXXX \
-     --freeze-expires-at 2025-03-10T12:00Z \
+     --freeze-ticket SNS-DF-4242 \
+     --freeze-expires-at "$DNS_FREEZE_EXPIRES_AT" \
      --freeze-note "guardian review" \
-     --txt ChangeTicket=OPS-XXXX --spki-pin <base64pin>
+     --txt ChangeTicket=OPS-4242 --spki-pin <base64pin>
    ```
    Los flags de freeze (`--freeze-ticket`, `--freeze-expires-at`, `--freeze-note`)
    requieren `--freeze-state`; el helper ahora falla rápido si falta metadata de
@@ -182,7 +182,7 @@ promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml
 ## 5. Checklist del día de cutover
 
 1. **Congelar inputs:** bloquear el bundle de manifiesto y artefactos de zonefile en Git
-   (`git tag dns-cutover-20250303`) y compartir el SHA en `#sorafs-gateway`.
+   (`git tag dns-cutover-ops-4242`) y compartir el SHA en `#sorafs-gateway`.
 2. **Aplicar zonefile:** publicar el skeleton firmado al bucket del resolver y recargar
    los resolvers. Vigilar `soradns_bundle_proof_age_seconds` por regresiones.
 3. **Verificar resolver + DNS:** ejecutar `cargo run -p soradns-resolver -- --config ...`
@@ -217,7 +217,7 @@ promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml
   cada snapshot y referenciar el archivo `.prom` nuevo.
 - Registrar completion en `status.md` (Latest Updates) con referencia al roadmap
   para que governance vea la trazabilidad.
-- Proveer un resumen en el refresh semanal de `status.md` y en el deck del kickoff
+- Proveer un resumen en el refresh semanal de `status.md` y en el deck del cutover
   una vez cambie el runbook.
 
 Mantener este documento al día es obligatorio para la preparación SF‑4/SF‑5; si

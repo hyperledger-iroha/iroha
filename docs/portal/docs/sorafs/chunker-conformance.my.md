@@ -53,10 +53,10 @@ SIMD အရှိန်မြှင့်မှုတိုင်းသည် �
 
 ### လက်မှတ်ထိုးခြင်းမူဝါဒ
 
-ဖန်သားပြင်ပြန်လည်ထုတ်လုပ်ခြင်း **ရပါမည်** အကျုံးဝင်သော ကောင်စီလက်မှတ်ပါရှိသည်။ မီးစက်
-`--allow-unsigned` ကို ပြတ်သားစွာ မကျော်လွန်ပါက လက်မှတ်မထိုးထားသော အထွက်ကို ငြင်းပယ်သည် (ရည်ရွယ်သည်
-ပြည်တွင်းစမ်းသပ်မှုများအတွက်သာ)။ လက်မှတ်စာအိတ်များသည် နောက်ဆက်တွဲ-သပ်သပ်ဖြစ်ပြီး၊
-လက်မှတ်ထိုးသူ တစ်ဦးလျှင် ထပ်ပွားထားသည်။
+Fixture regeneration **must** include a valid council signature. The generator
+rejects unsigned output in every mode; use `--signing-key` to create or append a
+council signature, or keep the existing verified `manifest_signatures.json`
+unchanged. Signature envelopes are append-only and deduplicated per signer.
 
 ကောင်စီလက်မှတ်ထည့်ရန်-
 

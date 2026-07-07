@@ -44,7 +44,7 @@ use iroha_crypto::{
 };
 use iroha_data_model::{
     ChainId, Encode as _, Level, Registrable,
-    asset::{AssetDefinitionId, AssetId},
+    asset::{AssetDefinition, AssetDefinitionId, AssetId},
     block::{
         BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockSignature,
         ExternalExecutionContext, SignedBlock,
@@ -85,7 +85,7 @@ use iroha_data_model::{
     transaction::{
         Executable, IvmBytecode, SignedTransaction, TransactionSubmissionReceipt,
         TransactionSubmissionReceiptPayload,
-        signed::{ExecutionStep, TransactionEntrypoint, TransactionResultInner},
+        signed::{ExecutionStep, TransactionEntrypoint, TransactionResult, TransactionResultInner},
     },
     trigger::DataTriggerSequence,
     trigger::time::TimeTriggerEntrypoint,
@@ -1552,6 +1552,13 @@ fn sample_lane_payload_ownership_status(
         subject_hash: Hash::prehashed([0x51; Hash::LENGTH]),
         qc_mode_tag: "test-lane-qc-mode".to_string(),
         accepted_candidate_indices: vec![9],
+        accepted_transaction_hashes: vec![Hash::prehashed([0x55; Hash::LENGTH])],
+        previous_lane_block_height: 776,
+        previous_lane_block_descriptor_hash: Some(Hash::prehashed([0x56; Hash::LENGTH])),
+        lane_block_descriptor_hash: Some(Hash::prehashed([0x54; Hash::LENGTH])),
+        lane_block_descriptor_validator_set: Vec::new(),
+        lane_block_descriptor_validator_count: 0,
+        lane_block_descriptor_min_quorum: 0,
         payload_ownership_hash: Hash::prehashed([0x52; Hash::LENGTH]),
         rbc_instance_hash: Hash::prehashed([0x53; Hash::LENGTH]),
     }
@@ -1565,6 +1572,17 @@ fn sample_block_with_lane_payload_artifact(
     lane_block_height: u64,
 ) -> SignedBlock {
     let mut block = sample_block(proposal_height, proposal_view, None);
+    let entrypoint_hash = block
+        .external_entrypoints_cloned()
+        .next()
+        .map(|entrypoint| entrypoint.hash())
+        .unwrap_or_else(|| {
+            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+                format!("main-loop-test-lane-artifact-fallback:{proposal_height}:{proposal_view}")
+                    .as_bytes(),
+            ))
+        });
+    let accepted_transaction_hash = Hash::from(entrypoint_hash);
     let preimage = format!(
         "main-loop-test-lane-artifact:{}:{}:{}:{}:{}",
         proposal_height,
@@ -1573,7 +1591,15 @@ fn sample_block_with_lane_payload_artifact(
         dataspace_id.as_u64(),
         lane_block_height
     );
-    let ownership = SumeragiLanePayloadOwnership {
+    let mut descriptor_validator_set = vec![PeerId::new(
+        deterministic_keypair(preimage.as_bytes(), Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    )];
+    descriptor_validator_set.sort();
+    let descriptor_validator_count =
+        u32::try_from(descriptor_validator_set.len()).expect("validator count fits u32");
+    let mut ownership = SumeragiLanePayloadOwnership {
         proposal_height,
         proposal_view,
         lane_id,
@@ -1583,11 +1609,26 @@ fn sample_block_with_lane_payload_artifact(
         subject_hash: Hash::new(preimage.as_bytes()),
         qc_mode_tag: "main-loop-lane-artifact-test".to_string(),
         accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![accepted_transaction_hash],
+        previous_lane_block_height: lane_block_height.saturating_sub(1),
+        previous_lane_block_descriptor_hash: lane_block_height
+            .checked_sub(1)
+            .filter(|height| *height > 0)
+            .map(|previous| Hash::new(format!("{preimage}:previous:{previous}").as_bytes())),
+        lane_block_descriptor_hash: Some(Hash::new(format!("{preimage}:descriptor").as_bytes())),
+        lane_block_descriptor_validator_set: descriptor_validator_set,
+        lane_block_descriptor_validator_count: descriptor_validator_count,
+        lane_block_descriptor_min_quorum: descriptor_validator_count,
         payload_ownership_hash: Hash::new(format!("{preimage}:payload").as_bytes()),
         rbc_instance_hash: Hash::new(format!("{preimage}:rbc").as_bytes()),
     };
-    let entrypoint_hash =
-        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(preimage.as_bytes()));
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("main-loop lane artifact replay hashes compute");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
     let execution_context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
         entrypoint_hash,
         lane_id,
@@ -1596,6 +1637,206 @@ fn sample_block_with_lane_payload_artifact(
     .with_lane_payload_ownerships(vec![ownership]);
     block.set_execution_context(Some(execution_context));
     block
+}
+
+fn block_with_lane_payload_transaction(
+    proposal_height: u64,
+    proposal_view: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    tx: SignedTransaction,
+) -> SignedBlock {
+    block_with_lane_payload_transactions(
+        proposal_height,
+        proposal_view,
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+        vec![tx],
+    )
+}
+
+fn block_with_lane_payload_transactions(
+    proposal_height: u64,
+    proposal_view: u64,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    txs: Vec<SignedTransaction>,
+) -> SignedBlock {
+    assert!(
+        !txs.is_empty(),
+        "lane payload transaction fixture requires at least one transaction"
+    );
+    let header = BlockHeader {
+        height: NonZeroU64::new(proposal_height).expect("block height must be non-zero"),
+        prev_block_hash: None,
+        merkle_root: None,
+        result_merkle_root: None,
+        da_proof_policies_hash: None,
+        da_commitments_hash: None,
+        da_pin_intents_hash: None,
+        prev_roster_evidence_hash: None,
+        npos_effects_hash: None,
+        execution_context_hash: None,
+        sccp_commitment_root: None,
+        creation_time_ms: proposal_height.saturating_sub(1),
+        view_change_index: proposal_view,
+        confidential_features: None,
+    };
+    let entrypoint_hashes = txs
+        .iter()
+        .map(SignedTransaction::hash_as_entrypoint)
+        .collect::<Vec<_>>();
+    let accepted_candidate_indices = (0..entrypoint_hashes.len())
+        .map(|idx| u64::try_from(idx).expect("fixture entrypoint index fits u64"))
+        .collect::<Vec<_>>();
+    let accepted_transaction_hashes = entrypoint_hashes
+        .iter()
+        .copied()
+        .map(Hash::from)
+        .collect::<Vec<_>>();
+    let tx_hashes = txs
+        .iter()
+        .map(|tx| tx.hash().to_string())
+        .collect::<Vec<_>>()
+        .join(":");
+    let preimage = format!(
+        "main-loop-test-lane-custom-artifact:{}:{}:{}:{}:{}:{}",
+        proposal_height,
+        proposal_view,
+        lane_id.as_u32(),
+        dataspace_id.as_u64(),
+        lane_block_height,
+        tx_hashes
+    );
+    let mut descriptor_validator_set = vec![PeerId::new(
+        deterministic_keypair(preimage.as_bytes(), Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    )];
+    descriptor_validator_set.sort();
+    let descriptor_validator_count =
+        u32::try_from(descriptor_validator_set.len()).expect("validator count fits u32");
+    let mut ownership = SumeragiLanePayloadOwnership {
+        proposal_height,
+        proposal_view,
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+        lane_block_view: proposal_view,
+        subject_hash: Hash::new(preimage.as_bytes()),
+        qc_mode_tag: "main-loop-lane-custom-artifact-test".to_string(),
+        accepted_candidate_indices,
+        accepted_transaction_hashes,
+        previous_lane_block_height: lane_block_height.saturating_sub(1),
+        previous_lane_block_descriptor_hash: lane_block_height
+            .checked_sub(1)
+            .filter(|height| *height > 0)
+            .map(|previous| Hash::new(format!("{preimage}:previous:{previous}").as_bytes())),
+        lane_block_descriptor_hash: Some(Hash::new(format!("{preimage}:descriptor").as_bytes())),
+        lane_block_descriptor_validator_set: descriptor_validator_set,
+        lane_block_descriptor_validator_count: descriptor_validator_count,
+        lane_block_descriptor_min_quorum: descriptor_validator_count,
+        payload_ownership_hash: Hash::new(format!("{preimage}:payload").as_bytes()),
+        rbc_instance_hash: Hash::new(format!("{preimage}:rbc").as_bytes()),
+    };
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("main-loop custom lane artifact replay hashes compute");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+    let execution_context = BlockExecutionContextBundle::new(
+        entrypoint_hashes
+            .iter()
+            .copied()
+            .map(|entrypoint_hash| {
+                ExternalExecutionContext::new(entrypoint_hash, lane_id, dataspace_id)
+            })
+            .collect(),
+    )
+    .with_lane_payload_ownerships(vec![ownership]);
+    let mut builder = BlockBuilder::new(header);
+    for tx in txs {
+        builder.push_transaction(tx);
+    }
+    builder.set_execution_context(Some(execution_context));
+    builder.build_with_signature(0, ALICE_KEYPAIR.private_key())
+}
+
+fn rebind_lane_payload_artifact_predecessor(
+    block: &mut SignedBlock,
+    previous_lane_block_descriptor_hash: Hash,
+) -> SumeragiLanePayloadOwnership {
+    let entrypoint_hash = block
+        .external_entrypoints_cloned()
+        .next()
+        .map(|entrypoint| entrypoint.hash())
+        .expect("lane payload fixture block has external entrypoint");
+    let mut ownership = block
+        .execution_context()
+        .expect("lane payload fixture block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("lane payload fixture block has ownership")
+        .clone();
+    ownership.previous_lane_block_descriptor_hash = Some(previous_lane_block_descriptor_hash);
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("rebinding predecessor keeps replay hashes canonical");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+    let execution_context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+        entrypoint_hash,
+        ownership.lane_id,
+        ownership.dataspace_id,
+    )])
+    .with_lane_payload_ownerships(vec![ownership.clone()]);
+    block.set_execution_context(Some(execution_context));
+    ownership
+}
+
+fn rebind_lane_payload_artifact_validator_set(
+    block: &mut SignedBlock,
+    validator_set: Vec<PeerId>,
+    min_quorum: u32,
+) -> SumeragiLanePayloadOwnership {
+    let entrypoint_hash = block
+        .external_entrypoints_cloned()
+        .next()
+        .map(|entrypoint| entrypoint.hash())
+        .expect("lane payload fixture block has external entrypoint");
+    let mut ownership = block
+        .execution_context()
+        .expect("lane payload fixture block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("lane payload fixture block has ownership")
+        .clone();
+    ownership.lane_block_descriptor_validator_count =
+        u32::try_from(validator_set.len()).expect("validator count fits u32");
+    ownership.lane_block_descriptor_min_quorum = min_quorum;
+    ownership.lane_block_descriptor_validator_set = validator_set;
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("rebinding validator set keeps replay hashes canonical");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+    let execution_context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+        entrypoint_hash,
+        ownership.lane_id,
+        ownership.dataspace_id,
+    )])
+    .with_lane_payload_ownerships(vec![ownership.clone()]);
+    block.set_execution_context(Some(execution_context));
+    ownership
 }
 
 fn seed_npos_epochs(
@@ -4861,6 +5102,28 @@ async fn test_actor_harness_with_config_and_height_and_kura(
     initial_height: u64,
     kura: Arc<Kura>,
 ) -> TestActorHarness {
+    test_actor_harness_with_config_and_height_and_kura_and_state_setup(
+        peer_count,
+        consensus_cfg,
+        rbc_store_cfg,
+        initial_height,
+        kura,
+        |_, _| {},
+    )
+    .await
+}
+
+async fn test_actor_harness_with_config_and_height_and_kura_and_state_setup<F>(
+    peer_count: usize,
+    consensus_cfg: SumeragiConfig,
+    rbc_store_cfg: Option<crate::sumeragi::RbcStoreConfig>,
+    initial_height: u64,
+    kura: Arc<Kura>,
+    state_setup: F,
+) -> TestActorHarness
+where
+    F: FnOnce(&mut State, &[KeyPair]),
+{
     use iroha_config::{
         base::WithOrigin,
         parameters::actual::{
@@ -5095,6 +5358,7 @@ async fn test_actor_harness_with_config_and_height_and_kura(
             state.push_block_hash_for_testing(hash);
         }
     }
+    state_setup(&mut state, &key_pairs);
     let state = Arc::new(state);
     let time_source = TimeSource::new_system();
     let queue = Arc::new(Queue::test(QueueConfig::default(), &time_source));
@@ -108420,6 +108684,7 @@ fn message_projection_helpers_match_formal_gate() {
     rbc_chunk.height = 53;
     rbc_chunk.view = 17;
     rbc_chunk.epoch = 0;
+    let (lane_proposal, lane_vote, lane_qc, _) = sample_lane_block_messages();
 
     let messages = vec![
         (
@@ -108691,12 +108956,23 @@ fn message_projection_helpers_match_formal_gate() {
             BlockMessage::Proposal(sample_proposal(block_hash, 47, 13)),
             None,
         ),
+        (
+            "LaneBlockProposal",
+            BlockMessage::LaneBlockProposal(lane_proposal),
+            None,
+        ),
+        (
+            "LaneBlockVote",
+            BlockMessage::LaneBlockVote(lane_vote),
+            None,
+        ),
+        ("LaneBlockQc", BlockMessage::LaneBlockQc(lane_qc), None),
     ];
 
     assert_eq!(
         messages.len(),
-        29,
-        "formal gate models exactly 29 block-message cases"
+        32,
+        "formal gate models exactly 32 block-message cases"
     );
     for (label, msg, expected) in &messages {
         assert_timing(label, msg, *expected);
@@ -144239,10 +144515,22 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
         lane1.dataspace_id,
         artifact_tip_height,
     );
+    let artifact_descriptor_hash = artifact_block
+        .execution_context()
+        .expect("artifact execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("artifact lane payload ownership")
+        .lane_block_descriptor_hash;
     store_block_with_test_ancestors(actor.kura.as_ref(), artifact_block);
     assert_eq!(
         actor.state.lane_block_artifact_tips_snapshot_cached(),
-        vec![(lane1.lane_id, lane1.dataspace_id, artifact_tip_height)]
+        vec![(
+            lane1.lane_id,
+            lane1.dataspace_id,
+            artifact_tip_height,
+            artifact_descriptor_hash
+        )]
     );
 
     let relay_tip_height = 5_u64;
@@ -144271,6 +144559,7 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
     )
     .expect("test signer bitmap fits u8");
     let (_, mode_tag, _) = actor.consensus_context_for_height(relay_tip_height);
+    let relay_descriptor_hash = Hash::new(b"proposal relay descriptor hash");
     let relay = sample_lane_relay_envelope(
         relay_tip_height,
         lane1.lane_id,
@@ -144278,7 +144567,8 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
         mode_tag,
         &signers,
         signer_bitmap,
-    );
+    )
+    .with_lane_block_descriptor_hash(Some(relay_descriptor_hash));
     actor
         .state
         .record_lane_relay(&relay)
@@ -144347,6 +144637,11 @@ async fn proposal_multilane_uses_lane_relay_tip_for_payload_ownership_status() {
         "a lane with relay history must not fall back to the global compatibility height"
     );
     assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.previous_lane_block_descriptor_hash,
+        Some(relay_descriptor_hash),
+        "merge-admissible relay tip metadata must bind the new lane block to the previous descriptor"
+    );
     assert_eq!(ownership.accepted_candidate_indices, vec![0]);
 
     drop(tx_guards);
@@ -144449,6 +144744,13 @@ async fn proposal_multilane_uses_lane_artifact_tip_for_payload_ownership_status(
         lane1.dataspace_id,
         artifact_tip_height,
     );
+    let artifact_descriptor_hash = artifact_block
+        .execution_context()
+        .expect("artifact execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("artifact lane payload ownership")
+        .lane_block_descriptor_hash;
     store_block_with_test_ancestors(actor.kura.as_ref(), artifact_block);
     let foreign_dataspace = DataSpaceId::new(77);
     let foreign_artifact_tip_height = artifact_tip_height + 2;
@@ -144478,7 +144780,12 @@ async fn proposal_multilane_uses_lane_artifact_tip_for_payload_ownership_status(
     );
     assert_eq!(
         actor.state.lane_block_artifact_tips_snapshot_cached(),
-        vec![(lane1.lane_id, lane1.dataspace_id, artifact_tip_height)],
+        vec![(
+            lane1.lane_id,
+            lane1.dataspace_id,
+            artifact_tip_height,
+            artifact_descriptor_hash
+        )],
         "active proposal tips must skip newer artifacts from foreign dataspaces"
     );
 
@@ -144544,6 +144851,10 @@ async fn proposal_multilane_uses_lane_artifact_tip_for_payload_ownership_status(
         "a lane with artifact history must not fall back to the global compatibility height"
     );
     assert_eq!(ownership.lane_block_view, view);
+    assert_eq!(
+        ownership.previous_lane_block_descriptor_hash, artifact_descriptor_hash,
+        "artifact tip metadata must bind the new lane block to the previous descriptor"
+    );
     assert_eq!(ownership.accepted_candidate_indices, vec![0]);
 
     drop(tx_guards);
@@ -184646,6 +184957,7 @@ fn block_message_height_view_matches_formal_projection_gate() {
         .expect("sample block has signature")
         .clone();
     let proposal = sample_proposal(block_hash, 47, 13);
+    let (lane_proposal, lane_vote, lane_qc, _) = sample_lane_block_messages();
     let mut rbc_chunk = sample_chunk_with_len(5, 3);
     rbc_chunk.height = 53;
     rbc_chunk.view = 17;
@@ -184860,6 +185172,10 @@ fn block_message_height_view_matches_formal_projection_gate() {
         (45, 12),
     );
     assert_slot("Proposal", BlockMessage::Proposal(proposal), (47, 13));
+    assert_no_slot(
+        "LaneBlockProposal",
+        BlockMessage::LaneBlockProposal(lane_proposal),
+    );
     assert_slot(
         "QcVote",
         BlockMessage::QcVote(crate::sumeragi::consensus::QcVote {
@@ -184882,6 +185198,8 @@ fn block_message_height_view_matches_formal_projection_gate() {
     qc_message.height = 58;
     qc_message.view = 22;
     assert_slot("Qc", BlockMessage::Qc(qc_message), (58, 22));
+    assert_no_slot("LaneBlockVote", BlockMessage::LaneBlockVote(lane_vote));
+    assert_no_slot("LaneBlockQc", BlockMessage::LaneBlockQc(lane_qc));
     assert_no_slot(
         "FetchPendingBlock",
         BlockMessage::FetchPendingBlock(super::message::FetchPendingBlock {
@@ -185032,6 +185350,8 @@ fn block_message_kind_and_status_match_formal_projection_gate() {
         cert.phase = phase;
         cert
     };
+
+    let (lane_proposal, lane_vote, lane_qc, _) = sample_lane_block_messages();
 
     assert_kind(
         "BlockCreated",
@@ -185334,6 +185654,24 @@ fn block_message_kind_and_status_match_formal_projection_gate() {
         BlockMessage::Proposal(proposal),
         "Proposal",
         Some(Kind::Proposal),
+    );
+    assert_kind(
+        "LaneBlockProposal",
+        BlockMessage::LaneBlockProposal(lane_proposal),
+        "LaneBlockProposal",
+        Some(Kind::LaneBlockProposal),
+    );
+    assert_kind(
+        "LaneBlockVote",
+        BlockMessage::LaneBlockVote(lane_vote),
+        "LaneBlockPrepareVote",
+        Some(Kind::LaneBlockVote),
+    );
+    assert_kind(
+        "LaneBlockQc",
+        BlockMessage::LaneBlockQc(lane_qc),
+        "LaneBlockPrepareCert",
+        Some(Kind::LaneBlockQc),
     );
 }
 
@@ -205616,6 +205954,3806 @@ fn sample_proposal(
         },
         payload_hash: Hash::prehashed([0x55; 32]),
     }
+}
+
+fn sample_lane_block_messages() -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    let keypair = checked_bls_keypair();
+    let signer_pop =
+        iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("lane block fixture PoP");
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let validator_set = vec![peer_id.clone()];
+    let mut descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
+        lane_id: LaneId::SINGLE,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        previous_lane_block_height: 12,
+        previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA0; Hash::LENGTH])),
+        lane_block_height: 13,
+        lane_block_view: 2,
+        subject_hash: Hash::prehashed([0xA1; Hash::LENGTH]),
+        payload_ownership_hash: Hash::prehashed([0xA2; Hash::LENGTH]),
+        rbc_instance_hash: Hash::prehashed([0xA3; Hash::LENGTH]),
+        accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![Hash::prehashed([0xA4; Hash::LENGTH])],
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set: validator_set.clone(),
+        validator_count: 1,
+        min_quorum: 1,
+        qc_mode_tag: "permissioned:lane:0:dataspace:0".to_string(),
+        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    let mut proposal = crate::sumeragi::consensus::LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    let body = proposal.vote_body(Phase::Prepare);
+    let signature = Signature::try_new(keypair.private_key(), &body.signature_preimage())
+        .expect("lane block fixture vote signature");
+    let vote = crate::lane_consensus::LaneBlockVoteV1 {
+        body: body.clone(),
+        signer: peer_id,
+        bls_signature: signature.payload().to_vec(),
+    };
+    let qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        body,
+        validator_set,
+        std::slice::from_ref(&vote),
+    )
+    .expect("lane block fixture QC");
+    (proposal, vote, qc, signer_pop)
+}
+
+fn sample_lane_block_proposal_for_validators(
+    validator_set: Vec<PeerId>,
+) -> crate::sumeragi::consensus::LaneBlockProposalV1 {
+    assert!(
+        !validator_set.is_empty(),
+        "lane block fixture requires validators"
+    );
+    let mut descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
+        lane_id: LaneId::SINGLE,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        previous_lane_block_height: 12,
+        previous_lane_block_descriptor_hash: Some(Hash::prehashed([0xA0; Hash::LENGTH])),
+        lane_block_height: 13,
+        lane_block_view: 2,
+        subject_hash: Hash::prehashed([0xA1; Hash::LENGTH]),
+        payload_ownership_hash: Hash::prehashed([0xA2; Hash::LENGTH]),
+        rbc_instance_hash: Hash::prehashed([0xA3; Hash::LENGTH]),
+        accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![Hash::prehashed([0xA4; Hash::LENGTH])],
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set: validator_set.clone(),
+        validator_count: u32::try_from(validator_set.len()).expect("validator count fits u32"),
+        min_quorum: 1,
+        qc_mode_tag: "permissioned:lane:0:dataspace:0".to_string(),
+        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    let mut proposal = crate::sumeragi::consensus::LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    proposal
+}
+
+fn sample_lane_block_prepare_vote_plan(
+    proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    signers: Vec<PeerId>,
+) -> super::lane_scheduler::LaneBlockVotePlan {
+    let body = proposal.vote_body(crate::sumeragi::consensus::Phase::Prepare);
+    let signing_hash = Hash::new(body.signature_preimage());
+    let votes = signers
+        .into_iter()
+        .map(|signer| {
+            let signer_index = proposal
+                .descriptor
+                .validator_set
+                .iter()
+                .position(|validator| validator == &signer)
+                .expect("fixture signer is in validator set");
+            super::lane_scheduler::LaneBlockVote {
+                phase: crate::sumeragi::consensus::Phase::Prepare,
+                lane_id: proposal.descriptor.lane_id,
+                dataspace_id: proposal.descriptor.dataspace_id,
+                lane_block_height: proposal.descriptor.lane_block_height,
+                lane_block_view: proposal.descriptor.lane_block_view,
+                proposal_hash: proposal.proposal_hash,
+                descriptor_hash: proposal.descriptor.descriptor_hash,
+                validator_set_hash: proposal.descriptor.validator_set_hash,
+                signer_index: u32::try_from(signer_index).expect("signer index fits u32"),
+                signer,
+                body: body.clone(),
+                signing_hash,
+            }
+        })
+        .collect();
+
+    super::lane_scheduler::LaneBlockVotePlan {
+        phase: crate::sumeragi::consensus::Phase::Prepare,
+        proposal_hash: proposal.proposal_hash,
+        descriptor_hash: proposal.descriptor.descriptor_hash,
+        validator_set_hash: proposal.descriptor.validator_set_hash,
+        min_quorum: proposal.descriptor.min_quorum,
+        votes,
+    }
+}
+
+fn signed_lane_block_vote_with_keypair(
+    proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    phase: crate::sumeragi::consensus::Phase,
+    keypair: &KeyPair,
+) -> crate::lane_consensus::LaneBlockVoteV1 {
+    let body = proposal.vote_body(phase);
+    let signature = Signature::try_new(keypair.private_key(), &body.signature_preimage())
+        .expect("lane block fixture vote signature");
+    crate::lane_consensus::LaneBlockVoteV1 {
+        body,
+        signer: PeerId::new(keypair.public_key().clone()),
+        bls_signature: signature.payload().to_vec(),
+    }
+}
+
+fn sample_lane_block_commit_messages() -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    sample_lane_block_commit_messages_at(13, 12, Some(Hash::prehashed([0xA0; Hash::LENGTH])))
+}
+
+fn lane_block_commit_fixture_hash(tag: u8, lane_block_height: u64) -> Hash {
+    if lane_block_height == 13 {
+        return Hash::prehashed([tag; Hash::LENGTH]);
+    }
+    let mut bytes = [tag; Hash::LENGTH];
+    bytes[..std::mem::size_of::<u64>()].copy_from_slice(&lane_block_height.to_le_bytes());
+    Hash::prehashed(bytes)
+}
+
+fn sample_lane_block_commit_messages_at(
+    lane_block_height: u64,
+    previous_lane_block_height: u64,
+    previous_lane_block_descriptor_hash: Option<Hash>,
+) -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    sample_lane_block_commit_messages_for_route_at(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+        lane_block_height,
+        previous_lane_block_height,
+        previous_lane_block_descriptor_hash,
+    )
+}
+
+fn sample_lane_block_commit_messages_for_route_at(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    previous_lane_block_height: u64,
+    previous_lane_block_descriptor_hash: Option<Hash>,
+) -> (
+    crate::sumeragi::consensus::LaneBlockProposalV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    crate::lane_consensus::LaneBlockVoteV1,
+    crate::sumeragi::consensus::LaneBlockQcV1,
+    Vec<u8>,
+) {
+    let keypair = checked_bls_keypair();
+    let signer_pop =
+        iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("lane block fixture PoP");
+    let peer_id = PeerId::new(keypair.public_key().clone());
+    let validator_set = vec![peer_id.clone()];
+    let mut descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
+        lane_id,
+        dataspace_id,
+        previous_lane_block_height,
+        previous_lane_block_descriptor_hash,
+        lane_block_height,
+        lane_block_view: 2,
+        subject_hash: lane_block_commit_fixture_hash(0xA1, lane_block_height),
+        payload_ownership_hash: lane_block_commit_fixture_hash(0xA2, lane_block_height),
+        rbc_instance_hash: lane_block_commit_fixture_hash(0xA3, lane_block_height),
+        accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![lane_block_commit_fixture_hash(0xA4, lane_block_height)],
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set: validator_set.clone(),
+        validator_count: 1,
+        min_quorum: 1,
+        qc_mode_tag: format!(
+            "permissioned:lane:{}:dataspace:{}",
+            lane_id.as_u32(),
+            dataspace_id.as_u64()
+        ),
+        descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    let mut proposal = crate::sumeragi::consensus::LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+
+    let prepare_body = proposal.vote_body(Phase::Prepare);
+    let prepare_signature =
+        Signature::try_new(keypair.private_key(), &prepare_body.signature_preimage())
+            .expect("lane block fixture prepare vote signature");
+    let prepare_vote = crate::lane_consensus::LaneBlockVoteV1 {
+        body: prepare_body.clone(),
+        signer: peer_id.clone(),
+        bls_signature: prepare_signature.payload().to_vec(),
+    };
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        prepare_body,
+        validator_set.clone(),
+        std::slice::from_ref(&prepare_vote),
+    )
+    .expect("lane block fixture prepare QC");
+
+    let commit_body = proposal.vote_body(Phase::Commit);
+    let commit_signature =
+        Signature::try_new(keypair.private_key(), &commit_body.signature_preimage())
+            .expect("lane block fixture commit vote signature");
+    let commit_vote = crate::lane_consensus::LaneBlockVoteV1 {
+        body: commit_body.clone(),
+        signer: peer_id,
+        bls_signature: commit_signature.payload().to_vec(),
+    };
+    let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        commit_body,
+        validator_set,
+        std::slice::from_ref(&commit_vote),
+    )
+    .expect("lane block fixture commit QC");
+
+    (
+        proposal,
+        prepare_vote,
+        prepare_qc,
+        commit_vote,
+        commit_qc,
+        signer_pop,
+    )
+}
+
+fn lane_block_proposal_from_lane_payload_ownership(
+    ownership: &SumeragiLanePayloadOwnership,
+) -> crate::sumeragi::consensus::LaneBlockProposalV1 {
+    let validator_set = ownership.lane_block_descriptor_validator_set.clone();
+    let descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
+        lane_id: ownership.lane_id,
+        dataspace_id: ownership.dataspace_id,
+        previous_lane_block_height: ownership.previous_lane_block_height,
+        previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
+        lane_block_height: ownership.lane_block_height,
+        lane_block_view: ownership.lane_block_view,
+        subject_hash: ownership.subject_hash,
+        payload_ownership_hash: ownership.payload_ownership_hash,
+        rbc_instance_hash: ownership.rbc_instance_hash,
+        accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
+        accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set,
+        validator_count: ownership.lane_block_descriptor_validator_count,
+        min_quorum: ownership.lane_block_descriptor_min_quorum,
+        qc_mode_tag: ownership.qc_mode_tag.clone(),
+        descriptor_hash: ownership
+            .lane_block_descriptor_hash
+            .expect("ownership has descriptor hash"),
+    };
+    assert_eq!(
+        descriptor.descriptor_hash,
+        descriptor.computed_descriptor_hash(),
+        "fixture ownership descriptor hash must be canonical"
+    );
+    let mut proposal = crate::sumeragi::consensus::LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    proposal
+}
+
+fn committed_lane_block_session_from_lane_payload_ownership(
+    ownership: &SumeragiLanePayloadOwnership,
+) -> crate::lane_consensus::CommittedLaneBlockSession {
+    let proposal = lane_block_proposal_from_lane_payload_ownership(ownership);
+    let prepare_qc = crate::sumeragi::consensus::LaneBlockQcV1 {
+        body: proposal.vote_body(Phase::Prepare),
+        validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+        validator_set_hash: proposal.descriptor.validator_set_hash,
+        validator_set: proposal.descriptor.validator_set.clone(),
+        signers_bitmap: Vec::new(),
+        bls_aggregate_signature: Vec::new(),
+    };
+    let commit_qc = crate::sumeragi::consensus::LaneBlockQcV1 {
+        body: proposal.vote_body(Phase::Commit),
+        validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+        validator_set_hash: proposal.descriptor.validator_set_hash,
+        validator_set: proposal.descriptor.validator_set.clone(),
+        signers_bitmap: Vec::new(),
+        bls_aggregate_signature: Vec::new(),
+    };
+    crate::lane_consensus::CommittedLaneBlockSession {
+        proposal,
+        prepare_qc,
+        commit_qc,
+    }
+}
+
+fn signed_committed_lane_block_session_from_lane_payload_ownership(
+    ownership: &SumeragiLanePayloadOwnership,
+    keypair: &KeyPair,
+) -> (
+    crate::lane_consensus::CommittedLaneBlockSession,
+    BTreeMap<PublicKey, Vec<u8>>,
+) {
+    let proposal = lane_block_proposal_from_lane_payload_ownership(ownership);
+    let prepare_vote = signed_lane_block_vote_with_keypair(
+        &proposal,
+        crate::sumeragi::consensus::Phase::Prepare,
+        keypair,
+    );
+    let commit_vote = signed_lane_block_vote_with_keypair(
+        &proposal,
+        crate::sumeragi::consensus::Phase::Commit,
+        keypair,
+    );
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        prepare_vote.body.clone(),
+        proposal.descriptor.validator_set.clone(),
+        std::slice::from_ref(&prepare_vote),
+    )
+    .expect("BLS lane payload fixture prepare QC");
+    let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        commit_vote.body.clone(),
+        proposal.descriptor.validator_set.clone(),
+        std::slice::from_ref(&commit_vote),
+    )
+    .expect("BLS lane payload fixture commit QC");
+    let signer_pops = BTreeMap::from([(
+        keypair.public_key().clone(),
+        iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+            .expect("BLS lane payload fixture PoP"),
+    )]);
+    (
+        crate::lane_consensus::CommittedLaneBlockSession {
+            proposal,
+            prepare_qc,
+            commit_qc,
+        },
+        signer_pops,
+    )
+}
+
+fn assert_consensus_message_handling_total(
+    kind: super::status::ConsensusMessageKind,
+    outcome: super::status::ConsensusMessageOutcome,
+    reason: super::status::ConsensusMessageReason,
+    expected: u64,
+) {
+    let actual = super::status::snapshot()
+        .consensus_message_handling
+        .entries
+        .into_iter()
+        .find(|entry| entry.kind == kind && entry.outcome == outcome && entry.reason == reason)
+        .map_or(0, |entry| entry.total);
+    assert_eq!(
+        actual, expected,
+        "{kind:?}/{outcome:?}/{reason:?} handling counter changed"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_ingress_caches_valid_messages_until_live_sessions_execute() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let (proposal, vote, qc, signer_pop) = sample_lane_block_messages();
+    let signer = vote.signer.clone();
+    actor
+        .roster_validation_cache
+        .pops
+        .insert(signer.public_key().clone(), signer_pop);
+
+    actor
+        .handle_lane_block_proposal(proposal)
+        .expect("valid lane-block proposal handled");
+    actor
+        .handle_lane_block_qc(qc)
+        .expect("valid lane-block QC handled");
+    actor
+        .handle_lane_block_vote(vote, Some(&signer))
+        .expect("valid lane-block vote handled");
+    assert_eq!(
+        actor.subsystems.lane_blocks.len(),
+        1,
+        "proposal, vote, and QC should share one cached lane-block session"
+    );
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        0,
+        "prepare-only lane-block artifacts must not reach the execution queue"
+    );
+    assert!(
+        super::status::committed_lane_blocks_snapshot().is_empty(),
+        "prepare-only lane-block artifacts must not reach committed status"
+    );
+
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockProposal,
+        super::status::ConsensusMessageOutcome::Deferred,
+        super::status::ConsensusMessageReason::PayloadUnapplied,
+        1,
+    );
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockVote,
+        super::status::ConsensusMessageOutcome::Deferred,
+        super::status::ConsensusMessageReason::PayloadUnapplied,
+        1,
+    );
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockQc,
+        super::status::ConsensusMessageOutcome::Deferred,
+        super::status::ConsensusMessageReason::PayloadUnapplied,
+        1,
+    );
+
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_ingress_queues_committed_session_from_inbound_qcs_once() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let (proposal, prepare_vote, prepare_qc, _commit_vote, commit_qc, signer_pop) =
+        sample_lane_block_commit_messages();
+    let signer = prepare_vote.signer.clone();
+    actor
+        .roster_validation_cache
+        .pops
+        .insert(signer.public_key().clone(), signer_pop);
+
+    actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("valid lane-block proposal handled");
+    assert_eq!(actor.subsystems.committed_lane_blocks.len(), 0);
+    actor
+        .handle_lane_block_qc(prepare_qc.clone())
+        .expect("valid prepare lane-block QC handled");
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        0,
+        "prepare QC alone must not queue execution"
+    );
+    actor
+        .handle_lane_block_qc(commit_qc.clone())
+        .expect("valid commit lane-block QC handled");
+
+    assert_eq!(actor.subsystems.committed_lane_blocks.len(), 1);
+    let committed = actor
+        .subsystems
+        .committed_lane_blocks
+        .front()
+        .expect("committed session queued");
+    assert_eq!(committed.proposal, proposal);
+    assert_eq!(committed.prepare_qc, prepare_qc);
+    assert_eq!(committed.commit_qc, commit_qc.clone());
+    let status = super::status::committed_lane_blocks_snapshot();
+    assert_eq!(status.len(), 1);
+    assert_eq!(status[0].lane_id, proposal.descriptor.lane_id);
+    assert_eq!(status[0].dataspace_id, proposal.descriptor.dataspace_id);
+    assert_eq!(
+        status[0].lane_block_height,
+        proposal.descriptor.lane_block_height
+    );
+    assert_eq!(status[0].proposal_hash, proposal.proposal_hash);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+    );
+    assert!(
+        !status[0].executable_payload_available(),
+        "certified-only lane-block sessions must not be advertised as executable"
+    );
+    assert_eq!(status[0].prepare_qc, prepare_qc);
+    assert_eq!(status[0].commit_qc, commit_qc.clone());
+    assert_eq!(super::status::snapshot().committed_lane_blocks, status);
+    let committed_tips = actor.known_lane_block_tips_for_proposal();
+    assert!(
+        committed_tips.iter().any(|tip| {
+            tip.lane_id == proposal.descriptor.lane_id
+                && tip.dataspace_id == proposal.descriptor.dataspace_id
+                && tip.latest_lane_block_height == proposal.descriptor.lane_block_height
+                && tip.latest_lane_block_descriptor_hash
+                    == Some(proposal.descriptor.descriptor_hash)
+        }),
+        "committed lane-block sessions should advance proposal-planning lane tips"
+    );
+
+    actor
+        .handle_lane_block_qc(commit_qc)
+        .expect("duplicate commit lane-block QC handled");
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        1,
+        "duplicate commit QC must not enqueue the same committed session twice"
+    );
+    assert_eq!(
+        super::status::committed_lane_blocks_snapshot().len(),
+        1,
+        "duplicate commit QC must not publish duplicate committed status"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn queue_committed_lane_block_sessions_prunes_inactive_cached_lane_routes_when_nexus_enabled()
+{
+    super::status::set_committed_lane_blocks(Vec::new());
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let active_lane = LaneId::new(7);
+    let active_dataspace = DataSpaceId::new(11);
+    let inactive_lane = LaneId::new(8);
+    let inactive_dataspace = DataSpaceId::new(12);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(9_u32),
+        vec![ModelLaneConfig {
+            id: active_lane,
+            dataspace_id: active_dataspace,
+            alias: "active-cached-lane-route-fixture".to_owned(),
+            ..ModelLaneConfig::default()
+        }],
+    )
+    .expect("lane catalog with one active cached route");
+    let runtime_lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let lane_entry = runtime_lane_config
+        .entry(active_lane)
+        .expect("runtime lane entry for active cached route");
+    actor
+        .state
+        .kura()
+        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision active cached route lane storage");
+    {
+        let mut nexus = actor.state.nexus.write();
+        nexus.enabled = true;
+        nexus.lane_config = runtime_lane_config;
+        nexus.lane_catalog = lane_catalog;
+    }
+
+    let (
+        active_proposal,
+        _active_prepare_vote,
+        active_prepare_qc,
+        _active_commit_vote,
+        active_commit_qc,
+        _active_signer_pop,
+    ) = sample_lane_block_commit_messages_for_route_at(
+        active_lane,
+        active_dataspace,
+        13,
+        12,
+        Some(Hash::prehashed([0xA0; Hash::LENGTH])),
+    );
+    let (
+        inactive_proposal,
+        _inactive_prepare_vote,
+        inactive_prepare_qc,
+        _inactive_commit_vote,
+        inactive_commit_qc,
+        _inactive_signer_pop,
+    ) = sample_lane_block_commit_messages_for_route_at(
+        inactive_lane,
+        inactive_dataspace,
+        13,
+        12,
+        Some(Hash::prehashed([0xB0; Hash::LENGTH])),
+    );
+    let (
+        inactive_conflicting_proposal,
+        _inactive_conflicting_prepare_vote,
+        _inactive_conflicting_prepare_qc,
+        _inactive_conflicting_commit_vote,
+        _inactive_conflicting_commit_qc,
+        _inactive_conflicting_signer_pop,
+    ) = sample_lane_block_commit_messages_for_route_at(
+        inactive_lane,
+        inactive_dataspace,
+        13,
+        12,
+        Some(Hash::prehashed([0xC0; Hash::LENGTH])),
+    );
+    assert_ne!(
+        inactive_proposal.proposal_hash,
+        inactive_conflicting_proposal.proposal_hash
+    );
+
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .insert_proposal(active_proposal.clone()),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .insert_proposal(inactive_proposal.clone()),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted)
+    );
+    assert_eq!(actor.subsystems.lane_blocks.len(), 2);
+
+    let active_session = crate::lane_consensus::CommittedLaneBlockSession {
+        proposal: active_proposal.clone(),
+        prepare_qc: active_prepare_qc,
+        commit_qc: active_commit_qc,
+    };
+    let inactive_session = crate::lane_consensus::CommittedLaneBlockSession {
+        proposal: inactive_proposal,
+        prepare_qc: inactive_prepare_qc,
+        commit_qc: inactive_commit_qc,
+    };
+    assert_eq!(
+        actor
+            .subsystems
+            .committed_lane_blocks
+            .hydrate_from_certified_sessions(vec![inactive_session, active_session]),
+        2
+    );
+
+    assert!(
+        actor.queue_committed_lane_block_sessions(),
+        "inactive lane-route pruning should count as queue progress"
+    );
+
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        1,
+        "inactive committed-lane sessions should be pruned before status publication"
+    );
+    let queued = actor
+        .subsystems
+        .committed_lane_blocks
+        .front()
+        .expect("active committed lane-block session should remain queued");
+    assert_eq!(queued.proposal, active_proposal);
+    assert_eq!(
+        actor.subsystems.lane_blocks.len(),
+        1,
+        "inactive proposal sessions should be pruned from the live lane-block cache"
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .insert_proposal(inactive_conflicting_proposal),
+        Ok(crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted),
+        "pruning an inactive lane-block proposal should release its stale slot claim"
+    );
+
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_proposal_tips_include_durable_certified_sessions() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let (first_proposal, _prepare_vote, first_prepare_qc, _commit_vote, first_commit_qc, first_pop) =
+        sample_lane_block_commit_messages();
+    let (
+        second_proposal,
+        _second_prepare_vote,
+        second_prepare_qc,
+        _second_commit_vote,
+        second_commit_qc,
+        second_pop,
+    ) = sample_lane_block_commit_messages_at(
+        first_proposal.descriptor.lane_block_height + 1,
+        first_proposal.descriptor.lane_block_height,
+        Some(first_proposal.descriptor.descriptor_hash),
+    );
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(8_u32),
+        vec![ModelLaneConfig {
+            id: first_proposal.descriptor.lane_id,
+            dataspace_id: first_proposal.descriptor.dataspace_id,
+            alias: "certified-lane-block-fixture".to_owned(),
+            ..ModelLaneConfig::default()
+        }],
+    )
+    .expect("lane catalog with certified fixture lane");
+    let runtime_lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let lane_entry = runtime_lane_config
+        .entry(first_proposal.descriptor.lane_id)
+        .expect("runtime lane entry for certified fixture");
+    actor
+        .state
+        .kura()
+        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision certified fixture lane storage");
+    {
+        let mut nexus = actor.state.nexus.write();
+        nexus.enabled = true;
+        nexus.lane_config = runtime_lane_config;
+        nexus.lane_catalog = lane_catalog;
+    }
+    actor
+        .state
+        .kura()
+        .persist_committed_lane_block_session(
+            &crate::lane_consensus::CommittedLaneBlockSession {
+                proposal: first_proposal.clone(),
+                prepare_qc: first_prepare_qc,
+                commit_qc: first_commit_qc,
+            },
+            &BTreeMap::from([(
+                first_proposal.descriptor.validator_set[0]
+                    .public_key()
+                    .clone(),
+                first_pop,
+            )]),
+        )
+        .expect("persist first committed lane-block session");
+    actor
+        .state
+        .kura()
+        .persist_committed_lane_block_session(
+            &crate::lane_consensus::CommittedLaneBlockSession {
+                proposal: second_proposal.clone(),
+                prepare_qc: second_prepare_qc,
+                commit_qc: second_commit_qc,
+            },
+            &BTreeMap::from([(
+                second_proposal.descriptor.validator_set[0]
+                    .public_key()
+                    .clone(),
+                second_pop,
+            )]),
+        )
+        .expect("persist second committed lane-block session");
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        0,
+        "fixture should prove the tip comes from durable Kura state, not the in-memory queue"
+    );
+
+    let tips = actor.known_lane_block_tips_for_proposal();
+    assert!(
+        tips.iter().any(|tip| {
+            tip.lane_id == second_proposal.descriptor.lane_id
+                && tip.dataspace_id == second_proposal.descriptor.dataspace_id
+                && tip.latest_lane_block_height == second_proposal.descriptor.lane_block_height
+                && tip.latest_lane_block_descriptor_hash
+                    == Some(second_proposal.descriptor.descriptor_hash)
+        }),
+        "durable certified lane-block sessions should advance proposal-planning lane tips to the latest height"
+    );
+    let replay_sessions = actor.state.certified_lane_block_sessions_snapshot_cached();
+    assert_eq!(
+        replay_sessions.len(),
+        2,
+        "all durable certified lane-block sidecars should rehydrate the committed session boundary"
+    );
+    assert_eq!(replay_sessions[0].proposal, first_proposal);
+    assert_eq!(replay_sessions[1].proposal, second_proposal);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_startup_hydrates_committed_lane_blocks_from_certified_sidecars() {
+    super::status::set_committed_lane_blocks(Vec::new());
+    let (first_proposal, _prepare_vote, first_prepare_qc, _commit_vote, first_commit_qc, first_pop) =
+        sample_lane_block_commit_messages();
+    let (
+        second_proposal,
+        _second_prepare_vote,
+        second_prepare_qc,
+        _second_commit_vote,
+        second_commit_qc,
+        second_pop,
+    ) = sample_lane_block_commit_messages_at(
+        first_proposal.descriptor.lane_block_height + 1,
+        first_proposal.descriptor.lane_block_height,
+        Some(first_proposal.descriptor.descriptor_hash),
+    );
+    let lane_id = first_proposal.descriptor.lane_id;
+    let dataspace_id = first_proposal.descriptor.dataspace_id;
+    let first_proposal_for_setup = first_proposal.clone();
+    let first_prepare_qc_for_setup = first_prepare_qc.clone();
+    let first_commit_qc_for_setup = first_commit_qc.clone();
+    let first_pop_for_setup = first_pop.clone();
+    let first_signer_public_key = first_proposal.descriptor.validator_set[0]
+        .public_key()
+        .clone();
+    let second_proposal_for_setup = second_proposal.clone();
+    let second_prepare_qc_for_setup = second_prepare_qc.clone();
+    let second_commit_qc_for_setup = second_commit_qc.clone();
+    let second_pop_for_setup = second_pop.clone();
+    let second_signer_public_key = second_proposal.descriptor.validator_set[0]
+        .public_key()
+        .clone();
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let kura = Kura::blank_kura_for_testing();
+
+    let mut harness = test_actor_harness_with_config_and_height_and_kura_and_state_setup(
+        4,
+        consensus_cfg,
+        None,
+        0,
+        kura,
+        move |state, _key_pairs| {
+            let lane_catalog = LaneCatalog::new(
+                nonzero!(8_u32),
+                vec![ModelLaneConfig {
+                    id: lane_id,
+                    dataspace_id,
+                    alias: "startup-certified-lane-block-fixture".to_owned(),
+                    ..ModelLaneConfig::default()
+                }],
+            )
+            .expect("lane catalog with startup certified fixture lane");
+            let runtime_lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+            let lane_entry = runtime_lane_config
+                .entry(lane_id)
+                .expect("runtime lane entry for startup certified fixture");
+            state
+                .kura()
+                .reconcile_lane_segments(&[lane_entry], &[], &[])
+                .expect("provision startup certified fixture lane storage");
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.lane_config = runtime_lane_config;
+                nexus.lane_catalog = lane_catalog;
+            }
+            state
+                .kura()
+                .persist_committed_lane_block_session(
+                    &crate::lane_consensus::CommittedLaneBlockSession {
+                        proposal: first_proposal_for_setup,
+                        prepare_qc: first_prepare_qc_for_setup,
+                        commit_qc: first_commit_qc_for_setup,
+                    },
+                    &BTreeMap::from([(first_signer_public_key, first_pop_for_setup)]),
+                )
+                .expect("persist first startup certified lane-block session");
+            state
+                .kura()
+                .persist_committed_lane_block_session(
+                    &crate::lane_consensus::CommittedLaneBlockSession {
+                        proposal: second_proposal_for_setup,
+                        prepare_qc: second_prepare_qc_for_setup,
+                        commit_qc: second_commit_qc_for_setup,
+                    },
+                    &BTreeMap::from([(second_signer_public_key, second_pop_for_setup)]),
+                )
+                .expect("persist second startup certified lane-block session");
+        },
+    )
+    .await;
+    let actor = &mut harness.actor;
+
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        2,
+        "actor startup should hydrate committed lane-block queue from certified sidecars"
+    );
+    let committed = actor
+        .subsystems
+        .committed_lane_blocks
+        .front()
+        .expect("hydrated committed lane block");
+    assert_eq!(committed.proposal, first_proposal);
+    let status = super::status::committed_lane_blocks_snapshot();
+    assert_eq!(status.len(), 2);
+    assert_eq!(status[0].lane_id, lane_id);
+    assert_eq!(status[0].dataspace_id, dataspace_id);
+    assert_eq!(
+        status[0].lane_block_height,
+        first_proposal.descriptor.lane_block_height
+    );
+    assert_eq!(status[1].lane_id, lane_id);
+    assert_eq!(status[1].dataspace_id, dataspace_id);
+    assert_eq!(
+        status[1].lane_block_height,
+        second_proposal.descriptor.lane_block_height
+    );
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+    );
+    assert_eq!(
+        status[1].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+    );
+    assert!(
+        status
+            .iter()
+            .all(|snapshot| !snapshot.executable_payload_available()),
+        "restart-hydrated certified sidecars still need executable lane payload material"
+    );
+
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_startup_status_includes_application_receipted_certified_sidecars() {
+    super::status::set_committed_lane_blocks(Vec::new());
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let validator_keypair = checked_bls_keypair();
+    let validator = PeerId::new(validator_keypair.public_key().clone());
+    let mut block =
+        sample_block_with_lane_payload_artifact(1, 0, lane_id, dataspace_id, lane_block_height);
+    let entrypoint_hashes: Vec<_> = block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect();
+    let results = entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    block
+        .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
+        .expect("attach restart applied fixture transaction results");
+    let ownership = rebind_lane_payload_artifact_validator_set(&mut block, vec![validator], 1);
+    let (session, signer_pops) = signed_committed_lane_block_session_from_lane_payload_ownership(
+        &ownership,
+        &validator_keypair,
+    );
+    let expected_proposal = session.proposal.clone();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let kura = Kura::blank_kura_for_testing();
+    let mut harness = test_actor_harness_with_config_and_height_and_kura_and_state_setup(
+        4,
+        consensus_cfg,
+        None,
+        0,
+        kura,
+        move |state, _key_pairs| {
+            let lane_catalog = LaneCatalog::new(
+                nonzero!(8_u32),
+                vec![ModelLaneConfig {
+                    id: lane_id,
+                    dataspace_id,
+                    alias: "startup-applied-certified-lane-block-fixture".to_owned(),
+                    ..ModelLaneConfig::default()
+                }],
+            )
+            .expect("lane catalog with startup applied certified fixture lane");
+            let runtime_lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+            let lane_entry = runtime_lane_config
+                .entry(lane_id)
+                .expect("runtime lane entry for startup applied certified fixture");
+            state
+                .kura()
+                .reconcile_lane_segments(&[lane_entry], &[], &[])
+                .expect("provision startup applied certified fixture lane storage");
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.lane_config = runtime_lane_config;
+                nexus.lane_catalog = lane_catalog;
+            }
+            state
+                .kura()
+                .store_block(Arc::new(block))
+                .expect("store startup applied lane payload block");
+            state
+                .kura()
+                .persist_committed_lane_block_session(&session, &signer_pops)
+                .expect("persist startup applied certified lane-block session");
+            state
+                .kura()
+                .persist_lane_block_application_receipt(&session.proposal)
+                .expect("persist startup applied lane-block application receipt");
+            assert!(
+                state
+                    .kura()
+                    .lane_block_application_receipt_available(&session.proposal),
+                "fixture should expose an application-receipted certified lane block before startup hydration"
+            );
+        },
+    )
+    .await;
+    let actor = &mut harness.actor;
+
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        0,
+        "startup hydration should skip already application-receipted certified sidecars"
+    );
+    let status = super::status::committed_lane_blocks_snapshot();
+    assert_eq!(
+        status.len(),
+        1,
+        "startup status should include the latest durable applied certified sidecar"
+    );
+    assert_eq!(status[0].proposal, expected_proposal);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
+    );
+    assert!(
+        status[0].executable_payload_available(),
+        "application-receipted certified sidecars should remain rollout-visible after restart"
+    );
+
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn actor_startup_status_preserves_direct_application_receipted_certified_sidecars() {
+    super::status::set_committed_lane_blocks(Vec::new());
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let chain: ChainId = "test-chain".parse().expect("chain id");
+    let authority = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+    let created_domain =
+        DomainId::try_new("startup_direct_created", "universal").expect("created domain id");
+    let register_domain_tx = TransactionBuilder::new(chain, authority.clone())
+        .with_instructions([Register::domain(Domain::new(created_domain.clone()))])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+    let mut block = block_with_lane_payload_transaction(
+        1,
+        0,
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+        register_domain_tx,
+    );
+    let validator_keypair = checked_bls_keypair();
+    let validator = PeerId::new(validator_keypair.public_key().clone());
+    let ownership = rebind_lane_payload_artifact_validator_set(&mut block, vec![validator], 1);
+    let (session, signer_pops) = signed_committed_lane_block_session_from_lane_payload_ownership(
+        &ownership,
+        &validator_keypair,
+    );
+    let expected_proposal = session.proposal.clone();
+    let created_domain_for_setup = created_domain.clone();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let kura = Kura::blank_kura_for_testing();
+    let mut harness = test_actor_harness_with_config_and_height_and_kura_and_state_setup(
+        4,
+        consensus_cfg,
+        None,
+        0,
+        kura,
+        move |state, _key_pairs| {
+            let lane_catalog = LaneCatalog::new(
+                nonzero!(8_u32),
+                vec![ModelLaneConfig {
+                    id: lane_id,
+                    dataspace_id,
+                    alias: "startup-direct-applied-certified-lane-block-fixture".to_owned(),
+                    ..ModelLaneConfig::default()
+                }],
+            )
+            .expect("lane catalog with startup direct-applied certified fixture lane");
+            let runtime_lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+            let lane_entry = runtime_lane_config
+                .entry(lane_id)
+                .expect("runtime lane entry for startup direct-applied certified fixture");
+            state
+                .kura()
+                .reconcile_lane_segments(&[lane_entry], &[], &[])
+                .expect("provision startup direct-applied certified fixture lane storage");
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.lane_config = runtime_lane_config;
+                nexus.lane_catalog = lane_catalog;
+            }
+            install_lane_manifest_registry(state, &[(lane_id, dataspace_id, vec![authority])]);
+            state
+                .kura()
+                .store_block(Arc::new(block))
+                .expect("store startup direct-applied lane payload block");
+            state
+                .kura()
+                .persist_committed_lane_block_session(&session, &signer_pops)
+                .expect("persist startup direct-applied certified lane-block session");
+
+            let mut queue = super::CommittedLaneBlockQueue::new(1);
+            assert_eq!(
+                queue.hydrate_from_certified_sessions(vec![session.clone()]),
+                1,
+                "direct-applied fixture session should queue before simulated restart"
+            );
+            assert_eq!(
+                queue.recover_available_payloads_into_kura(state.kura()),
+                1,
+                "direct-applied fixture payload should recover before simulated restart"
+            );
+            assert_eq!(
+                queue.preflight_recovered_execution_inputs_into_kura(state),
+                1,
+                "direct-applied fixture payload should preflight before simulated restart"
+            );
+            assert_eq!(
+                queue.apply_preflighted_execution_inputs_to_state(state),
+                1,
+                "direct-applied fixture payload should commit into state before simulated restart"
+            );
+            let receipt = state
+                .kura()
+                .read_lane_block_application_receipt(lane_id, lane_block_height)
+                .expect("startup direct-applied fixture receipt");
+            assert_eq!(
+                receipt.format,
+                crate::kura::LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+            );
+            assert!(
+                state.direct_lane_block_application_marker_matches(&receipt),
+                "direct-applied restart fixture should have committed the state marker"
+            );
+            let view = state.view();
+            assert!(
+                view.world()
+                    .domains()
+                    .get(&created_domain_for_setup)
+                    .is_some(),
+                "direct-applied restart fixture should have committed the world-state effect"
+            );
+        },
+    )
+    .await;
+    let actor = &mut harness.actor;
+
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        0,
+        "startup hydration should skip already direct-application-receipted certified sidecars"
+    );
+    let status = super::status::committed_lane_blocks_snapshot();
+    assert_eq!(
+        status.len(),
+        1,
+        "startup status should include the latest durable direct-applied certified sidecar"
+    );
+    assert_eq!(status[0].proposal, expected_proposal);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::StateAppliedByDirectExecution
+    );
+    assert!(
+        status[0].executable_payload_available(),
+        "direct-application-receipted certified sidecars should remain rollout-visible after restart"
+    );
+    let view = actor.state.view();
+    assert!(
+        view.world().domains().get(&created_domain).is_some(),
+        "startup should preserve directly applied world-state effects"
+    );
+
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[test]
+fn committed_lane_block_queue_hydrates_certified_sessions_once() {
+    let (proposal, _prepare_vote, prepare_qc, _commit_vote, commit_qc, _signer_pop) =
+        sample_lane_block_commit_messages();
+    let session = crate::lane_consensus::CommittedLaneBlockSession {
+        proposal: proposal.clone(),
+        prepare_qc,
+        commit_qc,
+    };
+    let mut queue = super::CommittedLaneBlockQueue::new(1);
+
+    assert_eq!(
+        queue.hydrate_from_certified_sessions(vec![session.clone(), session.clone()]),
+        1,
+        "duplicate durable certified sessions should hydrate once"
+    );
+    assert_eq!(queue.len(), 1);
+    let tips = queue.lane_block_tips_snapshot();
+    assert_eq!(tips.len(), 1);
+    assert_eq!(tips[0].lane_id, proposal.descriptor.lane_id);
+    assert_eq!(tips[0].dataspace_id, proposal.descriptor.dataspace_id);
+    assert_eq!(
+        tips[0].latest_lane_block_height,
+        proposal.descriptor.lane_block_height
+    );
+    assert_eq!(
+        tips[0].latest_lane_block_descriptor_hash,
+        Some(proposal.descriptor.descriptor_hash)
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let status = queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, None);
+    assert_eq!(status.len(), 1);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+    );
+    assert!(
+        !status[0].executable_payload_available(),
+        "hydrated certified sessions are not executable without lane payload bodies"
+    );
+}
+
+#[test]
+fn committed_lane_block_status_reports_available_payload_from_kura_artifact() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let mut block =
+        sample_block_with_lane_payload_artifact(1, 0, lane_id, dataspace_id, lane_block_height);
+    let entrypoint_hashes: Vec<_> = block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect();
+    let results = entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    block
+        .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
+        .expect("attach status fixture transaction results");
+    let ownership = block
+        .execution_context()
+        .expect("block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("block has lane payload ownership")
+        .clone();
+    let validator_set = ownership.lane_block_descriptor_validator_set.clone();
+    let descriptor = crate::sumeragi::consensus::LaneBlockDescriptorV1 {
+        lane_id,
+        dataspace_id,
+        previous_lane_block_height: ownership.previous_lane_block_height,
+        previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
+        lane_block_height,
+        lane_block_view: ownership.lane_block_view,
+        subject_hash: ownership.subject_hash,
+        payload_ownership_hash: ownership.payload_ownership_hash,
+        rbc_instance_hash: ownership.rbc_instance_hash,
+        accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
+        accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_set,
+        validator_count: ownership.lane_block_descriptor_validator_count,
+        min_quorum: ownership.lane_block_descriptor_min_quorum,
+        qc_mode_tag: ownership.qc_mode_tag.clone(),
+        descriptor_hash: ownership
+            .lane_block_descriptor_hash
+            .expect("ownership has descriptor hash"),
+    };
+    assert_eq!(
+        descriptor.descriptor_hash,
+        descriptor.computed_descriptor_hash()
+    );
+    let mut proposal = crate::sumeragi::consensus::LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    let prepare_qc = crate::sumeragi::consensus::LaneBlockQcV1 {
+        body: proposal.vote_body(Phase::Prepare),
+        validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+        validator_set_hash: proposal.descriptor.validator_set_hash,
+        validator_set: proposal.descriptor.validator_set.clone(),
+        signers_bitmap: Vec::new(),
+        bls_aggregate_signature: Vec::new(),
+    };
+    let commit_qc = crate::sumeragi::consensus::LaneBlockQcV1 {
+        body: proposal.vote_body(Phase::Commit),
+        validator_set_hash_version: proposal.descriptor.validator_set_hash_version,
+        validator_set_hash: proposal.descriptor.validator_set_hash,
+        validator_set: proposal.descriptor.validator_set.clone(),
+        signers_bitmap: Vec::new(),
+        bls_aggregate_signature: Vec::new(),
+    };
+    let session = crate::lane_consensus::CommittedLaneBlockSession {
+        proposal,
+        prepare_qc,
+        commit_qc,
+    };
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(8_u32),
+        vec![ModelLaneConfig {
+            id: lane_id,
+            dataspace_id,
+            alias: "payload-available-status-fixture".to_owned(),
+            ..ModelLaneConfig::default()
+        }],
+    )
+    .expect("lane catalog with status fixture lane");
+    let runtime_lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let lane_entry = runtime_lane_config
+        .entry(lane_id)
+        .expect("runtime lane entry for status fixture");
+    let kura = Kura::blank_kura_for_testing();
+    kura.reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision status fixture lane storage");
+    kura.store_block(Arc::new(block))
+        .expect("store block with lane payload artifact");
+
+    let mut queue = super::CommittedLaneBlockQueue::new(1);
+    assert_eq!(queue.hydrate_from_certified_sessions(vec![session]), 1);
+    let status = queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, None);
+    assert_eq!(status.len(), 1);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor
+    );
+    assert!(status[0].executable_payload_available());
+    assert_eq!(
+        queue.recover_available_payloads_into_kura(kura.as_ref()),
+        1,
+        "recoverable committed lane payload should be durably materialized once"
+    );
+    assert_eq!(
+        queue.recover_available_payloads_into_kura(kura.as_ref()),
+        0,
+        "durably materialized lane payload should not be recovered twice"
+    );
+    let status = queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, None);
+    assert_eq!(status.len(), 1);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
+    );
+    assert!(status[0].executable_payload_available());
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("durable lane execution input");
+    assert_eq!(input.proposal, status[0].proposal);
+    assert_eq!(
+        input.entrypoint_hashes,
+        ownership.accepted_transaction_hashes
+    );
+    kura.persist_lane_block_execution_preflight(
+        &input,
+        0,
+        None,
+        vec![TransactionResult(TransactionResultInner::Ok(
+            DataTriggerSequence::new(),
+        ))],
+    )
+    .expect("persist lane execution preflight");
+    let status = queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, None);
+    assert_eq!(status.len(), 1);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightedAwaitingStateApplication
+    );
+    let stale_tip_status = queue.status_snapshot_with_payload_availability(kura.as_ref(), 1, None);
+    assert_eq!(stale_tip_status.len(), 1);
+    assert_eq!(
+        stale_tip_status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication,
+        "preflight evidence from an older local state tip must not count as current readiness"
+    );
+    assert_eq!(
+        queue.record_available_payload_application_receipts_into_kura(kura.as_ref()),
+        1,
+        "recoverable committed lane results should be durably recorded once"
+    );
+    assert_eq!(
+        queue.record_available_payload_application_receipts_into_kura(kura.as_ref()),
+        0,
+        "durably recorded lane application receipt should not be recovered twice"
+    );
+    let status = queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, None);
+    assert_eq!(status.len(), 1);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
+    );
+    assert!(status[0].executable_payload_available());
+    let receipt = kura
+        .read_lane_block_application_receipt(lane_id, lane_block_height)
+        .expect("durable lane application receipt");
+    assert_eq!(receipt.proposal, status[0].proposal);
+    assert_eq!(
+        receipt.entrypoint_hashes,
+        ownership.accepted_transaction_hashes
+    );
+}
+
+fn direct_lane_application_fixture(
+    chain_literal: &str,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+) -> (State, Arc<Kura>, super::CommittedLaneBlockQueue, DomainId) {
+    let chain: ChainId = chain_literal.parse().expect("chain id");
+    let authority = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+    let label_prefix = chain_literal.replace('-', "_");
+    let created_domain = DomainId::try_new(format!("{label_prefix}_created"), "universal")
+        .expect("created domain id");
+
+    let register_domain_tx = TransactionBuilder::new(chain, authority.clone())
+        .with_instructions([Register::domain(Domain::new(created_domain.clone()))])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+    let (state, kura, queue) = direct_lane_application_fixture_with_transactions(
+        chain_literal,
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+        vec![register_domain_tx],
+    );
+
+    (state, kura, queue, created_domain)
+}
+
+fn direct_lane_application_fixture_with_transactions(
+    chain_literal: &str,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    txs: Vec<SignedTransaction>,
+) -> (State, Arc<Kura>, super::CommittedLaneBlockQueue) {
+    let chain: ChainId = chain_literal.parse().expect("chain id");
+    let authority = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+    let label_prefix = chain_literal.replace('-', "_");
+    let base_domain =
+        DomainId::try_new(format!("{label_prefix}_base"), "universal").expect("base domain id");
+    let world = World::with(
+        [Domain::new(base_domain).build(&authority)],
+        [Account::new(authority.clone()).build(&authority)],
+        [],
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_with_chain(
+        world,
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        chain,
+    );
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(16_u32),
+        vec![ModelLaneConfig {
+            id: lane_id,
+            dataspace_id,
+            alias: format!("direct-application-{}", lane_id.as_u32()),
+            ..ModelLaneConfig::default()
+        }],
+    )
+    .expect("lane catalog with direct-application lane");
+    let runtime_lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let lane_entry = runtime_lane_config
+        .entry(lane_id)
+        .expect("runtime direct-application lane entry");
+    kura.reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision direct-application lane storage");
+    {
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config = runtime_lane_config;
+    }
+    install_lane_manifest_registry(&state, &[(lane_id, dataspace_id, vec![authority])]);
+
+    let block =
+        block_with_lane_payload_transactions(1, 0, lane_id, dataspace_id, lane_block_height, txs);
+    let ownership = block
+        .execution_context()
+        .expect("direct-application block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("direct-application block has lane ownership")
+        .clone();
+    let session = committed_lane_block_session_from_lane_payload_ownership(&ownership);
+    kura.store_block(Arc::new(block))
+        .expect("store direct-application lane payload block");
+
+    let mut queue = super::CommittedLaneBlockQueue::new(1);
+    assert_eq!(
+        queue.hydrate_from_certified_sessions(vec![session]),
+        1,
+        "direct-application session should queue"
+    );
+    assert_eq!(
+        queue.recover_available_payloads_into_kura(kura.as_ref()),
+        1,
+        "direct-application payload should recover"
+    );
+    assert_eq!(
+        queue.preflight_recovered_execution_inputs_into_kura(&state),
+        1,
+        "direct-application payload should preflight"
+    );
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("direct-application preflight should be durable");
+    assert!(
+        !preflight.has_rejections(),
+        "direct-application fixture transaction must be accepted"
+    );
+
+    (state, kura, queue)
+}
+
+#[test]
+fn committed_lane_block_queue_preflights_recovered_inputs_from_isolated_state_base() {
+    let lane_a = LaneId::new(7);
+    let lane_b = LaneId::new(8);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let chain: ChainId = "lane-preflight-isolation".parse().expect("chain id");
+    let authority = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+    let base_domain = DomainId::try_new("preflight_base", "universal").expect("base domain id");
+    let world = World::with(
+        [Domain::new(base_domain.clone()).build(&authority)],
+        [Account::new(authority.clone()).build(&authority)],
+        [],
+    );
+    let kura = Kura::blank_kura_for_testing();
+    let state = State::new_with_chain(
+        world,
+        Arc::clone(&kura),
+        LiveQueryStore::start_test(),
+        chain.clone(),
+    );
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(9_u32),
+        vec![
+            ModelLaneConfig {
+                id: lane_a,
+                dataspace_id,
+                alias: "preflight-isolation-a".to_owned(),
+                ..ModelLaneConfig::default()
+            },
+            ModelLaneConfig {
+                id: lane_b,
+                dataspace_id,
+                alias: "preflight-isolation-b".to_owned(),
+                ..ModelLaneConfig::default()
+            },
+        ],
+    )
+    .expect("lane catalog with preflight isolation lanes");
+    let runtime_lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let lane_a_entry = runtime_lane_config
+        .entry(lane_a)
+        .expect("runtime lane A entry");
+    let lane_b_entry = runtime_lane_config
+        .entry(lane_b)
+        .expect("runtime lane B entry");
+    kura.reconcile_lane_segments(&[lane_a_entry, lane_b_entry], &[], &[])
+        .expect("provision isolation lane storage");
+    {
+        let mut nexus = state.nexus.write();
+        nexus.enabled = true;
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config = runtime_lane_config;
+    }
+    install_lane_manifest_registry(
+        &state,
+        &[
+            (lane_a, dataspace_id, vec![authority.clone()]),
+            (lane_b, dataspace_id, vec![authority.clone()]),
+        ],
+    );
+
+    let dependent_domain =
+        DomainId::try_new("created_by_lane_a", "universal").expect("dependent domain id");
+    let register_domain_tx = TransactionBuilder::new(chain.clone(), authority.clone())
+        .with_instructions([Register::domain(Domain::new(dependent_domain.clone()))])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+    let dependent_asset_id = AssetDefinitionId::new(
+        dependent_domain.clone(),
+        "isolated_coin".parse().expect("asset name"),
+    );
+    let register_asset_tx = TransactionBuilder::new(chain, authority)
+        .with_instructions([Register::asset_definition(
+            AssetDefinition::numeric(dependent_asset_id.clone())
+                .with_name(dependent_asset_id.name().to_string()),
+        )])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+
+    let block_a = block_with_lane_payload_transaction(
+        1,
+        0,
+        lane_a,
+        dataspace_id,
+        lane_block_height,
+        register_domain_tx,
+    );
+    let ownership_a = block_a
+        .execution_context()
+        .expect("lane A block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("lane A block has lane ownership")
+        .clone();
+    let session_a = committed_lane_block_session_from_lane_payload_ownership(&ownership_a);
+    let block_b = block_with_lane_payload_transaction(
+        2,
+        0,
+        lane_b,
+        dataspace_id,
+        lane_block_height,
+        register_asset_tx,
+    );
+    let ownership_b = block_b
+        .execution_context()
+        .expect("lane B block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("lane B block has lane ownership")
+        .clone();
+    let session_b = committed_lane_block_session_from_lane_payload_ownership(&ownership_b);
+    kura.store_block(Arc::new(block_a))
+        .expect("store lane A payload block");
+    kura.store_block(Arc::new(block_b))
+        .expect("store lane B payload block");
+
+    let mut queue = super::CommittedLaneBlockQueue::new(2);
+    assert_eq!(
+        queue.hydrate_from_certified_sessions(vec![session_a, session_b]),
+        2,
+        "both lane payload sessions should queue for preflight"
+    );
+    assert_eq!(
+        queue.recover_available_payloads_into_kura(kura.as_ref()),
+        2,
+        "both lane payloads should recover into durable execution inputs"
+    );
+    assert_eq!(
+        queue.preflight_recovered_execution_inputs_into_kura(&state),
+        2,
+        "both recovered inputs should produce durable direct-execution preflights"
+    );
+    let preflight_base_hash = Some(state.lane_execution_state_hash());
+
+    let preflight_a = kura
+        .read_lane_block_execution_preflight(lane_a, lane_block_height)
+        .expect("lane A preflight should be durable");
+    assert_eq!(preflight_a.preflight_state_hash, preflight_base_hash);
+    assert!(
+        !preflight_a.has_rejections(),
+        "lane A domain registration must be accepted by the direct preflight"
+    );
+    let preflight_b = kura
+        .read_lane_block_execution_preflight(lane_b, lane_block_height)
+        .expect("lane B preflight should be durable");
+    assert_eq!(preflight_b.preflight_state_hash, preflight_base_hash);
+    assert!(
+        preflight_b.has_rejections(),
+        "lane B must not observe lane A's speculative domain registration before it is committed"
+    );
+
+    let status =
+        queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, preflight_base_hash);
+    assert_eq!(status.len(), 2);
+    let lane_a_status = status
+        .iter()
+        .find(|snapshot| snapshot.lane_id == lane_a)
+        .expect("lane A status");
+    assert_eq!(
+        lane_a_status.execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightedAwaitingStateApplication
+    );
+    let lane_b_status = status
+        .iter()
+        .find(|snapshot| snapshot.lane_id == lane_b)
+        .expect("lane B status");
+    assert_eq!(
+        lane_b_status.execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::PayloadPreflightRejectedAwaitingStateApplication
+    );
+    assert!(
+        !lane_b_status.executable_payload_available(),
+        "rejected direct preflights must not advertise executor handoff readiness"
+    );
+
+    let changed_domain =
+        DomainId::try_new("preflight_base_changed", "universal").expect("changed domain id");
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut state_block = state.block(header);
+    state_block.world.domains.insert(
+        changed_domain.clone(),
+        Domain::new(changed_domain).build(&(*SAMPLE_GENESIS_ACCOUNT_ID).clone()),
+    );
+    state_block
+        .commit()
+        .expect("commit WSV-only change without advancing block metadata");
+    let changed_base_hash = Some(state.lane_execution_state_hash());
+    assert_ne!(
+        changed_base_hash, preflight_base_hash,
+        "direct lane preflight base identity must move when WSV changes without a new block hash"
+    );
+    let stale_status =
+        queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, changed_base_hash);
+    let stale_lane_a_status = stale_status
+        .iter()
+        .find(|snapshot| snapshot.lane_id == lane_a)
+        .expect("stale lane A status");
+    assert_eq!(
+        stale_lane_a_status.execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication,
+        "preflight evidence from the previous WSV hash must not count as current readiness"
+    );
+}
+
+#[test]
+fn committed_lane_block_queue_directly_applies_preflighted_input_to_state() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, mut queue, created_domain) = direct_lane_application_fixture(
+        "direct_lane_apply",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let before_height = state.committed_height();
+    let before_tip = state.latest_block_hash_fast();
+    let before_state_hash = state.lane_execution_state_hash();
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("direct application input should be durable");
+    let direct_transaction_hashes =
+        super::CommittedLaneBlockQueue::direct_committed_transaction_hashes(&input);
+    assert!(
+        !direct_transaction_hashes.is_empty(),
+        "direct application fixture should carry accepted transaction hashes"
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            !state.has_committed_transaction(*hash),
+            "direct transaction hash should not be committed before direct application"
+        );
+    }
+
+    let applied = queue.apply_preflighted_execution_inputs_to_state(&state);
+    let receipt_after_apply = kura
+        .read_lane_block_application_receipt(lane_id, lane_block_height)
+        .is_some();
+    let domain_after_apply = state
+        .view()
+        .world()
+        .domains()
+        .get(&created_domain)
+        .is_some();
+    assert_eq!(
+        applied, 1,
+        "accepted direct preflight should commit into world state; receipt_after_apply={receipt_after_apply}, domain_after_apply={domain_after_apply}"
+    );
+
+    assert_eq!(
+        state.committed_height(),
+        before_height,
+        "direct lane application must not advance canonical block height"
+    );
+    assert_eq!(
+        state.latest_block_hash_fast(),
+        before_tip,
+        "direct lane application must not append a canonical block hash"
+    );
+    assert_ne!(
+        state.lane_execution_state_hash(),
+        before_state_hash,
+        "direct lane application should move the WSV identity"
+    );
+    let view = state.view();
+    assert!(
+        view.world().domains().get(&created_domain).is_some(),
+        "accepted direct lane transaction should update world state"
+    );
+    drop(view);
+
+    let receipt = kura
+        .read_lane_block_application_receipt(lane_id, lane_block_height)
+        .expect("direct lane application receipt should be durable");
+    assert_eq!(
+        receipt.format,
+        crate::kura::LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+    );
+    assert!(
+        state.direct_lane_block_application_marker_matches(&receipt),
+        "direct lane application should commit an idempotence marker with the effects"
+    );
+    let status = queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, None);
+    assert_eq!(status.len(), 1);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::StateAppliedByDirectExecution,
+        "direct execution receipts must not be reported as canonical block application"
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            state.has_committed_transaction(*hash),
+            "direct lane application must mark accepted transaction hashes as committed"
+        );
+        assert_eq!(
+            state.committed_transaction_height(hash),
+            NonZeroUsize::new(1),
+            "direct committed transaction membership should use the direct application height"
+        );
+    }
+    assert_eq!(
+        queue.prune_application_receipted_sessions(kura.as_ref()),
+        1,
+        "direct receipt should release the committed lane-block queue entry"
+    );
+}
+
+#[test]
+fn committed_lane_block_queue_does_not_apply_stale_direct_preflight() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, queue, created_domain) = direct_lane_application_fixture(
+        "direct_lane_stale",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let preflight_base_hash = state.lane_execution_state_hash();
+    let changed_domain =
+        DomainId::try_new("direct_lane_stale_changed", "universal").expect("changed domain id");
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut state_block = state.block(header);
+    state_block.world.domains.insert(
+        changed_domain.clone(),
+        Domain::new(changed_domain).build(&(*SAMPLE_GENESIS_ACCOUNT_ID).clone()),
+    );
+    state_block
+        .commit()
+        .expect("commit WSV-only stale-preflight change");
+    assert_ne!(
+        state.lane_execution_state_hash(),
+        preflight_base_hash,
+        "test must move WSV identity without adding a canonical block"
+    );
+
+    assert_eq!(
+        queue.apply_preflighted_execution_inputs_to_state(&state),
+        0,
+        "stale direct preflight must not commit into the changed WSV"
+    );
+    assert!(
+        kura.read_lane_block_application_receipt(lane_id, lane_block_height)
+            .is_none(),
+        "stale preflight must not produce a direct application receipt"
+    );
+    let view = state.view();
+    assert!(
+        view.world().domains().get(&created_domain).is_none(),
+        "stale preflight transaction must not update world state"
+    );
+}
+
+#[test]
+fn committed_lane_block_queue_repairs_missing_direct_receipt_from_state_marker() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, _queue, created_domain) = direct_lane_application_fixture(
+        "direct_lane_repair",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("direct repair input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("direct repair preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("direct repair receipt should derive from preflight");
+    assert!(
+        super::CommittedLaneBlockQueue::apply_direct_lane_block_receipt_to_state(
+            &state, &input, &receipt,
+        )
+        .expect("direct repair state application should succeed"),
+        "direct repair fixture should apply once"
+    );
+    assert!(
+        kura.read_lane_block_application_receipt(lane_id, lane_block_height)
+            .is_none(),
+        "test simulates crash after state marker commit but before receipt persistence"
+    );
+    assert!(
+        state.direct_lane_block_application_marker_matches(&receipt),
+        "state marker should exist before receipt repair"
+    );
+    let view = state.view();
+    assert!(
+        view.world().domains().get(&created_domain).is_some(),
+        "state effects should commit before receipt repair"
+    );
+    drop(view);
+
+    assert_eq!(
+        super::CommittedLaneBlockQueue::repair_missing_direct_application_receipts_from_state(
+            &state,
+        ),
+        1,
+        "missing direct receipt should be rebuilt from the committed marker"
+    );
+    assert!(
+        kura.lane_block_application_receipt_available(&receipt.proposal),
+        "repaired direct receipt should satisfy queue pruning checks"
+    );
+}
+
+#[test]
+fn committed_lane_block_queue_refuses_direct_receipt_repair_from_mismatched_marker_key() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, _queue, _created_domain) = direct_lane_application_fixture(
+        "direct_lane_mismatched_marker_key_repair",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("mismatched marker repair input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("mismatched marker repair preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("mismatched marker repair receipt should derive from preflight");
+    let marker = crate::state::DirectLaneBlockApplicationMarker::from_direct_receipt(&receipt)
+        .expect("direct receipt should have a state marker");
+    let canonical_key = marker.key();
+    let mismatched_key = crate::state::DirectLaneBlockApplicationKey {
+        lane_id: LaneId::new(lane_id.as_u32().saturating_add(1)),
+        lane_block_height: marker.lane_block_height,
+    };
+    assert_ne!(
+        mismatched_key, canonical_key,
+        "test must corrupt the storage key without changing marker payload"
+    );
+    {
+        let mut block = state.world.direct_lane_block_application_markers.block();
+        block.insert(mismatched_key, marker);
+        block.commit();
+    }
+    assert!(
+        !state.direct_lane_block_application_marker_matches(&receipt),
+        "mismatched storage key must not satisfy canonical marker lookup"
+    );
+    assert!(
+        kura.read_lane_block_application_receipt(lane_id, lane_block_height)
+            .is_none(),
+        "test starts without a durable direct receipt"
+    );
+
+    assert_eq!(
+        super::CommittedLaneBlockQueue::repair_missing_direct_application_receipts_from_state(
+            &state,
+        ),
+        0,
+        "malformed marker keys must not be promoted into durable direct receipts"
+    );
+    assert!(
+        kura.read_lane_block_application_receipt(lane_id, lane_block_height)
+            .is_none(),
+        "repair must leave the direct receipt absent when the marker key is malformed"
+    );
+    let view = state.world.view();
+    assert!(
+        view.direct_lane_block_application_markers()
+            .get(&mismatched_key)
+            .is_some(),
+        "repair must not rewrite malformed committed marker rows implicitly"
+    );
+    assert!(
+        view.direct_lane_block_application_markers()
+            .get(&canonical_key)
+            .is_none(),
+        "repair must not synthesize the canonical marker key without replaying a durable receipt"
+    );
+}
+
+#[test]
+fn autoscale_direct_marker_guard_treats_mismatched_key_as_unrepaired_even_with_receipt() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, _queue, _created_domain) = direct_lane_application_fixture(
+        "direct_lane_mismatched_marker_key_autoscale_guard",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("autoscale guard marker input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("autoscale guard marker preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("autoscale guard direct receipt should derive from preflight");
+    kura.persist_direct_lane_block_application_receipt(&input, &preflight)
+        .expect("persist direct receipt for autoscale guard marker");
+    assert!(
+        kura.lane_block_application_receipt_available(&receipt.proposal),
+        "test setup should have a durable direct receipt matching the marker payload"
+    );
+    let marker = crate::state::DirectLaneBlockApplicationMarker::from_direct_receipt(&receipt)
+        .expect("direct receipt should have a state marker");
+    let canonical_key = marker.key();
+    let mismatched_key = crate::state::DirectLaneBlockApplicationKey {
+        lane_id: LaneId::new(lane_id.as_u32().saturating_add(1)),
+        lane_block_height: marker.lane_block_height,
+    };
+    assert_ne!(
+        mismatched_key, canonical_key,
+        "test must corrupt the storage key without changing marker payload"
+    );
+    {
+        let mut block = state.world.direct_lane_block_application_markers.block();
+        block.insert(mismatched_key, marker.clone());
+        block.commit();
+    }
+
+    assert_eq!(
+        state.unrepaired_direct_lane_application_marker_height(mismatched_key.lane_id),
+        Some(marker.lane_block_height),
+        "autoscale must treat malformed marker keys as unrepaired for the key lane"
+    );
+    assert_eq!(
+        state.unrepaired_direct_lane_application_marker_height(marker.lane_id),
+        Some(marker.lane_block_height),
+        "autoscale must treat malformed marker keys as unrepaired for the marker payload lane"
+    );
+    assert!(
+        !state.direct_lane_block_application_marker_matches(&receipt),
+        "malformed key must not satisfy canonical marker lookup"
+    );
+}
+
+#[test]
+fn committed_lane_block_queue_repairs_direct_transaction_membership_from_state_marker() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, _queue, _created_domain) = direct_lane_application_fixture(
+        "direct_lane_membership_repair",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("direct membership repair input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("direct membership repair preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("direct membership repair receipt should derive from preflight");
+    let direct_transaction_hashes =
+        super::CommittedLaneBlockQueue::direct_committed_transaction_hashes(&input);
+    assert!(
+        !direct_transaction_hashes.is_empty(),
+        "direct membership repair fixture should carry accepted transaction hashes"
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            !state.has_committed_transaction(*hash),
+            "test precondition: direct transaction membership starts absent"
+        );
+    }
+
+    let next_height = receipt.application_block_height.saturating_add(1).max(1);
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("direct repair block height is non-zero"),
+        Some(receipt.application_block_hash),
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut state_block = state.lane_application_block(header);
+    state_block
+        .stage_direct_lane_block_application_marker(&receipt)
+        .expect("test should stage direct marker without transaction membership");
+    state_block
+        .commit()
+        .expect("direct marker-only state block should commit");
+    assert!(
+        state.direct_lane_block_application_marker_matches(&receipt),
+        "test precondition: committed marker exists before membership repair"
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            !state.has_committed_transaction(*hash),
+            "marker-only commit should not implicitly populate direct transaction membership"
+        );
+    }
+
+    assert_eq!(
+        super::CommittedLaneBlockQueue::repair_missing_direct_application_receipts_from_state(
+            &state,
+        ),
+        1,
+        "marker repair should rebuild the direct receipt"
+    );
+    let expected_height = NonZeroUsize::new(
+        usize::try_from(next_height).expect("test direct height should fit usize"),
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            state.has_committed_transaction(*hash),
+            "marker repair should backfill direct transaction membership"
+        );
+        assert_eq!(
+            state.committed_transaction_height(hash),
+            expected_height,
+            "repaired direct membership should use the direct application height"
+        );
+    }
+}
+
+#[test]
+fn committed_lane_block_queue_membership_repair_only_backfills_missing_hashes() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let chain: ChainId = "direct_lane_partial_membership_repair"
+        .parse()
+        .expect("chain id");
+    let authority = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+    let first_domain =
+        DomainId::try_new("partial_repair_first", "universal").expect("first domain id");
+    let second_domain =
+        DomainId::try_new("partial_repair_second", "universal").expect("second domain id");
+    let first_tx = TransactionBuilder::new(chain.clone(), authority.clone())
+        .with_instructions([Register::domain(Domain::new(first_domain))])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+    let second_tx = TransactionBuilder::new(chain, authority)
+        .with_instructions([Register::domain(Domain::new(second_domain))])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+    let first_hash = first_tx.hash();
+    let second_hash = second_tx.hash();
+    let (state, kura, _queue) = direct_lane_application_fixture_with_transactions(
+        "direct_lane_partial_membership_repair",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+        vec![first_tx, second_tx],
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("partial membership repair input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("partial membership repair preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("partial membership repair receipt should derive from clean preflight");
+    let direct_transaction_hashes =
+        super::CommittedLaneBlockQueue::direct_committed_transaction_hashes(&input);
+    assert_eq!(
+        direct_transaction_hashes.len(),
+        2,
+        "partial membership repair fixture should carry two transaction hashes"
+    );
+    assert!(direct_transaction_hashes.contains(&first_hash));
+    assert!(direct_transaction_hashes.contains(&second_hash));
+
+    let next_height = receipt.application_block_height.saturating_add(1).max(1);
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("direct repair block height is non-zero"),
+        Some(receipt.application_block_hash),
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut state_block = state.lane_application_block(header);
+    state_block
+        .stage_direct_lane_block_application_marker(&receipt)
+        .expect("test should stage direct marker without transaction membership");
+    state_block
+        .commit()
+        .expect("direct marker-only state block should commit");
+
+    let preexisting_height =
+        NonZeroUsize::new(99).expect("preexisting direct membership height is non-zero");
+    state.record_direct_committed_transactions([first_hash], preexisting_height);
+    assert_eq!(
+        state.committed_transaction_height(&first_hash),
+        Some(preexisting_height),
+        "test precondition: one direct membership entry already exists at a different height"
+    );
+    assert!(
+        !state.has_committed_transaction(second_hash),
+        "test precondition: the second direct membership entry starts missing"
+    );
+
+    assert!(
+        super::CommittedLaneBlockQueue::repair_direct_committed_transaction_membership(
+            &state, &input, &receipt,
+        ),
+        "partial direct membership repair should backfill the missing transaction"
+    );
+    let expected_repair_height = NonZeroUsize::new(
+        usize::try_from(next_height).expect("test direct repair height should fit usize"),
+    );
+    assert_eq!(
+        state.committed_transaction_height(&first_hash),
+        Some(preexisting_height),
+        "partial repair must not rewrite existing direct membership heights"
+    );
+    assert_eq!(
+        state.committed_transaction_height(&second_hash),
+        expected_repair_height,
+        "partial repair should record only the missing direct transaction hash"
+    );
+}
+
+#[test]
+fn committed_lane_block_queue_replays_direct_receipt_into_state_marker() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, _queue, created_domain) = direct_lane_application_fixture(
+        "direct_lane_replay",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("direct replay input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("direct replay preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("direct replay receipt should derive from preflight");
+    kura.persist_direct_lane_block_application_receipt(&input, &preflight)
+        .expect("persist direct replay receipt");
+    assert!(
+        !state.direct_lane_block_application_marker_matches(&receipt),
+        "test precondition: direct receipt is durable but state marker is absent"
+    );
+
+    assert_eq!(
+        super::CommittedLaneBlockQueue::replay_direct_application_receipts_into_state(&state),
+        1,
+        "durable direct receipt should replay into state"
+    );
+    assert!(
+        state.direct_lane_block_application_marker_matches(&receipt),
+        "direct replay should commit an idempotence marker"
+    );
+    let view = state.view();
+    assert!(
+        view.world().domains().get(&created_domain).is_some(),
+        "direct replay should reapply accepted world-state effects"
+    );
+}
+
+#[test]
+fn committed_lane_block_queue_replay_repairs_membership_when_marker_already_exists() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, _queue, _created_domain) = direct_lane_application_fixture(
+        "direct_lane_replay_membership_repair",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("direct replay membership repair input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("direct replay membership repair preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("direct replay membership repair receipt should derive from preflight");
+    kura.persist_direct_lane_block_application_receipt(&input, &preflight)
+        .expect("persist direct replay membership repair receipt");
+    let direct_transaction_hashes =
+        super::CommittedLaneBlockQueue::direct_committed_transaction_hashes(&input);
+    assert!(
+        !direct_transaction_hashes.is_empty(),
+        "direct replay membership repair fixture should carry accepted transaction hashes"
+    );
+
+    let next_height = receipt.application_block_height.saturating_add(1).max(1);
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("direct repair block height is non-zero"),
+        Some(receipt.application_block_hash),
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut state_block = state.lane_application_block(header);
+    state_block
+        .stage_direct_lane_block_application_marker(&receipt)
+        .expect("test should stage direct marker without transaction membership");
+    state_block
+        .commit()
+        .expect("direct marker-only state block should commit");
+    assert!(
+        state.direct_lane_block_application_marker_matches(&receipt),
+        "test precondition: marker exists before replay"
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            !state.has_committed_transaction(*hash),
+            "test precondition: direct transaction membership starts absent"
+        );
+    }
+
+    assert_eq!(
+        super::CommittedLaneBlockQueue::replay_direct_application_receipts_into_state(&state),
+        0,
+        "existing marker should keep replay idempotent"
+    );
+    let expected_height = NonZeroUsize::new(
+        usize::try_from(next_height).expect("test direct height should fit usize"),
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            state.has_committed_transaction(*hash),
+            "receipt replay should backfill direct transaction membership even when marker exists"
+        );
+        assert_eq!(
+            state.committed_transaction_height(hash),
+            expected_height,
+            "repaired replay membership should use the direct application height"
+        );
+    }
+}
+
+#[test]
+fn committed_lane_block_queue_replay_does_not_repair_membership_for_inactive_marker() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, _queue, _created_domain) = direct_lane_application_fixture(
+        "direct_lane_inactive_marker_membership_repair",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("inactive marker membership input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("inactive marker membership preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("inactive marker membership receipt should derive from preflight");
+    kura.persist_direct_lane_block_application_receipt(&input, &preflight)
+        .expect("persist inactive marker membership direct receipt");
+    let direct_transaction_hashes =
+        super::CommittedLaneBlockQueue::direct_committed_transaction_hashes(&input);
+    assert!(
+        !direct_transaction_hashes.is_empty(),
+        "inactive marker membership fixture should carry accepted transaction hashes"
+    );
+
+    let next_height = receipt.application_block_height.saturating_add(1).max(1);
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("direct repair block height is non-zero"),
+        Some(receipt.application_block_hash),
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut state_block = state.lane_application_block(header);
+    state_block
+        .stage_direct_lane_block_application_marker(&receipt)
+        .expect("test should stage direct marker before lane retirement");
+    state_block
+        .commit()
+        .expect("direct marker-only state block should commit");
+    assert!(
+        state.direct_lane_block_application_marker_matches(&receipt),
+        "test precondition: marker exists before inactive-lane membership repair"
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            !state.has_committed_transaction(*hash),
+            "test precondition: direct transaction membership starts absent"
+        );
+    }
+
+    {
+        let active_catalog = LaneCatalog::new(nonzero!(1_u32), vec![ModelLaneConfig::default()])
+            .expect("replacement active lane catalog");
+        let active_lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&active_catalog);
+        let mut nexus = state.nexus.write();
+        nexus.lane_catalog = active_catalog;
+        nexus.lane_config = active_lane_config;
+    }
+    assert!(
+        !state.direct_lane_block_application_receipt_targets_active_lane(&receipt),
+        "test setup should retire the direct receipt lane before membership repair"
+    );
+
+    assert!(
+        !super::CommittedLaneBlockQueue::repair_direct_committed_transaction_membership(
+            &state, &input, &receipt,
+        ),
+        "direct membership repair must reject inactive lane receipts even when a marker exists"
+    );
+    assert_eq!(
+        super::CommittedLaneBlockQueue::replay_direct_application_receipts_into_state(&state),
+        0,
+        "existing inactive marker should keep replay idempotent without repairing membership"
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            !state.has_committed_transaction(*hash),
+            "inactive direct marker receipt must not backfill transaction membership"
+        );
+    }
+}
+
+#[test]
+fn committed_lane_block_queue_membership_repair_rejects_mismatched_input() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, _queue, _created_domain) = direct_lane_application_fixture(
+        "direct_lane_membership_repair_mismatch",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("direct membership mismatch input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("direct membership mismatch preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("direct membership mismatch receipt should derive from preflight");
+    let direct_transaction_hashes =
+        super::CommittedLaneBlockQueue::direct_committed_transaction_hashes(&input);
+    assert!(
+        !direct_transaction_hashes.is_empty(),
+        "direct membership mismatch fixture should carry accepted transaction hashes"
+    );
+    let next_height = receipt.application_block_height.saturating_add(1).max(1);
+    let header = BlockHeader::new(
+        NonZeroU64::new(next_height).expect("direct repair block height is non-zero"),
+        Some(receipt.application_block_hash),
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut state_block = state.lane_application_block(header);
+    state_block
+        .stage_direct_lane_block_application_marker(&receipt)
+        .expect("test should stage direct marker without transaction membership");
+    state_block
+        .commit()
+        .expect("direct marker-only state block should commit");
+    assert!(
+        state.direct_lane_block_application_marker_matches(&receipt),
+        "test precondition: marker exists before mismatched membership repair"
+    );
+    let mut mismatched_input = input.clone();
+    mismatched_input.entrypoint_hashes.clear();
+
+    assert!(
+        !super::CommittedLaneBlockQueue::repair_direct_committed_transaction_membership(
+            &state,
+            &mismatched_input,
+            &receipt,
+        ),
+        "membership repair must reject input evidence that diverges from the durable receipt"
+    );
+    for hash in &direct_transaction_hashes {
+        assert!(
+            !state.has_committed_transaction(*hash),
+            "mismatched membership repair must not mark transaction hashes committed"
+        );
+    }
+}
+
+#[test]
+fn committed_lane_block_queue_does_not_replay_direct_receipt_for_inactive_lane() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let (state, kura, _queue, created_domain) = direct_lane_application_fixture(
+        "direct_lane_inactive_replay",
+        lane_id,
+        dataspace_id,
+        lane_block_height,
+    );
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("inactive replay input should be durable");
+    let preflight = kura
+        .read_lane_block_execution_preflight(lane_id, lane_block_height)
+        .expect("inactive replay preflight should be durable");
+    let receipt =
+        crate::kura::LaneBlockApplicationReceiptArtifact::new_direct_execution(&input, &preflight)
+            .expect("inactive replay receipt should derive from preflight");
+    kura.persist_direct_lane_block_application_receipt(&input, &preflight)
+        .expect("persist inactive-lane direct replay receipt");
+
+    {
+        let active_catalog = LaneCatalog::new(nonzero!(1_u32), vec![ModelLaneConfig::default()])
+            .expect("replacement active lane catalog");
+        let active_lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&active_catalog);
+        let mut nexus = state.nexus.write();
+        nexus.lane_catalog = active_catalog;
+        nexus.lane_config = active_lane_config;
+    }
+
+    assert_eq!(
+        super::CommittedLaneBlockQueue::replay_direct_application_receipts_into_state(&state),
+        0,
+        "durable direct receipts for inactive lanes must not replay into the current WSV"
+    );
+    assert!(
+        !state.direct_lane_block_application_marker_matches(&receipt),
+        "inactive-lane replay must not commit an idempotence marker"
+    );
+    let view = state.view();
+    assert!(
+        view.world().domains().get(&created_domain).is_none(),
+        "inactive-lane direct receipt must not reapply world-state effects"
+    );
+}
+
+#[test]
+fn committed_lane_block_queue_keeps_conflicting_preflight_receipt_pending() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let lane_block_height = 1_u64;
+    let mut block =
+        sample_block_with_lane_payload_artifact(1, 0, lane_id, dataspace_id, lane_block_height);
+    let entrypoint_hashes: Vec<_> = block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect();
+    let results = entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    block
+        .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
+        .expect("attach conflict fixture transaction results");
+    let ownership = block
+        .execution_context()
+        .expect("block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("block has lane payload ownership")
+        .clone();
+    let session = committed_lane_block_session_from_lane_payload_ownership(&ownership);
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(8_u32),
+        vec![ModelLaneConfig {
+            id: lane_id,
+            dataspace_id,
+            alias: "conflicting-preflight-receipt-fixture".to_owned(),
+            ..ModelLaneConfig::default()
+        }],
+    )
+    .expect("lane catalog with conflict fixture lane");
+    let runtime_lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let lane_entry = runtime_lane_config
+        .entry(lane_id)
+        .expect("runtime lane entry for conflict fixture");
+    let kura = Kura::blank_kura_for_testing();
+    kura.reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision conflict fixture lane storage");
+    kura.store_block(Arc::new(block))
+        .expect("store block with canonical lane results");
+    let recovered = kura
+        .recover_lane_block_payload(&session.proposal)
+        .expect("recover lane payload");
+    kura.persist_lane_block_execution_input(&recovered)
+        .expect("persist lane execution input");
+    let input = kura
+        .read_lane_block_execution_input(lane_id, lane_block_height)
+        .expect("lane execution input");
+    let rejected = TransactionResult(TransactionResultInner::Err(
+        iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "adversarial queue preflight mismatch".to_owned(),
+            ),
+        ),
+    ));
+    kura.persist_lane_block_execution_preflight(&input, 0, None, vec![rejected])
+        .expect("persist conflicting lane execution preflight");
+
+    let mut queue = super::CommittedLaneBlockQueue::new(1);
+    assert_eq!(
+        queue.hydrate_from_certified_sessions(vec![session.clone()]),
+        1
+    );
+    assert!(kura.lane_block_application_receipt_conflicts_with_preflight(&session.proposal));
+    assert_eq!(
+        queue.record_available_payload_application_receipts_into_kura(kura.as_ref()),
+        0,
+        "conflicting preflight evidence must not be counted as receipt progress"
+    );
+    assert_eq!(
+        queue.prune_application_receipted_sessions(kura.as_ref()),
+        0,
+        "conflicting receipt/preflight evidence must not release queue capacity"
+    );
+    let status = queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, None);
+    assert_eq!(status.len(), 1);
+    assert_eq!(status[0].proposal, session.proposal);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::ApplicationReceiptConflictsWithPreflight
+    );
+    assert!(
+        !status[0].executable_payload_available(),
+        "conflicted lane blocks must stay fail-closed until direct execution and canonical receipt agree"
+    );
+    assert_eq!(queue.len(), 1);
+}
+
+#[test]
+fn committed_lane_block_queue_prunes_only_application_receipted_sessions() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+    let mut applied_block = sample_block_with_lane_payload_artifact(1, 0, lane_id, dataspace_id, 1);
+    let applied_entrypoint_hashes: Vec<_> = applied_block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect();
+    let applied_results = applied_entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    applied_block
+        .set_transaction_results(Vec::new(), &applied_entrypoint_hashes, applied_results)
+        .expect("attach applied fixture transaction results");
+    let applied_ownership = applied_block
+        .execution_context()
+        .expect("applied block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("applied block has lane payload ownership")
+        .clone();
+    let applied_session =
+        committed_lane_block_session_from_lane_payload_ownership(&applied_ownership);
+
+    let mut pending_block = sample_block_with_lane_payload_artifact(2, 0, lane_id, dataspace_id, 2);
+    let pending_ownership = rebind_lane_payload_artifact_predecessor(
+        &mut pending_block,
+        applied_session.proposal.descriptor.descriptor_hash,
+    );
+    let pending_session =
+        committed_lane_block_session_from_lane_payload_ownership(&pending_ownership);
+
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(8_u32),
+        vec![ModelLaneConfig {
+            id: lane_id,
+            dataspace_id,
+            alias: "queue-prune-receipted-fixture".to_owned(),
+            ..ModelLaneConfig::default()
+        }],
+    )
+    .expect("lane catalog with queue-prune fixture lane");
+    let runtime_lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let lane_entry = runtime_lane_config
+        .entry(lane_id)
+        .expect("runtime lane entry for queue-prune fixture");
+    let kura = Kura::blank_kura_for_testing();
+    kura.reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision queue-prune fixture lane storage");
+    kura.store_block(Arc::new(applied_block))
+        .expect("store applied lane payload artifact");
+    kura.persist_lane_block_application_receipt(&applied_session.proposal)
+        .expect("persist applied lane application receipt");
+    assert!(kura.lane_block_application_receipt_available(&applied_session.proposal));
+
+    kura.store_block(Arc::new(pending_block))
+        .expect("store pending lane payload artifact without committed results");
+    let pending_recovered = kura
+        .recover_lane_block_payload(&pending_session.proposal)
+        .expect("recover pending lane execution input");
+    kura.persist_lane_block_execution_input(&pending_recovered)
+        .expect("persist pending lane execution input");
+    assert!(kura.lane_block_execution_input_available(&pending_session.proposal));
+    assert!(
+        !kura.lane_block_application_receipt_available(&pending_session.proposal),
+        "execution input alone must not make a lane block application-receipted"
+    );
+
+    let mut saturated_queue = super::CommittedLaneBlockQueue::new(1);
+    assert_eq!(
+        saturated_queue.hydrate_from_certified_sessions(vec![applied_session.clone()]),
+        1
+    );
+    assert_eq!(
+        saturated_queue.hydrate_from_certified_sessions(vec![pending_session.clone()]),
+        0,
+        "receipt-backed pruning is required before another session can enter a full queue"
+    );
+    assert_eq!(
+        saturated_queue.prune_application_receipted_sessions(kura.as_ref()),
+        1,
+        "application-receipted sessions should release bounded queue capacity"
+    );
+    assert_eq!(
+        saturated_queue.hydrate_from_certified_sessions(vec![pending_session.clone()]),
+        1,
+        "capacity freed by the applied session should admit the next committed lane block"
+    );
+    assert_eq!(
+        saturated_queue.prune_application_receipted_sessions(kura.as_ref()),
+        0,
+        "recovered execution input without an application receipt must stay pending"
+    );
+    assert_eq!(saturated_queue.len(), 1);
+    let status = saturated_queue.status_snapshot_with_payload_availability(kura.as_ref(), 0, None);
+    assert_eq!(status.len(), 1);
+    assert_eq!(status[0].proposal, pending_session.proposal);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
+    );
+
+    let mut restart_queue = super::CommittedLaneBlockQueue::new(1);
+    assert_eq!(
+        restart_queue.hydrate_unapplied_from_certified_sessions(
+            vec![applied_session, pending_session.clone()],
+            kura.as_ref(),
+        ),
+        1,
+        "restart hydration should skip application-receipted sessions before applying capacity"
+    );
+    let queued = restart_queue
+        .front()
+        .expect("pending session should hydrate");
+    assert_eq!(queued.proposal, pending_session.proposal);
+}
+
+#[test]
+fn committed_lane_block_queue_prunes_inactive_lane_sessions() {
+    let active_lane = LaneId::new(7);
+    let active_dataspace = DataSpaceId::new(11);
+    let inactive_lane = LaneId::new(8);
+    let inactive_dataspace = DataSpaceId::new(12);
+    let (
+        active_proposal,
+        _active_prepare_vote,
+        active_prepare_qc,
+        _active_commit_vote,
+        active_commit_qc,
+        _active_signer_pop,
+    ) = sample_lane_block_commit_messages_for_route_at(
+        active_lane,
+        active_dataspace,
+        13,
+        12,
+        Some(Hash::prehashed([0xA0; Hash::LENGTH])),
+    );
+    let (
+        inactive_proposal,
+        _inactive_prepare_vote,
+        inactive_prepare_qc,
+        _inactive_commit_vote,
+        inactive_commit_qc,
+        _inactive_signer_pop,
+    ) = sample_lane_block_commit_messages_for_route_at(
+        inactive_lane,
+        inactive_dataspace,
+        13,
+        12,
+        Some(Hash::prehashed([0xB0; Hash::LENGTH])),
+    );
+    let active_session = crate::lane_consensus::CommittedLaneBlockSession {
+        proposal: active_proposal.clone(),
+        prepare_qc: active_prepare_qc,
+        commit_qc: active_commit_qc,
+    };
+    let inactive_session = crate::lane_consensus::CommittedLaneBlockSession {
+        proposal: inactive_proposal,
+        prepare_qc: inactive_prepare_qc,
+        commit_qc: inactive_commit_qc,
+    };
+    let mut queue = super::CommittedLaneBlockQueue::new(4);
+
+    assert_eq!(
+        queue.hydrate_from_certified_sessions(vec![inactive_session, active_session]),
+        2
+    );
+    assert_eq!(queue.len(), 2);
+
+    assert_eq!(
+        queue.retain_sessions_for_active_lanes(|lane_id, dataspace_id| {
+            lane_id == active_lane && dataspace_id == active_dataspace
+        }),
+        1
+    );
+
+    assert_eq!(queue.len(), 1);
+    let queued = queue
+        .front()
+        .expect("active committed lane-block session should remain queued");
+    assert_eq!(queued.proposal, active_proposal);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tick_redrives_committed_lane_block_queue_after_backpressure_prune() {
+    super::status::set_committed_lane_blocks(Vec::new());
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    consensus_cfg.recovery.pending_proposal_cap = 1;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(8_u32),
+        vec![ModelLaneConfig {
+            id: lane_id,
+            dataspace_id,
+            alias: "tick-lane-block-backpressure-fixture".to_owned(),
+            ..ModelLaneConfig::default()
+        }],
+    )
+    .expect("lane catalog with tick redrive fixture lane");
+    let runtime_lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let lane_entry = runtime_lane_config
+        .entry(lane_id)
+        .expect("runtime lane entry for tick redrive fixture");
+    actor
+        .state
+        .kura()
+        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision tick redrive lane storage");
+    {
+        let mut nexus = actor.state.nexus.write();
+        nexus.enabled = true;
+        nexus.lane_catalog = lane_catalog;
+        nexus.lane_config = runtime_lane_config;
+    }
+
+    let mut applied_block = sample_block_with_lane_payload_artifact(1, 0, lane_id, dataspace_id, 1);
+    let applied_entrypoint_hashes: Vec<_> = applied_block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect();
+    let applied_results = applied_entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    applied_block
+        .set_transaction_results(Vec::new(), &applied_entrypoint_hashes, applied_results)
+        .expect("attach applied fixture transaction results");
+    let applied_ownership = applied_block
+        .execution_context()
+        .expect("applied block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("applied block has lane payload ownership")
+        .clone();
+    let applied_session =
+        committed_lane_block_session_from_lane_payload_ownership(&applied_ownership);
+    actor
+        .state
+        .kura()
+        .store_block(Arc::new(applied_block))
+        .expect("store applied lane payload block");
+    assert_eq!(
+        actor
+            .subsystems
+            .committed_lane_blocks
+            .hydrate_from_certified_sessions(vec![applied_session.clone()]),
+        1,
+        "applied-ready session should occupy the bounded queue"
+    );
+    assert!(
+        !actor
+            .state
+            .kura()
+            .lane_block_application_receipt_available(&applied_session.proposal),
+        "test setup should leave the first committed session pending receipt recovery"
+    );
+
+    let (
+        blocked_proposal,
+        blocked_prepare_vote,
+        blocked_prepare_qc,
+        _blocked_commit_vote,
+        blocked_commit_qc,
+        blocked_pop,
+    ) = sample_lane_block_commit_messages_at(
+        2,
+        1,
+        Some(applied_session.proposal.descriptor.descriptor_hash),
+    );
+    let blocked_pops = BTreeMap::from([(
+        blocked_prepare_vote.signer.public_key().clone(),
+        blocked_pop,
+    )]);
+    actor
+        .roster_validation_cache
+        .pops
+        .extend(blocked_pops.clone());
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .insert_proposal(blocked_proposal.clone())
+            .expect("blocked proposal should cache"),
+        crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .insert_qc_with_pops(blocked_prepare_qc, &blocked_pops)
+            .expect("blocked prepare QC should cache"),
+        crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted
+    );
+    assert_eq!(
+        actor
+            .subsystems
+            .lane_blocks
+            .insert_qc_with_pops(blocked_commit_qc, &blocked_pops)
+            .expect("blocked commit QC should cache"),
+        crate::lane_consensus::LaneBlockSessionInsertOutcome::Inserted
+    );
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        1,
+        "full queue must not admit the second certified session before redrive frees capacity"
+    );
+
+    assert!(
+        actor.tick(),
+        "tick should make committed lane-block progress"
+    );
+
+    assert!(
+        actor
+            .state
+            .kura()
+            .lane_block_application_receipt_available(&applied_session.proposal),
+        "tick must recover the first session's application receipt while the queue is full"
+    );
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        1,
+        "capacity freed by the first session should admit the protected committed cache entry"
+    );
+    let queued = actor
+        .subsystems
+        .committed_lane_blocks
+        .front()
+        .expect("protected committed session should be queued after redrive");
+    assert_eq!(queued.proposal, blocked_proposal);
+    assert!(
+        actor
+            .state
+            .kura()
+            .read_certified_lane_block_artifact(
+                blocked_proposal.descriptor.lane_id,
+                blocked_proposal.descriptor.lane_block_height,
+            )
+            .is_some(),
+        "redriven committed session must be durable after queue admission"
+    );
+    let status = super::status::committed_lane_blocks_snapshot();
+    assert_eq!(
+        status
+            .iter()
+            .filter(|snapshot| snapshot.proposal_hash == applied_session.proposal.proposal_hash)
+            .count(),
+        1,
+        "same-tick status should retain the receipt-backed session exactly once"
+    );
+    assert!(
+        status.iter().any(|snapshot| {
+            snapshot.proposal_hash == applied_session.proposal.proposal_hash
+                && matches!(
+                    snapshot.execution_status,
+                    super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
+                        | super::status::CommittedLaneBlockExecutionStatus::StateAppliedByDirectExecution
+                )
+        }),
+        "same-tick status should preserve newly recorded application receipt evidence"
+    );
+    assert_eq!(
+        status
+            .iter()
+            .filter(|snapshot| snapshot.proposal_hash == blocked_proposal.proposal_hash)
+            .count(),
+        1,
+        "same-tick status should publish the session admitted after queue pruning exactly once"
+    );
+    assert!(
+        status.iter().any(|snapshot| {
+            snapshot.proposal_hash == blocked_proposal.proposal_hash
+                && snapshot.execution_status
+                    == super::status::CommittedLaneBlockExecutionStatus::AwaitingExecutablePayload
+        }),
+        "same-tick status should expose the newly admitted protected committed session"
+    );
+
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[test]
+fn committed_lane_block_queue_waits_for_matching_predecessor_receipt() {
+    let lane_id = LaneId::new(7);
+    let dataspace_id = DataSpaceId::new(11);
+
+    let mut first_block = sample_block_with_lane_payload_artifact(1, 0, lane_id, dataspace_id, 1);
+    let first_entrypoint_hashes: Vec<_> = first_block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect();
+    let first_results = first_entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    first_block
+        .set_transaction_results(Vec::new(), &first_entrypoint_hashes, first_results)
+        .expect("attach first lane results");
+    let first_ownership = first_block
+        .execution_context()
+        .expect("first block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("first block has lane ownership")
+        .clone();
+    let first_session = committed_lane_block_session_from_lane_payload_ownership(&first_ownership);
+
+    let mut mismatched_second_block =
+        sample_block_with_lane_payload_artifact(2, 0, lane_id, dataspace_id, 2);
+    let second_entrypoint_hashes: Vec<_> = mismatched_second_block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect();
+    let second_results: Vec<_> = second_entrypoint_hashes
+        .iter()
+        .map(|_| TransactionResultInner::Ok(DataTriggerSequence::new()))
+        .collect();
+    mismatched_second_block
+        .set_transaction_results(
+            Vec::new(),
+            &second_entrypoint_hashes,
+            second_results.clone(),
+        )
+        .expect("attach mismatched second lane results");
+    let mismatched_second_ownership = mismatched_second_block
+        .execution_context()
+        .expect("mismatched second block has execution context")
+        .lane_payload_ownerships
+        .first()
+        .expect("mismatched second block has lane ownership")
+        .clone();
+    let mismatched_second_session =
+        committed_lane_block_session_from_lane_payload_ownership(&mismatched_second_ownership);
+
+    let lane_catalog = LaneCatalog::new(
+        nonzero!(8_u32),
+        vec![ModelLaneConfig {
+            id: lane_id,
+            dataspace_id,
+            alias: "queue-predecessor-gate-fixture".to_owned(),
+            ..ModelLaneConfig::default()
+        }],
+    )
+    .expect("lane catalog with predecessor-gate fixture lane");
+    let runtime_lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+    let lane_entry = runtime_lane_config
+        .entry(lane_id)
+        .expect("runtime lane entry for predecessor-gate fixture");
+    let mismatched_kura = Kura::blank_kura_for_testing();
+    mismatched_kura
+        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision predecessor-gate fixture lane storage");
+    mismatched_kura
+        .store_block(Arc::new(first_block.clone()))
+        .expect("store first lane block");
+    mismatched_kura
+        .persist_lane_block_application_receipt(&first_session.proposal)
+        .expect("persist first lane receipt");
+    mismatched_kura
+        .store_block(Arc::new(mismatched_second_block))
+        .expect("store mismatched second lane block");
+
+    let mut mismatched_queue = super::CommittedLaneBlockQueue::new(1);
+    assert_eq!(
+        mismatched_queue.hydrate_from_certified_sessions(vec![mismatched_second_session]),
+        1
+    );
+    let status = mismatched_queue.status_snapshot_with_payload_availability(
+        mismatched_kura.as_ref(),
+        0,
+        None,
+    );
+    assert_eq!(status.len(), 1);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication,
+        "a receipt for the same predecessor height must not unlock a different descriptor hash"
+    );
+    assert!(!status[0].executable_payload_available());
+    assert_eq!(
+        mismatched_queue.recover_available_payloads_into_kura(mismatched_kura.as_ref()),
+        0,
+        "predecessor descriptor drift must block execution-input recovery"
+    );
+    assert_eq!(
+        mismatched_queue
+            .record_available_payload_application_receipts_into_kura(mismatched_kura.as_ref()),
+        0,
+        "predecessor descriptor drift must block current receipt recording"
+    );
+
+    let mut second_block = sample_block_with_lane_payload_artifact(2, 0, lane_id, dataspace_id, 2);
+    second_block
+        .set_transaction_results(Vec::new(), &second_entrypoint_hashes, second_results)
+        .expect("attach matching second lane results");
+    let second_ownership = rebind_lane_payload_artifact_predecessor(
+        &mut second_block,
+        first_session.proposal.descriptor.descriptor_hash,
+    );
+    let second_session =
+        committed_lane_block_session_from_lane_payload_ownership(&second_ownership);
+    let matching_kura = Kura::blank_kura_for_testing();
+    let lane_entry = runtime_lane_config
+        .entry(lane_id)
+        .expect("runtime lane entry for matching predecessor fixture");
+    matching_kura
+        .reconcile_lane_segments(&[lane_entry], &[], &[])
+        .expect("provision matching predecessor fixture lane storage");
+    matching_kura
+        .store_block(Arc::new(first_block))
+        .expect("store first lane block for matching predecessor");
+    matching_kura
+        .persist_lane_block_application_receipt(&first_session.proposal)
+        .expect("persist first lane receipt for matching predecessor");
+    matching_kura
+        .store_block(Arc::new(second_block))
+        .expect("store matching second lane block");
+
+    let mut matching_queue = super::CommittedLaneBlockQueue::new(1);
+    assert_eq!(
+        matching_queue.hydrate_from_certified_sessions(vec![second_session.clone()]),
+        1
+    );
+    assert_eq!(
+        matching_queue.recover_available_payloads_into_kura(matching_kura.as_ref()),
+        1,
+        "matching predecessor receipt should unlock execution-input recovery"
+    );
+    let status =
+        matching_queue.status_snapshot_with_payload_availability(matching_kura.as_ref(), 0, None);
+    assert_eq!(status.len(), 1);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::PayloadRecoveredAwaitingStateApplication
+    );
+    assert!(status[0].executable_payload_available());
+    assert_eq!(
+        matching_queue
+            .record_available_payload_application_receipts_into_kura(matching_kura.as_ref()),
+        1,
+        "matching predecessor receipt should unlock current receipt recording"
+    );
+    assert!(matching_kura.lane_block_application_receipt_available(&second_session.proposal));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_ingress_queues_committed_session_from_locally_sealed_votes_once() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let (proposal, prepare_vote, _prepare_qc, commit_vote, _commit_qc, _signer_pop) =
+        sample_lane_block_commit_messages();
+    let signer = prepare_vote.signer.clone();
+
+    actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("valid lane-block proposal handled");
+    actor
+        .handle_lane_block_vote(prepare_vote, Some(&signer))
+        .expect("quorum prepare lane-block vote handled");
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        0,
+        "locally sealed prepare QC alone must not queue execution"
+    );
+    actor
+        .handle_lane_block_vote(commit_vote.clone(), Some(&signer))
+        .expect("quorum commit lane-block vote handled");
+
+    assert_eq!(actor.subsystems.committed_lane_blocks.len(), 1);
+    let committed = actor
+        .subsystems
+        .committed_lane_blocks
+        .front()
+        .expect("committed session queued");
+    assert_eq!(committed.proposal, proposal);
+    assert_eq!(committed.prepare_qc.body.phase, Phase::Prepare);
+    assert_eq!(committed.commit_qc.body.phase, Phase::Commit);
+    let status = super::status::committed_lane_blocks_snapshot();
+    assert_eq!(status.len(), 1);
+    assert_eq!(status[0].proposal_hash, proposal.proposal_hash);
+    assert_eq!(
+        status[0].execution_status,
+        super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+    );
+    assert!(
+        !status[0].executable_payload_available(),
+        "locally sealed certified lane blocks must wait for executable payload material"
+    );
+    assert_eq!(status[0].prepare_qc.body.phase, Phase::Prepare);
+    assert_eq!(status[0].commit_qc.body.phase, Phase::Commit);
+
+    actor
+        .handle_lane_block_vote(commit_vote, Some(&signer))
+        .expect("duplicate commit lane-block vote handled");
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        1,
+        "duplicate commit vote must not enqueue the same committed session twice"
+    );
+    assert_eq!(
+        super::status::committed_lane_blocks_snapshot().len(),
+        1,
+        "duplicate commit vote must not publish duplicate committed status"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    super::status::set_committed_lane_blocks(Vec::new());
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_ingress_records_adversarial_drop_reasons() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let (mut bad_proposal, vote, mut bad_qc, _) = sample_lane_block_messages();
+    let wrong_sender = PeerId::from(
+        deterministic_keypair(b"lane-block-wrong-sender", Algorithm::Ed25519)
+            .public_key()
+            .clone(),
+    );
+
+    bad_proposal.descriptor.accepted_candidate_indices.clear();
+    actor
+        .handle_lane_block_proposal(bad_proposal)
+        .expect("malformed lane-block proposal handled");
+    actor
+        .handle_lane_block_vote(vote, Some(&wrong_sender))
+        .expect("sender-mismatched lane-block vote handled");
+    bad_qc.signers_bitmap.clear();
+    actor
+        .handle_lane_block_qc(bad_qc)
+        .expect("malformed lane-block QC handled");
+
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockProposal,
+        super::status::ConsensusMessageOutcome::Dropped,
+        super::status::ConsensusMessageReason::InvalidPayload,
+        1,
+    );
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockVote,
+        super::status::ConsensusMessageOutcome::Dropped,
+        super::status::ConsensusMessageReason::InvalidSignature,
+        1,
+    );
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockQc,
+        super::status::ConsensusMessageOutcome::Dropped,
+        super::status::ConsensusMessageReason::InvalidPayload,
+        1,
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_ingress_rejects_missing_pop_and_forged_aggregate_qc() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let (_proposal, vote, qc, signer_pop) = sample_lane_block_messages();
+    let signer = vote.signer.clone();
+
+    actor
+        .handle_lane_block_qc(qc.clone())
+        .expect("missing-pop lane-block QC handled");
+    assert!(
+        actor.subsystems.lane_blocks.is_empty(),
+        "missing-PoP QC must not populate the lane-block cache"
+    );
+
+    actor
+        .roster_validation_cache
+        .pops
+        .insert(signer.public_key().clone(), signer_pop);
+    let mut forged_qc = qc;
+    forged_qc.bls_aggregate_signature[0] ^= 0x01;
+    actor
+        .handle_lane_block_qc(forged_qc)
+        .expect("forged lane-block QC handled");
+    assert!(
+        actor.subsystems.lane_blocks.is_empty(),
+        "forged aggregate QC must not populate the lane-block cache"
+    );
+
+    assert_consensus_message_handling_total(
+        super::status::ConsensusMessageKind::LaneBlockQc,
+        super::status::ConsensusMessageOutcome::Dropped,
+        super::status::ConsensusMessageReason::InvalidSignature,
+        2,
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_ingress_broadcasts_locally_sealed_qc_once() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let (proposal, vote, _qc, _) = sample_lane_block_messages();
+    let signer = vote.signer.clone();
+
+    actor
+        .handle_lane_block_proposal(proposal)
+        .expect("valid lane-block proposal handled");
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockPrepareCert")),
+        "proposal without cached votes must not broadcast a lane QC"
+    );
+
+    actor
+        .handle_lane_block_vote(vote.clone(), Some(&signer))
+        .expect("quorum lane-block vote handled");
+    let broadcasts = take_background_log(&background_log)
+        .into_iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockPrepareCert")
+        })
+        .count();
+    assert_eq!(
+        broadcasts, 1,
+        "quorum vote should broadcast the sealed prepare QC exactly once"
+    );
+
+    actor
+        .handle_lane_block_vote(vote, Some(&signer))
+        .expect("duplicate lane-block vote handled");
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockPrepareCert")),
+        "duplicate vote must not rebroadcast the already drained lane QC"
+    );
+
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_broadcast_sends_proposal_and_local_prepare_vote() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer.clone()]);
+
+    let signed_vote = actor
+        .local_lane_block_prepare_vote(&prepare_plan)
+        .expect("local lane-block prepare vote should be signable");
+    Signature::try_from_bytes(&signed_vote.bls_signature)
+        .expect("local lane-block prepare vote signature should decode")
+        .verify(
+            local_peer.public_key(),
+            &signed_vote.body.signature_preimage(),
+        )
+        .expect("local lane-block prepare vote signature should verify");
+
+    let scheduled = actor.broadcast_lane_block_plan_artifacts(
+        std::slice::from_ref(&proposal),
+        std::slice::from_ref(&prepare_plan),
+    );
+    assert_eq!(scheduled, 2);
+
+    let entries = take_background_log(&background_log);
+    let proposal_broadcasts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockProposal")
+        })
+        .count();
+    let prepare_vote_broadcasts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockPrepareVote")
+        })
+        .count();
+    let commit_vote_broadcasts = entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockVote")
+        })
+        .count();
+
+    assert_eq!(proposal_broadcasts, 1);
+    assert_eq!(prepare_vote_broadcasts, 1);
+    assert_eq!(
+        commit_vote_broadcasts, 0,
+        "proposal finalization must not broadcast lane commit votes before a prepare QC"
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_broadcast_skips_nonlocal_prepare_vote() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let other_peer = PeerId::new(checked_bls_keypair().public_key().clone());
+    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer, other_peer.clone()]);
+    let prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![other_peer]);
+
+    assert!(
+        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        "node must not sign a lane-block prepare vote planned for another validator"
+    );
+    let scheduled = actor.broadcast_lane_block_plan_artifacts(
+        std::slice::from_ref(&proposal),
+        std::slice::from_ref(&prepare_plan),
+    );
+    assert_eq!(scheduled, 1);
+
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(
+            |entry| entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockProposal")
+        ),
+        "lane proposal should still be broadcast"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockPrepareVote")),
+        "non-local prepare vote must not be broadcast"
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_broadcast_skips_tampered_prepare_vote_hash() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let mut prepare_plan = sample_lane_block_prepare_vote_plan(&proposal, vec![local_peer]);
+    prepare_plan.votes[0].signing_hash = Hash::prehashed([0xEF; Hash::LENGTH]);
+
+    assert!(
+        actor.local_lane_block_prepare_vote(&prepare_plan).is_none(),
+        "node must not sign a lane-block prepare vote whose signing hash was tampered"
+    );
+    let scheduled = actor.broadcast_lane_block_plan_artifacts(
+        std::slice::from_ref(&proposal),
+        std::slice::from_ref(&prepare_plan),
+    );
+    assert_eq!(scheduled, 1);
+
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries.iter().any(
+            |entry| entry.kind == super::BackgroundRequestLogKind::Broadcast
+                && entry.msg_kind == Some("LaneBlockProposal")
+        ),
+        "lane proposal should still be broadcast"
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockPrepareVote")),
+        "tampered prepare vote must not be broadcast"
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_prepare_vote_seal_broadcasts_local_commit_vote_once() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let prepare_vote = signed_lane_block_vote_with_keypair(
+        &proposal,
+        crate::sumeragi::consensus::Phase::Prepare,
+        &actor.common_config.key_pair,
+    );
+
+    actor
+        .handle_lane_block_proposal(proposal.clone())
+        .expect("local lane-block proposal handled");
+    let _ = take_background_log(&background_log);
+    actor
+        .handle_lane_block_vote(prepare_vote.clone(), Some(&local_peer))
+        .expect("local prepare vote handled");
+
+    let entries = take_background_log(&background_log);
+    assert_eq!(
+        entries
+            .iter()
+            .filter(
+                |entry| entry.kind == super::BackgroundRequestLogKind::Broadcast
+                    && entry.msg_kind == Some("LaneBlockPrepareCert")
+            )
+            .count(),
+        1,
+        "sealed prepare QC should be broadcast once"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(
+                |entry| entry.kind == super::BackgroundRequestLogKind::Broadcast
+                    && entry.msg_kind == Some("LaneBlockVote")
+            )
+            .count(),
+        1,
+        "prepare QC should unlock exactly one local commit vote broadcast"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(
+                |entry| entry.kind == super::BackgroundRequestLogKind::Broadcast
+                    && entry.msg_kind == Some("LaneBlockCert")
+            )
+            .count(),
+        1,
+        "locally cached single-validator commit vote should seal one commit QC"
+    );
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        1,
+        "single-validator prepare and commit QCs should queue the committed lane block"
+    );
+
+    actor
+        .handle_lane_block_vote(prepare_vote, Some(&local_peer))
+        .expect("duplicate local prepare vote handled");
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockVote")),
+        "duplicate prepare vote must not rebroadcast the local commit vote"
+    );
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_inbound_prepare_qc_broadcasts_local_commit_vote_without_echoing_qc() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let local_peer = actor.common_config.peer.id().clone();
+    let proposal = sample_lane_block_proposal_for_validators(vec![local_peer.clone()]);
+    let prepare_vote = signed_lane_block_vote_with_keypair(
+        &proposal,
+        crate::sumeragi::consensus::Phase::Prepare,
+        &actor.common_config.key_pair,
+    );
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        prepare_vote.body.clone(),
+        proposal.descriptor.validator_set.clone(),
+        std::slice::from_ref(&prepare_vote),
+    )
+    .expect("single-validator prepare QC");
+    let signer_pop = iroha_crypto::bls_normal_pop_prove(actor.common_config.key_pair.private_key())
+        .expect("local lane block PoP");
+    actor
+        .roster_validation_cache
+        .pops
+        .insert(local_peer.public_key().clone(), signer_pop);
+
+    actor
+        .handle_lane_block_proposal(proposal)
+        .expect("local lane-block proposal handled");
+    let _ = take_background_log(&background_log);
+    actor
+        .handle_lane_block_qc(prepare_qc.clone())
+        .expect("inbound prepare QC handled");
+
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockPrepareCert")),
+        "inbound prepare QC must not be echoed as a sealed local QC"
+    );
+    assert_eq!(
+        entries
+            .iter()
+            .filter(
+                |entry| entry.kind == super::BackgroundRequestLogKind::Broadcast
+                    && entry.msg_kind == Some("LaneBlockVote")
+            )
+            .count(),
+        1,
+        "inbound prepare QC should unlock one local commit vote broadcast"
+    );
+    assert_eq!(
+        actor.subsystems.committed_lane_blocks.len(),
+        1,
+        "local commit vote should seal commit QC and queue the lane block"
+    );
+
+    actor
+        .handle_lane_block_qc(prepare_qc)
+        .expect("duplicate inbound prepare QC handled");
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockVote")),
+        "duplicate inbound prepare QC must not rebroadcast the local commit vote"
+    );
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn lane_block_prepare_qc_does_not_broadcast_commit_vote_for_nonmember() {
+    let _message_guard = super::status::message_handling_test_guard();
+    super::status::reset_message_handling_for_tests();
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
+    let other_keypair = checked_bls_keypair();
+    let other_peer = PeerId::new(other_keypair.public_key().clone());
+    let proposal = sample_lane_block_proposal_for_validators(vec![other_peer.clone()]);
+    let prepare_vote = signed_lane_block_vote_with_keypair(
+        &proposal,
+        crate::sumeragi::consensus::Phase::Prepare,
+        &other_keypair,
+    );
+    let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+        prepare_vote.body.clone(),
+        proposal.descriptor.validator_set.clone(),
+        std::slice::from_ref(&prepare_vote),
+    )
+    .expect("single-validator prepare QC");
+    let signer_pop =
+        iroha_crypto::bls_normal_pop_prove(other_keypair.private_key()).expect("other PoP");
+    actor
+        .roster_validation_cache
+        .pops
+        .insert(other_peer.public_key().clone(), signer_pop);
+
+    actor
+        .handle_lane_block_proposal(proposal)
+        .expect("nonlocal lane-block proposal handled");
+    let _ = take_background_log(&background_log);
+    actor
+        .handle_lane_block_qc(prepare_qc)
+        .expect("nonlocal prepare QC handled");
+
+    assert!(
+        take_background_log(&background_log)
+            .into_iter()
+            .all(|entry| entry.msg_kind != Some("LaneBlockVote")),
+        "node outside the lane validator set must not broadcast a commit vote"
+    );
+    assert_eq!(actor.subsystems.committed_lane_blocks.len(), 0);
+    super::status::reset_message_handling_for_tests();
+    harness.shutdown.send();
 }
 
 #[tokio::test(flavor = "current_thread")]

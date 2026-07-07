@@ -761,7 +761,7 @@ def test_deployment_context_is_required(tmp_path: Path) -> None:
 
     result = json.loads(summary.read_text(encoding="utf-8"))
     artifact = result["required"]["appeal_intake"]["artifacts"][0]
-    assert "deployment_id must be a non-empty string" in artifact["errors"]
+    assert "deployment_id must be a non-empty canonical string" in artifact["errors"]
 
 
 def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
@@ -874,6 +874,23 @@ def test_all_policy_bound_artifacts_reject_e2e_policy_mismatch(
             f"{kind_name} policy_digest_hex must match a valid "
             "e2e_panel policy_digest_hex"
         ) in artifact["errors"]
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = e2e_panel()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "e2e-panel-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
 
 
 def test_policy_bound_subset_requires_e2e_panel_anchor(tmp_path: Path) -> None:
@@ -1889,6 +1906,23 @@ def test_all_case_bound_artifacts_reject_appeal_case_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_case_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = appeal_intake()
+    payload["case_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "appeal-intake-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_case_digests"] == []
+    assert (
+        "valid_case_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_commit_reveal_roster_binding_must_match_sortition(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = commit_reveal()
@@ -1923,6 +1957,23 @@ def test_all_roster_bound_artifacts_reject_sortition_tuple_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_roster_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = sortition_roster()
+    payload["roster_hash_hex"] = DIGEST_2
+    write_json(tmp_path / "sortition-roster-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_roster_bindings"] == []
+    assert (
+        "valid_roster_bindings must contain exactly one active binding"
+        in result["errors"]
+    )
+
+
 def test_decision_publication_tally_binding_must_match_commit_reveal(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = decision_publication()
@@ -1955,6 +2006,23 @@ def test_all_tally_bound_artifacts_reject_commit_reveal_tuple_mismatch(
             f"{kind_name} case_digest_hex, roster_hash_hex, and "
             "tally_digest_hex must match a valid roster-bound commit_reveal artifact"
         ) in artifact["errors"]
+
+
+def test_multiple_valid_tally_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = commit_reveal()
+    payload["tally_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "commit-reveal-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_tally_bindings"] == []
+    assert (
+        "valid_tally_bindings must contain exactly one active binding"
+        in result["errors"]
+    )
 
 
 def test_decision_publication_outcomes_must_not_duplicate(tmp_path: Path) -> None:

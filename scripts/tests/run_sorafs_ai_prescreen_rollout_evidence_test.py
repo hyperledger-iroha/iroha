@@ -34,10 +34,8 @@ def complete_args(tmp_path: Path) -> list[str]:
         "/usr/local/bin/sorafs_cli",
         "--iroha-bin",
         "/usr/local/bin/iroha",
-        "--iroha-arg",
-        "--config",
-        "--iroha-arg",
-        "/runtime/client.toml",
+        "--iroha-arg=--config",
+        "--iroha-arg=/runtime/client.toml",
         "--out-dir",
         str(tmp_path / "evidence"),
         "--manifest",
@@ -447,6 +445,30 @@ def test_malformed_source_entry_does_not_echo_spec(tmp_path: Path) -> None:
     assert bad_spec not in diagnostics
 
 
+def test_source_entry_rejects_padded_or_unicode_components_without_trimming(
+    tmp_path: Path,
+) -> None:
+    parsed_args = MODULE.parse_args(complete_args(tmp_path))
+    source_kind = MODULE.REQUIRED_TRANSPARENCY_SOURCE_KINDS[0]
+    source_path = tmp_path / "payloads" / "source-entry-0.json"
+    cases = (
+        f" {source_kind}={source_path}",
+        f"{source_kind}={source_path} ",
+        f"{source_kind}\u200d={source_path}",
+        f"{source_kind}={source_path}\u202e",
+    )
+
+    for spec in cases:
+        parsed_args.source_entry = [spec]
+        errors = MODULE.validate_inputs(parsed_args)
+        diagnostics = "\n".join(errors)
+        escaped_spec = spec.encode("unicode_escape").decode("ascii")
+
+        assert "--source-entry must use KIND=PATH form" in diagnostics
+        assert spec not in diagnostics
+        assert escaped_spec not in diagnostics
+
+
 def test_missing_payload_file_fails_before_plan(tmp_path: Path, capsys) -> None:
     args = complete_args(tmp_path)
     missing = tmp_path / "missing-execution-summary.json"
@@ -505,12 +527,28 @@ def test_iroha_arg_rejects_secret_bearing_value_without_leaking(
     tmp_path: Path, capsys
 ) -> None:
     args = complete_args(tmp_path)
-    args.extend(["--iroha-arg", "--bearer-token=runtime-secret"])
+    args.append("--iroha-arg=--bearer-token=runtime-secret")
 
     assert MODULE.main([*args, "--dry-run"]) == 2
 
     captured = capsys.readouterr()
     assert "SoraFS runner passthrough arguments must not contain" in captured.err
+    assert "bearer-token" not in captured.err
+    assert "runtime-secret" not in captured.err
+    assert captured.out == ""
+
+
+def test_split_iroha_arg_form_fails_without_leaking_value(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = complete_args(tmp_path)
+    args.extend(["--iroha-arg", "--bearer-token=runtime-secret"])
+
+    assert MODULE.main([*args, "--dry-run"]) == 2
+
+    captured = capsys.readouterr()
+    assert MODULE.IROHA_ARG_EQUALS_FORM_DIAGNOSTIC in captured.err
     assert "bearer-token" not in captured.err
     assert "runtime-secret" not in captured.err
     assert captured.out == ""

@@ -162,7 +162,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -477,6 +477,19 @@ def validate_evidence_payload(
     )
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active release digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -486,7 +499,6 @@ def build_summary(
     summary_out: Path | None,
 ) -> tuple[dict[str, Any], list[str]]:
     errors: list[str] = []
-
 
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_release_manifest_digests: set[str] = set()
@@ -541,18 +553,18 @@ def build_summary(
             if kind_name == "release_archive":
                 archive_index_digest = fingerprint.get("archive_index_digest_hex")
                 if isinstance(archive_index_digest, str):
-                    valid_archive_index_digests.add(archive_index_digest.lower())
+                    valid_archive_index_digests.add(archive_index_digest)
             elif kind_name == "signed_manifest":
                 digest = fingerprint.get("manifest_digest_hex")
                 if isinstance(digest, str):
-                    valid_release_manifest_digests.add(digest.lower())
+                    valid_release_manifest_digests.add(digest)
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
-                    valid_policy_digests.add(policy_digest.lower())
+                    valid_policy_digests.add(policy_digest)
                 release_key_fingerprint = fingerprint.get("public_key_fingerprint_hex")
                 if isinstance(release_key_fingerprint, str):
                     valid_release_key_fingerprints.add(
-                        release_key_fingerprint.lower()
+                        release_key_fingerprint
                     )
                 signature_algorithm = fingerprint.get("signature_algorithm")
                 if isinstance(signature_algorithm, str):
@@ -560,18 +572,18 @@ def build_summary(
             elif kind_name == "downstream_bindings":
                 package_index_digest = fingerprint.get("package_index_digest_hex")
                 if isinstance(package_index_digest, str):
-                    valid_package_index_digests.add(package_index_digest.lower())
+                    valid_package_index_digests.add(package_index_digest)
             elif kind_name == "cookbook_smoke":
                 smoke_output_digest = fingerprint.get("smoke_output_digest_hex")
                 if isinstance(smoke_output_digest, str):
-                    valid_smoke_output_digests.add(smoke_output_digest.lower())
+                    valid_smoke_output_digests.add(smoke_output_digest)
             elif kind_name == "ffi_header_contract":
                 ffi_contract_digest = fingerprint.get("ffi_contract_digest_hex")
                 if isinstance(ffi_contract_digest, str):
-                    valid_ffi_contract_digests.add(ffi_contract_digest.lower())
+                    valid_ffi_contract_digests.add(ffi_contract_digest)
                 header_digest = fingerprint.get("header_digest_hex")
                 if isinstance(header_digest, str):
-                    valid_header_digests.add(header_digest.lower())
+                    valid_header_digests.add(header_digest)
             if kind_name in RELEASE_MANIFEST_BOUND_KINDS:
                 valid_release_manifest_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
@@ -580,6 +592,22 @@ def build_summary(
                 valid_release_key_bound_artifacts.append((kind_name, artifact))
         record_evidence_artifact(artifacts_by_kind, kind_name, artifact, errors)
         record_evidence_validation_errors(path, validation_errors, errors)
+
+    valid_release_manifest_digests = require_single_active_digest(
+        valid_release_manifest_digests,
+        errors,
+        label="valid_release_manifest_digests",
+    )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
+    valid_release_key_fingerprints = require_single_active_digest(
+        valid_release_key_fingerprints,
+        errors,
+        label="valid_release_key_fingerprints",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
@@ -637,7 +665,7 @@ def build_summary(
             fingerprint = evidence_artifact_fingerprint(artifact)
             digest = fingerprint.get("release_manifest_digest_hex")
             if isinstance(digest, str):
-                valid_release_manifest_reference_digests.add(digest.lower())
+                valid_release_manifest_reference_digests.add(digest)
 
     required = build_required_evidence_summary(
         required_kinds,

@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: ad5b314217e5c9cec94561315112a27b573b70de6d12274a07972259ebb249ce
+source_hash: a5cb0caf1a731e0be2ba5f0545eebd836d90619e156bf0c522154065b0c9fa1d
 source_last_modified: "2026-01-05T09:28:12.079530+00:00"
 translation_last_reviewed: 2026-02-07
 ---

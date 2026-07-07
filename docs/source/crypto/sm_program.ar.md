@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/crypto/sm_program.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08e2e1e4a54390d9142d6788aad2385e93282a33423b9fc7f3418e3633f3f86a
+source_hash: 2d65304e93effdc04fc35690fe3d4fb1c11ed5fd5963cdda9d84f617891b8ca5
 source_last_modified: "2026-01-23T18:50:10.586502+00:00"
 translation_last_reviewed: 2026-02-07
 translator: machine-google-reviewed
@@ -80,7 +80,7 @@ translator: machine-google-reviewed
 تم تسجيله في `WARN`، ولكن يجب أن تحافظ عقد الإجماع على تمكين الإعدادات الافتراضية لمنع حدوث أي حادث غير مقصود
 الاختلاف بين أقرانهم المدركين لـ SM والأقران ذوي الإعاقة.
 تعرض واجهة سطر الأوامر (CLI) عمليات التبديل هذه عبر تحديث المصافحة في تطبيق iroha_cli sorafs
---allow-sm-handshake-mismatch` and `--allow-sm-openssl-preview-mismatch`, or the matching `--require-*`
+--require-sm-handshake-match` and `--require-sm-openssl-preview-match`, or the matching `--require-*`
 أعلام لاستعادة التنفيذ الصارم.#### معاينة OpenSSL/Tongsuo (`sm-ffi-openssl`)
 - **النطاق.** ينشئ شريحة موفر للمعاينة فقط (`OpenSslProvider`) تتحقق من توفر وقت تشغيل OpenSSL وتكشف عن تجزئة SM3 المدعومة بـ OpenSSL، والتحقق من SM2، وتشفير/فك تشفير SM4-GCM مع الاستمرار في الاشتراك. يجب أن تستمر الثنائيات المتفق عليها في استخدام مسار RustCrypto؛ يتم اشتراك الواجهة الخلفية لـ FFI بشكل صارم في البرامج التجريبية للتحقق/التوقيع على الحافة.
 - **إنشاء المتطلبات الأساسية.** ترجمة مع `cargo build -p iroha_crypto --features "sm sm-ffi-openssl"` والتأكد من روابط سلسلة الأدوات مقابل OpenSSL/Tongsuo 3.0+ (`libcrypto` مع دعم SM2/SM3/SM4). لا يُنصح بالارتباط الثابت؛ تفضل المكتبات الديناميكية التي يديرها المشغل.

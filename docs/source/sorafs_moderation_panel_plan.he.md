@@ -4,10 +4,10 @@ direction: rtl
 source: docs/source/sorafs_moderation_panel_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 47e55ba34918a0429c07ca2dc0439c867ad281ab36a7a837599c44056d2531d1
-source_last_modified: "2026-07-05T01:58:10.286017+00:00"
+source_hash: 058c332625831618de34e16e923d5cd4abf6dcff6678a87de4a5551435f351e9
+source_last_modified: "2026-07-06T20:30:29.739197+00:00"
 translation_last_reviewed: 2026-07-05
-source_mtime: 2026-07-05T01:58:10.286017+00:00
+source_mtime: "2026-07-06T20:30:29.739197+00:00"
 ---
 # Moderation Appeals & Sortition Panels
 
@@ -49,7 +49,10 @@ tally metadata emitted by the lane checker.
 End-to-end panel artifacts also publish `policy_digest_hex`; governance
 approval artifacts must bind `policy_digest_hex` to that valid end-to-end
 policy digest, and the checker emits those valid panel policy digests as
-`valid_policy_digests`.
+`valid_policy_digests`. The moderation-panel gate fail-closes when more than
+one valid case, roster, tally, or policy anchor appears, and clears the mixed
+`valid_case_digests`, `valid_roster_bindings`, `valid_tally_bindings`, or
+`valid_policy_digests` set before aggregate promotion can report ready.
 It does not yet ship the full moderation appeal service, SoraFS juror panel
 engine, secure evidence viewer, durable voting orchestrator, or portal workflow
 described in the original plan.
@@ -269,7 +272,11 @@ lane-proven bound artifacts before final promotion: case-bound artifact
 fingerprints must match `valid_case_digests`, roster-bound artifact fingerprints
 must match `valid_roster_bindings`, tally-bound artifact fingerprints must match
 `valid_tally_bindings`, and policy-bound governance approval fingerprints must
-match `valid_policy_digests`.
+match `valid_policy_digests`. The moderation-panel gate fail-closes when more
+than one valid case, roster, tally, or policy anchor appears, and clears the
+mixed `valid_case_digests`, `valid_roster_bindings`,
+`valid_tally_bindings`, or `valid_policy_digests` set before aggregate
+promotion can report ready.
 Appeal-intake artifacts also bind `case_count` to the unique canonical
 `cases[].name` inventory, require `accepted_case_count` to match the
 `cases[].accepted` partition, require reviewed lowercase

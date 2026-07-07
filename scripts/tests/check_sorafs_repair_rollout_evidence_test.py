@@ -1134,6 +1134,75 @@ def test_all_policy_bound_artifacts_reject_governance_policy_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_roster_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = auditor_roster()
+    payload["roster_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "auditor-roster-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_roster_digests"] == []
+    assert (
+        "valid_roster_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_failure_bundle_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = failure_capture()
+    payload["evidence_bundle_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "failure-capture-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_failure_bundle_digests"] == []
+    assert (
+        "valid_failure_bundle_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_handoff_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "governance-handoff-alt.json",
+        governance_handoff(handoff_digest=DIGEST_2),
+    )
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_handoff_digests"] == []
+    assert (
+        "valid_handoff_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = governance_handoff()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "governance-handoff-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_policy_bound_subset_requires_governance_handoff_anchor(tmp_path: Path) -> None:
     write_json(tmp_path / "governance-approval.json", governance_approval())
     summary = tmp_path / "summary.json"

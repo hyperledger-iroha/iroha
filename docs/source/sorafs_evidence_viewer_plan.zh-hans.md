@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_evidence_viewer_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 78829c1c4d9a3f1986e67dc26b956f003afe35e75c45c906ddc7008e7907b712
+source_hash: c532af543f9f4dcd9323f49a2ee1c1c8b88199faae1724c8224b10c170a71fa1
 source_last_modified: "2026-07-05T01:58:10.285289+00:00"
 translation_last_reviewed: 2026-07-05
 source_mtime: 2026-07-05T01:58:10.285289+00:00
@@ -103,11 +103,12 @@ missing browser/streaming viewer service.
   missing access event coverage, long-lived segment URLs, private viewer
   material, and incomplete watermark/access-log controls.
 - `scripts/build_sorafs_evidence_viewer_canary.py` builds the payload-free
-  `evidence_viewer` canary from reviewed deployment facts, requires every
-  positive control claim explicitly, forces raw evidence/session-token/signed
-  URL/watermark-secret/body flags to `false`, requires reviewed
-  reviewed `moderation-viewer-session-*` `--viewer-session` labels whose unique
-  inventory matches `--session-count` and rejects non-production markers,
+  `evidence_viewer` canary from reviewed deployment facts, rejects unreviewed
+  `--deployment-id` and `--environment` values before checker prevalidation,
+  requires every positive control claim explicitly, forces raw
+  evidence/session-token/signed URL/watermark-secret/body flags to `false`,
+  requires reviewed `moderation-viewer-session-*` `--viewer-session` labels
+  whose unique inventory matches `--session-count` and rejects non-production markers,
   emits `role_count`, `security_control_count`, `access_event_kind_count`, and
   `export_target_count` from the reviewed role/control/event/export inventories
   before checker prevalidation, requires explicit audit-log tamper rejection and

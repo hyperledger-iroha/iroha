@@ -997,64 +997,24 @@ fn fetch_cli_writes_report_to_stdout_when_json_out_dash() {
 }
 
 #[test]
-fn fetch_cli_can_skip_digest_verification() {
-    let tempdir = tempdir().expect("tempdir");
-    let payload_path = tempdir.path().join("payload.bin");
-    let original_payload = write_payload(&payload_path, 12 * 1024);
+fn fetch_cli_rejects_integrity_verification_bypass_flags() {
+    for flag in [
+        "--allow-insecure",
+        "--no-verify-digest",
+        "--no-verify-length",
+    ] {
+        let assert = sorafs_fetch_cmd().arg(flag).assert().failure();
 
-    let plan = CarBuildPlan::single_file_with_profile(&original_payload, ChunkProfile::DEFAULT)
-        .expect("plan");
-    let fetch_array: Vec<Value> = plan
-        .chunk_fetch_specs()
-        .iter()
-        .map(|spec| {
-            let mut obj = Map::new();
-            obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            obj.insert("offset".into(), Value::from(spec.offset));
-            obj.insert("length".into(), Value::from(spec.length as u64));
-            obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-            Value::Object(obj)
-        })
-        .collect();
-    let plan_path = tempdir.path().join("plan.json");
-    fs::write(
-        &plan_path,
-        (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-    )
-    .expect("write plan");
-
-    // Corrupt the provider payload so digest verification would normally fail.
-    let mut corrupted = original_payload.clone();
-    corrupted[0] ^= 0xFF;
-    fs::write(&payload_path, &corrupted).expect("write corrupted payload");
-
-    let output_path = tempdir.path().join("assembled.bin");
-    sorafs_fetch_cmd()
-        .arg(format!("--plan={}", plan_path.display()))
-        .arg(format!("--provider=alpha={}", payload_path.display()))
-        .arg("--allow-insecure")
-        .arg("--no-verify-digest")
-        .arg(format!("--output={}", output_path.display()))
-        .assert()
-        .success();
-
-    let assembled = fs::read(&output_path).expect("read assembled payload");
-    assert_eq!(assembled, corrupted);
-    assert_ne!(assembled, original_payload);
-}
-
-#[test]
-fn fetch_cli_requires_allow_insecure_for_verification_bypass() {
-    let assert = sorafs_fetch_cmd()
-        .arg("--no-verify-digest")
-        .assert()
-        .failure();
-
-    let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
-    assert!(
-        stderr.contains("allow-insecure"),
-        "unexpected stderr: {stderr}"
-    );
+        let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
+        assert!(
+            stderr.contains("unknown option"),
+            "unexpected stderr for {flag}: {stderr}"
+        );
+        assert!(
+            stderr.contains(flag),
+            "stderr should name rejected flag {flag}: {stderr}"
+        );
+    }
 }
 
 #[test]

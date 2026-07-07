@@ -105,7 +105,8 @@ Optional:
   --adoption-report PATH          Adoption report path (default: alongside summary).
   --min-providers N               Require at least N eligible providers when running the adoption gate (default: provider count).
   --require-telemetry             Fail the adoption gate when telemetry metadata is missing.
-  --skip-adoption-check           Skip the adoption gate (not recommended; use only for local diagnostics).
+  --skip-adoption-check           Skip the adoption gate only when
+                                  SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP=local-diagnostic.
   --workspace PATH                Repository root (default: current directory).
   --cli PATH                      Explicit sorafs_cli binary to use.
   --help                          Show this help message.
@@ -316,6 +317,66 @@ if [[ -n "$min_providers_override" ]]; then
     exit 1
   fi
 fi
+if [[ ${skip_adoption_check} -eq 1 && "${SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP:-}" != "local-diagnostic" ]]; then
+  echo "error: --skip-adoption-check requires SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP=local-diagnostic" >&2
+  exit 1
+fi
+
+declare -a ADOPTION_FLAGS=()
+if [[ ${skip_adoption_check} -eq 0 && -n "${XTASK_SORAFS_ADOPTION_FLAGS:-}" ]]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "error: python3 is required to parse XTASK_SORAFS_ADOPTION_FLAGS" >&2
+    exit 1
+  fi
+  while IFS= read -r flag; do
+    if [[ -n "$flag" ]]; then
+      ADOPTION_FLAGS+=("$flag")
+    fi
+  done < <(
+    XTASK_SORAFS_ADOPTION_FLAGS_INPUT="${XTASK_SORAFS_ADOPTION_FLAGS}" python3 <<'PY'
+import os
+import shlex
+
+flags = os.environ.get("XTASK_SORAFS_ADOPTION_FLAGS_INPUT", "")
+try:
+    parts = shlex.split(flags)
+except ValueError as exc:
+    raise SystemExit(f"error: failed to parse XTASK_SORAFS_ADOPTION_FLAGS: {exc}") from exc
+for part in parts:
+    print(part)
+PY
+  )
+fi
+relaxing_adoption_override=0
+if (( ${#ADOPTION_FLAGS[@]} )); then
+  for flag in "${ADOPTION_FLAGS[@]}"; do
+    case "$flag" in
+      --allow-single-source|--allow-zero-weight)
+        relaxing_adoption_override=1
+        ;;
+    esac
+  done
+fi
+if [[ ${relaxing_adoption_override} -eq 1 ]]; then
+  if [[ -z "${SORAFS_ADOPTION_OVERRIDE_ID:-}" ]]; then
+    echo "error: relaxing XTASK_SORAFS_ADOPTION_FLAGS require SORAFS_ADOPTION_OVERRIDE_ID" >&2
+    exit 1
+  fi
+  if [[ ! "${SORAFS_ADOPTION_OVERRIDE_ID}" =~ ^[A-Za-z0-9][A-Za-z0-9._:@+-]{2,127}$ ]]; then
+    echo "error: SORAFS_ADOPTION_OVERRIDE_ID must be 3-128 characters of [A-Za-z0-9._:@+-] and start with alphanumeric" >&2
+    exit 1
+  fi
+  adoption_override_flag_present=0
+  for flag in "${ADOPTION_FLAGS[@]}"; do
+    if [[ "$flag" == "--adoption-override-id" || "$flag" == "--override-id" ]]; then
+      adoption_override_flag_present=1
+      break
+    fi
+  done
+  if [[ ${adoption_override_flag_present} -eq 0 ]]; then
+    ADOPTION_FLAGS+=("--adoption-override-id" "${SORAFS_ADOPTION_OVERRIDE_ID}")
+  fi
+fi
 
 if [[ -z "$output_path" ]]; then
   output_path="${workspace}/artifacts/sorafs_direct_mode/payload.bin"
@@ -456,35 +517,9 @@ if [[ ${skip_adoption_check} -eq 0 ]]; then
     min_providers_effective="${#providers[@]}"
   fi
   if [[ -z "$min_providers_effective" || "$min_providers_effective" -lt 1 ]]; then
-    min_providers_effective=1
+  min_providers_effective=1
   fi
   echo "Running cargo xtask sorafs-adoption-check (min providers: ${min_providers_effective})"
-  # shellcheck disable=SC2206
-  ADOPTION_FLAGS=()
-  if [[ -n "${XTASK_SORAFS_ADOPTION_FLAGS:-}" ]]; then
-    if ! command -v python3 >/dev/null 2>&1; then
-      echo "error: python3 is required to parse XTASK_SORAFS_ADOPTION_FLAGS" >&2
-      exit 1
-    fi
-    while IFS= read -r flag; do
-      if [[ -n "$flag" ]]; then
-        ADOPTION_FLAGS+=("$flag")
-      fi
-    done < <(
-      XTASK_SORAFS_ADOPTION_FLAGS_INPUT="${XTASK_SORAFS_ADOPTION_FLAGS}" python3 <<'PY'
-import os
-import shlex
-
-flags = os.environ.get("XTASK_SORAFS_ADOPTION_FLAGS_INPUT", "")
-try:
-    parts = shlex.split(flags)
-except ValueError as exc:
-    raise SystemExit(f"error: failed to parse XTASK_SORAFS_ADOPTION_FLAGS: {exc}") from exc
-for part in parts:
-    print(part)
-PY
-    )
-  fi
   if [[ ${require_telemetry} -eq 1 ]]; then
     needs_flag=1
     if (( ${#ADOPTION_FLAGS[@]} )); then

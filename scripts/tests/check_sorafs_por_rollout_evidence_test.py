@@ -305,7 +305,7 @@ def test_summary_collects_reviewed_archive_backend_set(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     write_json(
         tmp_path / "reporting-archive-sql.json",
-        reporting_archive(archive_backend="sql", handoff_digest=DIGEST_2),
+        reporting_archive(archive_backend="sql", handoff_digest=HANDOFF_DIGEST),
     )
     summary = tmp_path / "summary.json"
 
@@ -313,10 +313,7 @@ def test_summary_collects_reviewed_archive_backend_set(tmp_path: Path) -> None:
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     assert payload["archive_backends"] == ["parquet", "sql"]
-    assert payload["valid_governance_archive_handoff_digests"] == [
-        HANDOFF_DIGEST,
-        DIGEST_2,
-    ]
+    assert payload["valid_governance_archive_handoff_digests"] == [HANDOFF_DIGEST]
     fingerprints = [
         artifact["fingerprint"]["archive_backend"]
         for artifact in payload["required"]["reporting_archive"]["artifacts"]
@@ -326,7 +323,7 @@ def test_summary_collects_reviewed_archive_backend_set(tmp_path: Path) -> None:
         artifact["fingerprint"]["governance_archive_handoff_digest_hex"]
         for artifact in payload["required"]["reporting_archive"]["artifacts"]
     ]
-    assert sorted(handoff_fingerprints) == [HANDOFF_DIGEST, DIGEST_2]
+    assert sorted(handoff_fingerprints) == [HANDOFF_DIGEST, HANDOFF_DIGEST]
 
 
 def test_payload_safety_flags_are_required(tmp_path: Path) -> None:
@@ -858,6 +855,60 @@ def test_all_policy_bound_artifacts_reject_randomness_policy_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_seed_replay_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    payload["seed_replay_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "randomness-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_seed_replay_digests"] == []
+    assert (
+        "valid_seed_replay_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = randomness()
+    payload["policy_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "randomness-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
+def test_multiple_valid_governance_archive_handoff_anchors_fail_closed(
+    tmp_path: Path,
+) -> None:
+    write_complete_evidence(tmp_path)
+    write_json(
+        tmp_path / "reporting-archive-alt.json",
+        reporting_archive(handoff_digest=DIGEST_2),
+    )
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_governance_archive_handoff_digests"] == []
+    assert (
+        "valid_governance_archive_handoff_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_stale_randomness_does_not_anchor_policy_bound_evidence(
     tmp_path: Path,
 ) -> None:
@@ -976,7 +1027,7 @@ def test_reporting_archive_rejects_malformed_governance_handoff_digest(
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["reporting_archive"]["artifacts"][0]
     assert (
-        "governance_archive_handoff_digest_hex must be 64 hex characters"
+        "governance_archive_handoff_digest_hex must be 64 lowercase hex characters"
         in artifact["errors"]
     )
 

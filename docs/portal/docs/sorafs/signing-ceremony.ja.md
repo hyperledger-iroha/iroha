@@ -70,8 +70,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-manifest が別 URL にある場合は `--manifest` を渡します。署名なし envelope は、
-ローカル smoke 実行のために `--allow-unsigned` を設定しない限り拒否されます。
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - staging gateway で manifest を検証する場合は、ローカル payload ではなく Torii を指定します:
 

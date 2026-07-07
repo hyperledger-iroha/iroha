@@ -847,6 +847,21 @@ def test_required_kind_schema_contracts_cover_gate_contracts() -> None:
             assert MODULE.canonical_string(schema) == schema
 
 
+def test_canonical_string_rejects_unicode_controls() -> None:
+    assert MODULE.canonical_string("gateway_load") == "gateway_load"
+
+    for value in (
+        "",
+        " gateway_load",
+        "gateway_load ",
+        "gateway\nload",
+        "gateway\u200dload",
+        "gateway\u202eload",
+        "gateway\ue000load",
+    ):
+        assert MODULE.canonical_string(value) is None
+
+
 def test_payload_free_summary_metadata_fields_have_validator_coverage() -> None:
     metadata_fields = set(MODULE.PAYLOAD_FREE_SUMMARY_METADATA_FIELDS)
     valid_fields = {field for field in metadata_fields if field.startswith("valid_")}
@@ -1609,6 +1624,43 @@ def test_explicit_evidence_symlink_fails_closed_without_path_leak(
     assert payload["status"] == "blocked"
 
 
+def test_explicit_evidence_broken_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    symlink = tmp_path / "linked-summary.json"
+    symlink.symlink_to(tmp_path / "missing-target.json")
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(symlink),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-summary" not in diagnostics
+    assert "missing-target" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
 def test_evidence_dir_symlink_fails_closed_without_path_leak(
     tmp_path: Path,
     capsys,
@@ -1644,6 +1696,236 @@ def test_evidence_dir_symlink_fails_closed_without_path_leak(
     assert "missing required gateway_load production readiness summary" in diagnostics
     assert "linked-evidence" not in diagnostics
     assert "target" not in diagnostics
+    assert payload["status"] == "blocked"
+
+
+def test_evidence_dir_broken_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    symlink_dir = tmp_path / "linked-evidence"
+    symlink_dir.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(symlink_dir),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence directory must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-evidence" not in diagnostics
+    assert "missing-target" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_explicit_evidence_parent_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target_parent = tmp_path / "target-parent"
+    target_parent.mkdir()
+    write_gate(target_parent, "gateway_load")
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(target_parent, target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(linked_parent / "gateway_load.json"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file parent must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-parent" not in diagnostics
+    assert "target-parent" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_explicit_evidence_broken_parent_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    linked_parent = tmp_path / "linked-broken-parent"
+    linked_parent.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(linked_parent / "gateway_load.json"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file parent must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-broken-parent" not in diagnostics
+    assert "missing-target" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_evidence_dir_parent_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target_parent = tmp_path / "target-parent"
+    target_dir = target_parent / "summaries"
+    target_dir.mkdir(parents=True)
+    write_gate(target_dir, "gateway_load")
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(target_parent, target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(linked_parent / "summaries"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence directory parent must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-parent" not in diagnostics
+    assert "target-parent" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_evidence_dir_broken_parent_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    linked_parent = tmp_path / "linked-broken-parent"
+    linked_parent.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(linked_parent / "summaries"),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence directory parent must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-broken-parent" not in diagnostics
+    assert "missing-target" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
+    assert payload["status"] == "blocked"
+
+
+def test_discovered_evidence_file_symlink_fails_closed_without_path_leak(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    target = write_gate(tmp_path, "gateway_load")
+    symlink = tmp_path / "linked-discovered-summary.json"
+    symlink.symlink_to(target)
+    target.unlink()
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    diagnostics = "\n".join([*payload["errors"], captured.err])
+    assert "evidence file must not be a symlink" in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "linked-discovered-summary" not in diagnostics
+    assert "gateway_load.json" not in diagnostics
+    assert payload["summary_file_count"] == 0
     assert payload["status"] == "blocked"
 
 
@@ -1862,6 +2144,53 @@ def test_unknown_sorafs_schema_in_summary_dir_fails(tmp_path: Path) -> None:
     )
 
 
+def test_duplicate_sensitive_json_key_load_error_does_not_echo(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    evidence = tmp_path / "malformed-summary.json"
+    secret_value = "runtime-only-private-key-material"
+    evidence.write_text(
+        '{"schema":"sorafs.gateway_load.rollout_evidence_gate.v1",'
+        f'"private_key":"{secret_value}",'
+        f'"private_key":"{secret_value}-shadow"}}',
+        encoding="utf-8",
+    )
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence",
+                str(evidence),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--deployment-id",
+                DEPLOYMENT_ID,
+                "--environment",
+                ENVIRONMENT,
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    diagnostics = "\n".join([*payload["errors"], captured.err, captured.out])
+    assert (
+        "failed to load evidence JSON: evidence JSON object contains duplicate key "
+        "`<sensitive-key>`"
+    ) in diagnostics
+    assert "missing required gateway_load production readiness summary" in diagnostics
+    assert "private_key" not in diagnostics
+    assert secret_value not in diagnostics
+    assert "malformed-summary.json" not in diagnostics
+
+
 def test_unknown_non_sorafs_schema_in_summary_dir_fails(tmp_path: Path) -> None:
     write_gate(tmp_path, "gateway_load")
     write_json(
@@ -1996,13 +2325,52 @@ def test_malformed_threshold_entries_are_not_carried_into_summary(
 
 
 def test_stale_artifact_timestamp_fails(tmp_path: Path) -> None:
+    summary = tmp_path / "summary.json"
     write_gate(
         tmp_path,
         "gateway_load",
         generated_at_unix=NOW_UNIX - MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS - 1,
     )
 
-    assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert ".fingerprint.generated_at_unix exceeds max summary artifact age" in errors
+    assert ".artifacts[0].generated_at_unix exceeds max summary artifact age" not in errors
+    assert "recognized_artifacts[0].generated_at_unix exceeds max summary artifact age" not in errors
+
+
+def test_future_artifact_timestamp_fails_with_fingerprint_path(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load", generated_at_unix=NOW_UNIX + 1)
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert ".fingerprint.generated_at_unix must not be future" in errors
+    assert ".artifacts[0].generated_at_unix must not be future" not in errors
+    assert "recognized_artifacts[0].generated_at_unix must not be future" not in errors
 
 
 def test_malformed_required_artifact_digest_fails(tmp_path: Path) -> None:
@@ -2014,6 +2382,66 @@ def test_malformed_required_artifact_digest_fails(tmp_path: Path) -> None:
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
 
 
+def test_required_and_recognized_artifact_digests_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, forged_digest in (
+            ("uppercase", "AB" * 32),
+            ("malformed", f"runtime-only-digest-{index:03d}"),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name]["artifacts"][0]["sha256"] = forged_digest
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"]
+                == payload["required"][kind_name]["artifacts"][0]["path"]
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0].sha256 "
+                "must be canonical lowercase SHA-256"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].sha256 "
+                "must be canonical lowercase SHA-256"
+                in errors
+            )
+            assert forged_digest not in result_text
+
+
 def test_malformed_required_artifact_metadata_label_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
@@ -2021,6 +2449,168 @@ def test_malformed_required_artifact_metadata_label_fails(tmp_path: Path) -> Non
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_non_object_artifact_fingerprint_reports_single_sanitized_error(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    secret_fingerprint = "runtime-only-private-key-material"
+    payload["required"][first_required]["artifacts"][0][
+        "fingerprint"
+    ] = secret_fingerprint
+    payload["recognized_artifacts"][0]["fingerprint"] = secret_fingerprint
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert errors.count(".fingerprint must be an object") == 2
+    assert ".fingerprint.generated_at_unix" not in errors
+    assert ".fingerprint.deployment_id" not in errors
+    assert ".fingerprint.environment" not in errors
+    assert secret_fingerprint not in errors
+
+
+def test_sensitive_artifact_fingerprint_key_is_rejected_without_echo(
+    tmp_path: Path,
+) -> None:
+    payload = gate_summary("gateway_load")
+    first_required = MODULE.GATE_BY_NAME["gateway_load"].required_kinds[0]
+    secret_value = "runtime-only-private-key-material"
+    payload["required"][first_required]["artifacts"][0]["fingerprint"][
+        "private_key"
+    ] = secret_value
+    payload["recognized_artifacts"][0]["fingerprint"]["private_key"] = secret_value
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "gateway_load.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "gateway_load",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+    assert ".fingerprint.<sensitive-key> must not be present" in errors
+    assert "private_key" not in errors
+    assert secret_value not in errors
+
+
+def test_artifact_fingerprint_deployment_context_rejects_nonproduction_without_echo(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (
+            {"deployment_id": "gateway-staging-a"},
+            "fingerprint.deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "gateway-staging-a",
+        ),
+        (
+            {"environment": "qa"},
+            "fingerprint.environment must be production",
+            "qa",
+        ),
+    ]
+
+    for index, (fingerprint_metadata, expected_error, raw_label) in enumerate(cases):
+        root = tmp_path / f"artifact_context_{index}"
+        root.mkdir()
+        payload = gate_summary("gateway_load")
+        add_fingerprint_metadata(payload, **fingerprint_metadata)
+        summary = root / "summary.json"
+        write_json(root / "gateway_load.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                "gateway_load",
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert expected_error in errors
+        assert raw_label not in errors
+
+
+def test_artifact_fingerprint_deployment_context_rejects_nonproduction_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+    assert set(cases) == {
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in MODULE.GATE_BY_NAME[gate.name].required_kinds
+    }
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, fingerprint_metadata, expected_error, raw_label in (
+            (
+                "deployment_id",
+                {"deployment_id": f"sorafs-staging-artifact-{index:03d}"},
+                "fingerprint.deployment_id must not contain "
+                "non-production deployment markers ['staging']",
+                f"sorafs-staging-artifact-{index:03d}",
+            ),
+            (
+                "environment",
+                {"environment": f"runtime-env-secret-{index:03d}"},
+                "fingerprint.environment must be production",
+                f"runtime-env-secret-{index:03d}",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            add_fingerprint_metadata(
+                payload,
+                kind_name=kind_name,
+                **fingerprint_metadata,
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert raw_label not in result_text
 
 
 def test_artifact_paths_must_be_archive_portable(tmp_path: Path) -> None:
@@ -2078,6 +2668,75 @@ def test_artifact_paths_must_be_archive_portable(tmp_path: Path) -> None:
     assert encoded_drive_path not in errors
     assert html_separator_path not in errors
     assert html_drive_path not in errors
+
+
+def test_required_and_recognized_artifact_paths_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+    expected_error_suffix = (
+        "path must be archive-relative without absolute, empty, current, "
+        "parent, encoded, URI-scheme-like, platform-specific, or secret-looking "
+        "segments"
+    )
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, forged_path in (
+            (
+                "absolute",
+                f"/tmp/runtime-only/sorafs/{gate_name}/{kind_name}/private_key.json",
+            ),
+            (
+                "encoded_parent",
+                f"artifacts/{gate_name}/%2e%2e/{kind_name}/private_key.json",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name]["artifacts"][0]["path"] = forged_path
+            payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                payload
+            )
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name and artifact["path"] == forged_path
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{gate_name}.required.{kind_name}.artifacts[0]."
+                f"{expected_error_suffix}"
+                in errors
+            )
+            assert (
+                f"recognized_artifacts[{recognized_index}].{expected_error_suffix}"
+                in errors
+            )
+            assert forged_path not in result_text
+            assert "private_key" not in result_text
 
 
 def test_artifact_paths_reject_platform_specific_segments(tmp_path: Path) -> None:
@@ -2333,6 +2992,45 @@ def test_numbered_staging_deployment_id_cannot_promote_production_readiness(
     tmp_path: Path,
 ) -> None:
     staging_deployment = "gateway-staging1-a"
+    write_gate(tmp_path, "gateway_load", deployment_id=staging_deployment)
+    summary = tmp_path / "summary.json"
+
+    assert (
+        MODULE.main(
+            [
+                "--evidence-dir",
+                str(tmp_path),
+                "--require-gate",
+                "gateway_load",
+                "--now-unix",
+                str(NOW_UNIX),
+                "--summary-out",
+                str(summary),
+            ]
+        )
+        == 1
+    )
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    errors = "\n".join(result["errors"])
+    assert (
+        "aggregate deployment_id must not contain non-production deployment markers "
+        "['staging']"
+        in errors
+    )
+    assert (
+        "gateway_load aggregate row deployment_id must not contain "
+        "non-production deployment markers ['staging']"
+        in errors
+    )
+    assert result["status"] == "blocked"
+    assert staging_deployment not in errors
+
+
+def test_compact_staging_deployment_id_cannot_promote_production_readiness(
+    tmp_path: Path,
+) -> None:
+    staging_deployment = "gateway-stagingready-a"
     write_gate(tmp_path, "gateway_load", deployment_id=staging_deployment)
     summary = tmp_path / "summary.json"
 
@@ -3148,6 +3846,133 @@ def test_required_top_level_lane_metadata_lists_must_not_be_empty(
     assert "valid_policy_digests must not be empty for `gateway_load` lane metadata" in errors
 
 
+def test_required_lane_metadata_fields_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(MODULE.GATE_METADATA_FIELDS[gate.name])
+    ]
+    assert cases
+
+    for gate_name, field in cases:
+        root = tmp_path / f"{gate_name}_{field}_missing"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        assert field in payload
+        del payload[field]
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{field} is required for `{gate_name}` lane metadata" in errors
+
+
+def test_list_lane_metadata_fields_require_list_shape_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_LIST_METADATA_FIELDS
+        )
+    ]
+    assert cases
+
+    for gate_name, field in cases:
+        for suffix, value, expected_error in (
+            (
+                "non_list",
+                {"runtime_key": "runtime-only-private-key"},
+                f"{field} must be a payload-free metadata list",
+            ),
+            (
+                "empty",
+                [],
+                f"{field} must not be empty for `{gate_name}` lane metadata",
+            ),
+        ):
+            root = tmp_path / f"{gate_name}_{field}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload[field] = value
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert "runtime-only-private-key" not in result_text
+
+
+def test_cross_lane_metadata_fields_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases: list[tuple[str, str]] = []
+    for field in sorted(MODULE.PAYLOAD_FREE_SUMMARY_METADATA_FIELDS):
+        target_gate = next(
+            gate
+            for gate in MODULE.GATE_SUMMARY_KINDS
+            if field not in MODULE.GATE_METADATA_FIELDS[gate.name]
+        )
+        cases.append((target_gate.name, field))
+
+    covered_fields = {field for _, field in cases}
+    assert covered_fields == MODULE.PAYLOAD_FREE_SUMMARY_METADATA_FIELDS
+
+    secret = "runtime-only-private-key-cross-lane"
+    for gate_name, field in cases:
+        root = tmp_path / f"{gate_name}_{field}_disallowed"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        assert field not in MODULE.GATE_METADATA_FIELDS[gate_name]
+        payload[field] = {"private_key": secret}
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field} is not allowed for `{gate_name}` lane metadata" in errors
+        assert "private_key" not in result_text
+        assert secret not in result_text
+
+
 def test_hex_list_metadata_must_match_recognized_artifact_fingerprints(
     tmp_path: Path,
 ) -> None:
@@ -3235,7 +4060,7 @@ def test_hex_list_metadata_without_owner_kind_tether_fails_closed(
 def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    cases = [
+    manual_cases = [
         (
             "ai_prescreen",
             "valid_executor_summary_digests",
@@ -3365,6 +4190,12 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "provider_roster_digest_hex",
         ),
         (
+            "pdp",
+            "valid_repair_handoff_digests",
+            ("governance_repair",),
+            "repair_handoff_digest_hex",
+        ),
+        (
             "pop_credentials",
             "valid_policy_digests",
             ("verifier_service",),
@@ -3394,6 +4225,12 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "valid_seed_replay_digests",
             ("randomness",),
             "seed_replay_digest_hex",
+        ),
+        (
+            "por",
+            "valid_governance_archive_handoff_digests",
+            ("reporting_archive",),
+            "governance_archive_handoff_digest_hex",
         ),
         (
             "potr",
@@ -3480,6 +4317,12 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
             "smoke_output_digest_hex",
         ),
         (
+            "reputation",
+            "valid_reputation_weight_digests",
+            ("publish", "latest"),
+            "weights_digest_hex",
+        ),
+        (
             "repair",
             "valid_failure_bundle_digests",
             ("failure_capture",),
@@ -3513,8 +4356,28 @@ def test_anchor_hex_list_metadata_must_match_owner_kind_fingerprints(
         ),
     ]
 
-    for gate_name, metadata_field, owner_kinds, fingerprint_field in cases:
-        root = tmp_path / f"{gate_name}_{metadata_field}"
+    configured_cases = {
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_BINDINGS[
+                metadata_field
+            ],
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS.items()
+    }
+    manual_case_set = set(manual_cases)
+    assert len(manual_cases) == len(manual_case_set)
+    assert manual_case_set == configured_cases
+
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(
+        configured_cases
+    ):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
         for owner_kind in owner_kinds:
@@ -3579,6 +4442,55 @@ def test_digest_list_metadata_entries_are_validated(tmp_path: Path) -> None:
     )
     assert bad_digest not in errors
     assert "AB" * 32 not in errors
+
+
+def test_hex_list_metadata_entries_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS
+        )
+    ]
+    assert cases
+
+    for index, (gate_name, field) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{field}_hex_entries"
+        root.mkdir()
+        bad_label = f"private-key-{field}"
+        bad_uppercase = "AB" * 32
+        bad_object = {
+            "digest": SHA256,
+            "private_key": f"runtime-only-{field}-key",
+        }
+        payload = gate_summary(gate_name)
+        payload[field] = [bad_label, bad_uppercase, bad_object]
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field}[0] must be 64 lowercase hex characters" in errors
+        assert f"{field}[1] must be 64 lowercase hex characters" in errors
+        assert f"{field}[2] must be 64 lowercase hex characters" in errors
+        assert bad_label not in result_text
+        assert bad_uppercase not in result_text
+        assert "private_key" not in result_text
+        assert bad_object["private_key"] not in result_text
 
 
 def test_digest_list_metadata_entries_must_be_unique_and_sorted(
@@ -5777,7 +6689,7 @@ def test_hex_binding_metadata_without_owner_kind_tether_fails_closed(
 def test_hex_binding_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    cases = [
+    manual_cases = [
         (
             "ai_prescreen",
             "valid_runner_bindings",
@@ -5864,8 +6776,29 @@ def test_hex_binding_metadata_must_match_owner_kind_fingerprints(
         ),
     ]
 
-    for gate_name, metadata_field, owner_kinds, fingerprint_fields in cases:
-        root = tmp_path / f"{gate_name}_{metadata_field}"
+    configured_cases = {
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_FIELDS[
+                metadata_field
+            ],
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS.items()
+    }
+    manual_case_set = set(manual_cases)
+    assert len(manual_cases) == len(manual_case_set)
+    assert manual_case_set == configured_cases
+
+    for gate_name, metadata_field, owner_kinds, fingerprint_fields in sorted(
+        configured_cases
+    ):
+        fingerprint_suffix = "_".join(fingerprint_fields)
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_suffix}"
         root.mkdir()
         payload = gate_summary(gate_name)
         for owner_kind in owner_kinds:
@@ -5937,6 +6870,68 @@ def test_hex_binding_metadata_entries_are_validated(tmp_path: Path) -> None:
     assert "raw_response" not in errors
     assert "runtime-only-body" not in errors
     assert "not-a-binding" not in errors
+
+
+def test_hex_binding_metadata_entries_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field, MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS[field])
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS.keys()
+        )
+    ]
+    assert cases
+
+    for index, (gate_name, field, binding_fields) in enumerate(cases):
+        base_item = copy.deepcopy(gate_summary(gate_name)[field][0])
+        for key, expected_hex_length in sorted(binding_fields.items()):
+            root = tmp_path / f"{index}_{gate_name}_{field}_{key}_binding_entries"
+            root.mkdir()
+            uppercase_value = "AB" * (expected_hex_length // 2)
+            bad_item = copy.deepcopy(base_item)
+            bad_item[key] = uppercase_value
+            bad_item["private_key"] = f"runtime-only-{field}-{key}-key"
+            missing_item = copy.deepcopy(base_item)
+            del missing_item[key]
+            non_object = f"private-key-{field}-{key}"
+            payload = gate_summary(gate_name)
+            payload[field] = [bad_item, missing_item, non_object]
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{field}[0].{key} must be {expected_hex_length} lowercase hex characters"
+                in errors
+            )
+            assert (
+                f"{field}[1].{key} must be {expected_hex_length} lowercase hex characters"
+                in errors
+            )
+            assert f"{field}[2] must be a payload-free binding object" in errors
+            assert (
+                f"{field}[0].<sensitive-key> is not allowed in payload-free binding metadata"
+                in errors
+            )
+            assert uppercase_value not in result_text
+            assert "private_key" not in result_text
+            assert bad_item["private_key"] not in result_text
+            assert non_object not in result_text
 
 
 def test_binding_metadata_entries_must_be_unique_and_sorted(
@@ -6523,6 +7518,49 @@ def test_provider_count_values_metadata_entries_are_positive_ints(
     assert '"3"' not in errors
 
 
+def test_positive_int_list_metadata_entries_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS
+        )
+    ]
+    assert cases
+
+    for index, (gate_name, field) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{field}_positive_int_entries"
+        root.mkdir()
+        bad_string = f"private-key-{field}"
+        bad_object = {"private_key": f"runtime-only-{field}-key"}
+        payload = gate_summary(gate_name)
+        payload[field] = [1, 0, -1, True, bad_string, bad_object]
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        for item_index in range(1, 6):
+            assert f"{field}[{item_index}] must be a positive integer" in errors
+        assert bad_string not in result_text
+        assert "private_key" not in result_text
+        assert bad_object["private_key"] not in result_text
+
+
 def test_provider_count_values_metadata_must_be_unique_and_sorted(
     tmp_path: Path,
 ) -> None:
@@ -6625,6 +7663,40 @@ def test_provider_ids_secret_like_metadata_does_not_echo(tmp_path: Path) -> None
         "provider_ids[0] must not contain non-production markers "
         "['placeholder', 'private']"
     ) in errors
+    assert raw_provider_id not in result_text
+
+
+def test_provider_ids_compact_non_production_marker_does_not_echo(
+    tmp_path: Path,
+) -> None:
+    raw_provider_id = "provider-prodplaceholderreview"
+    payload = gate_summary("reputation")
+    payload["provider_ids"] = [raw_provider_id]
+    add_fingerprint_metadata(
+        payload,
+        kind_name="provider",
+        provider_id=raw_provider_id,
+    )
+    summary = tmp_path / "summary.json"
+    write_json(tmp_path / "reputation.json", payload)
+
+    assert (
+        run_gate(
+            tmp_path,
+            "--require-gate",
+            "reputation",
+            "--summary-out",
+            str(summary),
+        )
+        == 1
+    )
+
+    result_text = summary.read_text(encoding="utf-8")
+    errors = "\n".join(json.loads(result_text)["errors"])
+    assert (
+        "provider_ids[0] must not contain non-production markers ['placeholder']"
+        in errors
+    )
     assert raw_provider_id not in result_text
 
 
@@ -6736,28 +7808,541 @@ def test_string_array_list_metadata_without_owner_kind_tether_fails_closed(
     assert "metrics source-kind tether is not configured for `reputation`" in errors
 
 
+def test_payload_free_metadata_owner_kind_tethers_fail_closed_from_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_kind_maps = {
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_LIST_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS
+        ),
+        "PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS": dict(
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_BINDING_SOURCE_KINDS
+        ),
+    }
+    assert all(source_kind_maps.values())
+
+    for map_name, original_tethers in source_kind_maps.items():
+        for gate_name, field in sorted(original_tethers):
+            root = tmp_path / f"{map_name}_{gate_name}_{field}_missing"
+            root.mkdir()
+            for reset_map_name, reset_tethers in source_kind_maps.items():
+                monkeypatch.setattr(
+                    MODULE,
+                    reset_map_name,
+                    dict(reset_tethers),
+                )
+            monkeypatch.setattr(
+                MODULE,
+                map_name,
+                {
+                    key: value
+                    for key, value in original_tethers.items()
+                    if key != (gate_name, field)
+                },
+            )
+            payload = gate_summary(gate_name)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            errors = "\n".join(
+                json.loads(summary.read_text(encoding="utf-8"))["errors"]
+            )
+            assert (
+                f"{field} source-kind tether is not configured for `{gate_name}`"
+                in errors
+            )
+
+
 def test_string_list_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    payload = gate_summary("reputation")
-    remove_fingerprint_metadata(payload, "provider_id", kind_name="provider")
-    summary = tmp_path / "summary.json"
-    write_json(tmp_path / "reputation.json", payload)
-
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "reputation",
-            "--summary-out",
-            str(summary),
+    cases = [
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS[
+                metadata_field
+            ],
         )
-        == 1
-    )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS.items()
+    ]
 
-    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
-    assert "provider_ids must match recognized artifact fingerprints" in errors
-    assert "provider_count_values must match recognized artifact fingerprints" not in errors
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        for owner_kind in owner_kinds:
+            remove_fingerprint_metadata(
+                payload,
+                fingerprint_field,
+                kind_name=owner_kind,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must match recognized artifact fingerprints" in errors
+
+
+def test_string_array_list_metadata_must_match_owner_kind_fingerprints(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS[
+                metadata_field
+            ],
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS.items()
+    ]
+
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        for owner_kind in owner_kinds:
+            remove_fingerprint_metadata(
+                payload,
+                fingerprint_field,
+                kind_name=owner_kind,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must match recognized artifact fingerprints" in errors
+
+
+def test_string_list_metadata_entries_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, field)
+        for source_kind_map in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS,
+        )
+        for gate_name, field in source_kind_map
+    ]
+    assert cases
+
+    for index, (gate_name, field) in enumerate(sorted(cases)):
+        root = tmp_path / f"{index}_{gate_name}_{field}_string_entries"
+        root.mkdir()
+        bad_string = f" private-key-{field}"
+        bad_object = {"private_key": f"runtime-only-{field}-key"}
+        payload = gate_summary(gate_name)
+        payload[field] = [bad_string, True, bad_object]
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field}[0] must be a canonical string" in errors
+        assert f"{field}[1] must be a canonical string" in errors
+        assert f"{field}[2] must be a canonical string" in errors
+        assert bad_string not in result_text
+        assert "private_key" not in result_text
+        assert bad_object["private_key"] not in result_text
+
+
+def test_required_string_list_metadata_must_cover_configured_values(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, metadata_field, tuple(required_values))
+        for (
+            gate_name,
+            metadata_field,
+        ), required_values in MODULE.PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES.items()
+    ]
+
+    for gate_name, metadata_field, required_values in sorted(cases):
+        assert required_values
+        root = tmp_path / f"{gate_name}_{metadata_field}_missing"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        missing = required_values[0]
+        payload[metadata_field] = [
+            value for value in payload[metadata_field] if value != missing
+        ]
+        count_field = MODULE.PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS.get(
+            (gate_name, metadata_field)
+        )
+        if count_field is not None:
+            count_value = len(set(payload[metadata_field]))
+            payload[count_field] = [count_value]
+            fingerprint_field = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS[
+                    count_field
+                ]
+            )
+            for owner_kind in (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS[
+                    (gate_name, count_field)
+                ]
+            ):
+                add_fingerprint_metadata(
+                    payload,
+                    kind_name=owner_kind,
+                    **{fingerprint_field: count_value},
+                )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must include metadata value `{missing}`" in errors
+
+
+def test_required_string_list_metadata_rejects_unknown_values(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, metadata_field, tuple(required_values))
+        for (
+            gate_name,
+            metadata_field,
+        ), required_values in MODULE.PAYLOAD_FREE_SUMMARY_REQUIRED_STRING_LIST_VALUES.items()
+    ]
+
+    for gate_name, metadata_field, _required_values in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_unknown"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        unknown = f"sorafs_{gate_name}_{metadata_field}_unknown_total"
+        payload[metadata_field] = sorted([*payload[metadata_field], unknown])
+        count_field = MODULE.PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS.get(
+            (gate_name, metadata_field)
+        )
+        fingerprint_metadata = {}
+        if count_field is not None:
+            count_value = len(set(payload[metadata_field]))
+            payload[count_field] = [count_value]
+            count_fingerprint_field = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS[
+                    count_field
+                ]
+            )
+            fingerprint_metadata[count_fingerprint_field] = count_value
+        if (
+            gate_name,
+            metadata_field,
+        ) in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS:
+            source_kinds = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_SOURCE_KINDS[
+                    (gate_name, metadata_field)
+                ]
+            )
+            fingerprint_field = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_ARRAY_LIST_BINDINGS[
+                    metadata_field
+                ]
+            )
+            fingerprint_metadata[fingerprint_field] = payload[metadata_field]
+        else:
+            source_kinds = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS[
+                    (gate_name, metadata_field)
+                ]
+            )
+            fingerprint_field = (
+                MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS[
+                    metadata_field
+                ]
+            )
+            fingerprint_metadata[fingerprint_field] = unknown
+        for source_kind in source_kinds:
+            append_required_artifact(
+                payload,
+                source_kind,
+                suffix=f"{metadata_field}-unknown",
+                sha256="bc" * 32,
+                **fingerprint_metadata,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must not include unknown metadata values" in errors
+        assert unknown not in errors
+
+
+def test_allowed_string_list_metadata_rejects_unknown_values(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, metadata_field, tuple(allowed_values))
+        for (
+            gate_name,
+            metadata_field,
+        ), allowed_values in MODULE.PAYLOAD_FREE_SUMMARY_ALLOWED_STRING_LIST_VALUES.items()
+    ]
+
+    for gate_name, metadata_field, _allowed_values in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_allowed_unknown"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        unknown = f"{metadata_field}-unknown"
+        payload[metadata_field] = sorted([*payload[metadata_field], unknown])
+        fingerprint_field = (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_BINDINGS[
+                metadata_field
+            ]
+        )
+        for source_kind in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_STRING_LIST_SOURCE_KINDS[
+                (gate_name, metadata_field)
+            ]
+        ):
+            append_required_artifact(
+                payload,
+                source_kind,
+                suffix=f"{metadata_field}-unknown",
+                sha256="bc" * 32,
+                **{fingerprint_field: unknown},
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must not include unknown metadata values" in errors
+        assert unknown not in errors
+
+
+def test_string_list_count_bindings_must_match_configured_unique_counts(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate_name, metadata_field, count_field)
+        for (
+            gate_name,
+            metadata_field,
+        ), count_field in MODULE.PAYLOAD_FREE_SUMMARY_STRING_LIST_COUNT_BINDINGS.items()
+    ]
+
+    for gate_name, metadata_field, count_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{count_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        count_value = len(set(payload[metadata_field])) + 1
+        payload[count_field] = [count_value]
+        fingerprint_field = (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS[
+                count_field
+            ]
+        )
+        for owner_kind in (
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS[
+                (gate_name, count_field)
+            ]
+        ):
+            add_fingerprint_metadata(
+                payload,
+                kind_name=owner_kind,
+                **{fingerprint_field: count_value},
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{count_field} must include the unique {metadata_field} count" in errors
+
+
+def test_ordered_list_metadata_must_be_unique_and_sorted_from_config(
+    tmp_path: Path,
+) -> None:
+    def hex_value_before(value: str) -> str:
+        candidate = "00" * (len(value) // 2)
+        if candidate < value:
+            return candidate
+        return "ff" * (len(value) // 2)
+
+    def string_value_before(value: str) -> str:
+        candidate = "aaa-ordered-probe"
+        if candidate < value:
+            return candidate
+        return "zzz-ordered-probe"
+
+    def binding_value_before(field: str, item: dict) -> dict:
+        binding_fields = MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS[field]
+        candidate = copy.deepcopy(item)
+        first_field, expected_hex_length = next(iter(binding_fields.items()))
+        current = candidate[first_field]
+        lower = "00" * (expected_hex_length // 2)
+        candidate[first_field] = (
+            lower if lower < current else "ff" * (expected_hex_length // 2)
+        )
+        return candidate
+
+    def duplicate_and_unsorted_items(field: str, payload: dict) -> tuple[list, list]:
+        first = copy.deepcopy(payload[field][0])
+        duplicate = [copy.deepcopy(first), copy.deepcopy(first)]
+        if field in MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS:
+            other = binding_value_before(field, first)
+            unsorted = [first, other] if first != other else duplicate
+        elif field in MODULE.PAYLOAD_FREE_SUMMARY_POSITIVE_INT_LIST_METADATA_FIELDS:
+            unsorted = [2, 1]
+        elif field in MODULE.PAYLOAD_FREE_SUMMARY_HEX_LIST_METADATA_FIELDS:
+            other = hex_value_before(first)
+            unsorted = [first, other] if other < first else [other, first]
+        else:
+            other = string_value_before(first)
+            unsorted = [first, other] if other < first else [other, first]
+        assert duplicate[0] == duplicate[1]
+        if field in MODULE.PAYLOAD_FREE_SUMMARY_HEX_BINDING_METADATA_FIELDS:
+            assert unsorted[0] != unsorted[1]
+        else:
+            assert unsorted != sorted(unsorted)
+        return duplicate, unsorted
+
+    cases = [
+        (gate.name, field)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_ORDERED_LIST_METADATA_FIELDS
+        )
+    ]
+    assert cases
+
+    for gate_name, field in cases:
+        for suffix, expected_error, mutation_index in (
+            ("duplicate", f"{field} must not contain duplicate metadata entries", 0),
+            ("unsorted", f"{field} must be sorted in canonical order", 1),
+        ):
+            root = tmp_path / f"{gate_name}_{field}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload[field] = duplicate_and_unsorted_items(field, payload)[
+                mutation_index
+            ]
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+            assert expected_error in errors
 
 
 def test_reputation_metrics_metadata_must_match_owner_kind_fingerprints(
@@ -7061,26 +8646,47 @@ def test_positive_int_list_metadata_without_owner_kind_tether_fails_closed(
 def test_positive_int_list_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    payload = gate_summary("reputation")
-    for kind_name in ("publish", "latest"):
-        remove_fingerprint_metadata(payload, "provider_count", kind_name=kind_name)
-    summary = tmp_path / "summary.json"
-    write_json(tmp_path / "reputation.json", payload)
-
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "reputation",
-            "--summary-out",
-            str(summary),
+    cases = [
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_BINDINGS[
+                metadata_field
+            ],
         )
-        == 1
-    )
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_POSITIVE_INT_LIST_SOURCE_KINDS.items()
+    ]
 
-    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
-    assert "provider_count_values must match recognized artifact fingerprints" in errors
-    assert "provider_ids must match recognized artifact fingerprints" not in errors
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        for owner_kind in owner_kinds:
+            remove_fingerprint_metadata(
+                payload,
+                fingerprint_field,
+                kind_name=owner_kind,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must match recognized artifact fingerprints" in errors
 
 
 def test_object_list_metadata_for_gate_passes(tmp_path: Path) -> None:
@@ -7145,18 +8751,20 @@ def test_object_list_metadata_must_match_required_artifact_count(
     tmp_path: Path,
 ) -> None:
     cases = [
-        ("appeal_finance", "valid_multi_peer_runs", "multi_peer_reconciliation"),
-        ("hedging_billing", "valid_billing_cycles", "billing_cycle"),
-        ("moderation_panel", "valid_e2e_runs", "e2e_panel"),
         (
-            "moderation_panel",
-            "valid_evidence_viewer_digest_sets",
-            "evidence_viewer",
-        ),
-        ("reserve_rent", "valid_provider_bakes", "provider_bake"),
+            gate_name,
+            metadata_field,
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS[
+                metadata_field
+            ],
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ) in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
     ]
 
-    for gate_name, metadata_field, required_kind in cases:
+    for gate_name, metadata_field, required_kind in sorted(cases):
         root = tmp_path / f"{gate_name}_{metadata_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
@@ -7291,44 +8899,120 @@ def test_object_list_metadata_owner_kind_tether_drift_fails_closed(
     ) in errors
 
 
+def test_object_list_metadata_missing_owner_kind_tethers_fail_closed_from_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    original_tethers = dict(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS)
+    assert original_tethers
+
+    for gate_name, field in sorted(original_tethers):
+        root = tmp_path / f"{gate_name}_{field}_missing_tether"
+        root.mkdir()
+        monkeypatch.setattr(
+            MODULE,
+            "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS",
+            {
+                key: value
+                for key, value in original_tethers.items()
+                if key != (gate_name, field)
+            },
+        )
+        payload = gate_summary(gate_name)
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{field} source-kind tether is not configured for `{gate_name}`" in errors
+
+
+def test_object_list_metadata_owner_kind_tether_drift_fails_closed_from_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    original_tethers = dict(MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS)
+    cases = []
+    for gate_name, field in sorted(original_tethers):
+        expected_kind = MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_REQUIRED_KIND_COUNTS[
+            field
+        ]
+        alternate_kind = next(
+            (
+                kind
+                for kind in MODULE.GATE_BY_NAME[gate_name].required_kinds
+                if kind != expected_kind
+            ),
+            None,
+        )
+        assert alternate_kind is not None
+        cases.append((gate_name, field, alternate_kind))
+    assert cases
+
+    for gate_name, field, alternate_kind in cases:
+        root = tmp_path / f"{gate_name}_{field}_drifted_tether"
+        root.mkdir()
+        drifted_tethers = dict(original_tethers)
+        drifted_tethers[(gate_name, field)] = alternate_kind
+        monkeypatch.setattr(
+            MODULE,
+            "PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS",
+            drifted_tethers,
+        )
+        payload = gate_summary(gate_name)
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert (
+            f"{field} source-kind tether must match required artifact count "
+            f"kind for `{gate_name}`"
+        ) in errors
+        assert alternate_kind not in errors
+
+
 def test_object_list_metadata_must_match_recognized_artifact_fingerprints(
     tmp_path: Path,
 ) -> None:
     cases = [
         (
-            "appeal_finance",
-            "valid_multi_peer_runs",
-            "multi_peer_reconciliation",
-            "config_digest_hex",
-        ),
-        (
-            "hedging_billing",
-            "valid_billing_cycles",
-            "billing_cycle",
-            "reference_decision_id_hex",
-        ),
-        (
-            "moderation_panel",
-            "valid_e2e_runs",
-            "e2e_panel",
-            "case_digest_hex",
-        ),
-        (
-            "moderation_panel",
-            "valid_evidence_viewer_digest_sets",
-            "evidence_viewer",
-            "audit_digest_hex",
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "provider_bake",
-            "matrix_digest_hex",
-        ),
+            gate_name,
+            metadata_field,
+            source_kind,
+            fingerprint_field,
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ), source_kind in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS.items()
+        for fingerprint_field in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_FINGERPRINT_HEX_BINDINGS[
+            metadata_field
+        ]
     ]
 
-    for gate_name, metadata_field, required_kind, fingerprint_field in cases:
-        root = tmp_path / f"{gate_name}_{metadata_field}"
+    for gate_name, metadata_field, required_kind, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
         remove_fingerprint_metadata(
@@ -7360,42 +9044,54 @@ def test_object_list_metadata_must_match_recognized_artifact_fingerprints(
 def test_object_list_metadata_non_digest_details_must_match_fingerprints(
     tmp_path: Path,
 ) -> None:
+    def replacement_value(metadata_field: str, detail_field: str, current: object) -> object:
+        if detail_field == "cycle_id":
+            return "billing-cycle-2"
+        if detail_field == "bake_id":
+            return "reserve-bake-002"
+        if detail_field == "generated_at_unix":
+            assert isinstance(current, int)
+            return current - 1
+        if isinstance(current, int):
+            return current + 1
+        raise AssertionError(f"unhandled {metadata_field}.{detail_field}")
+
     cases = [
-        ("appeal_finance", "valid_multi_peer_runs", "peer_count", 5),
         (
-            "hedging_billing",
-            "valid_billing_cycles",
-            "cycle_id",
-            "billing-cycle-2",
-        ),
-        ("moderation_panel", "valid_e2e_runs", "validator_count", 5),
-        ("reserve_rent", "valid_provider_bakes", "provider_count", 2),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "scheduled_lifecycle_canary_tick_count",
-            3,
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "scheduled_lifecycle_canary_defaulted_provider_count",
-            2,
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "scheduled_lifecycle_canary_last_tick_at_unix",
-            GENERATED_AT - 1,
-        ),
+            gate_name,
+            metadata_field,
+            detail_field,
+        )
+        for (
+            gate_name,
+            metadata_field,
+        ) in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
+        for detail_field in sorted(
+            (
+                set(
+                    MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[
+                        metadata_field
+                    ].get("strings", ())
+                )
+                - {"deployment_id", "environment"}
+            )
+            | set(
+                MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[
+                    metadata_field
+                ].get("positive_ints", ())
+            )
+        )
     ]
 
-    for index, (gate_name, metadata_field, detail_field, replacement) in enumerate(
-        cases
-    ):
+    for index, (gate_name, metadata_field, detail_field) in enumerate(cases):
         root = tmp_path / f"{index}_{gate_name}_{detail_field}"
         root.mkdir()
         payload = gate_summary(gate_name)
+        replacement = replacement_value(
+            metadata_field,
+            detail_field,
+            payload[metadata_field][0][detail_field],
+        )
         payload[metadata_field][0][detail_field] = replacement
         summary = root / "summary.json"
         write_json(root / f"{gate_name}.json", payload)
@@ -7421,49 +9117,69 @@ def test_object_list_metadata_non_digest_details_must_match_fingerprints(
 def test_object_list_identity_labels_replay_lane_policies_without_echo(
     tmp_path: Path,
 ) -> None:
+    def invalid_labels(
+        gate_name: str,
+        metadata_field: str,
+        key_field: str,
+        policy: dict,
+    ) -> list[tuple[str, str]]:
+        current = gate_summary(gate_name)[metadata_field][0][key_field]
+        assert isinstance(current, str)
+        marker = (
+            "placeholder"
+            if "placeholder" in policy["forbidden_markers"]
+            else sorted(policy["forbidden_markers"])[0]
+        )
+        forbidden_error = (
+            f"{metadata_field}[0].{key_field} must not contain "
+            f"non-production markers {str([marker])}"
+        )
+        prefix = current.rsplit("-", 1)[0]
+        forbidden_labels = [
+            f"{prefix}-prod{marker}review",
+            f"{current}-{marker}",
+        ]
+        for label in forbidden_labels:
+            assert policy["pattern"].fullmatch(label) is not None
+
+        pattern_label = f"{key_field}-prod-private-key"
+        assert policy["pattern"].fullmatch(pattern_label) is None
+        pattern_error = f"{metadata_field}[0].{key_field} {policy['pattern_error']}"
+        return [
+            *((label, forbidden_error) for label in forbidden_labels),
+            (pattern_label, pattern_error),
+        ]
+
     cases = [
         (
-            "hedging_billing",
-            "valid_billing_cycles",
-            "billing_cycle",
-            "cycle_id",
-            "billing-cycle-prod-placeholder",
-            "valid_billing_cycles[0].cycle_id must not contain "
-            "non-production markers ['placeholder']",
-        ),
-        (
-            "hedging_billing",
-            "valid_billing_cycles",
-            "billing_cycle",
-            "cycle_id",
-            "cycle-prod-private-key",
-            "valid_billing_cycles[0].cycle_id must match canonical "
-            "lowercase `billing-cycle-*`",
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "provider_bake",
-            "bake_id",
-            "reserve-bake-prod-placeholder",
-            "valid_provider_bakes[0].bake_id must not contain "
-            "non-production markers ['placeholder']",
-        ),
-        (
-            "reserve_rent",
-            "valid_provider_bakes",
-            "provider_bake",
-            "bake_id",
-            "bake-prod-private-key",
-            "valid_provider_bakes[0].bake_id must match canonical "
-            "lowercase `reserve-bake-*`",
-        ),
+            gate_name,
+            metadata_field,
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS[
+                (gate_name, metadata_field)
+            ],
+            key_field,
+            invalid_label,
+            expected_error,
+        )
+        for (
+            gate_name,
+            metadata_field,
+            key_field,
+        ), policy in sorted(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_STRING_FIELD_POLICIES.items()
+        )
+        for invalid_label, expected_error in invalid_labels(
+            gate_name,
+            metadata_field,
+            key_field,
+            policy,
+        )
     ]
 
     for index, (
         gate_name,
         metadata_field,
-        kind_name,
+        source_kind,
         key_field,
         invalid_label,
         expected_error,
@@ -7474,7 +9190,7 @@ def test_object_list_identity_labels_replay_lane_policies_without_echo(
         payload[metadata_field][0][key_field] = invalid_label
         add_fingerprint_metadata(
             payload,
-            kind_name=kind_name,
+            kind_name=source_kind,
             **{key_field: invalid_label},
         )
         if gate_name == "reserve_rent":
@@ -7555,6 +9271,114 @@ def test_object_list_metadata_entries_are_validated(tmp_path: Path) -> None:
     assert "not-a-run" not in errors
 
 
+def test_object_list_metadata_schema_fields_fail_closed_from_config() -> None:
+    cases = [
+        (
+            gate_name,
+            field,
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field],
+        )
+        for gate_name, field in sorted(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
+        )
+    ]
+    assert cases
+    assert {field for _, field, _ in cases} == set(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS
+    )
+
+    def validate(field: str, schema: dict, item: object) -> str:
+        errors: list[str] = []
+        MODULE.validate_payload_free_object_list_metadata(
+            field,
+            [item],
+            schema,
+            errors,
+        )
+        return "\n".join(errors)
+
+    for gate_name, field, schema in cases:
+        base_item = copy.deepcopy(gate_summary(gate_name)[field][0])
+        secret = f" private_key-runtime-{field}"
+        non_object_errors = validate(field, schema, secret)
+        assert f"{field}[0] must be a payload-free metadata object" in non_object_errors
+        assert secret not in non_object_errors
+
+        item_with_secret_key = copy.deepcopy(base_item)
+        item_with_secret_key["private_key"] = f"runtime-only-{field}-key"
+        secret_key_errors = validate(field, schema, item_with_secret_key)
+        assert (
+            f"{field}[0].<sensitive-key> is not allowed in payload-free object metadata"
+            in secret_key_errors
+        )
+        assert "private_key" not in secret_key_errors
+        assert f"runtime-only-{field}-key" not in secret_key_errors
+
+        for key in sorted(schema.get("strings", frozenset())):
+            item = copy.deepcopy(base_item)
+            item[key] = secret
+            errors = validate(field, schema, item)
+            assert f"{field}[0].{key} must be a canonical string" in errors
+            assert secret not in errors
+
+        for key in sorted(schema.get("positive_ints", frozenset())):
+            item = copy.deepcopy(base_item)
+            item[key] = True
+            errors = validate(field, schema, item)
+            assert f"{field}[0].{key} must be a positive integer" in errors
+
+        for key, expected_hex_length in sorted(schema.get("hex", {}).items()):
+            item = copy.deepcopy(base_item)
+            bad_hex = "AB" * (expected_hex_length // 2)
+            item[key] = bad_hex
+            errors = validate(field, schema, item)
+            assert (
+                f"{field}[0].{key} must be {expected_hex_length} lowercase hex characters"
+                in errors
+            )
+            assert bad_hex not in errors
+
+        for start_key, end_key in schema.get("ordered_int_pairs", ()):
+            item = copy.deepcopy(base_item)
+            item[start_key] = 2
+            item[end_key] = 1
+            errors = validate(field, schema, item)
+            assert f"{field}[0].{end_key} must be >= {start_key}" in errors
+
+
+def test_object_list_metadata_entries_must_not_duplicate_from_config() -> None:
+    cases = [
+        (
+            gate_name,
+            field,
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field],
+        )
+        for gate_name, field in sorted(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
+        )
+    ]
+    assert cases
+    assert {field for _, field, _ in cases} == set(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS
+    )
+
+    for gate_name, field, schema in cases:
+        original = copy.deepcopy(gate_summary(gate_name)[field][0])
+        errors: list[str] = []
+        MODULE.validate_payload_free_object_list_metadata(
+            field,
+            [copy.deepcopy(original), copy.deepcopy(original)],
+            schema,
+            errors,
+        )
+
+        result_text = "\n".join(errors)
+        assert f"{field} must not contain duplicate metadata entries" in result_text
+        for value in original.values():
+            if isinstance(value, str):
+                assert value not in result_text
+
+
 def test_evidence_viewer_digest_set_metadata_requires_every_digest(
     tmp_path: Path,
 ) -> None:
@@ -7619,149 +9443,60 @@ def test_object_list_metadata_entries_must_not_duplicate(tmp_path: Path) -> None
 
 
 def test_object_list_metadata_domain_identities_must_not_duplicate() -> None:
-    other_digest = "bc" * 32
-    third_digest = "cd" * 32
+    def replacement_value(field: str, detail_field: str, current: object) -> object:
+        schema = MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+        if detail_field in schema.get("positive_ints", frozenset()):
+            assert isinstance(current, int)
+            return current + 1
+        if detail_field in schema.get("hex", {}):
+            expected_hex_length = schema["hex"][detail_field]
+            replacement = "bc" * (expected_hex_length // 2)
+            if replacement != current:
+                return replacement
+            return "cd" * (expected_hex_length // 2)
+        if detail_field in schema.get("strings", frozenset()):
+            assert isinstance(current, str)
+            return f"{current}-variant"
+        raise AssertionError(f"unhandled {field}.{detail_field}")
+
+    def duplicate_domain_entries(gate_name: str, field: str) -> list[dict]:
+        schema = MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS[field]
+        identity_fields = set(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_DOMAIN_IDENTITY_FIELDS[field]
+        )
+        candidate_fields = sorted(
+            (
+                set(schema.get("positive_ints", frozenset()))
+                | set(schema.get("hex", {}))
+                | set(schema.get("strings", frozenset()))
+            )
+            - identity_fields
+        )
+        assert candidate_fields
+
+        original = copy.deepcopy(gate_summary(gate_name)[field][0])
+        duplicate_entry = copy.deepcopy(original)
+        detail_field = candidate_fields[0]
+        duplicate_entry[detail_field] = replacement_value(
+            field,
+            detail_field,
+            duplicate_entry[detail_field],
+        )
+        assert duplicate_entry != original
+        return [original, duplicate_entry]
+
     cases = [
         (
-            "valid_multi_peer_runs",
-            [
-                {
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT,
-                    "peer_count": 4,
-                    "validator_count": 4,
-                    "case_count": 2,
-                    "config_digest_hex": SHA256,
-                },
-                {
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT,
-                    "peer_count": 5,
-                    "validator_count": 5,
-                    "case_count": 3,
-                    "config_digest_hex": other_digest,
-                },
-            ],
-        ),
-        (
-            "valid_billing_cycles",
-            [
-                {
-                    "cycle_id": "billing-cycle-1",
-                    "cycle_index": 1,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT,
-                    "policy_digest_hex": SHA256,
-                    "reconciliation_digest_hex": SHA256,
-                    "reference_decision_id_hex": SHA256,
-                    "statement_bundle_digest_hex": SHA256,
-                    "statement_count": 1,
-                },
-                {
-                    "cycle_id": "billing-cycle-1",
-                    "cycle_index": 2,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT + 60,
-                    "policy_digest_hex": SHA256,
-                    "reconciliation_digest_hex": other_digest,
-                    "reference_decision_id_hex": SHA256,
-                    "statement_bundle_digest_hex": third_digest,
-                    "statement_count": 2,
-                },
-            ],
-        ),
-        (
-            "valid_e2e_runs",
-            [
-                {
-                    "case_count": 1,
-                    "case_digest_hex": SHA256,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT,
-                    "peer_count": 4,
-                    "roster_hash_hex": SHA256,
-                    "tally_digest_hex": SHA256,
-                    "validator_count": 4,
-                },
-                {
-                    "case_count": 2,
-                    "case_digest_hex": SHA256,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "generated_at_unix": GENERATED_AT + 60,
-                    "peer_count": 5,
-                    "roster_hash_hex": SHA256,
-                    "tally_digest_hex": SHA256,
-                    "validator_count": 5,
-                },
-            ],
-        ),
-        (
-            "valid_evidence_viewer_digest_sets",
-            [
-                {
-                    "access_log_digest_hex": SHA256,
-                    "audit_digest_hex": SHA256,
-                    "case_digest_hex": SHA256,
-                    "legal_hold_receipt_digest_hex": SHA256,
-                    "roster_hash_hex": SHA256,
-                    "session_manifest_digest_hex": SHA256,
-                    "transparency_report_digest_hex": SHA256,
-                    "watermark_metadata_digest_hex": SHA256,
-                },
-                {
-                    "access_log_digest_hex": other_digest,
-                    "audit_digest_hex": third_digest,
-                    "case_digest_hex": SHA256,
-                    "legal_hold_receipt_digest_hex": other_digest,
-                    "roster_hash_hex": SHA256,
-                    "session_manifest_digest_hex": third_digest,
-                    "transparency_report_digest_hex": other_digest,
-                    "watermark_metadata_digest_hex": third_digest,
-                },
-            ],
-        ),
-        (
-            "valid_provider_bakes",
-            [
-                {
-                    "bake_id": "reserve-bake-001",
-                    "completed_at_unix": GENERATED_AT,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "ledger_digest_hex": SHA256,
-                    "matrix_digest_hex": SHA256,
-                    "policy_digest_hex": SHA256,
-                    "provider_count": 3,
-                    "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-                    "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT - 30,
-                    "scheduled_lifecycle_canary_tick_count": 2,
-                    "started_at_unix": GENERATED_AT - 60,
-                },
-                {
-                    "bake_id": "reserve-bake-001",
-                    "completed_at_unix": GENERATED_AT + 120,
-                    "deployment_id": DEPLOYMENT_ID,
-                    "environment": ENVIRONMENT,
-                    "ledger_digest_hex": other_digest,
-                    "matrix_digest_hex": third_digest,
-                    "policy_digest_hex": SHA256,
-                    "provider_count": 4,
-                    "scheduled_lifecycle_canary_defaulted_provider_count": 1,
-                    "scheduled_lifecycle_canary_last_tick_at_unix": GENERATED_AT + 90,
-                    "scheduled_lifecycle_canary_tick_count": 2,
-                    "started_at_unix": GENERATED_AT + 60,
-                },
-            ],
-        ),
+            gate_name,
+            field,
+            duplicate_domain_entries(gate_name, field),
+        )
+        for (gate_name, field) in sorted(
+            MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_SOURCE_KINDS
+        )
     ]
 
-    for field, entries in cases:
+    for _gate_name, field, entries in cases:
         errors: list[str] = []
         MODULE.validate_payload_free_object_list_metadata(
             field,
@@ -8611,6 +10346,81 @@ def test_deployment_context_metadata_entries_are_validated(
     assert "runtime-only-key-material" not in errors
 
 
+def test_object_metadata_fields_fail_closed_from_config(tmp_path: Path) -> None:
+    cases = [
+        (gate.name, field, tuple(sorted(object_fields)))
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, object_fields in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+    ]
+    assert cases
+    assert {field for _, field, _ in cases} == set(
+        MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS
+    )
+
+    for index, (gate_name, field, object_fields) in enumerate(cases):
+        invalid_value = f"runtime-only-{field}-secret"
+        root = tmp_path / f"{index}_{gate_name}_{field}_non_object"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload[field] = invalid_value
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field} must be a payload-free metadata object" in errors
+        assert invalid_value not in result_text
+
+        invalid_required_value = f" runtime-only-{field}-deployment"
+        private_value = f"runtime-only-{field}-key-material"
+        root = tmp_path / f"{index}_{gate_name}_{field}_invalid_entries"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload[field] = {
+            object_fields[0]: invalid_required_value,
+            f"bad\n{field}": f"runtime-only-{field}-control-key",
+            "private_key": private_value,
+        }
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert f"{field} keys must be canonical strings" in errors
+        assert (
+            f"{field}.<sensitive-key> is not allowed in payload-free object metadata"
+            in errors
+        )
+        for object_field in object_fields:
+            assert f"{field}.{object_field} must be a canonical string" in errors
+        assert invalid_required_value.strip() not in result_text
+        assert private_value not in result_text
+        assert "private_key" not in result_text
+
+
 def test_payload_free_deployment_context_rejects_nonproduction_without_echo(
     tmp_path: Path,
 ) -> None:
@@ -8630,6 +10440,22 @@ def test_payload_free_deployment_context_rejects_nonproduction_without_echo(
             "valid_multi_peer_runs[0].deployment_id must not contain "
             "non-production deployment markers ['staging']",
             "appeal-finance-staging-a",
+        ),
+        (
+            "moderation_panel",
+            "moderation-panel-stagingready-a",
+            ENVIRONMENT,
+            "deployment_context.deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "moderation-panel-stagingready-a",
+        ),
+        (
+            "moderation_panel",
+            "moderation-panel-staging-b",
+            ENVIRONMENT,
+            "valid_e2e_runs[0].deployment_id must not contain "
+            "non-production deployment markers ['staging']",
+            "moderation-panel-staging-b",
         ),
         (
             "hedging_billing",
@@ -8679,6 +10505,131 @@ def test_payload_free_deployment_context_rejects_nonproduction_without_echo(
         errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
         assert expected_error in errors
         assert raw_label not in errors
+
+
+def test_payload_free_deployment_context_surfaces_reject_nonproduction_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, field, False)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, object_fields in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+        and {"deployment_id", "environment"} <= set(object_fields)
+    ]
+    cases.extend(
+        (gate.name, field, True)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, schema in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+        and {"deployment_id", "environment"} <= set(schema.get("strings", frozenset()))
+    )
+    assert cases
+
+    for index, (gate_name, field, is_object_list) in enumerate(cases):
+        path = f"{field}[0]" if is_object_list else field
+        for suffix, key, value, expected_error in (
+            (
+                "deployment_id",
+                "deployment_id",
+                f"{gate_name.replace('_', '-')}-staging-a",
+                f"{path}.deployment_id must not contain "
+                "non-production deployment markers ['staging']",
+            ),
+            (
+                "environment",
+                "environment",
+                "dev",
+                f"{path}.environment must be production",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{field}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            metadata = payload[field][0] if is_object_list else payload[field]
+            assert isinstance(metadata, dict)
+            metadata[key] = value
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert value not in result_text
+
+
+def test_payload_free_deployment_context_surfaces_must_match_artifacts_from_config(
+    tmp_path: Path,
+) -> None:
+    object_field_cases = [
+        (gate.name, field, False)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, object_fields in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+        and {"deployment_id", "environment"} <= set(object_fields)
+    ]
+    object_list_field_cases = [
+        (gate.name, field, True)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field, schema in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.items()
+        if field in MODULE.GATE_METADATA_FIELDS[gate.name]
+        and {"deployment_id", "environment"} <= set(schema.get("strings", frozenset()))
+    ]
+    cases = object_field_cases + object_list_field_cases
+    assert cases
+    assert {field for _, field, _ in object_field_cases} == {
+        field
+        for field, object_fields in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_METADATA_FIELDS.items()
+        if {"deployment_id", "environment"} <= set(object_fields)
+    }
+    assert {field for _, field, _ in object_list_field_cases} == {
+        field
+        for field, schema in MODULE.PAYLOAD_FREE_SUMMARY_OBJECT_LIST_METADATA_FIELDS.items()
+        if {"deployment_id", "environment"} <= set(schema.get("strings", frozenset()))
+    }
+
+    for index, (gate_name, field, is_object_list) in enumerate(cases):
+        mismatched_deployment_id = (
+            f"sorafs-mainnet-{index:02d}-{gate_name.replace('_', '-')}"
+        )
+        root = tmp_path / f"{index}_{gate_name}_{field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        metadata = payload[field][0] if is_object_list else payload[field]
+        assert isinstance(metadata, dict)
+        metadata["deployment_id"] = mismatched_deployment_id
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert (
+            f"{gate_name} deployment context must match across artifacts and metadata"
+            in errors
+        )
+        assert mismatched_deployment_id not in result_text
 
 
 def test_object_list_metadata_deployment_context_mismatch_fails(
@@ -8903,34 +10854,105 @@ def test_scalar_metadata_without_owner_kind_tether_fails_closed(
     assert "snapshot_id_hex source-kind tether is not configured for `reputation`" in errors
 
 
+def test_scalar_hex_metadata_entries_fail_closed_from_config(tmp_path: Path) -> None:
+    cases = [
+        (
+            gate.name,
+            field,
+            MODULE.PAYLOAD_FREE_SUMMARY_HEX_METADATA_LENGTHS[field],
+        )
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for field in sorted(
+            MODULE.GATE_METADATA_FIELDS[gate.name]
+            & MODULE.PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS
+        )
+    ]
+    assert cases
+    assert {field for _, field, _ in cases} == set(
+        MODULE.PAYLOAD_FREE_SUMMARY_STRING_METADATA_FIELDS
+    )
+
+    for index, (gate_name, field, expected_hex_length) in enumerate(cases):
+        for suffix, value in (
+            ("malformed", f"private-key-{field}"),
+            ("uppercase", "AB" * (expected_hex_length // 2)),
+            ("object", {"private_key": f"runtime-only-{field}-key"}),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{field}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload[field] = value
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"{field} must be {expected_hex_length} lowercase hex characters"
+                in errors
+            )
+            if isinstance(value, str):
+                assert value not in result_text
+            else:
+                assert "private_key" not in result_text
+                assert value["private_key"] not in result_text
+
+
 def test_scalar_metadata_must_match_owner_kind_fingerprints(
     tmp_path: Path,
 ) -> None:
-    payload = gate_summary("reputation")
-    for kind_name in ("publish", "latest"):
-        remove_fingerprint_metadata(
-            payload,
-            "snapshot_id_hex",
-            "merkle_root_hex",
-            kind_name=kind_name,
+    cases = [
+        (
+            gate_name,
+            metadata_field,
+            owner_kinds,
+            MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_BINDINGS[
+                metadata_field
+            ],
         )
-    summary = tmp_path / "summary.json"
-    write_json(tmp_path / "reputation.json", payload)
+        for (
+            gate_name,
+            metadata_field,
+        ), owner_kinds in MODULE.PAYLOAD_FREE_SUMMARY_FINGERPRINT_HEX_SCALAR_SOURCE_KINDS.items()
+    ]
 
-    assert (
-        run_gate(
-            tmp_path,
-            "--require-gate",
-            "reputation",
-            "--summary-out",
-            str(summary),
+    for gate_name, metadata_field, owner_kinds, fingerprint_field in sorted(cases):
+        root = tmp_path / f"{gate_name}_{metadata_field}_{fingerprint_field}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        for owner_kind in owner_kinds:
+            remove_fingerprint_metadata(
+                payload,
+                fingerprint_field,
+                kind_name=owner_kind,
+            )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
         )
-        == 1
-    )
 
-    errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
-    assert "snapshot_id_hex must match recognized artifact fingerprints" in errors
-    assert "merkle_root_hex must match recognized artifact fingerprints" in errors
+        errors = "\n".join(json.loads(summary.read_text(encoding="utf-8"))["errors"])
+        assert f"{metadata_field} must match recognized artifact fingerprints" in errors
 
 
 def test_reputation_top_level_hex_metadata_is_validated(tmp_path: Path) -> None:
@@ -9117,6 +11139,289 @@ def test_extra_required_row_field_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_required_row_state_fields_fail_closed_from_config(tmp_path: Path) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for field, expected_error in (
+            ("present", f"{gate_name}.required.{kind_name}.present must be true"),
+            ("valid", f"{gate_name}.required.{kind_name}.valid must be true"),
+            (
+                "artifact_count",
+                f"{gate_name}.required.{kind_name}.artifact_count must be positive",
+            ),
+        ):
+            forged_value = f"runtime-only-required-row-{field}-{index:03d}"
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{field}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            payload["required"][kind_name][field] = forged_value
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert forged_value not in result_text
+
+
+def test_required_row_presence_and_shape_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, mutate, forged_value in (
+            (
+                "missing",
+                lambda payload: payload["required"].pop(kind_name),
+                None,
+            ),
+            (
+                "non_object",
+                lambda payload: payload["required"].__setitem__(
+                    kind_name,
+                    f"runtime-only-required-row-object-{index:03d}",
+                ),
+                f"runtime-only-required-row-object-{index:03d}",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert f"{gate_name}.required.{kind_name} must be an object" in errors
+            if forged_value is not None:
+                assert forged_value not in result_text
+
+
+def test_required_and_recognized_error_lists_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for suffix, mutate, expected_error in (
+            (
+                "row",
+                lambda payload, error_text: payload["required"][kind_name].__setitem__(
+                    "errors",
+                    [error_text],
+                ),
+                f"{gate_name}.required.{kind_name}.errors must be empty",
+            ),
+            (
+                "required_artifact",
+                lambda payload, error_text: payload["required"][kind_name][
+                    "artifacts"
+                ][0].__setitem__(
+                    "errors",
+                    [error_text],
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].errors must be empty",
+            ),
+            (
+                "recognized_artifact",
+                lambda payload, error_text: payload["recognized_artifacts"][
+                    next(
+                        artifact_index
+                        for artifact_index, artifact in enumerate(
+                            payload["recognized_artifacts"]
+                        )
+                        if artifact["kind"] == kind_name
+                    )
+                ].__setitem__(
+                    "errors",
+                    [error_text],
+                ),
+                "recognized_artifacts[{index}].errors must be empty",
+            ),
+        ):
+            forged_error = f"runtime-only-private-key-material-{index:03d}-{suffix}"
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload, forged_error)
+            recognized_index = next(
+                (
+                    artifact_index
+                    for artifact_index, artifact in enumerate(
+                        payload["recognized_artifacts"]
+                    )
+                    if isinstance(artifact, dict) and artifact.get("kind") == kind_name
+                ),
+                None,
+            )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            if suffix == "recognized_artifact":
+                assert recognized_index is not None
+                expected = expected_error.format(index=recognized_index)
+            else:
+                expected = expected_error
+            assert expected in errors
+            assert forged_error not in result_text
+
+
+def test_required_and_recognized_malformed_error_lists_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    def set_required_row_errors(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int | None:
+        payload["required"][kind_name]["errors"] = value
+        return None
+
+    def set_required_artifact_errors(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int | None:
+        payload["required"][kind_name]["artifacts"][0]["errors"] = value
+        return None
+
+    def set_recognized_artifact_errors(
+        payload: dict,
+        kind_name: str,
+        value: object,
+    ) -> int:
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+        )
+        payload["recognized_artifacts"][recognized_index]["errors"] = value
+        return recognized_index
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for surface, mutate, expected_path in (
+            (
+                "row",
+                set_required_row_errors,
+                f"{gate_name}.required.{kind_name}.errors",
+            ),
+            (
+                "required_artifact",
+                set_required_artifact_errors,
+                f"{gate_name}.required.{kind_name}.artifacts[0].errors",
+            ),
+            (
+                "recognized_artifact",
+                set_recognized_artifact_errors,
+                "recognized_artifacts[{index}].errors",
+            ),
+        ):
+            for shape, malformed_value, expected_suffix in (
+                (
+                    "scalar",
+                    f"runtime-only-private-key-error-list-{index:03d}-{surface}",
+                    "must be an empty error list",
+                ),
+                (
+                    "noncanonical",
+                    [
+                        f"runtime-only-private-key-error-list-{index:03d}-{surface}\nforged"
+                    ],
+                    "must contain only canonical strings",
+                ),
+            ):
+                root = tmp_path / f"{index}_{gate_name}_{kind_name}_{surface}_{shape}"
+                root.mkdir()
+                payload = gate_summary(gate_name)
+                recognized_index = mutate(payload, kind_name, malformed_value)
+                summary = root / "summary.json"
+                write_json(root / f"{gate_name}.json", payload)
+
+                assert (
+                    run_gate(
+                        root,
+                        "--require-gate",
+                        gate_name,
+                        "--summary-out",
+                        str(summary),
+                    )
+                    == 1
+                )
+
+                result_text = summary.read_text(encoding="utf-8")
+                errors = "\n".join(json.loads(result_text)["errors"])
+                if surface == "recognized_artifact":
+                    assert recognized_index is not None
+                    path = expected_path.format(index=recognized_index)
+                else:
+                    path = expected_path
+                assert f"{path} {expected_suffix}" in errors
+                if isinstance(malformed_value, list):
+                    assert malformed_value[0] not in result_text
+                else:
+                    assert malformed_value not in result_text
 
 
 def test_recognized_artifact_count_mismatch_fails(tmp_path: Path) -> None:
@@ -9427,6 +11732,107 @@ def test_required_and_recognized_artifact_status_must_be_successful(
     assert "failed" not in errors
 
 
+def test_required_and_recognized_artifact_statuses_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        forged_status = f"runtime-only-status-{index:03d}"
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload["required"][kind_name]["artifacts"][0]["status"] = forged_status
+        payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+            and artifact["path"]
+            == payload["required"][kind_name]["artifacts"][0]["path"]
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts[0].status "
+            "must be a successful status"
+            in errors
+        )
+        assert (
+            f"recognized_artifacts[{recognized_index}].status "
+            "must be a successful status"
+            in errors
+        )
+        assert forged_status not in result_text
+
+
+def test_required_and_recognized_artifact_valid_markers_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        forged_valid = f"runtime-only-valid-{index:03d}"
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        payload["required"][kind_name]["artifacts"][0]["valid"] = forged_valid
+        payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+            and artifact["path"]
+            == payload["required"][kind_name]["artifacts"][0]["path"]
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts[0].valid must be true"
+            in errors
+        )
+        assert f"recognized_artifacts[{recognized_index}].valid must be true" in errors
+        assert forged_valid not in result_text
+
+
 def test_required_artifact_extra_fields_fail(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_kind = payload["required_kinds"][0]
@@ -9493,6 +11899,75 @@ def test_required_artifact_schema_must_match_required_evidence_schema(
     assert "sorafs.shadow.schema.v1" not in errors
 
 
+def test_required_kind_schema_bindings_fail_closed_from_config(tmp_path: Path) -> None:
+    cases = [
+        (gate.name, kind_name, schema)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name, schema in MODULE.GATE_REQUIRED_KIND_SCHEMAS[gate.name].items()
+    ]
+    assert cases
+    assert set(cases) == {
+        (
+            gate.name,
+            kind_name,
+            MODULE.GATE_REQUIRED_KIND_SCHEMAS[gate.name][kind_name],
+        )
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    }
+
+    for index, (gate_name, kind_name, _schema) in enumerate(cases):
+        forged_schema = f"sorafs.private.runtime.schema.{index:03d}.v1"
+        for suffix, mutate, expected_error in (
+            (
+                "row",
+                lambda payload: payload["required"][kind_name].__setitem__(
+                    "schema",
+                    forged_schema,
+                ),
+                f"{gate_name}.required.{kind_name}.schema "
+                "must match required evidence schema",
+            ),
+            (
+                "artifact",
+                lambda payload: payload["required"][kind_name]["artifacts"][
+                    0
+                ].__setitem__(
+                    "schema",
+                    forged_schema,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].schema "
+                "must match required evidence schema",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload)
+            if suffix == "artifact":
+                payload["recognized_artifacts"] = recognized_artifacts_from_required(
+                    payload
+                )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert forged_schema not in result_text
+
+
 def test_required_artifact_kind_mismatch_fails(tmp_path: Path) -> None:
     payload = gate_summary("gateway_load")
     first_kind = payload["required_kinds"][0]
@@ -9500,6 +11975,72 @@ def test_required_artifact_kind_mismatch_fails(tmp_path: Path) -> None:
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_required_and_recognized_artifact_kind_labels_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        forged_kind = f"runtime_only_kind_{index:03d}"
+        for suffix, mutate, expected_error in (
+            (
+                "required",
+                lambda payload: payload["required"][kind_name]["artifacts"][
+                    0
+                ].__setitem__(
+                    "kind",
+                    forged_kind,
+                ),
+                f"{gate_name}.required.{kind_name}.artifacts[0].kind "
+                "must match required row kind",
+            ),
+            (
+                "recognized",
+                lambda payload: payload["recognized_artifacts"][
+                    next(
+                        artifact_index
+                        for artifact_index, artifact in enumerate(
+                            payload["recognized_artifacts"]
+                        )
+                        if artifact["kind"] == kind_name
+                    )
+                ].__setitem__(
+                    "kind",
+                    forged_kind,
+                ),
+                "kind must be part of the full "
+                f"`{gate_name}` gate contract",
+            ),
+        ):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{suffix}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            mutate(payload)
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert expected_error in errors
+            assert forged_kind not in result_text
 
 
 def test_required_artifact_duplicate_paths_fail(tmp_path: Path) -> None:
@@ -9535,6 +12076,62 @@ def test_required_artifact_duplicate_paths_fail(tmp_path: Path) -> None:
     errors = "\n".join(result["errors"])
     assert ".artifacts must not duplicate artifact paths" in errors
     assert "recognized_artifacts must not duplicate artifact paths" in errors
+
+
+def test_required_artifact_duplicate_identities_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        duplicate = copy.deepcopy(payload["required"][kind_name]["artifacts"][0])
+        payload["required"][kind_name]["artifacts"].append(duplicate)
+        payload["required"][kind_name]["artifact_count"] = len(
+            payload["required"][kind_name]["artifacts"]
+        )
+        payload["recognized_artifacts"] = recognized_artifacts_from_required(payload)
+        payload["recognized_artifact_count"] = len(payload["recognized_artifacts"])
+        payload["evidence_file_count"] = len(
+            {
+                artifact["path"]
+                for artifact in payload["recognized_artifacts"]
+                if isinstance(artifact, dict)
+            }
+        )
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result = json.loads(summary.read_text(encoding="utf-8"))
+        errors = "\n".join(result["errors"])
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts "
+            "must not duplicate artifact paths"
+            in errors
+        )
+        assert (
+            f"{gate_name}.required.{kind_name}.artifacts "
+            "must not duplicate artifact identities"
+            in errors
+        )
 
 
 def test_recognized_artifact_extra_fields_fail(tmp_path: Path) -> None:
@@ -9603,6 +12200,52 @@ def test_recognized_artifacts_must_match_required_artifact_identities(
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
 
 
+def test_recognized_artifact_identity_drift_fails_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        root = tmp_path / f"{index}_{gate_name}_{kind_name}"
+        root.mkdir()
+        payload = gate_summary(gate_name)
+        required_artifact = payload["required"][kind_name]["artifacts"][0]
+        recognized_index = next(
+            artifact_index
+            for artifact_index, artifact in enumerate(payload["recognized_artifacts"])
+            if artifact["kind"] == kind_name
+            and artifact["path"] == required_artifact["path"]
+            and artifact["sha256"] == required_artifact["sha256"]
+        )
+        forged_digest = f"{(index + 1) % 256:02x}" * 32
+        if forged_digest == required_artifact["sha256"]:
+            forged_digest = "cd" * 32
+        payload["recognized_artifacts"][recognized_index]["sha256"] = forged_digest
+        summary = root / "summary.json"
+        write_json(root / f"{gate_name}.json", payload)
+
+        assert (
+            run_gate(
+                root,
+                "--require-gate",
+                gate_name,
+                "--summary-out",
+                str(summary),
+            )
+            == 1
+        )
+
+        result_text = summary.read_text(encoding="utf-8")
+        errors = "\n".join(json.loads(result_text)["errors"])
+        assert "recognized_artifacts must match required artifact identities" in errors
+        assert forged_digest not in result_text
+
+
 def test_recognized_artifacts_must_match_required_artifact_metadata(
     tmp_path: Path,
 ) -> None:
@@ -9615,6 +12258,71 @@ def test_recognized_artifacts_must_match_required_artifact_metadata(
     write_json(tmp_path / "gateway_load.json", payload)
 
     assert run_gate(tmp_path, "--require-gate", "gateway_load") == 1
+
+
+def test_recognized_artifact_metadata_bindings_fail_closed_from_config(
+    tmp_path: Path,
+) -> None:
+    cases = [
+        (gate.name, kind_name)
+        for gate in MODULE.GATE_SUMMARY_KINDS
+        for kind_name in gate.required_kinds
+    ]
+    assert cases
+
+    for index, (gate_name, kind_name) in enumerate(cases):
+        for metadata_field in ("schema", "status", "fingerprint"):
+            root = tmp_path / f"{index}_{gate_name}_{kind_name}_{metadata_field}"
+            root.mkdir()
+            payload = gate_summary(gate_name)
+            required_artifact = payload["required"][kind_name]["artifacts"][0]
+            recognized_index = next(
+                artifact_index
+                for artifact_index, artifact in enumerate(
+                    payload["recognized_artifacts"]
+                )
+                if artifact["kind"] == kind_name
+                and artifact["path"] == required_artifact["path"]
+                and artifact["sha256"] == required_artifact["sha256"]
+            )
+            recognized_artifact = payload["recognized_artifacts"][recognized_index]
+            if metadata_field == "schema":
+                forged_value = f"sorafs.private.runtime.schema.{index:03d}.v1"
+                recognized_artifact["schema"] = forged_value
+            elif metadata_field == "status":
+                forged_value = "verified"
+                assert required_artifact["status"] != forged_value
+                recognized_artifact["status"] = forged_value
+            else:
+                forged_value = f"runtime-only-fingerprint-{index:03d}"
+                recognized_artifact["fingerprint"] = dict(
+                    recognized_artifact["fingerprint"]
+                )
+                recognized_artifact["fingerprint"]["aggregate_binding_nonce"] = (
+                    forged_value
+                )
+            summary = root / "summary.json"
+            write_json(root / f"{gate_name}.json", payload)
+
+            assert (
+                run_gate(
+                    root,
+                    "--require-gate",
+                    gate_name,
+                    "--summary-out",
+                    str(summary),
+                )
+                == 1
+            )
+
+            result_text = summary.read_text(encoding="utf-8")
+            errors = "\n".join(json.loads(result_text)["errors"])
+            assert (
+                f"recognized_artifacts[{recognized_index}].{metadata_field} "
+                "must match the required artifact metadata"
+                in errors
+            )
+            assert forged_value not in result_text
 
 
 def test_recognized_artifacts_duplicate_paths_fail(tmp_path: Path) -> None:
@@ -9894,6 +12602,17 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
 
     errors = []
     ready_summary = copy.deepcopy(summary)
+    ready_summary["deployment"]["deployment_id"] = "gateway-stagingready-a"
+    MODULE.validate_aggregate_summary_output(ready_summary, ("gateway_load",), errors)
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary deployment_id must not contain non-production "
+        "deployment markers ['staging']"
+        in diagnostics
+    )
+
+    errors = []
+    ready_summary = copy.deepcopy(summary)
     ready_summary["required"]["gateway_load"]["deployment_id"] = (
         "sorafs-mainnet-2026-07"
     )
@@ -10023,7 +12742,7 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
         "environment": ENVIRONMENT,
         "private_key": "runtime-only-key-material",
     }
-    summary["errors"] = ["bad\nerror"]
+    summary["errors"] = ["bad\nerror", "bad\u200derror", "bad\u202eerror"]
     MODULE.validate_aggregate_summary_output(summary, ("gateway_load",), errors)
     diagnostics = "\n".join(errors)
     assert (
@@ -10046,6 +12765,79 @@ def test_aggregate_summary_output_shape_is_validated(tmp_path: Path) -> None:
     assert "private_key" not in diagnostics
     assert "runtime-only-key-material" not in diagnostics
     assert "bad\nerror" not in diagnostics
+    assert "bad\u200derror" not in diagnostics
+    assert "bad\u202eerror" not in diagnostics
+
+
+def test_aggregate_summary_output_rejects_overcounted_ready_inventory(
+    tmp_path: Path,
+) -> None:
+    write_gate(tmp_path, "gateway_load")
+    options = MODULE.ValidationOptions(
+        now_unix=NOW_UNIX,
+        max_summary_artifact_age_secs=MODULE.DEFAULT_MAX_SUMMARY_ARTIFACT_AGE_SECS,
+        deployment_id=DEPLOYMENT_ID,
+        environment=ENVIRONMENT,
+    )
+    summary, build_errors = MODULE.build_summary(
+        [tmp_path],
+        [],
+        ("gateway_load",),
+        options,
+        None,
+    )
+    assert build_errors == []
+    assert summary["status"] == "ready"
+
+    errors: list[str] = []
+    over_file_count = copy.deepcopy(summary)
+    over_file_count["recognized_summary_count"] = (
+        over_file_count["summary_file_count"] + 1
+    )
+    MODULE.validate_aggregate_summary_output(
+        over_file_count,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary recognized_summary_count must not exceed summary_file_count"
+        in diagnostics
+    )
+    assert (
+        "aggregate summary ready recognized_summary_count must match required gate count"
+        in diagnostics
+    )
+
+    errors = []
+    over_required_count = copy.deepcopy(summary)
+    over_required_count["summary_file_count"] = 3
+    over_required_count["recognized_summary_count"] = 2
+    MODULE.validate_aggregate_summary_output(
+        over_required_count,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert (
+        "aggregate summary recognized_summary_count must not exceed required gate count"
+        in diagnostics
+    )
+
+    errors = []
+    unknown_row = copy.deepcopy(summary)
+    unknown_row["required"]["shadow_gate"] = copy.deepcopy(
+        unknown_row["required"]["gateway_load"]
+    )
+    MODULE.validate_aggregate_summary_output(
+        unknown_row,
+        ("gateway_load",),
+        errors,
+    )
+    diagnostics = "\n".join(errors)
+    assert "aggregate summary required rows must match requested gates" in diagnostics
+    assert "aggregate summary required rows must use known gate names" in diagnostics
+    assert "shadow_gate" not in diagnostics
 
 
 def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> None:
@@ -10097,7 +12889,7 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     summary["required"]["gateway_load"]["valid"] = False
     summary["required"]["gateway_load"]["errors"] = []
     summary["required"]["gateway_load"]["sha256"] = "AB" * 32
-    summary["required"]["gateway_load"]["thresholds"] = {"bad\nkey": False}
+    summary["required"]["gateway_load"]["thresholds"] = {"bad\u200dkey": False}
     summary["required"]["gateway_load"]["evidence_file_count"] = None
     summary["required"]["gateway_load"]["recognized_artifact_count"] = "1"
     summary["required"]["gateway_load"]["artifact_count"] = False
@@ -10106,7 +12898,7 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
     summary["required"]["gateway_load"]["oldest_generated_at_unix"] = 0
     summary["required"]["gateway_load"]["newest_generated_at_unix"] = False
     summary["required"]["gateway_load"]["deployment_id"] = " runtime-only-deployment"
-    summary["required"]["gateway_load"]["environment"] = "prod\nsecret"
+    summary["required"]["gateway_load"]["environment"] = "prod\u202esecret"
     summary["required"]["reputation"]["present"] = True
     summary["required"]["reputation"]["private_key"] = "runtime-only-key-material"
     MODULE.validate_aggregate_required_row_output(
@@ -10189,6 +12981,8 @@ def test_aggregate_required_row_output_shape_is_validated(tmp_path: Path) -> Non
         "reputation aggregate required row <sensitive-key> is not allowed"
         in diagnostics
     )
+    assert "bad\u200dkey" not in diagnostics
+    assert "prod\u202esecret" not in diagnostics
     assert (
         "reputation aggregate missing row errors must match the deterministic missing summary diagnostic"
         in diagnostics

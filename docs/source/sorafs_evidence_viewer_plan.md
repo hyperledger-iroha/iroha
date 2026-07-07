@@ -97,11 +97,12 @@ missing browser/streaming viewer service.
   missing access event coverage, long-lived segment URLs, private viewer
   material, and incomplete watermark/access-log controls.
 - `scripts/build_sorafs_evidence_viewer_canary.py` builds the payload-free
-  `evidence_viewer` canary from reviewed deployment facts, requires every
-  positive control claim explicitly, forces raw evidence/session-token/signed
-  URL/watermark-secret/body flags to `false`, requires reviewed
-  reviewed `moderation-viewer-session-*` `--viewer-session` labels whose unique
-  inventory matches `--session-count` and rejects non-production markers,
+  `evidence_viewer` canary from reviewed deployment facts, rejects unreviewed
+  `--deployment-id` and `--environment` values before checker prevalidation,
+  requires every positive control claim explicitly, forces raw
+  evidence/session-token/signed URL/watermark-secret/body flags to `false`,
+  requires reviewed `moderation-viewer-session-*` `--viewer-session` labels
+  whose unique inventory matches `--session-count` and rejects non-production markers,
   emits `role_count`, `security_control_count`, `access_event_kind_count`, and
   `export_target_count` from the reviewed role/control/event/export inventories
   before checker prevalidation, requires explicit audit-log tamper rejection and

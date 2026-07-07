@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_exception,
     render_checker_summary,
     resolve_checker_preflight_path,
+    validate_checker_rendered_paths,
     validate_checker_summary_output,
     write_checker_summary,
 )
@@ -33,8 +35,13 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_paths import validate_evidence_parent_chain  # noqa: E402
 from sorafs_path_identity import (  # noqa: E402
+    diagnostic_text_is_canonical,
     error_diagnostic_label,
     path_diagnostic_label,
+)
+from sorafs_runner_preflight import (  # noqa: E402
+    is_sensitive_path_component,
+    plan_rendered_path_is_safe,
 )
 
 
@@ -65,6 +72,17 @@ HEDGING_FIXTURE_ROOT = Path("fixtures") / "sorafs_manifest" / "hedging"
 HEDGING_FIXTURE_MANIFEST_PATH = HEDGING_FIXTURE_ROOT / "fixture_manifest.json"
 VALIDATED_NORITO_PATH = "_validated_norito_path"
 VALIDATED_JSON_PATH = "_validated_json_path"
+INVALID_FIXTURE_NAME_LABEL = "<invalid-fixture-name>"
+UNSAFE_CHECKER_PATH_LABEL = "<unsafe-path>"
+FIXTURE_PATH_DIAGNOSTIC = (
+    "fixture path must be a safe repository-relative path under the hedging fixture root"
+)
+SENSITIVE_JSON_FIELD_LABEL = "<sensitive-field>"
+NON_CANONICAL_JSON_FIELD_LABEL = "<non-canonical-field>"
+VALIDATION_COMMAND_TOKENS_DIAGNOSTIC = (
+    "validation_command tokens must match pinned command"
+)
+UNSAFE_GENERATED_FIXTURE_PATH_LABEL = "<unsafe-generated-fixture-path>"
 JSON_SIDE_CAR_KEYS = {
     "billing-line-item": {
         "direction",
@@ -143,7 +161,12 @@ EXPECTED_NEGATIVE_CASES = {
 def _path_label(path: Any) -> str:
     """Return a canonical operator diagnostic label for a path-like value."""
 
-    return path_diagnostic_label(path)
+    label = path_diagnostic_label(path)
+    if label != str(path):
+        return label
+    if isinstance(path, (Path, str)) and not plan_rendered_path_is_safe(Path(path)):
+        return UNSAFE_CHECKER_PATH_LABEL
+    return label
 
 
 def _error_label(error: BaseException, *, path_label: str | None = None) -> str:
@@ -244,19 +267,23 @@ def validate_fixture_manifest_preflight(args: argparse.Namespace) -> list[str]:
     errors: list[str] = []
     manifest = getattr(args, "manifest", None)
     summary_out = getattr(args, "summary_out", None)
+    if not isinstance(manifest, Path):
+        errors.append(f"--manifest `{_path_label(manifest)}` must be a path")
+        return errors
+    validate_checker_rendered_paths((manifest,), errors)
+    if errors:
+        return errors
     if summary_out is None:
         return errors
     if not isinstance(summary_out, Path):
         return [f"--summary-out `{_path_label(summary_out)}` must be a path"]
     if not validate_checker_summary_output(summary_out, errors):
         return errors
-    manifest_identity = None
-    if isinstance(manifest, Path):
-        manifest_identity = resolve_checker_preflight_path(
-            manifest,
-            errors,
-            label="--manifest",
-        )
+    manifest_identity = resolve_checker_preflight_path(
+        manifest,
+        errors,
+        label="--manifest",
+    )
     summary_identity = resolve_checker_preflight_path(
         summary_out,
         errors,
@@ -448,11 +475,16 @@ def validate_manifest(manifest: dict[str, Any], errors: list[str]) -> list[dict[
             continue
         entry = dict(raw_entry)
         name = require_string(entry, "name", path, errors)
-        if name and not NAME_RE.fullmatch(name):
-            errors.append(f"{path}.name has invalid shape: {name}")
-        if name in seen_names:
-            errors.append(f"{path}.name duplicates {name}")
-        seen_names.add(name)
+        name_is_valid = bool(
+            name and NAME_RE.fullmatch(name) and not is_sensitive_path_component(name)
+        )
+        if name and not name_is_valid:
+            errors.append(f"{path}.name has invalid shape")
+            entry["name"] = INVALID_FIXTURE_NAME_LABEL
+        if name_is_valid:
+            if name in seen_names:
+                errors.append(f"{path}.name duplicates another fixture name")
+            seen_names.add(name)
 
         kind = require_string(entry, "kind", path, errors)
         if kind and kind not in KIND_FLAGS:
@@ -474,12 +506,12 @@ def validate_manifest(manifest: dict[str, Any], errors: list[str]) -> list[dict[
             entry[VALIDATED_NORITO_PATH] = norito_path
         if json_path is not None:
             entry[VALIDATED_JSON_PATH] = json_path
-        if name and norito_path and not norito_path.name == f"{name}.to":
+        if name_is_valid and norito_path and not norito_path.name == f"{name}.to":
             errors.append(f"{path}.norito_path must end with {name}.to")
-        if name and json_path and not json_path.name == f"{name}.json":
+        if name_is_valid and json_path and not json_path.name == f"{name}.json":
             errors.append(f"{path}.json_path must end with {name}.json")
         validate_status_path_contract(
-            name,
+            name if name_is_valid else "",
             expected_status,
             negative_case,
             norito_path,
@@ -502,7 +534,7 @@ def validate_manifest(manifest: dict[str, Any], errors: list[str]) -> list[dict[
     if missing:
         errors.append(f"fixtures missing required names: {sorted(missing)}")
     if extra:
-        errors.append(f"fixtures include unexpected names: {sorted(extra)}")
+        errors.append("fixtures include unexpected names")
     return entries
 
 
@@ -581,9 +613,13 @@ def parse_fixture_path(
 
     fixture_path = Path(raw)
     valid = True
-    if fixture_path.is_absolute() or ".." in fixture_path.parts:
+    if (
+        fixture_path.is_absolute()
+        or ".." in fixture_path.parts
+        or not plan_rendered_path_is_safe(fixture_path)
+    ):
         errors.append(
-            f"{field_path} must be a repository-relative path without parent segments"
+            f"{field_path} {FIXTURE_PATH_DIAGNOSTIC}"
         )
         valid = False
     if not fixture_path.as_posix().startswith(HEDGING_FIXTURE_ROOT.as_posix() + "/"):
@@ -717,7 +753,10 @@ def validate_json_sidecar(
     if missing:
         errors.append(f"{json_path} missing required JSON sidecar fields: {missing}")
     if extra:
-        errors.append(f"{json_path} has unexpected JSON sidecar fields: {extra}")
+        errors.append(
+            f"{json_path} has unexpected JSON sidecar fields: "
+            f"{safe_json_field_labels(extra)}"
+        )
 
     valid = not missing and not extra
     if kind == "price-feed":
@@ -796,6 +835,22 @@ def sidecar_keys(kind: str, *, include_norito_bytes: bool) -> set[str]:
     return keys
 
 
+def safe_json_field_label(field: object) -> str:
+    """Return a diagnostic label for a generated sidecar field name."""
+
+    if not diagnostic_text_is_canonical(field):
+        return NON_CANONICAL_JSON_FIELD_LABEL
+    if is_sensitive_path_component(field):
+        return SENSITIVE_JSON_FIELD_LABEL
+    return field
+
+
+def safe_json_field_labels(fields: Iterable[object]) -> list[str]:
+    """Return sorted unique field labels safe for checker diagnostics."""
+
+    return sorted({safe_json_field_label(field) for field in fields})
+
+
 def validate_nested_object_keys(
     value: dict[str, Any],
     kind: str,
@@ -813,7 +868,10 @@ def validate_nested_object_keys(
         errors.append(f"{label} missing required JSON sidecar fields: {missing}")
         valid = False
     if extra:
-        errors.append(f"{label} has unexpected JSON sidecar fields: {extra}")
+        errors.append(
+            f"{label} has unexpected JSON sidecar fields: "
+            f"{safe_json_field_labels(extra)}"
+        )
         valid = False
     return valid
 
@@ -953,7 +1011,7 @@ def require_unique_nested_strings(
         if not isinstance(field_value, str):
             continue
         if field_value in seen:
-            errors.append(f"{label} duplicate {field}: {field_value}")
+            errors.append(f"{label} duplicate {field} values")
             valid = False
         seen.add(field_value)
     return valid
@@ -1232,7 +1290,32 @@ def validate_generated_inventory(
         actual_paths.add(relative_path.as_posix())
     extra_paths = sorted(actual_paths.difference(expected_paths))
     if extra_paths:
-        errors.append(f"unmanifested generated hedging fixtures: {extra_paths}")
+        errors.append(
+            "unmanifested generated hedging fixtures: "
+            f"{safe_generated_fixture_path_labels(extra_paths)}"
+        )
+
+
+def safe_generated_fixture_path_label(path: object) -> str:
+    """Return an inventory diagnostic label for an unmanifested fixture path."""
+
+    if not diagnostic_text_is_canonical(path):
+        return UNSAFE_GENERATED_FIXTURE_PATH_LABEL
+    fixture_path = Path(path)
+    if (
+        fixture_path.is_absolute()
+        or ".." in fixture_path.parts
+        or not fixture_path.as_posix().startswith(HEDGING_FIXTURE_ROOT.as_posix() + "/")
+        or not plan_rendered_path_is_safe(fixture_path)
+    ):
+        return UNSAFE_GENERATED_FIXTURE_PATH_LABEL
+    return fixture_path.as_posix()
+
+
+def safe_generated_fixture_path_labels(paths: Iterable[object]) -> list[str]:
+    """Return sorted unique inventory labels safe for checker diagnostics."""
+
+    return sorted({safe_generated_fixture_path_label(path) for path in paths})
 
 
 def scan_generated_fixture_files(fixture_root: Path, errors: list[str]) -> list[Path]:
@@ -1286,14 +1369,12 @@ def validate_expected_status(
         )
         return
     if command_tokens != expected_tokens:
-        errors.append(
-            f"{name} validation_command tokens must be {expected_tokens}, got {command_tokens}"
-        )
+        errors.append(f"{name} {VALIDATION_COMMAND_TOKENS_DIAGNOSTIC}")
         return
 
     validator_path = resolve_validator_bin(validator_bin)
     if validator_path is None:
-        errors.append(f"validator binary not found: {validator_bin}")
+        errors.append(f"validator binary not found: {_path_label(validator_bin)}")
         return
     if validator_timeout_seconds <= 0:
         errors.append("validator-timeout-seconds must be positive")

@@ -11,10 +11,8 @@
 
 --iroha-bin
 target/debug/iroha
---iroha-arg
---config
---iroha-arg
-/runtime/sorafs-transparency-client.toml
+--iroha-arg=--config
+--iroha-arg=/runtime/sorafs-transparency-client.toml
 --torii-url
 https://torii.example.invalid
 --deployment-id

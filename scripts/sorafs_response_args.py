@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from sorafs_path_identity import (
+    diagnostic_text_is_canonical,
     error_diagnostic_label,
     resolve_path_identity,
 )
@@ -47,12 +48,8 @@ def _require_string_sequence(values: Any, *, label: str) -> Sequence[Any]:
 
 def _require_argument_string(value: Any) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"argument `{value}` must be a string")
-    if (
-        not value.strip()
-        or value != value.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-    ):
+        raise ValueError("argument must be a string")
+    if not diagnostic_text_is_canonical(value):
         raise ValueError("argument must be a non-empty canonical string")
     return value
 
@@ -63,6 +60,23 @@ def require_expanded_arg_limit(expanded: Sequence[str]) -> None:
     _require_string_sequence(expanded, label="expanded arguments")
     if len(expanded) > MAX_EXPANDED_ARGS:
         raise ValueError(f"expanded arguments must be <= {MAX_EXPANDED_ARGS}")
+
+
+def require_equals_form_option_values(
+    args: Sequence[str],
+    option: str,
+    diagnostic: str,
+) -> list[str]:
+    """Reject split option values for options that require exact equals form."""
+
+    _require_string_sequence(args, label="expanded arguments")
+    option_name = _require_argument_string(option)
+    diagnostic_text = _require_argument_string(diagnostic)
+    for arg in args:
+        argument = _require_argument_string(arg)
+        if argument == option_name:
+            raise ValueError(diagnostic_text)
+    return list(args)
 
 
 class EvidenceArgumentParser(argparse.ArgumentParser):

@@ -573,7 +573,10 @@ artifact fingerprint before final promotion can report ready. Governance DAG
 aggregate promotion also rechecks the lane-proven relationships: public-head
 bound artifact fingerprints must match `valid_public_head_cids`, and
 policy-bound artifact fingerprints must match `valid_policy_digests` before
-final promotion can report ready. Governance DAG
+final promotion can report ready. Governance DAG rollout summaries must expose
+exactly one active public head CID, one active publisher policy digest, and one
+active checkpoint digest; mixed valid public-head, policy, or checkpoint
+anchors fail closed before final promotion can report ready. Governance DAG
 payload-safety artifacts must explicitly set `payload_bytes_included`,
 `raw_head_included`, `raw_car_included`, `mirror_drift_detected`,
 `raw_blocks_included`, `raw_checkpoint_included`, `response_bodies_included`,

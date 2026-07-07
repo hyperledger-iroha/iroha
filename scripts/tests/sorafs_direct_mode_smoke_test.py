@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -33,8 +34,21 @@ def run_wrapper(
     plan_path: Path,
     policy_path: Path,
     *extra_args: str,
+    allow_adoption_skip: bool = True,
+    extra_env: dict[str, str | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the direct-mode smoke wrapper with a CLI that must not be reached."""
+
+    env = os.environ.copy()
+    if allow_adoption_skip:
+        env["SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP"] = "local-diagnostic"
+    else:
+        env.pop("SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP", None)
+    for key, value in (extra_env or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
 
     return subprocess.run(
         [
@@ -55,6 +69,7 @@ def run_wrapper(
             *extra_args,
         ],
         cwd=REPO_ROOT,
+        env=env,
         text=True,
         capture_output=True,
         check=False,
@@ -134,6 +149,88 @@ def test_direct_mode_smoke_rejects_symlinked_summary_output(
     assert result.returncode == 1
     assert "summary JSON report must not be a symlink" in result.stderr
     assert not (tmp_path / "payload.bin").exists()
+
+
+def test_direct_mode_smoke_rejects_ungated_adoption_skip(
+    tmp_path: Path,
+) -> None:
+    plan_path, policy_path = write_inputs(tmp_path)
+
+    result = run_wrapper(
+        tmp_path,
+        plan_path,
+        policy_path,
+        "--skip-adoption-check",
+        "--output",
+        str(tmp_path / "payload.bin"),
+        "--summary",
+        str(tmp_path / "summary.json"),
+        allow_adoption_skip=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "--skip-adoption-check requires "
+        "SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP=local-diagnostic"
+    ) in result.stderr
+    assert not (tmp_path / "payload.bin").exists()
+    assert not (tmp_path / "summary.json").exists()
+
+
+def test_direct_mode_smoke_rejects_relaxing_adoption_flags_without_override_id(
+    tmp_path: Path,
+) -> None:
+    plan_path, policy_path = write_inputs(tmp_path)
+
+    result = run_wrapper(
+        tmp_path,
+        plan_path,
+        policy_path,
+        "--output",
+        str(tmp_path / "payload.bin"),
+        "--summary",
+        str(tmp_path / "summary.json"),
+        extra_env={
+            "XTASK_SORAFS_ADOPTION_FLAGS": "--allow-single-source --require-direct-only",
+            "SORAFS_ADOPTION_OVERRIDE_ID": None,
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        "relaxing XTASK_SORAFS_ADOPTION_FLAGS require "
+        "SORAFS_ADOPTION_OVERRIDE_ID"
+    ) in result.stderr
+    assert not (tmp_path / "payload.bin").exists()
+    assert not (tmp_path / "summary.json").exists()
+
+
+def test_direct_mode_smoke_rejects_malformed_adoption_override_id(
+    tmp_path: Path,
+) -> None:
+    plan_path, policy_path = write_inputs(tmp_path)
+
+    result = run_wrapper(
+        tmp_path,
+        plan_path,
+        policy_path,
+        "--output",
+        str(tmp_path / "payload.bin"),
+        "--summary",
+        str(tmp_path / "summary.json"),
+        extra_env={
+            "XTASK_SORAFS_ADOPTION_FLAGS": "--allow-zero-weight",
+            "SORAFS_ADOPTION_OVERRIDE_ID": "bad id",
+        },
+    )
+
+    assert result.returncode == 1
+    assert (
+        "SORAFS_ADOPTION_OVERRIDE_ID must be 3-128 characters"
+        in result.stderr
+    )
+    assert not (tmp_path / "payload.bin").exists()
+    assert not (tmp_path / "summary.json").exists()
 
 
 def test_direct_mode_smoke_rejects_symlinked_adoption_report(

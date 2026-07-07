@@ -32,6 +32,7 @@ from sorafs_evidence_json import (  # noqa: E402
 )
 from sorafs_evidence_validation import (  # noqa: E402
     archive_artifact_path_label,
+    forbidden_non_production_markers,
     build_evidence_artifact,
     count_evidence_artifacts,
     recognized_evidence_artifacts,
@@ -472,7 +473,7 @@ def require_only_required_values(
             value = item.get(field)
         else:
             value = item
-        if not isinstance(value, str) or value.strip() not in allowed:
+        if not isinstance(value, str) or value not in allowed:
             errors.append(f"{array_field} must not include unknown values")
             return
 
@@ -486,11 +487,7 @@ def require_issuer_id(payload: dict[str, Any], errors: list[str]) -> str:
     if ISSUER_ID_PATTERN.fullmatch(issuer_id) is None:
         errors.append(ISSUER_ID_ERROR)
         return ""
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_ISSUER_ID_MARKERS
-        if marker in issuer_id.split("-")
-    )
+    forbidden = forbidden_non_production_markers(issuer_id, FORBIDDEN_ISSUER_ID_MARKERS)
     if forbidden:
         errors.append(f"issuer_id must not contain non-production markers {forbidden}")
         return ""
@@ -512,11 +509,7 @@ def require_inventory_label(
     if pattern.fullmatch(value) is None:
         errors.append(label_error)
         return value
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_INVENTORY_LABEL_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_INVENTORY_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{path} must not contain non-production markers {forbidden}")
     return value
@@ -868,6 +861,19 @@ def validate_evidence_payload(
     return kind_name, errors
 
 
+def require_single_active_digest(
+    digests: set[str],
+    errors: list[str],
+    *,
+    label: str,
+) -> set[str]:
+    """Return one active rollout digest or fail closed on mixed anchors."""
+
+    if len(digests) <= 1:
+        return digests
+    errors.append(f"{label} must contain exactly one active digest")
+    return set()
+
 
 def build_summary(
     evidence_dirs: list[Path],
@@ -1008,6 +1014,11 @@ def build_summary(
     )
     if issuer_root_digests and issuer_root_digests == commitment_root_digests:
         valid_root_digests = set(issuer_root_digests)
+    valid_root_digests = require_single_active_digest(
+        valid_root_digests,
+        errors,
+        label="valid_root_digests",
+    )
 
     valid_revocation_digests: set[str] = set()
     issuer_revocation_digests = evidence_artifact_digest_set(
@@ -1023,6 +1034,11 @@ def build_summary(
         and issuer_revocation_digests == registry_revocation_digests
     ):
         valid_revocation_digests = set(issuer_revocation_digests)
+    valid_revocation_digests = require_single_active_digest(
+        valid_revocation_digests,
+        errors,
+        label="valid_revocation_list_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
@@ -1070,6 +1086,11 @@ def build_summary(
         ],
         "policy_digest_hex",
     )
+    valid_policy_digests = require_single_active_digest(
+        valid_policy_digests,
+        errors,
+        label="valid_policy_digests",
+    )
 
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
@@ -1096,7 +1117,7 @@ def build_summary(
         synced_revocation = fingerprint.get("synced_revocation_list_digest_hex")
         if isinstance(synced_root, str) and isinstance(synced_revocation, str):
             valid_juror_sync_bindings.add(
-                (synced_root.lower(), synced_revocation.lower())
+                (synced_root, synced_revocation)
             )
 
     for artifact in artifacts_by_kind.get("moderation_integration", []):
@@ -1105,7 +1126,13 @@ def build_summary(
         fingerprint = evidence_artifact_fingerprint(artifact)
         pop_snapshot_digest = fingerprint.get("pop_snapshot_digest_hex")
         if isinstance(pop_snapshot_digest, str):
-            valid_pop_snapshot_digests.add(pop_snapshot_digest.lower())
+            valid_pop_snapshot_digests.add(pop_snapshot_digest)
+
+    valid_pop_snapshot_digests = require_single_active_digest(
+        valid_pop_snapshot_digests,
+        errors,
+        label="valid_pop_snapshot_digests",
+    )
 
     required = build_required_evidence_summary(
         required_kinds,

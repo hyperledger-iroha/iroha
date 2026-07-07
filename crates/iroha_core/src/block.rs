@@ -107,47 +107,10 @@ use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 #[cfg(feature = "telemetry")]
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
-use norito::codec::Encode;
 #[cfg(feature = "bls")]
 use norito::json::Value as JsonValue;
 use rust_decimal::Decimal;
 use sha2::Digest as _;
-
-#[derive(Clone, Debug, Encode)]
-struct ExecutionContextLaneBlockSubjectPreimage {
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct ExecutionContextLanePayloadOwnershipPreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct ExecutionContextLaneRbcInstancePreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    payload_ownership_hash: Hash,
-}
 
 const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 
@@ -5951,6 +5914,7 @@ pub(crate) mod valid {
             Self::validate_da_pin_intent_bundle(block, state)?;
             Self::validate_execution_context_with_state(
                 block,
+                topology,
                 state,
                 allow_missing_legacy_context,
             )?;
@@ -6509,17 +6473,68 @@ pub(crate) mod valid {
             Ok(())
         }
 
-        fn execution_context_preimage_hash(
-            preimage: &impl Encode,
-            context: &str,
-        ) -> Result<Hash, BlockValidationError> {
-            Ok(Hash::new(norito::to_bytes(preimage).map_err(|err| {
-                Self::execution_context_error(format!("failed to encode {context} preimage: {err}"))
-            })?))
+        fn execution_context_lane_descriptor_validator_set(
+            topology: &Topology,
+            state: &impl StateReadOnly,
+            proposal_height: u64,
+            lane_id: LaneId,
+        ) -> Result<Vec<PeerId>, String> {
+            let use_shared_lane_domain_committee = !state.nexus().enabled
+                || crate::queue::routable_lane_ids_for_nexus_at_height(
+                    state.nexus(),
+                    proposal_height,
+                )
+                .len()
+                    <= 1;
+            let validators = if use_shared_lane_domain_committee {
+                let topology_peers: &[PeerId] = topology.as_ref();
+                if state.world().consensus_keys().is_empty() {
+                    topology_peers.to_vec()
+                } else {
+                    topology_peers
+                        .iter()
+                        .filter(|peer| {
+                            crate::state::peer_has_live_consensus_key(
+                                state.world(),
+                                peer,
+                                proposal_height,
+                            )
+                        })
+                        .cloned()
+                        .collect()
+                }
+            } else {
+                state.authoritative_lane_peer_ids(lane_id)
+            };
+            Self::execution_context_canonical_lane_descriptor_validators(lane_id, validators)
+        }
+
+        fn execution_context_canonical_lane_descriptor_validators(
+            lane_id: LaneId,
+            mut validators: Vec<PeerId>,
+        ) -> Result<Vec<PeerId>, String> {
+            if validators.is_empty() {
+                return Err(format!(
+                    "has no lane block descriptor validators for lane {}",
+                    lane_id.as_u32()
+                ));
+            }
+            validators.sort();
+            for pair in validators.windows(2) {
+                if pair[0] == pair[1] {
+                    return Err(format!(
+                        "has duplicate lane block descriptor validator for lane {}",
+                        lane_id.as_u32()
+                    ));
+                }
+            }
+            Ok(validators)
         }
 
         fn validate_execution_context_lane_payload_ownerships(
             block: &SignedBlock,
+            topology: &Topology,
+            state: &impl StateReadOnly,
             bundle: &BlockExecutionContextBundle,
         ) -> Result<(), BlockValidationError> {
             if bundle.lane_payload_ownerships.is_empty() {
@@ -6530,6 +6545,7 @@ pub(crate) mod valid {
             let proposal_view = block.header().view_change_index();
             let mut covered_indices = BTreeSet::new();
             let mut seen_slots = BTreeSet::new();
+            let mut seen_descriptor_hashes = BTreeSet::new();
             let mut seen_payload_ownership_hashes = BTreeSet::new();
             let mut seen_rbc_instance_hashes = BTreeSet::new();
 
@@ -6556,6 +6572,11 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} has blank QC mode tag"
                     )));
                 }
+                let Some(lane_block_descriptor_hash) = ownership.lane_block_descriptor_hash else {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} has no lane block descriptor hash"
+                    )));
+                };
 
                 let slot = (
                     ownership.lane_id,
@@ -6577,6 +6598,19 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} reuses its RBC instance hash"
                     )));
                 }
+                if lane_block_descriptor_hash == ownership.subject_hash
+                    || lane_block_descriptor_hash == ownership.payload_ownership_hash
+                    || lane_block_descriptor_hash == ownership.rbc_instance_hash
+                {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} reuses its lane block descriptor hash"
+                    )));
+                }
+                if !seen_descriptor_hashes.insert(lane_block_descriptor_hash) {
+                    return Err(Self::execution_context_error(format!(
+                        "duplicate lane block descriptor hash at ownership {ownership_idx}"
+                    )));
+                }
                 if !seen_payload_ownership_hashes.insert(ownership.payload_ownership_hash) {
                     return Err(Self::execution_context_error(format!(
                         "duplicate lane payload ownership hash at ownership {ownership_idx}"
@@ -6589,7 +6623,7 @@ pub(crate) mod valid {
                 }
 
                 let mut local_indices = BTreeSet::new();
-                let mut candidate_indices =
+                let mut candidate_hashes =
                     Vec::with_capacity(ownership.accepted_candidate_indices.len());
                 for raw_index in &ownership.accepted_candidate_indices {
                     let index = usize::try_from(*raw_index).map_err(|_| {
@@ -6613,7 +6647,7 @@ pub(crate) mod valid {
                             "lane payload ownership entrypoint index {index} is covered more than once"
                         )));
                     }
-                    candidate_indices.push(*raw_index);
+                    candidate_hashes.push(Hash::from(context.entrypoint_hash));
                     if context.lane_id != ownership.lane_id
                         || context.dataspace_id != ownership.dataspace_id
                     {
@@ -6626,61 +6660,71 @@ pub(crate) mod valid {
                         )));
                     }
                 }
-
-                let expected_subject_hash = Self::execution_context_preimage_hash(
-                    &ExecutionContextLaneBlockSubjectPreimage {
-                        version: 1,
-                        lane_id: ownership.lane_id,
-                        dataspace_id: ownership.dataspace_id,
-                        lane_block_height: ownership.lane_block_height,
-                        lane_block_view: ownership.lane_block_view,
-                        candidate_indices: candidate_indices.clone(),
-                        qc_mode_tag: ownership.qc_mode_tag.clone(),
-                    },
-                    "lane block subject",
-                )?;
-                if ownership.subject_hash != expected_subject_hash {
+                if ownership.accepted_transaction_hashes != candidate_hashes {
                     return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} subject hash mismatch"
+                        "lane payload ownership {ownership_idx} accepted transaction hashes mismatch"
                     )));
                 }
 
-                let expected_payload_ownership_hash = Self::execution_context_preimage_hash(
-                    &ExecutionContextLanePayloadOwnershipPreimage {
-                        purpose: "nexus:lane-payload-ownership:v1".to_string(),
-                        version: 1,
-                        lane_id: ownership.lane_id,
-                        dataspace_id: ownership.dataspace_id,
-                        lane_block_height: ownership.lane_block_height,
-                        lane_block_view: ownership.lane_block_view,
-                        subject_hash: ownership.subject_hash,
-                        candidate_indices,
-                        qc_mode_tag: ownership.qc_mode_tag.clone(),
-                    },
-                    "lane payload ownership",
-                )?;
-                if ownership.payload_ownership_hash != expected_payload_ownership_hash {
+                let validator_set = Self::execution_context_lane_descriptor_validator_set(
+                    topology,
+                    state,
+                    proposal_height,
+                    ownership.lane_id,
+                )
+                .map_err(|message| {
+                    Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} {message}"
+                    ))
+                })?;
+                let validator_count = u32::try_from(validator_set.len()).map_err(|_| {
+                    Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} validator count overflows u32"
+                    ))
+                })?;
+                let min_quorum = u32::try_from(
+                    crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
+                )
+                .map_err(|_| {
+                    Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} quorum overflows u32"
+                    ))
+                })?;
+                let previous_lane_block_height =
+                    ownership.lane_block_height.checked_sub(1).ok_or_else(|| {
+                        Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} has zero lane block height"
+                        ))
+                    })?;
+                if ownership.previous_lane_block_height != previous_lane_block_height {
                     return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} payload ownership hash mismatch"
+                        "lane payload ownership {ownership_idx} previous lane block height mismatch"
                     )));
                 }
-
-                let expected_rbc_instance_hash = Self::execution_context_preimage_hash(
-                    &ExecutionContextLaneRbcInstancePreimage {
-                        purpose: "nexus:lane-rbc-instance:v1".to_string(),
-                        version: 1,
-                        lane_id: ownership.lane_id,
-                        dataspace_id: ownership.dataspace_id,
-                        lane_block_height: ownership.lane_block_height,
-                        lane_block_view: ownership.lane_block_view,
-                        subject_hash: ownership.subject_hash,
-                        payload_ownership_hash: ownership.payload_ownership_hash,
-                    },
-                    "lane RBC instance",
-                )?;
-                if ownership.rbc_instance_hash != expected_rbc_instance_hash {
+                if ownership.lane_block_descriptor_validator_set != validator_set {
                     return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} RBC instance hash mismatch"
+                        "lane payload ownership {ownership_idx} lane block descriptor validator set mismatch"
+                    )));
+                }
+                if ownership.lane_block_descriptor_validator_count != validator_count {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} lane block descriptor validator count mismatch"
+                    )));
+                }
+                if ownership.lane_block_descriptor_min_quorum != min_quorum {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} lane block descriptor quorum mismatch"
+                    )));
+                }
+                if let Err(error) = ownership.validate_replay_material() {
+                    let error_message = error.to_string();
+                    let message = if error_message == "descriptor hash mismatch" {
+                        "lane block descriptor hash mismatch"
+                    } else {
+                        error_message.as_str()
+                    };
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} {message}"
                     )));
                 }
             }
@@ -6746,6 +6790,7 @@ pub(crate) mod valid {
 
         fn validate_execution_context_with_state(
             block: &SignedBlock,
+            topology: &Topology,
             state: &impl StateReadOnly,
             allow_missing_legacy_context: bool,
         ) -> Result<(), BlockValidationError> {
@@ -6764,7 +6809,9 @@ pub(crate) mod valid {
             };
 
             Self::validate_execution_context_alignment(block, bundle)?;
-            Self::validate_execution_context_lane_payload_ownerships(block, bundle)?;
+            Self::validate_execution_context_lane_payload_ownerships(
+                block, topology, state, bundle,
+            )?;
             Self::validate_execution_context_lane_payload_artifacts(block, state, bundle)?;
             if allow_missing_legacy_context || block.header().is_genesis() {
                 return Ok(());
@@ -13687,6 +13734,8 @@ pub(crate) mod valid {
             lane_id: LaneId,
             dataspace_id: DataSpaceId,
             accepted_candidate_indices: Vec<u64>,
+            candidate_hashes: Vec<Hash>,
+            validator_set: &[PeerId],
         ) -> SumeragiLanePayloadOwnership {
             sample_lane_payload_ownership_for_context_at_slot(
                 proposal_height,
@@ -13696,6 +13745,8 @@ pub(crate) mod valid {
                 proposal_height,
                 proposal_view,
                 accepted_candidate_indices,
+                candidate_hashes,
+                validator_set,
             )
         }
 
@@ -13707,62 +13758,58 @@ pub(crate) mod valid {
             lane_block_height: u64,
             lane_block_view: u64,
             accepted_candidate_indices: Vec<u64>,
+            candidate_hashes: Vec<Hash>,
+            validator_set: &[PeerId],
         ) -> SumeragiLanePayloadOwnership {
             let qc_mode_tag =
                 LaneRelayEnvelope::lane_qc_mode_tag_for(lane_id, dataspace_id, "block-test");
-            let subject_hash = Hash::new(
-                norito::to_bytes(&ExecutionContextLaneBlockSubjectPreimage {
-                    version: 1,
-                    lane_id,
-                    dataspace_id,
-                    lane_block_height,
-                    lane_block_view,
-                    candidate_indices: accepted_candidate_indices.clone(),
-                    qc_mode_tag: qc_mode_tag.clone(),
-                })
-                .expect("lane block subject preimage encodes"),
-            );
-            let payload_ownership_hash = Hash::new(
-                norito::to_bytes(&ExecutionContextLanePayloadOwnershipPreimage {
-                    purpose: "nexus:lane-payload-ownership:v1".to_string(),
-                    version: 1,
-                    lane_id,
-                    dataspace_id,
-                    lane_block_height,
-                    lane_block_view,
-                    subject_hash,
-                    candidate_indices: accepted_candidate_indices.clone(),
-                    qc_mode_tag: qc_mode_tag.clone(),
-                })
-                .expect("lane payload ownership preimage encodes"),
-            );
-            let rbc_instance_hash = Hash::new(
-                norito::to_bytes(&ExecutionContextLaneRbcInstancePreimage {
-                    purpose: "nexus:lane-rbc-instance:v1".to_string(),
-                    version: 1,
-                    lane_id,
-                    dataspace_id,
-                    lane_block_height,
-                    lane_block_view,
-                    subject_hash,
-                    payload_ownership_hash,
-                })
-                .expect("lane RBC instance preimage encodes"),
-            );
-
-            SumeragiLanePayloadOwnership {
+            let mut descriptor_validator_set = validator_set.to_vec();
+            descriptor_validator_set.sort();
+            descriptor_validator_set.dedup();
+            let validator_count = u32::try_from(descriptor_validator_set.len())
+                .expect("test validator count fits u32");
+            let min_quorum =
+                u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+                    descriptor_validator_set.len(),
+                ))
+                .expect("test quorum fits u32");
+            let previous_lane_block_height = lane_block_height
+                .checked_sub(1)
+                .expect("test lane block height is non-zero");
+            let mut ownership = SumeragiLanePayloadOwnership {
                 proposal_height,
                 proposal_view,
                 lane_id,
                 dataspace_id,
                 lane_block_height,
                 lane_block_view,
-                subject_hash,
+                subject_hash: Hash::new(b"block-test lane subject placeholder"),
                 qc_mode_tag,
                 accepted_candidate_indices,
-                payload_ownership_hash,
-                rbc_instance_hash,
-            }
+                accepted_transaction_hashes: candidate_hashes,
+                previous_lane_block_height,
+                previous_lane_block_descriptor_hash: (previous_lane_block_height > 0).then(|| {
+                    Hash::new(
+                        format!("{}:{}:prev", lane_id.as_u32(), dataspace_id.as_u64()).into_bytes(),
+                    )
+                }),
+                lane_block_descriptor_hash: Some(Hash::new(
+                    b"block-test lane descriptor placeholder",
+                )),
+                lane_block_descriptor_validator_set: descriptor_validator_set,
+                lane_block_descriptor_validator_count: validator_count,
+                lane_block_descriptor_min_quorum: min_quorum,
+                payload_ownership_hash: Hash::new(b"block-test lane payload placeholder"),
+                rbc_instance_hash: Hash::new(b"block-test lane rbc placeholder"),
+            };
+            let replay_hashes = ownership
+                .compute_replay_hashes()
+                .expect("lane payload ownership replay hashes compute");
+            ownership.subject_hash = replay_hashes.subject_hash;
+            ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+            ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+            ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+            ownership
         }
 
         fn lane_payload_context_fixture() -> (State, Arc<Kura>, Topology, TimeSource, KeyPair) {
@@ -13821,6 +13868,8 @@ pub(crate) mod valid {
                         lane_block_height,
                         0,
                         vec![0],
+                        vec![Hash::from(tx.hash_as_entrypoint())],
+                        topology.as_ref(),
                     ),
                 ]);
             let mut builder =
@@ -13862,7 +13911,7 @@ pub(crate) mod valid {
         fn signed_default_lane_block_with_execution_context(
             label: &str,
             transaction_count: usize,
-            context_for: impl FnOnce(&[SignedTransaction]) -> BlockExecutionContextBundle,
+            context_for: impl FnOnce(&[SignedTransaction], &[PeerId]) -> BlockExecutionContextBundle,
         ) -> (State, Topology, TimeSource, SignedBlock) {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
@@ -13917,7 +13966,7 @@ pub(crate) mod valid {
                 .into_iter()
                 .map(|(_, _, tx)| tx)
                 .collect::<Vec<_>>();
-            let execution_context = context_for(&canonical_transactions);
+            let execution_context = context_for(&canonical_transactions, topology.as_ref());
             let builder = BlockBuilder::new_with_time_source(accepted, time_source.clone())
                 .chain(0, state.view().latest_block().as_deref())
                 .with_execution_context(Some(execution_context));
@@ -15360,7 +15409,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-valid",
                     1,
-                    |transactions| {
+                    |transactions, validators| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -15373,6 +15422,8 @@ pub(crate) mod valid {
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
                                 vec![0],
+                                vec![Hash::from(transactions[0].hash_as_entrypoint())],
+                                validators,
                             ),
                         ])
                     },
@@ -15459,22 +15510,28 @@ pub(crate) mod valid {
             expected_message: &str,
         ) {
             let (state, topology, time_source, signed) =
-                signed_default_lane_block_with_execution_context(label, 1, |transactions| {
-                    let mut ownership = sample_lane_payload_ownership_for_context(
-                        2,
-                        0,
-                        LaneId::SINGLE,
-                        DataSpaceId::UNIVERSAL,
-                        vec![0],
-                    );
-                    mutate(&mut ownership);
-                    BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
-                        transactions[0].hash_as_entrypoint(),
-                        LaneId::SINGLE,
-                        DataSpaceId::UNIVERSAL,
-                    )])
-                    .with_lane_payload_ownerships(vec![ownership])
-                });
+                signed_default_lane_block_with_execution_context(
+                    label,
+                    1,
+                    |transactions, validators| {
+                        let mut ownership = sample_lane_payload_ownership_for_context(
+                            2,
+                            0,
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                            vec![0],
+                            vec![Hash::from(transactions[0].hash_as_entrypoint())],
+                            validators,
+                        );
+                        mutate(&mut ownership);
+                        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                            transactions[0].hash_as_entrypoint(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )])
+                        .with_lane_payload_ownerships(vec![ownership])
+                    },
+                );
 
             let view = state.query_view();
             let err = ValidBlock::validate_static_state_dependent(
@@ -15509,11 +15566,143 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_static_state_dependent_rejects_missing_lane_block_descriptor_hash() {
+            assert_lane_payload_ownership_context_rejected(
+                "lane-payload-context-missing-descriptor",
+                |ownership| ownership.lane_block_descriptor_hash = None,
+                "no lane block descriptor hash",
+            );
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_reused_lane_block_descriptor_hash() {
+            assert_lane_payload_ownership_context_rejected(
+                "lane-payload-context-reused-descriptor",
+                |ownership| ownership.lane_block_descriptor_hash = Some(ownership.subject_hash),
+                "reuses its lane block descriptor hash",
+            );
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_lane_block_descriptor_hash_tamper() {
+            assert_lane_payload_ownership_context_rejected(
+                "lane-payload-context-descriptor-tamper",
+                |ownership| {
+                    ownership.lane_block_descriptor_hash =
+                        Some(Hash::new(b"tampered lane descriptor"))
+                },
+                "lane block descriptor hash mismatch",
+            );
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_lane_block_descriptor_validator_set_drift() {
+            let (state, topology, time_source, signed) =
+                signed_default_lane_block_with_execution_context(
+                    "lane-payload-context-descriptor-validator-drift",
+                    1,
+                    |transactions, _validators| {
+                        let wrong_validator =
+                            crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+                        let wrong_validators =
+                            vec![PeerId::new(wrong_validator.public_key().clone())];
+                        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                            transactions[0].hash_as_entrypoint(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )])
+                        .with_lane_payload_ownerships(vec![
+                            sample_lane_payload_ownership_for_context(
+                                2,
+                                0,
+                                LaneId::SINGLE,
+                                DataSpaceId::UNIVERSAL,
+                                vec![0],
+                                vec![Hash::from(transactions[0].hash_as_entrypoint())],
+                                &wrong_validators,
+                            ),
+                        ])
+                    },
+                );
+
+            let view = state.query_view();
+            let err = ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                false,
+            )
+            .expect_err("validator-set drift in lane descriptor must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("lane block descriptor validator set mismatch")
+                ),
+                "unexpected validation error: {err:?}"
+            );
+        }
+
+        #[test]
         fn validate_static_state_dependent_rejects_lane_payload_ownership_subject_hash_tamper() {
             assert_lane_payload_ownership_context_rejected(
                 "lane-payload-context-subject-tamper",
                 |ownership| ownership.subject_hash = Hash::new(b"tampered lane subject"),
                 "subject hash mismatch",
+            );
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_lane_payload_ownership_candidate_hash_drift() {
+            let (state, topology, time_source, signed) =
+                signed_default_lane_block_with_execution_context(
+                    "lane-payload-context-candidate-hash-drift",
+                    1,
+                    |transactions, validators| {
+                        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                            transactions[0].hash_as_entrypoint(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )])
+                        .with_lane_payload_ownerships(vec![
+                            sample_lane_payload_ownership_for_context(
+                                2,
+                                0,
+                                LaneId::SINGLE,
+                                DataSpaceId::UNIVERSAL,
+                                vec![0],
+                                vec![Hash::new(b"wrong lane candidate hash")],
+                                validators,
+                            ),
+                        ])
+                    },
+                );
+
+            let view = state.query_view();
+            let err = ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                false,
+            )
+            .expect_err("candidate-hash drift must be rejected");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("accepted transaction hashes mismatch")
+                ),
+                "unexpected validation error: {err:?}"
             );
         }
 
@@ -15541,7 +15730,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-route-mismatch",
                     1,
-                    |transactions| {
+                    |transactions, validators| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -15554,6 +15743,8 @@ pub(crate) mod valid {
                                 LaneId::new(3),
                                 DataSpaceId::UNIVERSAL,
                                 vec![0],
+                                vec![Hash::from(transactions[0].hash_as_entrypoint())],
+                                validators,
                             ),
                         ])
                     },
@@ -15586,7 +15777,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-partial",
                     2,
-                    |transactions| {
+                    |transactions, validators| {
                         BlockExecutionContextBundle::new(vec![
                             ExternalExecutionContext::new(
                                 transactions[0].hash_as_entrypoint(),
@@ -15606,6 +15797,8 @@ pub(crate) mod valid {
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
                                 vec![0],
+                                vec![Hash::from(transactions[0].hash_as_entrypoint())],
+                                validators,
                             ),
                         ])
                     },
@@ -15640,7 +15833,7 @@ pub(crate) mod valid {
                 signed_default_lane_block_with_execution_context(
                     "lane-payload-context-out-of-range",
                     1,
-                    |transactions| {
+                    |transactions, validators| {
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -15653,6 +15846,8 @@ pub(crate) mod valid {
                                 LaneId::SINGLE,
                                 DataSpaceId::UNIVERSAL,
                                 vec![1],
+                                vec![Hash::from(transactions[0].hash_as_entrypoint())],
+                                validators,
                             ),
                         ])
                     },

@@ -372,9 +372,21 @@ impl Actor {
 
         if let Some(network) = network {
             if let Some(value) = network.require_sm_handshake_match {
+                if !value {
+                    return Err(Error::Validation(
+                        "SoraNet SM handshake matching is mandatory in the first-release policy"
+                            .to_string(),
+                    ));
+                }
                 next.network.require_sm_handshake_match = value;
             }
             if let Some(value) = network.require_sm_openssl_preview_match {
+                if !value {
+                    return Err(Error::Validation(
+                        "SoraNet SM OpenSSL preview matching is mandatory in the first-release policy"
+                            .to_string(),
+                    ));
+                }
                 next.network.require_sm_openssl_preview_match = value;
             }
             if let Some(profile) = network.lane_profile {
@@ -485,7 +497,7 @@ impl Actor {
             };
         }
         if let Some(pow_update) = update.pow {
-            Self::apply_pow_update(&mut handshake.pow, &pow_update);
+            Self::apply_pow_update(&mut handshake.pow, &pow_update)?;
         }
 
         Ok(())
@@ -518,8 +530,16 @@ impl Actor {
         Ok(())
     }
 
-    fn apply_pow_update(pow: &mut SoranetPow, update: &SoranetHandshakePowUpdate) {
+    fn apply_pow_update(
+        pow: &mut SoranetPow,
+        update: &SoranetHandshakePowUpdate,
+    ) -> Result<(), String> {
         if let Some(required) = update.required {
+            if !required {
+                return Err(
+                    "SoraNet PoW admission is mandatory in the first-release policy".to_string(),
+                );
+            }
             pow.required = required;
         }
         if let Some(difficulty) = update.difficulty {
@@ -537,7 +557,10 @@ impl Actor {
         if let Some(puzzle_update) = &update.puzzle {
             if let Some(enabled) = puzzle_update.enabled {
                 if !enabled {
-                    pow.puzzle = None;
+                    return Err(
+                        "SoraNet Argon2 puzzle admission is mandatory in the first-release policy"
+                            .to_string(),
+                    );
                 } else if pow.puzzle.is_none() {
                     pow.puzzle = Some(default_puzzle_params());
                 }
@@ -558,6 +581,7 @@ impl Actor {
                 pow.puzzle = Some(default_puzzle_params());
             }
         }
+        Ok(())
     }
 
     fn snapshot_network_acl(state: &Config) -> NetworkAcl {
@@ -2407,45 +2431,89 @@ mod tests {
             "puzzle gate should be enabled by default"
         );
 
-        // Disable the puzzle gate.
-        kiso.update_with_dto(ConfigUpdateDTO {
-            logger: LoggerDTO {
-                level: Level::INFO,
-                filter: None,
-            },
-            network_acl: None,
-            network: None,
-            confidential_gas: None,
-            soranet_handshake: Some(SoranetHandshakeUpdate {
-                descriptor_commit_hex: None,
-                client_capabilities_hex: None,
-                relay_capabilities_hex: None,
-                kem_id: None,
-                sig_id: None,
-                resume_hash_hex: None,
-                pow: Some(SoranetHandshakePowUpdate {
-                    required: None,
-                    difficulty: None,
-                    max_future_skew_secs: None,
-                    min_ticket_ttl_secs: None,
-                    ticket_ttl_secs: None,
-                    signed_ticket_public_key_hex: None,
-                    puzzle: Some(SoranetHandshakePuzzleUpdate {
-                        enabled: Some(false),
-                        memory_kib: None,
-                        time_cost: None,
-                        lanes: None,
+        let err = kiso
+            .update_with_dto(ConfigUpdateDTO {
+                logger: LoggerDTO {
+                    level: Level::INFO,
+                    filter: None,
+                },
+                network_acl: None,
+                network: None,
+                confidential_gas: None,
+                soranet_handshake: Some(SoranetHandshakeUpdate {
+                    descriptor_commit_hex: None,
+                    client_capabilities_hex: None,
+                    relay_capabilities_hex: None,
+                    kem_id: None,
+                    sig_id: None,
+                    resume_hash_hex: None,
+                    pow: Some(SoranetHandshakePowUpdate {
+                        required: Some(false),
+                        difficulty: None,
+                        max_future_skew_secs: None,
+                        min_ticket_ttl_secs: None,
+                        ticket_ttl_secs: None,
+                        signed_ticket_public_key_hex: None,
+                        puzzle: None,
                     }),
                 }),
-            }),
-            transport: None,
-            compute_pricing: None,
-        })
-        .await
-        .expect("puzzle disable should succeed");
+                transport: None,
+                compute_pricing: None,
+            })
+            .await
+            .expect_err("PoW disable should be rejected");
+        assert!(
+            err.to_string().contains("PoW admission is mandatory"),
+            "unexpected error: {err}"
+        );
 
-        let dto = kiso.get_dto().await.expect("fetch puzzle-disabled dto");
-        assert!(dto.network.soranet_handshake.pow.puzzle.is_none());
+        let err = kiso
+            .update_with_dto(ConfigUpdateDTO {
+                logger: LoggerDTO {
+                    level: Level::INFO,
+                    filter: None,
+                },
+                network_acl: None,
+                network: None,
+                confidential_gas: None,
+                soranet_handshake: Some(SoranetHandshakeUpdate {
+                    descriptor_commit_hex: None,
+                    client_capabilities_hex: None,
+                    relay_capabilities_hex: None,
+                    kem_id: None,
+                    sig_id: None,
+                    resume_hash_hex: None,
+                    pow: Some(SoranetHandshakePowUpdate {
+                        required: None,
+                        difficulty: None,
+                        max_future_skew_secs: None,
+                        min_ticket_ttl_secs: None,
+                        ticket_ttl_secs: None,
+                        signed_ticket_public_key_hex: None,
+                        puzzle: Some(SoranetHandshakePuzzleUpdate {
+                            enabled: Some(false),
+                            memory_kib: None,
+                            time_cost: None,
+                            lanes: None,
+                        }),
+                    }),
+                }),
+                transport: None,
+                compute_pricing: None,
+            })
+            .await
+            .expect_err("puzzle disable should be rejected");
+        assert!(
+            err.to_string()
+                .contains("Argon2 puzzle admission is mandatory"),
+            "unexpected error: {err}"
+        );
+
+        let dto = kiso.get_dto().await.expect("fetch post-rejection dto");
+        assert!(
+            dto.network.soranet_handshake.pow.puzzle.is_some(),
+            "rejected update must not disable the puzzle gate"
+        );
     }
 
     #[tokio::test]
@@ -2503,32 +2571,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn soranet_sm_policy_update_applies() {
+    async fn soranet_sm_policy_update_rejects_relaxation() {
         let config = test_config();
         let (kiso, _) = KisoHandle::start(config);
 
-        kiso.update_with_dto(ConfigUpdateDTO {
-            logger: LoggerDTO {
-                level: Level::INFO,
-                filter: None,
-            },
-            network_acl: None,
-            network: Some(NetworkUpdate {
-                lane_profile: None,
-                require_sm_handshake_match: Some(false),
-                require_sm_openssl_preview_match: Some(false),
-            }),
-            confidential_gas: None,
-            soranet_handshake: None,
-            transport: None,
-            compute_pricing: None,
-        })
-        .await
-        .expect("SM toggle update should succeed");
+        let err = kiso
+            .update_with_dto(ConfigUpdateDTO {
+                logger: LoggerDTO {
+                    level: Level::INFO,
+                    filter: None,
+                },
+                network_acl: None,
+                network: Some(NetworkUpdate {
+                    lane_profile: None,
+                    require_sm_handshake_match: Some(false),
+                    require_sm_openssl_preview_match: Some(false),
+                }),
+                confidential_gas: None,
+                soranet_handshake: None,
+                transport: None,
+                compute_pricing: None,
+            })
+            .await
+            .expect_err("SM policy relaxation should be rejected");
+        assert!(
+            err.to_string()
+                .contains("SM handshake matching is mandatory"),
+            "unexpected error: {err}"
+        );
+
+        let err = kiso
+            .update_with_dto(ConfigUpdateDTO {
+                logger: LoggerDTO {
+                    level: Level::INFO,
+                    filter: None,
+                },
+                network_acl: None,
+                network: Some(NetworkUpdate {
+                    lane_profile: None,
+                    require_sm_handshake_match: None,
+                    require_sm_openssl_preview_match: Some(false),
+                }),
+                confidential_gas: None,
+                soranet_handshake: None,
+                transport: None,
+                compute_pricing: None,
+            })
+            .await
+            .expect_err("SM OpenSSL preview relaxation should be rejected");
+        assert!(
+            err.to_string()
+                .contains("SM OpenSSL preview matching is mandatory"),
+            "unexpected error: {err}"
+        );
 
         let dto = kiso.get_dto().await.expect("fetch updated dto");
-        assert!(!dto.network.require_sm_handshake_match);
-        assert!(!dto.network.require_sm_openssl_preview_match);
+        assert!(dto.network.require_sm_handshake_match);
+        assert!(dto.network.require_sm_openssl_preview_match);
     }
 
     #[test]

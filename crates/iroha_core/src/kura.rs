@@ -37,20 +37,24 @@ use iroha_config::{
 use iroha_crypto::Algorithm;
 #[cfg(any(test, feature = "bench"))]
 use iroha_crypto::KeyPair;
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::decode_versioned_signed_block;
 use iroha_data_model::{
     AccountId,
     block::{
-        BlockHeader, SignedBlock, consensus::SumeragiLanePayloadOwnership,
+        BlockHeader, SignedBlock,
+        consensus::{
+            CertPhase, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1,
+            SumeragiLanePayloadOwnership,
+        },
         decode_framed_signed_block,
     },
     consensus::{Qc, ValidatorSetCheckpoint},
     merge::MergeLedgerEntry,
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,
-    transaction::signed::TransactionEntrypoint,
+    transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
@@ -87,6 +91,14 @@ const COMMIT_MANIFESTS_DIR_NAME: &str = "commit_manifests";
 const LANE_ARTIFACTS_DIR_NAME: &str = "lane_artifacts";
 const LANE_ARTIFACTS_DATA_FILE: &str = "ownerships.norito";
 const LANE_ARTIFACTS_INDEX_FILE: &str = "ownerships.index";
+const CERTIFIED_LANE_BLOCKS_DATA_FILE: &str = "certified_blocks.norito";
+const CERTIFIED_LANE_BLOCKS_INDEX_FILE: &str = "certified_blocks.index";
+const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
+const LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE: &str = "execution_inputs.index";
+const LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE: &str = "execution_preflights.norito";
+const LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE: &str = "execution_preflights.index";
+const LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE: &str = "application_receipts.norito";
+const LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE: &str = "application_receipts.index";
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
 const ROSTER_SIDECARS_DATA_FILE: &str = "roster_sidecars.norito";
@@ -6181,6 +6193,65 @@ impl FastpqProofSnapshot {
     }
 }
 
+/// Known metadata format variants for certified standalone lane blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub enum CertifiedLaneBlockArtifactFormat {
+    #[codec(index = 1)]
+    /// Standalone lane block certified by prepare and commit lane-local QCs.
+    Current,
+}
+
+/// Persisted standalone lane block certification artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct CertifiedLaneBlockArtifact {
+    /// Schema / evolution tag for the certified lane block format.
+    pub format: CertifiedLaneBlockArtifactFormat,
+    /// Lane block proposal that defines the certified descriptor and payload subject.
+    pub proposal: LaneBlockProposalV1,
+    /// Prepare QC for the lane block proposal.
+    pub prepare_qc: LaneBlockQcV1,
+    /// Commit QC for the lane block proposal.
+    pub commit_qc: LaneBlockQcV1,
+    /// Proof-of-possession material for every signer selected by either QC.
+    pub signer_pops: BTreeMap<PublicKey, Vec<u8>>,
+}
+
+impl CertifiedLaneBlockArtifact {
+    const FORMAT_LABEL: &'static str = "lane.certified_block";
+
+    /// Construct a certified lane block artifact using the current schema.
+    #[must_use]
+    pub(crate) fn new(
+        session: crate::lane_consensus::CommittedLaneBlockSession,
+        signer_pops: BTreeMap<PublicKey, Vec<u8>>,
+    ) -> Self {
+        Self {
+            format: CertifiedLaneBlockArtifactFormat::Current,
+            proposal: session.proposal,
+            prepare_qc: session.prepare_qc,
+            commit_qc: session.commit_qc,
+            signer_pops,
+        }
+    }
+
+    /// Return the human-readable format tag describing the artifact payload.
+    #[must_use]
+    pub fn format_label(&self) -> &'static str {
+        match self.format {
+            CertifiedLaneBlockArtifactFormat::Current => Self::FORMAT_LABEL,
+        }
+    }
+
+    /// Encode the artifact into a framed Norito buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if framing fails.
+    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
+        norito::to_bytes(self)
+    }
+}
+
 /// Known metadata format variants for lane-local block artifacts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockArtifactFormat {
@@ -6343,6 +6414,307 @@ impl SidecarIndexEntry {
     }
 }
 
+/// Local availability state for the executable payload behind a certified lane block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneBlockPayloadAvailability {
+    /// The canonical global block body still provides every accepted entrypoint.
+    Available,
+    /// No lane payload ownership artifact is stored for the certified lane height.
+    MissingLaneArtifact,
+    /// The ownership artifact no longer matches the certified lane descriptor.
+    DescriptorMismatch,
+    /// The global block that anchored the ownership artifact is not locally readable.
+    MissingProposalBlock,
+    /// An accepted entrypoint index is not present in the canonical global block body.
+    MissingEntrypoint,
+    /// The canonical global block has no committed result at an accepted entrypoint index.
+    MissingTransactionResult,
+    /// An accepted entrypoint hash differs from the certified descriptor.
+    EntrypointHashMismatch,
+}
+
+impl LaneBlockPayloadAvailability {
+    /// Whether every accepted entrypoint can be recovered from local durable block state.
+    #[must_use]
+    pub(crate) const fn is_available(self) -> bool {
+        matches!(self, Self::Available)
+    }
+}
+
+/// Verified payload material recovered for a certified standalone lane block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveredLaneBlockPayload {
+    /// Certified lane-block proposal whose descriptor selected this payload.
+    pub proposal: LaneBlockProposalV1,
+    /// Lane payload ownership sidecar anchoring the payload to a global block.
+    pub artifact: LaneBlockArtifact,
+    /// Accepted entrypoints in lane descriptor order.
+    pub entrypoints: Vec<TransactionEntrypoint>,
+}
+
+/// Known metadata format variants for durable lane-block execution input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub enum LaneBlockExecutionInputArtifactFormat {
+    #[codec(index = 1)]
+    /// Recovered standalone lane-block payload awaiting state application.
+    Current,
+}
+
+/// Durable recovered input for a certified standalone lane block.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct LaneBlockExecutionInputArtifact {
+    /// Schema / evolution tag for the execution input format.
+    pub format: LaneBlockExecutionInputArtifactFormat,
+    /// Certified lane-block proposal whose descriptor selected this payload.
+    pub proposal: LaneBlockProposalV1,
+    /// Lane payload ownership sidecar anchoring the payload to a global block.
+    pub artifact: LaneBlockArtifact,
+    /// Accepted entrypoint hashes in lane descriptor order.
+    pub entrypoint_hashes: Vec<Hash>,
+    /// Accepted entrypoints in lane descriptor order.
+    pub entrypoints: Vec<TransactionEntrypoint>,
+}
+
+impl LaneBlockExecutionInputArtifact {
+    const FORMAT_LABEL: &'static str = "lane.execution_input";
+
+    /// Construct a durable execution input artifact from a verified recovery result.
+    #[must_use]
+    pub fn new(recovered: RecoveredLaneBlockPayload) -> Self {
+        let entrypoint_hashes = recovered
+            .entrypoints
+            .iter()
+            .map(|entrypoint| Hash::from(entrypoint.hash()))
+            .collect();
+        Self {
+            format: LaneBlockExecutionInputArtifactFormat::Current,
+            proposal: recovered.proposal,
+            artifact: recovered.artifact,
+            entrypoint_hashes,
+            entrypoints: recovered.entrypoints,
+        }
+    }
+
+    /// Return the human-readable format tag describing the artifact payload.
+    #[must_use]
+    pub fn format_label(&self) -> &'static str {
+        match self.format {
+            LaneBlockExecutionInputArtifactFormat::Current => Self::FORMAT_LABEL,
+        }
+    }
+
+    /// Encode the artifact into a framed Norito buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if framing fails.
+    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
+        norito::to_bytes(self)
+    }
+}
+
+/// Known metadata format variants for durable lane-block direct-execution preflights.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub enum LaneBlockExecutionPreflightArtifactFormat {
+    #[codec(index = 1)]
+    /// Non-committing direct-execution preflight result for recovered lane input.
+    Current,
+}
+
+/// Durable result of non-committing direct-execution preflight for a lane block.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct LaneBlockExecutionPreflightArtifact {
+    /// Schema / evolution tag for the preflight format.
+    pub format: LaneBlockExecutionPreflightArtifactFormat,
+    /// Certified lane-block proposal whose descriptor selected this payload.
+    pub proposal: LaneBlockProposalV1,
+    /// Lane payload ownership sidecar anchoring the payload to a global block.
+    pub artifact: LaneBlockArtifact,
+    /// Local committed state height used as the preflight base.
+    pub preflight_state_height: u64,
+    /// Local committed WSV snapshot hash used as the preflight base.
+    pub preflight_state_hash: Option<HashOf<BlockHeader>>,
+    /// Accepted entrypoint indices in lane descriptor order.
+    pub entrypoint_indices: Vec<u64>,
+    /// Accepted entrypoint hashes in lane descriptor order.
+    pub entrypoint_hashes: Vec<Hash>,
+    /// Hashes of preflight transaction results in lane descriptor order.
+    pub result_hashes: Vec<Hash>,
+    /// Preflight transaction results in lane descriptor order.
+    pub results: Vec<TransactionResult>,
+}
+
+impl LaneBlockExecutionPreflightArtifact {
+    const FORMAT_LABEL: &'static str = "lane.execution_preflight";
+
+    /// Construct a durable direct-execution preflight result from recovered input.
+    #[must_use]
+    pub fn new(
+        input: &LaneBlockExecutionInputArtifact,
+        preflight_state_height: u64,
+        preflight_state_hash: Option<HashOf<BlockHeader>>,
+        results: Vec<TransactionResult>,
+    ) -> Self {
+        let result_hashes = results
+            .iter()
+            .map(|result| Hash::from(result.hash()))
+            .collect();
+        Self {
+            format: LaneBlockExecutionPreflightArtifactFormat::Current,
+            proposal: input.proposal.clone(),
+            artifact: input.artifact.clone(),
+            preflight_state_height,
+            preflight_state_hash,
+            entrypoint_indices: input.proposal.descriptor.accepted_candidate_indices.clone(),
+            entrypoint_hashes: input.entrypoint_hashes.clone(),
+            result_hashes,
+            results,
+        }
+    }
+
+    /// Return the human-readable format tag describing the artifact payload.
+    #[must_use]
+    pub fn format_label(&self) -> &'static str {
+        match self.format {
+            LaneBlockExecutionPreflightArtifactFormat::Current => Self::FORMAT_LABEL,
+        }
+    }
+
+    /// Whether any transaction failed during preflight.
+    #[must_use]
+    pub fn has_rejections(&self) -> bool {
+        self.results.iter().any(|result| result.0.is_err())
+    }
+
+    /// Encode the artifact into a framed Norito buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if framing fails.
+    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
+        norito::to_bytes(self)
+    }
+}
+
+/// Known metadata format variants for durable lane-block application receipts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+pub enum LaneBlockApplicationReceiptArtifactFormat {
+    #[codec(index = 1)]
+    /// Canonical global block results proving lane payload state application.
+    Current,
+    #[codec(index = 2)]
+    /// Direct standalone execution results proving lane payload state application.
+    DirectExecution,
+}
+
+/// Durable receipt proving a certified standalone lane block has committed results.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+pub struct LaneBlockApplicationReceiptArtifact {
+    /// Schema / evolution tag for the application receipt format.
+    pub format: LaneBlockApplicationReceiptArtifactFormat,
+    /// Certified lane-block proposal whose descriptor selected this payload.
+    pub proposal: LaneBlockProposalV1,
+    /// Lane payload ownership sidecar anchoring the payload to a global block.
+    pub artifact: LaneBlockArtifact,
+    /// Canonical block height, or committed preflight base height for direct execution.
+    pub application_block_height: u64,
+    /// Canonical block hash, or committed preflight base WSV hash for direct execution.
+    pub application_block_hash: HashOf<BlockHeader>,
+    /// Accepted entrypoint indices in the canonical block body.
+    pub entrypoint_indices: Vec<u64>,
+    /// Accepted entrypoint hashes in lane descriptor order.
+    pub entrypoint_hashes: Vec<Hash>,
+    /// Hashes of committed transaction results in lane descriptor order.
+    pub result_hashes: Vec<Hash>,
+    /// Committed transaction results in lane descriptor order.
+    pub results: Vec<TransactionResult>,
+}
+
+impl LaneBlockApplicationReceiptArtifact {
+    const FORMAT_LABEL: &'static str = "lane.application_receipt";
+
+    /// Construct a durable application receipt from canonical block results.
+    #[must_use]
+    pub fn new(
+        recovered: RecoveredLaneBlockPayload,
+        application_block_height: u64,
+        application_block_hash: HashOf<BlockHeader>,
+        results: Vec<TransactionResult>,
+    ) -> Self {
+        let entrypoint_indices = recovered
+            .proposal
+            .descriptor
+            .accepted_candidate_indices
+            .clone();
+        let entrypoint_hashes = recovered
+            .entrypoints
+            .iter()
+            .map(|entrypoint| Hash::from(entrypoint.hash()))
+            .collect();
+        let result_hashes = results
+            .iter()
+            .map(|result| Hash::from(result.hash()))
+            .collect();
+        Self {
+            format: LaneBlockApplicationReceiptArtifactFormat::Current,
+            proposal: recovered.proposal,
+            artifact: recovered.artifact,
+            application_block_height,
+            application_block_hash,
+            entrypoint_indices,
+            entrypoint_hashes,
+            result_hashes,
+            results,
+        }
+    }
+
+    /// Construct a durable application receipt from clean direct-execution preflight results.
+    #[must_use]
+    pub fn new_direct_execution(
+        input: &LaneBlockExecutionInputArtifact,
+        preflight: &LaneBlockExecutionPreflightArtifact,
+    ) -> Option<Self> {
+        let application_block_hash = preflight.preflight_state_hash?;
+        if preflight.has_rejections()
+            || input.proposal != preflight.proposal
+            || input.artifact != preflight.artifact
+            || input.proposal.descriptor.accepted_candidate_indices != preflight.entrypoint_indices
+            || input.entrypoint_hashes != preflight.entrypoint_hashes
+        {
+            return None;
+        }
+        Some(Self {
+            format: LaneBlockApplicationReceiptArtifactFormat::DirectExecution,
+            proposal: input.proposal.clone(),
+            artifact: input.artifact.clone(),
+            application_block_height: preflight.preflight_state_height,
+            application_block_hash,
+            entrypoint_indices: preflight.entrypoint_indices.clone(),
+            entrypoint_hashes: preflight.entrypoint_hashes.clone(),
+            result_hashes: preflight.result_hashes.clone(),
+            results: preflight.results.clone(),
+        })
+    }
+
+    /// Return the human-readable format tag describing the artifact payload.
+    #[must_use]
+    pub fn format_label(&self) -> &'static str {
+        match self.format {
+            LaneBlockApplicationReceiptArtifactFormat::Current
+            | LaneBlockApplicationReceiptArtifactFormat::DirectExecution => Self::FORMAT_LABEL,
+        }
+    }
+
+    /// Encode the artifact into a framed Norito buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if framing fails.
+    pub fn encode_framed(&self) -> Result<Vec<u8>, norito::Error> {
+        norito::to_bytes(self)
+    }
+}
+
 impl Kura {
     fn now_unix_secs() -> u64 {
         SystemTime::now()
@@ -6381,11 +6753,239 @@ impl Kura {
         )
     }
 
+    fn certified_lane_block_paths_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> (PathBuf, PathBuf) {
+        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
+        (
+            dir.join(CERTIFIED_LANE_BLOCKS_DATA_FILE),
+            dir.join(CERTIFIED_LANE_BLOCKS_INDEX_FILE),
+        )
+    }
+
+    fn lane_block_execution_input_paths_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> (PathBuf, PathBuf) {
+        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
+        (
+            dir.join(LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE),
+            dir.join(LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE),
+        )
+    }
+
+    fn lane_block_execution_preflight_paths_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> (PathBuf, PathBuf) {
+        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
+        (
+            dir.join(LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE),
+            dir.join(LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE),
+        )
+    }
+
+    fn lane_block_application_receipt_paths_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> (PathBuf, PathBuf) {
+        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
+        (
+            dir.join(LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE),
+            dir.join(LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE),
+        )
+    }
+
     fn invalid_lane_artifact_error(path: PathBuf, message: impl Into<String>) -> Error {
         Error::IO(
             std::io::Error::new(ErrorKind::InvalidData, message.into()),
             path,
         )
+    }
+
+    fn validate_certified_lane_block_artifact(
+        artifact: &CertifiedLaneBlockArtifact,
+    ) -> std::result::Result<(), &'static str> {
+        crate::lane_consensus::validate_lane_block_proposal(&artifact.proposal)
+            .map_err(|_| "invalid lane block proposal")?;
+        crate::lane_consensus::validate_lane_block_qc(&artifact.prepare_qc)
+            .map_err(|_| "invalid prepare lane block QC")?;
+        crate::lane_consensus::validate_lane_block_qc(&artifact.commit_qc)
+            .map_err(|_| "invalid commit lane block QC")?;
+
+        let descriptor = &artifact.proposal.descriptor;
+        let prepare_body = artifact.proposal.vote_body(CertPhase::Prepare);
+        let commit_body = artifact.proposal.vote_body(CertPhase::Commit);
+        if artifact.prepare_qc.body != prepare_body {
+            return Err("prepare QC body does not match proposal");
+        }
+        if artifact.commit_qc.body != commit_body {
+            return Err("commit QC body does not match proposal");
+        }
+        for qc in [&artifact.prepare_qc, &artifact.commit_qc] {
+            if qc.validator_set_hash_version != descriptor.validator_set_hash_version
+                || qc.validator_set_hash != descriptor.validator_set_hash
+                || qc.validator_set != descriptor.validator_set
+            {
+                return Err("QC validator set does not match proposal");
+            }
+        }
+        let mut expected_pops = Self::lane_block_qc_signer_keys(&artifact.prepare_qc)?;
+        expected_pops.extend(Self::lane_block_qc_signer_keys(&artifact.commit_qc)?);
+        let actual_pops = artifact
+            .signer_pops
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if actual_pops != expected_pops {
+            return Err("certified lane block signer PoPs do not match QC signers");
+        }
+        crate::lane_consensus::validate_lane_block_qc_aggregate(
+            &artifact.prepare_qc,
+            &artifact.signer_pops,
+        )
+        .map_err(|_| "invalid prepare lane block QC aggregate")?;
+        crate::lane_consensus::validate_lane_block_qc_aggregate(
+            &artifact.commit_qc,
+            &artifact.signer_pops,
+        )
+        .map_err(|_| "invalid commit lane block QC aggregate")?;
+        Ok(())
+    }
+
+    pub(crate) fn validate_lane_block_execution_input_artifact(
+        artifact: &LaneBlockExecutionInputArtifact,
+    ) -> std::result::Result<(), &'static str> {
+        crate::lane_consensus::validate_lane_block_proposal(&artifact.proposal)
+            .map_err(|_| "invalid lane block proposal")?;
+        let descriptor = &artifact.proposal.descriptor;
+        if !Self::lane_block_artifact_matches_descriptor(&artifact.artifact.ownership, descriptor) {
+            return Err("execution input lane artifact does not match proposal descriptor");
+        }
+        if artifact.entrypoint_hashes != descriptor.accepted_transaction_hashes {
+            return Err("execution input entrypoint hashes do not match proposal descriptor");
+        }
+        if artifact.entrypoints.len() != artifact.entrypoint_hashes.len() {
+            return Err("execution input entrypoint count does not match hashes");
+        }
+        for (entrypoint, expected_hash) in artifact
+            .entrypoints
+            .iter()
+            .zip(artifact.entrypoint_hashes.iter().copied())
+        {
+            if Hash::from(entrypoint.hash()) != expected_hash {
+                return Err("execution input entrypoint hash mismatch");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_lane_block_execution_preflight_artifact(
+        artifact: &LaneBlockExecutionPreflightArtifact,
+    ) -> std::result::Result<(), &'static str> {
+        crate::lane_consensus::validate_lane_block_proposal(&artifact.proposal)
+            .map_err(|_| "invalid lane block proposal")?;
+        let descriptor = &artifact.proposal.descriptor;
+        if !Self::lane_block_artifact_matches_descriptor(&artifact.artifact.ownership, descriptor) {
+            return Err("execution preflight lane artifact does not match proposal descriptor");
+        }
+        if artifact.preflight_state_height > 0 && artifact.preflight_state_hash.is_none() {
+            return Err("execution preflight state hash is missing for non-zero state height");
+        }
+        if artifact.entrypoint_indices != descriptor.accepted_candidate_indices {
+            return Err("execution preflight entrypoint indices do not match proposal descriptor");
+        }
+        if artifact.entrypoint_hashes != descriptor.accepted_transaction_hashes {
+            return Err("execution preflight entrypoint hashes do not match proposal descriptor");
+        }
+        if artifact.results.len() != artifact.result_hashes.len() {
+            return Err("execution preflight result count does not match hashes");
+        }
+        if artifact.results.len() != artifact.entrypoint_hashes.len() {
+            return Err("execution preflight result count does not match entrypoints");
+        }
+        for (result, expected_hash) in artifact
+            .results
+            .iter()
+            .zip(artifact.result_hashes.iter().copied())
+        {
+            if Hash::from(result.hash()) != expected_hash {
+                return Err("execution preflight result hash mismatch");
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_lane_block_application_receipt_artifact(
+        artifact: &LaneBlockApplicationReceiptArtifact,
+    ) -> std::result::Result<(), &'static str> {
+        crate::lane_consensus::validate_lane_block_proposal(&artifact.proposal)
+            .map_err(|_| "invalid lane block proposal")?;
+        let descriptor = &artifact.proposal.descriptor;
+        if !Self::lane_block_artifact_matches_descriptor(&artifact.artifact.ownership, descriptor) {
+            return Err("application receipt lane artifact does not match proposal descriptor");
+        }
+        match artifact.format {
+            LaneBlockApplicationReceiptArtifactFormat::Current => {
+                if artifact.application_block_height != artifact.artifact.ownership.proposal_height
+                {
+                    return Err("application receipt block height does not match lane ownership");
+                }
+                if artifact.application_block_hash != artifact.artifact.proposal_block_hash {
+                    return Err("application receipt block hash does not match lane artifact");
+                }
+            }
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
+                // Direct receipts are tied to the committed WSV base used for
+                // preflight. A fresh chain can have a valid WSV hash at height 0.
+            }
+        }
+        if artifact.entrypoint_indices != descriptor.accepted_candidate_indices {
+            return Err("application receipt entrypoint indices do not match proposal descriptor");
+        }
+        if artifact.entrypoint_hashes != descriptor.accepted_transaction_hashes {
+            return Err("application receipt entrypoint hashes do not match proposal descriptor");
+        }
+        if artifact.results.len() != artifact.result_hashes.len() {
+            return Err("application receipt result count does not match hashes");
+        }
+        if artifact.results.len() != artifact.entrypoint_hashes.len() {
+            return Err("application receipt result count does not match entrypoints");
+        }
+        for (result, expected_hash) in artifact
+            .results
+            .iter()
+            .zip(artifact.result_hashes.iter().copied())
+        {
+            if Hash::from(result.hash()) != expected_hash {
+                return Err("application receipt result hash mismatch");
+            }
+        }
+        Ok(())
+    }
+
+    fn lane_block_qc_signer_keys(
+        qc: &LaneBlockQcV1,
+    ) -> std::result::Result<BTreeSet<PublicKey>, &'static str> {
+        let mut signers = BTreeSet::new();
+        for (byte_index, byte) in qc.signers_bitmap.iter().copied().enumerate() {
+            if byte == 0 {
+                continue;
+            }
+            for bit in 0..8 {
+                if byte & (1_u8 << bit) == 0 {
+                    continue;
+                }
+                let signer_index = byte_index * 8 + bit;
+                let signer = qc
+                    .validator_set
+                    .get(signer_index)
+                    .ok_or("certified lane block QC signer bitmap is out of range")?;
+                signers.insert(signer.public_key().clone());
+            }
+        }
+        Ok(signers)
     }
 
     fn lane_artifact_required_bytes_for_block(block: &SignedBlock) -> Result<u64> {
@@ -6509,6 +7109,1315 @@ impl Kura {
         Ok(())
     }
 
+    /// Persist a certified standalone lane-block session under its lane segment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the session is internally inconsistent, the lane
+    /// has no configured storage segment, or the sidecar write fails.
+    pub(crate) fn persist_committed_lane_block_session(
+        &self,
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+        signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+    ) -> Result<()> {
+        let artifact = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+        self.write_certified_lane_block_artifact(&artifact)
+    }
+
+    fn write_certified_lane_block_artifact(
+        &self,
+        artifact: &CertifiedLaneBlockArtifact,
+    ) -> Result<()> {
+        Self::validate_certified_lane_block_artifact(artifact).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
+        })?;
+        let descriptor = &artifact.proposal.descriptor;
+        let lane_id = descriptor.lane_id;
+        let lane_block_height = descriptor.lane_block_height;
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
+        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "certified lane block path has no parent directory",
+            ));
+        };
+        if lane_block_height == 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "certified lane block height must be non-zero",
+            ));
+        }
+        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
+
+        let _guard = self.sidecar_lock.lock();
+        if let Some(existing) = Self::read_indexed_sidecar_from_paths(
+            lane_block_height,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<CertifiedLaneBlockArtifact>,
+            "certified lane block",
+        ) {
+            if existing == *artifact {
+                return Ok(());
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                format!(
+                    "certified lane block already exists for lane {} height {} with a different payload",
+                    lane_id.as_u32(),
+                    lane_block_height
+                ),
+            ));
+        }
+
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure certified lane block bytes before write"
+                );
+                None
+            }
+        };
+        let payload = artifact.encode_framed()?;
+        let wrote = Self::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            lane_block_height,
+            &payload,
+            "certified lane block",
+            self.sidecar_fsync_mode(),
+            None,
+        );
+        if !wrote {
+            return Err(Error::IO(
+                std::io::Error::other("failed to persist certified lane block"),
+                data_path,
+            ));
+        }
+        if let Some(before_bytes) = before_bytes {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
+                Err(err) => iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure certified lane block bytes after write"
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    /// Read a certified standalone lane block by lane and lane-local block height.
+    ///
+    /// Returns `None` when the artifact is absent, malformed, belongs to a different
+    /// lane/height, or fails proposal/QC consistency checks.
+    #[must_use]
+    pub fn read_certified_lane_block_artifact(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Option<CertifiedLaneBlockArtifact> {
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        self.read_certified_lane_block_artifact_from_paths_locked(
+            lane_id,
+            lane_block_height,
+            &data_path,
+            &index_path,
+            true,
+        )
+    }
+
+    /// Return the highest valid certified standalone lane block for a lane and dataspace.
+    #[must_use]
+    pub fn latest_certified_lane_block_artifact_for_dataspace(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Option<CertifiedLaneBlockArtifact> {
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block");
+
+        let index_len = match std::fs::metadata(&index_path) {
+            Ok(meta) => meta.len(),
+            Err(err) => {
+                iroha_logger::debug!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    ?index_path,
+                    "certified lane block index is unavailable"
+                );
+                return None;
+            }
+        };
+        let remainder = index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
+        if remainder != 0 {
+            iroha_logger::warn!(
+                len = index_len,
+                aligned_len = index_len - remainder,
+                lane = %lane_id.as_u32(),
+                ?index_path,
+                "certified lane block index length misaligned; ignoring trailing bytes"
+            );
+        }
+        let total_entries = index_len / PIPELINE_INDEX_ENTRY_SIZE_U64;
+        for lane_block_height in (1..=total_entries).rev() {
+            if let Some(artifact) = self.read_certified_lane_block_artifact_from_paths_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                false,
+            ) && artifact.proposal.descriptor.dataspace_id == dataspace_id
+            {
+                return Some(artifact);
+            }
+        }
+        None
+    }
+
+    /// Return all valid certified standalone lane blocks for a lane and dataspace.
+    ///
+    /// Artifacts are returned in ascending lane-local height order. Malformed or
+    /// foreign-dataspace sidecars are skipped. Callers that track lane reset
+    /// watermarks must filter stale incarnations before hydrating execution
+    /// backlogs.
+    #[must_use]
+    pub fn certified_lane_block_artifacts_for_dataspace(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Vec<CertifiedLaneBlockArtifact> {
+        let Some(entry) = self.lane_storage_entry(lane_id).ok() else {
+            return Vec::new();
+        };
+        let (data_path, index_path) =
+            Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
+        let _guard = self.sidecar_lock.lock();
+        Self::recover_indexed_sidecar_artifacts(&data_path, &index_path, "certified lane block");
+
+        let index_len = match std::fs::metadata(&index_path) {
+            Ok(meta) => meta.len(),
+            Err(err) => {
+                iroha_logger::debug!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    ?index_path,
+                    "certified lane block index is unavailable"
+                );
+                return Vec::new();
+            }
+        };
+        let remainder = index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
+        if remainder != 0 {
+            iroha_logger::warn!(
+                len = index_len,
+                aligned_len = index_len - remainder,
+                lane = %lane_id.as_u32(),
+                ?index_path,
+                "certified lane block index length misaligned; ignoring trailing bytes"
+            );
+        }
+        let total_entries = index_len / PIPELINE_INDEX_ENTRY_SIZE_U64;
+        (1..=total_entries)
+            .filter_map(|lane_block_height| {
+                let artifact = self.read_certified_lane_block_artifact_from_paths_locked(
+                    lane_id,
+                    lane_block_height,
+                    &data_path,
+                    &index_path,
+                    false,
+                )?;
+                (artifact.proposal.descriptor.dataspace_id == dataspace_id).then_some(artifact)
+            })
+            .collect()
+    }
+
+    fn read_certified_lane_block_artifact_from_paths_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        recover: bool,
+    ) -> Option<CertifiedLaneBlockArtifact> {
+        Self::read_indexed_sidecar_from_paths_with_recovery(
+            lane_block_height,
+            data_path,
+            index_path,
+            norito::decode_from_bytes::<CertifiedLaneBlockArtifact>,
+            "certified lane block",
+            recover,
+        )
+        .and_then(|artifact| {
+            let descriptor = &artifact.proposal.descriptor;
+            if descriptor.lane_id != lane_id || descriptor.lane_block_height != lane_block_height {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    actual_lane = %descriptor.lane_id.as_u32(),
+                    actual_height = descriptor.lane_block_height,
+                    "certified lane block identity mismatch"
+                );
+                return None;
+            }
+            if let Err(message) = Self::validate_certified_lane_block_artifact(&artifact) {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    message,
+                    "certified lane block validation failed"
+                );
+                return None;
+            }
+            Some(artifact)
+        })
+    }
+
+    /// Persist verified recovered payload input for a certified standalone lane block.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the recovered input is internally inconsistent, the
+    /// lane has no configured storage segment, or the sidecar write fails.
+    pub fn persist_lane_block_execution_input(
+        &self,
+        recovered: &RecoveredLaneBlockPayload,
+    ) -> Result<()> {
+        let verified = self
+            .recover_lane_block_payload(&recovered.proposal)
+            .map_err(|availability| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("lane execution input recovery failed: {availability:?}"),
+                )
+            })?;
+        if &verified != recovered {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "lane execution input does not match canonical recovered payload",
+            ));
+        }
+        let artifact = LaneBlockExecutionInputArtifact::new(verified);
+        self.write_lane_block_execution_input_artifact(&artifact)
+    }
+
+    fn write_lane_block_execution_input_artifact(
+        &self,
+        artifact: &LaneBlockExecutionInputArtifact,
+    ) -> Result<()> {
+        Self::validate_lane_block_execution_input_artifact(artifact).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
+        })?;
+        let descriptor = &artifact.proposal.descriptor;
+        let lane_id = descriptor.lane_id;
+        let lane_block_height = descriptor.lane_block_height;
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (data_path, index_path) =
+            Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
+        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane execution input path has no parent directory",
+            ));
+        };
+        if lane_block_height == 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane execution input height must be non-zero",
+            ));
+        }
+        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
+
+        if let Some(existing) = self.read_lane_block_execution_input(lane_id, lane_block_height) {
+            if existing == *artifact {
+                return Ok(());
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                format!(
+                    "canonical lane execution input already exists for lane {} height {} with a different payload",
+                    lane_id.as_u32(),
+                    lane_block_height
+                ),
+            ));
+        }
+
+        let _guard = self.sidecar_lock.lock();
+        if let Some(existing) = Self::read_indexed_sidecar_from_paths(
+            lane_block_height,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<LaneBlockExecutionInputArtifact>,
+            "lane block execution input",
+        ) {
+            if existing == *artifact {
+                return Ok(());
+            }
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                "overwriting stale lane execution input sidecar with recovered canonical payload"
+            );
+        }
+
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure lane execution input bytes before write"
+                );
+                None
+            }
+        };
+        let payload = artifact.encode_framed()?;
+        let wrote = Self::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            lane_block_height,
+            &payload,
+            "lane block execution input",
+            self.sidecar_fsync_mode(),
+            None,
+        );
+        if !wrote {
+            return Err(Error::IO(
+                std::io::Error::other("failed to persist lane block execution input"),
+                data_path,
+            ));
+        }
+        if let Some(before_bytes) = before_bytes {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
+                Err(err) => iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure lane execution input bytes after write"
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    /// Read durable recovered payload input for a certified standalone lane block.
+    ///
+    /// Returns `None` when the artifact is absent, malformed, belongs to a
+    /// different lane/height, no longer matches its proposal descriptor, or no
+    /// longer matches the canonical lane payload recoverable from Kura.
+    #[must_use]
+    pub fn read_lane_block_execution_input(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Option<LaneBlockExecutionInputArtifact> {
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let (data_path, index_path) =
+            Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root);
+        let artifact = {
+            let _guard = self.sidecar_lock.lock();
+            self.read_lane_block_execution_input_from_paths_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                true,
+            )?
+        };
+        if !self.lane_block_execution_input_matches_canonical_payload(&artifact) {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                "lane execution input does not match canonical recovered payload"
+            );
+            return None;
+        }
+        Some(artifact)
+    }
+
+    pub(crate) fn lane_block_execution_input_available(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        self.read_lane_block_execution_input(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )
+        .is_some_and(|artifact| artifact.proposal == *proposal)
+    }
+
+    fn lane_block_execution_input_matches_canonical_payload(
+        &self,
+        artifact: &LaneBlockExecutionInputArtifact,
+    ) -> bool {
+        match self.recover_lane_block_payload(&artifact.proposal) {
+            Ok(recovered) => LaneBlockExecutionInputArtifact::new(recovered) == *artifact,
+            Err(availability) => {
+                iroha_logger::warn!(
+                    ?availability,
+                    lane = %artifact.proposal.descriptor.lane_id.as_u32(),
+                    lane_block_height = artifact.proposal.descriptor.lane_block_height,
+                    "failed to recover canonical lane execution input for validation"
+                );
+                false
+            }
+        }
+    }
+
+    fn read_lane_block_execution_input_from_paths_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        recover: bool,
+    ) -> Option<LaneBlockExecutionInputArtifact> {
+        Self::read_indexed_sidecar_from_paths_with_recovery(
+            lane_block_height,
+            data_path,
+            index_path,
+            norito::decode_from_bytes::<LaneBlockExecutionInputArtifact>,
+            "lane block execution input",
+            recover,
+        )
+        .and_then(|artifact| {
+            let descriptor = &artifact.proposal.descriptor;
+            if descriptor.lane_id != lane_id || descriptor.lane_block_height != lane_block_height {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    actual_lane = %descriptor.lane_id.as_u32(),
+                    actual_height = descriptor.lane_block_height,
+                    "lane execution input identity mismatch"
+                );
+                return None;
+            }
+            if let Err(message) = Self::validate_lane_block_execution_input_artifact(&artifact) {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    message,
+                    "lane execution input validation failed"
+                );
+                return None;
+            }
+            Some(artifact)
+        })
+    }
+
+    /// Persist direct-execution preflight results for a recovered standalone lane block.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the execution input is no longer canonical, the
+    /// preflight result is internally inconsistent, the lane has no configured
+    /// storage segment, or the sidecar write fails.
+    pub(crate) fn persist_lane_block_execution_preflight(
+        &self,
+        input: &LaneBlockExecutionInputArtifact,
+        preflight_state_height: u64,
+        preflight_state_hash: Option<HashOf<BlockHeader>>,
+        results: Vec<TransactionResult>,
+    ) -> Result<()> {
+        Self::validate_lane_block_execution_input_artifact(input).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
+        })?;
+        let descriptor = &input.proposal.descriptor;
+        let Some(canonical_input) =
+            self.read_lane_block_execution_input(descriptor.lane_id, descriptor.lane_block_height)
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical lane execution input unavailable for preflight",
+            ));
+        };
+        if canonical_input != *input {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "lane execution preflight input does not match canonical recovered input",
+            ));
+        }
+        let artifact = LaneBlockExecutionPreflightArtifact::new(
+            input,
+            preflight_state_height,
+            preflight_state_hash,
+            results,
+        );
+        self.write_lane_block_execution_preflight_artifact(&artifact)
+    }
+
+    fn write_lane_block_execution_preflight_artifact(
+        &self,
+        artifact: &LaneBlockExecutionPreflightArtifact,
+    ) -> Result<()> {
+        Self::validate_lane_block_execution_preflight_artifact(artifact).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
+        })?;
+        let descriptor = &artifact.proposal.descriptor;
+        let lane_id = descriptor.lane_id;
+        let lane_block_height = descriptor.lane_block_height;
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (data_path, index_path) =
+            Self::lane_block_execution_preflight_paths_for_entry(&entry, &self.store_root);
+        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane execution preflight path has no parent directory",
+            ));
+        };
+        if lane_block_height == 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane execution preflight height must be non-zero",
+            ));
+        }
+        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
+
+        if let Some(existing) = self.read_lane_block_execution_preflight(lane_id, lane_block_height)
+        {
+            if existing == *artifact {
+                return Ok(());
+            }
+            if existing.proposal == artifact.proposal
+                && existing.preflight_state_height == artifact.preflight_state_height
+                && existing.preflight_state_hash == artifact.preflight_state_hash
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    format!(
+                        "lane execution preflight already exists for lane {} height {} state {} with a different result",
+                        lane_id.as_u32(),
+                        lane_block_height,
+                        artifact.preflight_state_height
+                    ),
+                ));
+            }
+        }
+
+        let _guard = self.sidecar_lock.lock();
+        if let Some(existing) = Self::read_indexed_sidecar_from_paths(
+            lane_block_height,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<LaneBlockExecutionPreflightArtifact>,
+            "lane block execution preflight",
+        ) {
+            if existing == *artifact {
+                return Ok(());
+            }
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                preflight_state_height = artifact.preflight_state_height,
+                "overwriting stale lane execution preflight sidecar"
+            );
+        }
+
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure lane execution preflight bytes before write"
+                );
+                None
+            }
+        };
+        let payload = artifact.encode_framed()?;
+        let wrote = Self::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            lane_block_height,
+            &payload,
+            "lane block execution preflight",
+            self.sidecar_fsync_mode(),
+            None,
+        );
+        if !wrote {
+            return Err(Error::IO(
+                std::io::Error::other("failed to persist lane block execution preflight"),
+                data_path,
+            ));
+        }
+        if let Some(before_bytes) = before_bytes {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
+                Err(err) => iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure lane execution preflight bytes after write"
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    /// Read a durable lane-block direct-execution preflight result.
+    ///
+    /// Returns `None` when the artifact is absent, malformed, belongs to a
+    /// different lane/height, fails structural validation, or no longer matches
+    /// the canonical recovered execution input.
+    #[must_use]
+    pub fn read_lane_block_execution_preflight(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Option<LaneBlockExecutionPreflightArtifact> {
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let (data_path, index_path) =
+            Self::lane_block_execution_preflight_paths_for_entry(&entry, &self.store_root);
+        let artifact = {
+            let _guard = self.sidecar_lock.lock();
+            self.read_lane_block_execution_preflight_from_paths_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                true,
+            )?
+        };
+        if !self.lane_block_execution_preflight_matches_canonical_input(&artifact) {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                "lane execution preflight does not match canonical recovered input"
+            );
+            return None;
+        }
+        Some(artifact)
+    }
+
+    pub(crate) fn lane_block_execution_preflight_has_rejections(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        current_state_height: u64,
+        current_state_hash: Option<HashOf<BlockHeader>>,
+    ) -> Option<bool> {
+        let artifact = self.read_lane_block_execution_preflight(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        )?;
+        if artifact.proposal == *proposal
+            && artifact.preflight_state_height == current_state_height
+            && artifact.preflight_state_hash == current_state_hash
+        {
+            Some(artifact.has_rejections())
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn lane_block_predecessor_application_receipt_available(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        let descriptor = &proposal.descriptor;
+        let previous_height = descriptor.previous_lane_block_height;
+        if previous_height == 0 {
+            return true;
+        }
+        let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {
+            return false;
+        };
+        let Some(receipt) =
+            self.read_lane_block_application_receipt(descriptor.lane_id, previous_height)
+        else {
+            return false;
+        };
+        receipt.proposal.descriptor.dataspace_id == descriptor.dataspace_id
+            && receipt.proposal.descriptor.lane_block_height == previous_height
+            && receipt.proposal.descriptor.descriptor_hash == previous_descriptor_hash
+            && self.lane_block_application_receipt_available(&receipt.proposal)
+    }
+
+    pub(crate) fn read_preflighted_lane_block_execution_input_for_application(
+        &self,
+        proposal: &LaneBlockProposalV1,
+        current_state_height: u64,
+        current_state_hash: Option<HashOf<BlockHeader>>,
+    ) -> Option<LaneBlockExecutionInputArtifact> {
+        if !self.lane_block_predecessor_application_receipt_available(proposal) {
+            return None;
+        }
+        if self.lane_block_application_receipt_available(proposal)
+            || self.lane_block_application_receipt_conflicts_with_preflight(proposal)
+        {
+            return None;
+        }
+        let descriptor = &proposal.descriptor;
+        let preflight = self.read_lane_block_execution_preflight(
+            descriptor.lane_id,
+            descriptor.lane_block_height,
+        )?;
+        if preflight.proposal != *proposal
+            || preflight.preflight_state_height != current_state_height
+            || preflight.preflight_state_hash != current_state_hash
+            || preflight.has_rejections()
+        {
+            return None;
+        }
+        let input =
+            self.read_lane_block_execution_input(descriptor.lane_id, descriptor.lane_block_height)?;
+        if input.proposal == preflight.proposal
+            && input.artifact == preflight.artifact
+            && input.entrypoint_hashes == preflight.entrypoint_hashes
+        {
+            Some(input)
+        } else {
+            None
+        }
+    }
+
+    fn lane_block_execution_preflight_matches_canonical_input(
+        &self,
+        artifact: &LaneBlockExecutionPreflightArtifact,
+    ) -> bool {
+        let descriptor = &artifact.proposal.descriptor;
+        match self.read_lane_block_execution_input(descriptor.lane_id, descriptor.lane_block_height)
+        {
+            Some(input) => {
+                input.proposal == artifact.proposal
+                    && input.artifact == artifact.artifact
+                    && input.entrypoint_hashes == artifact.entrypoint_hashes
+            }
+            None => false,
+        }
+    }
+
+    fn read_lane_block_execution_preflight_from_paths_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        recover: bool,
+    ) -> Option<LaneBlockExecutionPreflightArtifact> {
+        Self::read_indexed_sidecar_from_paths_with_recovery(
+            lane_block_height,
+            data_path,
+            index_path,
+            norito::decode_from_bytes::<LaneBlockExecutionPreflightArtifact>,
+            "lane block execution preflight",
+            recover,
+        )
+        .and_then(|artifact| {
+            let descriptor = &artifact.proposal.descriptor;
+            if descriptor.lane_id != lane_id || descriptor.lane_block_height != lane_block_height {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    actual_lane = %descriptor.lane_id.as_u32(),
+                    actual_height = descriptor.lane_block_height,
+                    "lane execution preflight identity mismatch"
+                );
+                return None;
+            }
+            if let Err(message) = Self::validate_lane_block_execution_preflight_artifact(&artifact)
+            {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    message,
+                    "lane execution preflight validation failed"
+                );
+                return None;
+            }
+            Some(artifact)
+        })
+    }
+
+    /// Persist a canonical application receipt for a certified standalone lane block.
+    ///
+    /// The receipt records the committed transaction results from the canonical
+    /// block that anchored the lane payload ownership. It does not re-execute
+    /// transactions; it provides an idempotent boundary for the standalone
+    /// executor to replace with direct lane-local state application.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lane payload is not recoverable, the canonical
+    /// block lacks committed results for every accepted entrypoint, the lane has
+    /// no configured storage segment, or the sidecar write fails.
+    pub fn persist_lane_block_application_receipt(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<()> {
+        let artifact = self
+            .recover_lane_block_application_receipt_artifact(proposal)
+            .map_err(|availability| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("lane application receipt recovery failed: {availability:?}"),
+                )
+            })?;
+        self.write_lane_block_application_receipt_artifact(&artifact)
+    }
+
+    /// Persist a direct standalone execution receipt for a certified lane block.
+    ///
+    /// The receipt is accepted only when `input` is the canonical recovered
+    /// input, `preflight` is the canonical clean direct-execution preflight for
+    /// that input, and the preflight is tied to a concrete committed state hash.
+    /// The caller should invoke this only after the corresponding direct
+    /// lane-state effects have committed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input or preflight is malformed, stale,
+    /// rejected, missing its committed state hash, no longer matches Kura's
+    /// canonical sidecars, or the receipt sidecar cannot be written.
+    pub fn persist_direct_lane_block_application_receipt(
+        &self,
+        input: &LaneBlockExecutionInputArtifact,
+        preflight: &LaneBlockExecutionPreflightArtifact,
+    ) -> Result<()> {
+        Self::validate_lane_block_execution_input_artifact(input).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
+        })?;
+        Self::validate_lane_block_execution_preflight_artifact(preflight).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
+        })?;
+        let descriptor = &input.proposal.descriptor;
+        let Some(canonical_input) =
+            self.read_lane_block_execution_input(descriptor.lane_id, descriptor.lane_block_height)
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical lane execution input unavailable for direct receipt",
+            ));
+        };
+        if canonical_input != *input {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "direct receipt input does not match canonical recovered input",
+            ));
+        }
+        let Some(canonical_preflight) = self
+            .read_lane_block_execution_preflight(descriptor.lane_id, descriptor.lane_block_height)
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "canonical lane execution preflight unavailable for direct receipt",
+            ));
+        };
+        if canonical_preflight != *preflight {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "direct receipt preflight does not match canonical preflight",
+            ));
+        }
+        let Some(artifact) =
+            LaneBlockApplicationReceiptArtifact::new_direct_execution(input, preflight)
+        else {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "direct receipt requires clean preflight evidence with a committed state hash",
+            ));
+        };
+        self.write_lane_block_application_receipt_artifact(&artifact)
+    }
+
+    pub(crate) fn persist_lane_block_application_receipt_if_ready(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<bool> {
+        let artifact = match self.recover_lane_block_application_receipt_artifact(proposal) {
+            Ok(artifact) => artifact,
+            Err(
+                LaneBlockPayloadAvailability::MissingLaneArtifact
+                | LaneBlockPayloadAvailability::MissingProposalBlock
+                | LaneBlockPayloadAvailability::MissingEntrypoint
+                | LaneBlockPayloadAvailability::MissingTransactionResult,
+            ) => return Ok(false),
+            Err(availability) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("lane application receipt recovery failed: {availability:?}"),
+                ));
+            }
+        };
+        self.write_lane_block_application_receipt_artifact(&artifact)?;
+        Ok(true)
+    }
+
+    fn recover_lane_block_application_receipt_artifact(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<LaneBlockApplicationReceiptArtifact, LaneBlockPayloadAvailability> {
+        let recovered = self.recover_lane_block_payload(proposal)?;
+        let Some(block_height) =
+            self.get_block_height_by_hash(recovered.artifact.proposal_block_hash)
+        else {
+            return Err(LaneBlockPayloadAvailability::MissingProposalBlock);
+        };
+        let Some(block) = self.get_block(block_height) else {
+            return Err(LaneBlockPayloadAvailability::MissingProposalBlock);
+        };
+        let mut results = Vec::with_capacity(
+            recovered
+                .proposal
+                .descriptor
+                .accepted_candidate_indices
+                .len(),
+        );
+        for raw_index in recovered
+            .proposal
+            .descriptor
+            .accepted_candidate_indices
+            .iter()
+            .copied()
+        {
+            let Ok(index) = usize::try_from(raw_index) else {
+                return Err(LaneBlockPayloadAvailability::MissingEntrypoint);
+            };
+            let Some(result) = Self::block_transaction_result_at(&block, index) else {
+                return Err(LaneBlockPayloadAvailability::MissingTransactionResult);
+            };
+            results.push(result);
+        }
+        Ok(LaneBlockApplicationReceiptArtifact::new(
+            recovered,
+            u64::try_from(block_height.get()).unwrap_or(u64::MAX),
+            block.hash(),
+            results,
+        ))
+    }
+
+    fn write_lane_block_application_receipt_artifact(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+    ) -> Result<()> {
+        Self::validate_lane_block_application_receipt_artifact(artifact).map_err(|message| {
+            Self::invalid_lane_artifact_error(self.store_root.clone(), message.to_string())
+        })?;
+        let descriptor = &artifact.proposal.descriptor;
+        let lane_id = descriptor.lane_id;
+        let lane_block_height = descriptor.lane_block_height;
+        let entry = self.lane_storage_entry(lane_id)?;
+        let (data_path, index_path) =
+            Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane application receipt path has no parent directory",
+            ));
+        };
+        if lane_block_height == 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "lane application receipt height must be non-zero",
+            ));
+        }
+        std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
+
+        let _guard = self.sidecar_lock.lock();
+        if let Some(existing) = Self::read_indexed_sidecar_from_paths(
+            lane_block_height,
+            &data_path,
+            &index_path,
+            norito::decode_from_bytes::<LaneBlockApplicationReceiptArtifact>,
+            "lane block application receipt",
+        ) {
+            if existing == *artifact {
+                return Ok(());
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                format!(
+                    "lane application receipt already exists for lane {} height {} with a different payload",
+                    lane_id.as_u32(),
+                    lane_block_height
+                ),
+            ));
+        }
+
+        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+            Ok(bytes) => Some(bytes),
+            Err(err) => {
+                iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure lane application receipt bytes before write"
+                );
+                None
+            }
+        };
+        let payload = artifact.encode_framed()?;
+        let wrote = Self::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            lane_block_height,
+            &payload,
+            "lane block application receipt",
+            self.sidecar_fsync_mode(),
+            None,
+        );
+        if !wrote {
+            return Err(Error::IO(
+                std::io::Error::other("failed to persist lane block application receipt"),
+                data_path,
+            ));
+        }
+        if let Some(before_bytes) = before_bytes {
+            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
+                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
+                Err(err) => iroha_logger::warn!(
+                    ?err,
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    "failed to measure lane application receipt bytes after write"
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    /// Read a durable lane-block application receipt.
+    ///
+    /// Returns `None` when the artifact is absent, malformed, belongs to a
+    /// different lane/height, or fails structural validation.
+    #[must_use]
+    pub fn read_lane_block_application_receipt(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        let entry = self.lane_storage_entry(lane_id).ok()?;
+        let (data_path, index_path) =
+            Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+        let artifact = {
+            let _guard = self.sidecar_lock.lock();
+            self.read_lane_block_application_receipt_from_paths_locked(
+                lane_id,
+                lane_block_height,
+                &data_path,
+                &index_path,
+                true,
+            )?
+        };
+        if !self.lane_block_application_receipt_matches_available_evidence(&artifact) {
+            iroha_logger::warn!(
+                lane = %lane_id.as_u32(),
+                lane_block_height,
+                "lane application receipt does not match available execution evidence"
+            );
+            return None;
+        }
+        Some(artifact)
+    }
+
+    /// Return all valid direct-execution lane-block application receipts.
+    #[must_use]
+    pub fn direct_lane_block_application_receipts_snapshot(
+        &self,
+    ) -> Vec<LaneBlockApplicationReceiptArtifact> {
+        let entries: Vec<_> = self
+            .lane_storage_entries
+            .lock()
+            .iter()
+            .map(|(lane_id, entry)| (*lane_id, entry.clone()))
+            .collect();
+        let mut receipts = Vec::new();
+        for (lane_id, entry) in entries {
+            let (data_path, index_path) =
+                Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+            let total_entries = {
+                let _guard = self.sidecar_lock.lock();
+                Self::recover_indexed_sidecar_artifacts(
+                    &data_path,
+                    &index_path,
+                    "lane block application receipt",
+                );
+                let Ok(index_len) = std::fs::metadata(&index_path).map(|meta| meta.len()) else {
+                    continue;
+                };
+                let remainder = index_len % PIPELINE_INDEX_ENTRY_SIZE_U64;
+                if remainder != 0 {
+                    iroha_logger::warn!(
+                        len = index_len,
+                        aligned_len = index_len - remainder,
+                        lane = %lane_id.as_u32(),
+                        ?index_path,
+                        "lane application receipt index length misaligned; ignoring trailing bytes"
+                    );
+                }
+                index_len / PIPELINE_INDEX_ENTRY_SIZE_U64
+            };
+            receipts.extend((1..=total_entries).filter_map(|lane_block_height| {
+                let receipt =
+                    self.read_lane_block_application_receipt(lane_id, lane_block_height)?;
+                (receipt.format == LaneBlockApplicationReceiptArtifactFormat::DirectExecution)
+                    .then_some(receipt)
+            }));
+        }
+        receipts.sort_by_key(|receipt| {
+            (
+                receipt.application_block_height,
+                receipt.proposal.descriptor.lane_id,
+                receipt.proposal.descriptor.lane_block_height,
+            )
+        });
+        receipts
+    }
+
+    pub(crate) fn lane_block_application_receipt_available(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        let available = self
+            .read_lane_block_application_receipt(
+                proposal.descriptor.lane_id,
+                proposal.descriptor.lane_block_height,
+            )
+            .is_some_and(|artifact| artifact.proposal == *proposal);
+        if !available {
+            return false;
+        }
+        if self.lane_block_application_receipt_conflicts_with_preflight(proposal) {
+            iroha_logger::warn!(
+                lane = %proposal.descriptor.lane_id.as_u32(),
+                lane_block_height = proposal.descriptor.lane_block_height,
+                "lane application receipt conflicts with durable direct-execution preflight"
+            );
+            return false;
+        }
+        true
+    }
+
+    pub(crate) fn lane_block_application_receipt_conflicts_with_preflight(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> bool {
+        let Ok(receipt) = self.recover_lane_block_application_receipt_artifact(proposal) else {
+            return false;
+        };
+        let Some(preflight) = self.read_lane_block_execution_preflight(
+            proposal.descriptor.lane_id,
+            proposal.descriptor.lane_block_height,
+        ) else {
+            return false;
+        };
+        preflight.proposal == receipt.proposal
+            && preflight.artifact == receipt.artifact
+            && preflight.entrypoint_indices == receipt.entrypoint_indices
+            && preflight.entrypoint_hashes == receipt.entrypoint_hashes
+            && preflight.result_hashes != receipt.result_hashes
+    }
+
+    fn lane_block_application_receipt_matches_available_evidence(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
+        match artifact.format {
+            LaneBlockApplicationReceiptArtifactFormat::Current => {
+                self.lane_block_application_receipt_matches_canonical_results(artifact)
+            }
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution => {
+                self.lane_block_application_receipt_matches_direct_preflight(artifact)
+            }
+        }
+    }
+
+    fn lane_block_application_receipt_matches_canonical_results(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
+        match self.recover_lane_block_application_receipt_artifact(&artifact.proposal) {
+            Ok(expected) => expected == *artifact,
+            Err(availability) => {
+                iroha_logger::warn!(
+                    ?availability,
+                    lane = %artifact.proposal.descriptor.lane_id.as_u32(),
+                    lane_block_height = artifact.proposal.descriptor.lane_block_height,
+                    "failed to recover canonical lane application receipt for validation"
+                );
+                false
+            }
+        }
+    }
+
+    fn lane_block_application_receipt_matches_direct_preflight(
+        &self,
+        artifact: &LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
+        let descriptor = &artifact.proposal.descriptor;
+        let Some(preflight) = self
+            .read_lane_block_execution_preflight(descriptor.lane_id, descriptor.lane_block_height)
+        else {
+            return false;
+        };
+        preflight.proposal == artifact.proposal
+            && preflight.artifact == artifact.artifact
+            && preflight.preflight_state_height == artifact.application_block_height
+            && preflight.preflight_state_hash == Some(artifact.application_block_hash)
+            && preflight.entrypoint_indices == artifact.entrypoint_indices
+            && preflight.entrypoint_hashes == artifact.entrypoint_hashes
+            && preflight.result_hashes == artifact.result_hashes
+            && preflight.results == artifact.results
+            && !preflight.has_rejections()
+    }
+
+    fn read_lane_block_application_receipt_from_paths_locked(
+        &self,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        data_path: &Path,
+        index_path: &Path,
+        recover: bool,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        Self::read_indexed_sidecar_from_paths_with_recovery(
+            lane_block_height,
+            data_path,
+            index_path,
+            norito::decode_from_bytes::<LaneBlockApplicationReceiptArtifact>,
+            "lane block application receipt",
+            recover,
+        )
+        .and_then(|artifact| {
+            let descriptor = &artifact.proposal.descriptor;
+            if descriptor.lane_id != lane_id || descriptor.lane_block_height != lane_block_height {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    actual_lane = %descriptor.lane_id.as_u32(),
+                    actual_height = descriptor.lane_block_height,
+                    "lane application receipt identity mismatch"
+                );
+                return None;
+            }
+            if let Err(message) = Self::validate_lane_block_application_receipt_artifact(&artifact)
+            {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    message,
+                    "lane application receipt validation failed"
+                );
+                return None;
+            }
+            Some(artifact)
+        })
+    }
+
     /// Read a lane-local block artifact by lane and lane-local block height.
     ///
     /// Returns `None` when the artifact is absent, malformed, belongs to a different lane/height,
@@ -6529,6 +8438,159 @@ impl Kura {
             &index_path,
             true,
         )
+    }
+
+    pub(crate) fn lane_block_payload_availability(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> LaneBlockPayloadAvailability {
+        let block = match self.lane_block_payload_artifact_and_block(proposal) {
+            Ok((_, block)) => block,
+            Err(err) => return err,
+        };
+        let descriptor = &proposal.descriptor;
+        for (raw_index, expected_hash) in descriptor
+            .accepted_candidate_indices
+            .iter()
+            .copied()
+            .zip(descriptor.accepted_transaction_hashes.iter().copied())
+        {
+            let Ok(index) = usize::try_from(raw_index) else {
+                return LaneBlockPayloadAvailability::MissingEntrypoint;
+            };
+            let Some(actual_hash) = Self::block_entrypoint_hash_at(&block, index) else {
+                return LaneBlockPayloadAvailability::MissingEntrypoint;
+            };
+            if actual_hash != expected_hash {
+                return LaneBlockPayloadAvailability::EntrypointHashMismatch;
+            }
+        }
+        LaneBlockPayloadAvailability::Available
+    }
+
+    /// Recover accepted entrypoints for a certified standalone lane block.
+    ///
+    /// The recovered payload is accepted only when the certified descriptor
+    /// matches the lane ownership sidecar and every accepted entrypoint hash is
+    /// present in the canonical global block body that anchored that sidecar.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LaneBlockPayloadAvailability`] describing the first recovery
+    /// precondition that is not satisfied.
+    pub fn recover_lane_block_payload(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<RecoveredLaneBlockPayload, LaneBlockPayloadAvailability> {
+        let (artifact, block) = self.lane_block_payload_artifact_and_block(proposal)?;
+        let descriptor = &proposal.descriptor;
+        let mut entrypoints = Vec::with_capacity(descriptor.accepted_candidate_indices.len());
+        for (raw_index, expected_hash) in descriptor
+            .accepted_candidate_indices
+            .iter()
+            .copied()
+            .zip(descriptor.accepted_transaction_hashes.iter().copied())
+        {
+            let Ok(index) = usize::try_from(raw_index) else {
+                return Err(LaneBlockPayloadAvailability::MissingEntrypoint);
+            };
+            let Some(entrypoint) = Self::block_entrypoint_at(&block, index) else {
+                return Err(LaneBlockPayloadAvailability::MissingEntrypoint);
+            };
+            let actual_hash = Hash::from(entrypoint.hash());
+            if actual_hash != expected_hash {
+                return Err(LaneBlockPayloadAvailability::EntrypointHashMismatch);
+            }
+            entrypoints.push(entrypoint);
+        }
+
+        Ok(RecoveredLaneBlockPayload {
+            proposal: proposal.clone(),
+            artifact,
+            entrypoints,
+        })
+    }
+
+    fn lane_block_payload_artifact_and_block(
+        &self,
+        proposal: &LaneBlockProposalV1,
+    ) -> Result<(LaneBlockArtifact, Arc<SignedBlock>), LaneBlockPayloadAvailability> {
+        let descriptor = &proposal.descriptor;
+        if descriptor.computed_descriptor_hash() != descriptor.descriptor_hash
+            || descriptor.computed_validator_set_hash() != descriptor.validator_set_hash
+            || proposal.computed_proposal_hash() != proposal.proposal_hash
+        {
+            return Err(LaneBlockPayloadAvailability::DescriptorMismatch);
+        }
+
+        let Some(artifact) =
+            self.read_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
+        else {
+            return Err(LaneBlockPayloadAvailability::MissingLaneArtifact);
+        };
+        if !Self::lane_block_artifact_matches_descriptor(&artifact.ownership, descriptor) {
+            return Err(LaneBlockPayloadAvailability::DescriptorMismatch);
+        }
+
+        let Some(block_height) = self.get_block_height_by_hash(artifact.proposal_block_hash) else {
+            return Err(LaneBlockPayloadAvailability::MissingProposalBlock);
+        };
+        let Some(block) = self.get_block(block_height) else {
+            return Err(LaneBlockPayloadAvailability::MissingProposalBlock);
+        };
+        let Some(bundle) = block.execution_context() else {
+            return Err(LaneBlockPayloadAvailability::MissingProposalBlock);
+        };
+        if !bundle
+            .lane_payload_ownerships
+            .iter()
+            .any(|ownership| ownership == &artifact.ownership)
+        {
+            return Err(LaneBlockPayloadAvailability::DescriptorMismatch);
+        }
+
+        Ok((artifact, block))
+    }
+
+    fn lane_block_artifact_matches_descriptor(
+        ownership: &SumeragiLanePayloadOwnership,
+        descriptor: &LaneBlockDescriptorV1,
+    ) -> bool {
+        ownership.lane_id == descriptor.lane_id
+            && ownership.dataspace_id == descriptor.dataspace_id
+            && ownership.previous_lane_block_height == descriptor.previous_lane_block_height
+            && ownership.previous_lane_block_descriptor_hash
+                == descriptor.previous_lane_block_descriptor_hash
+            && ownership.lane_block_height == descriptor.lane_block_height
+            && ownership.lane_block_view == descriptor.lane_block_view
+            && ownership.subject_hash == descriptor.subject_hash
+            && ownership.payload_ownership_hash == descriptor.payload_ownership_hash
+            && ownership.rbc_instance_hash == descriptor.rbc_instance_hash
+            && ownership.accepted_candidate_indices == descriptor.accepted_candidate_indices
+            && ownership.accepted_transaction_hashes == descriptor.accepted_transaction_hashes
+            && ownership.lane_block_descriptor_hash == Some(descriptor.descriptor_hash)
+            && ownership.lane_block_descriptor_validator_set == descriptor.validator_set
+            && ownership.lane_block_descriptor_validator_count == descriptor.validator_count
+            && ownership.lane_block_descriptor_min_quorum == descriptor.min_quorum
+            && ownership.qc_mode_tag == descriptor.qc_mode_tag
+    }
+
+    fn block_entrypoint_hash_at(block: &SignedBlock, index: usize) -> Option<Hash> {
+        Self::block_entrypoint_at(block, index).map(|entrypoint| Hash::from(entrypoint.hash()))
+    }
+
+    fn block_entrypoint_at(block: &SignedBlock, index: usize) -> Option<TransactionEntrypoint> {
+        if let Some(entrypoints) = block.external_entrypoints_slice() {
+            return entrypoints.get(index).cloned();
+        }
+        block.external_entrypoints_cloned().nth(index)
+    }
+
+    fn block_transaction_result_at(block: &SignedBlock, index: usize) -> Option<TransactionResult> {
+        if !block.has_results() {
+            return None;
+        }
+        block.results().nth(index).cloned()
     }
 
     /// Return the highest valid lane-local block artifact known for `lane_id`.
@@ -6635,6 +8697,15 @@ impl Kura {
                     actual_lane = %artifact.ownership.lane_id.as_u32(),
                     actual_height = artifact.ownership.lane_block_height,
                     "lane block artifact identity mismatch"
+                );
+                return None;
+            }
+            if let Err(err) = artifact.ownership.validate_replay_material() {
+                iroha_logger::warn!(
+                    lane = %lane_id.as_u32(),
+                    lane_block_height,
+                    error = %err,
+                    "lane block artifact replay material mismatch"
                 );
                 return None;
             }
@@ -9914,22 +11985,26 @@ mod tests {
             },
         },
     };
-    use iroha_crypto::{Algorithm, Hash, HashOf, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, Level,
         account::Account,
         block::{
             BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
-            consensus::SumeragiLanePayloadOwnership,
+            consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, SumeragiLanePayloadOwnership},
         },
-        consensus::Qc,
+        consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1},
         domain::{Domain, DomainId},
         isi::{Log, Upgrade},
         merge::MergeQuorumCertificate,
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId},
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
-        transaction::TransactionBuilder,
+        transaction::{
+            TransactionBuilder,
+            signed::{TransactionResult, TransactionResultInner},
+        },
+        trigger::DataTriggerSequence,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
     use iroha_telemetry::metrics::Metrics;
@@ -14541,47 +16616,219 @@ mod tests {
         let proposal_view = block.header().view_change_index();
         let lane_block_view = proposal_view;
         let accepted_candidate_indices = vec![0_u64];
-        let subject_hash = Hash::new(
-            format!(
-                "kura-lane-subject:{}:{}:{}",
-                lane_id.as_u32(),
-                dataspace_id.as_u64(),
-                lane_block_height
-            )
-            .into_bytes(),
-        );
-        let payload_ownership_hash = Hash::new(
-            format!(
-                "kura-lane-payload:{}:{}:{}",
-                lane_id.as_u32(),
-                dataspace_id.as_u64(),
-                lane_block_height
-            )
-            .into_bytes(),
-        );
-        let rbc_instance_hash = Hash::new(
-            format!(
-                "kura-lane-rbc:{}:{}:{}",
-                lane_id.as_u32(),
-                dataspace_id.as_u64(),
-                lane_block_height
-            )
-            .into_bytes(),
-        );
-
-        SumeragiLanePayloadOwnership {
+        let accepted_transaction_hash = Kura::block_entrypoint_hash_at(block, 0)
+            .expect("dummy block has a first external entrypoint");
+        let mut validator_set = vec![checked_peer_id()];
+        validator_set.sort();
+        let validator_count = u32::try_from(validator_set.len()).expect("validator count fits u32");
+        let min_quorum = validator_count;
+        let mut ownership = SumeragiLanePayloadOwnership {
             proposal_height,
             proposal_view,
             lane_id,
             dataspace_id,
             lane_block_height,
             lane_block_view,
-            subject_hash,
+            subject_hash: Hash::new(b"kura-lane-subject-placeholder"),
             qc_mode_tag: "kura-lane-artifact-test".to_string(),
             accepted_candidate_indices,
-            payload_ownership_hash,
-            rbc_instance_hash,
+            accepted_transaction_hashes: vec![accepted_transaction_hash],
+            previous_lane_block_height: lane_block_height.saturating_sub(1),
+            previous_lane_block_descriptor_hash: lane_block_height
+                .checked_sub(1)
+                .filter(|height| *height > 0)
+                .map(|previous| {
+                    Hash::new(
+                        format!(
+                            "kura-lane-previous-descriptor:{}:{}:{}",
+                            lane_id.as_u32(),
+                            dataspace_id.as_u64(),
+                            previous
+                        )
+                        .into_bytes(),
+                    )
+                }),
+            lane_block_descriptor_hash: Some(Hash::new(b"kura-lane-descriptor-placeholder")),
+            lane_block_descriptor_validator_set: validator_set,
+            lane_block_descriptor_validator_count: validator_count,
+            lane_block_descriptor_min_quorum: min_quorum,
+            payload_ownership_hash: Hash::new(b"kura-lane-payload-placeholder"),
+            rbc_instance_hash: Hash::new(b"kura-lane-rbc-placeholder"),
+        };
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("kura lane artifact replay hashes compute");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        ownership
+    }
+
+    fn signed_lane_block_vote_for_kura(
+        proposal: &LaneBlockProposalV1,
+        phase: CertPhase,
+        keypair: &KeyPair,
+    ) -> crate::lane_consensus::LaneBlockVoteV1 {
+        let body = proposal.vote_body(phase);
+        let signature = Signature::try_new(keypair.private_key(), &body.signature_preimage())
+            .expect("kura lane block vote signature");
+        crate::lane_consensus::LaneBlockVoteV1 {
+            body,
+            signer: PeerId::new(keypair.public_key().clone()),
+            bls_signature: signature.payload().to_vec(),
         }
+    }
+
+    fn lane_block_proposal_from_ownership(
+        ownership: &SumeragiLanePayloadOwnership,
+    ) -> LaneBlockProposalV1 {
+        let validator_set = ownership.lane_block_descriptor_validator_set.clone();
+        let descriptor = LaneBlockDescriptorV1 {
+            lane_id: ownership.lane_id,
+            dataspace_id: ownership.dataspace_id,
+            previous_lane_block_height: ownership.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
+            lane_block_height: ownership.lane_block_height,
+            lane_block_view: ownership.lane_block_view,
+            subject_hash: ownership.subject_hash,
+            payload_ownership_hash: ownership.payload_ownership_hash,
+            rbc_instance_hash: ownership.rbc_instance_hash,
+            accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
+            accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set,
+            validator_count: ownership.lane_block_descriptor_validator_count,
+            min_quorum: ownership.lane_block_descriptor_min_quorum,
+            qc_mode_tag: ownership.qc_mode_tag.clone(),
+            descriptor_hash: ownership
+                .lane_block_descriptor_hash
+                .expect("ownership has descriptor hash"),
+        };
+        assert_eq!(
+            descriptor.descriptor_hash,
+            descriptor.computed_descriptor_hash(),
+            "fixture ownership descriptor hash must be canonical"
+        );
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        proposal
+    }
+
+    fn sample_committed_lane_block_session_for_kura(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+    ) -> (
+        crate::lane_consensus::CommittedLaneBlockSession,
+        BTreeMap<PublicKey, Vec<u8>>,
+    ) {
+        let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let signer_pop =
+            bls_normal_pop_prove(keypair.private_key()).expect("kura certified lane signer PoP");
+        let peer_id = PeerId::new(keypair.public_key().clone());
+        let validator_set = vec![peer_id];
+        let mut signer_pops = BTreeMap::new();
+        signer_pops.insert(keypair.public_key().clone(), signer_pop);
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id,
+            dataspace_id,
+            previous_lane_block_height: lane_block_height.saturating_sub(1),
+            previous_lane_block_descriptor_hash: lane_block_height
+                .checked_sub(1)
+                .filter(|height| *height > 0)
+                .map(|previous| {
+                    Hash::new(
+                        format!(
+                            "kura-certified-previous:{}:{}:{}",
+                            lane_id.as_u32(),
+                            dataspace_id.as_u64(),
+                            previous
+                        )
+                        .into_bytes(),
+                    )
+                }),
+            lane_block_height,
+            lane_block_view: 2,
+            subject_hash: Hash::new(
+                format!(
+                    "kura-certified-subject:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    lane_block_height
+                )
+                .into_bytes(),
+            ),
+            payload_ownership_hash: Hash::new(
+                format!(
+                    "kura-certified-ownership:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    lane_block_height
+                )
+                .into_bytes(),
+            ),
+            rbc_instance_hash: Hash::new(
+                format!(
+                    "kura-certified-rbc:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    lane_block_height
+                )
+                .into_bytes(),
+            ),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::new(
+                format!(
+                    "kura-certified-tx:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    lane_block_height
+                )
+                .into_bytes(),
+            )],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: "permissioned:kura-certified-lane-block".to_string(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+
+        let prepare_vote = signed_lane_block_vote_for_kura(&proposal, CertPhase::Prepare, &keypair);
+        let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            prepare_vote.body.clone(),
+            validator_set.clone(),
+            std::slice::from_ref(&prepare_vote),
+        )
+        .expect("kura certified lane prepare QC");
+        let commit_vote = signed_lane_block_vote_for_kura(&proposal, CertPhase::Commit, &keypair);
+        let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            commit_vote.body.clone(),
+            validator_set,
+            std::slice::from_ref(&commit_vote),
+        )
+        .expect("kura certified lane commit QC");
+
+        (
+            crate::lane_consensus::CommittedLaneBlockSession {
+                proposal,
+                prepare_qc,
+                commit_qc,
+            },
+            signer_pops,
+        )
     }
 
     fn dummy_block_with_lane_payload_ownership(
@@ -14623,6 +16870,53 @@ mod tests {
             .with_lane_payload_ownerships(vec![ownership]);
         block.set_execution_context(Some(execution_context));
         Arc::new(block)
+    }
+
+    fn rebind_kura_lane_payload_predecessor(
+        block: &mut SignedBlock,
+        previous_lane_block_descriptor_hash: Hash,
+    ) -> SumeragiLanePayloadOwnership {
+        let mut ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        ownership.previous_lane_block_descriptor_hash = Some(previous_lane_block_descriptor_hash);
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("rebinding predecessor keeps replay hashes canonical");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"kura-lane-artifact-entrypoint",
+        ));
+        let execution_context =
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint_hash,
+                ownership.lane_id,
+                ownership.dataspace_id,
+            )])
+            .with_lane_payload_ownerships(vec![ownership.clone()]);
+        block.set_execution_context(Some(execution_context));
+        ownership
+    }
+
+    fn attach_ok_results_to_block(block: &mut SignedBlock) {
+        let entrypoint_hashes: Vec<_> = block
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect();
+        let results = entrypoint_hashes
+            .iter()
+            .map(|_| TransactionResultInner::Ok(DataTriggerSequence::default()))
+            .collect();
+        block
+            .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
+            .expect("attach deterministic transaction results");
     }
 
     fn two_lane_runtime_config() -> RuntimeLaneConfig {
@@ -14679,6 +16973,1355 @@ mod tests {
         assert_eq!(
             reloaded.read_lane_block_artifact(lane_id, lane_block_height),
             Some(artifact)
+        );
+    }
+
+    #[test]
+    fn lane_block_payload_availability_recovers_entrypoints_from_canonical_block() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let expected_entrypoint = block
+            .external_entrypoints_cloned()
+            .next()
+            .expect("dummy block entrypoint");
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+
+        assert_eq!(
+            kura.lane_block_payload_availability(&proposal),
+            LaneBlockPayloadAvailability::Available
+        );
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        assert_eq!(recovered.proposal, proposal);
+        assert_eq!(recovered.artifact.ownership, ownership);
+        assert_eq!(recovered.entrypoints, vec![expected_entrypoint]);
+    }
+
+    #[test]
+    fn lane_block_execution_input_persists_recovered_payload_and_reloads() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("duplicate lane execution input persistence is idempotent");
+
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input");
+        assert_eq!(input.format_label(), "lane.execution_input");
+        assert_eq!(input.proposal, proposal);
+        assert_eq!(input.artifact, recovered.artifact);
+        assert_eq!(
+            input.entrypoint_hashes,
+            proposal.descriptor.accepted_transaction_hashes
+        );
+        assert_eq!(input.entrypoints, recovered.entrypoints);
+        assert!(kura.lane_block_execution_input_available(&proposal));
+
+        let (data_path, index_path) =
+            Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            data_path.is_file(),
+            "lane execution input data file missing"
+        );
+        assert!(
+            index_path.is_file(),
+            "lane execution input index file missing"
+        );
+
+        drop(kura);
+        let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
+        assert_eq!(
+            reloaded.read_lane_block_execution_input(lane_id, lane_block_height),
+            Some(input)
+        );
+        assert!(reloaded.lane_block_execution_input_available(&proposal));
+    }
+
+    #[test]
+    fn lane_block_application_receipt_persists_canonical_results_and_reloads() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut block);
+        let block_hash = block.hash();
+        let block_height = block.header().height().get();
+        let expected_result = block.results().next().expect("dummy block result").clone();
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(Arc::new(block))
+            .expect("store block with lane artifact and results");
+        kura.persist_lane_block_application_receipt(&proposal)
+            .expect("persist lane application receipt");
+        kura.persist_lane_block_application_receipt(&proposal)
+            .expect("duplicate lane application receipt persistence is idempotent");
+
+        let receipt = kura
+            .read_lane_block_application_receipt(lane_id, lane_block_height)
+            .expect("lane application receipt");
+        assert_eq!(receipt.format_label(), "lane.application_receipt");
+        assert_eq!(receipt.proposal, proposal);
+        assert_eq!(receipt.artifact.ownership, ownership);
+        assert_eq!(receipt.application_block_height, block_height);
+        assert_eq!(receipt.application_block_hash, block_hash);
+        assert_eq!(
+            receipt.entrypoint_indices,
+            proposal.descriptor.accepted_candidate_indices
+        );
+        assert_eq!(
+            receipt.entrypoint_hashes,
+            proposal.descriptor.accepted_transaction_hashes
+        );
+        assert_eq!(receipt.results, vec![expected_result.clone()]);
+        assert_eq!(
+            receipt.result_hashes,
+            vec![Hash::from(expected_result.hash())]
+        );
+        assert!(kura.lane_block_application_receipt_available(&proposal));
+
+        let (data_path, index_path) =
+            Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            data_path.is_file(),
+            "lane application receipt data file missing"
+        );
+        assert!(
+            index_path.is_file(),
+            "lane application receipt index file missing"
+        );
+
+        drop(kura);
+        let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
+        assert_eq!(
+            reloaded.read_lane_block_application_receipt(lane_id, lane_block_height),
+            Some(receipt)
+        );
+        assert!(reloaded.lane_block_application_receipt_available(&proposal));
+    }
+
+    #[test]
+    fn lane_block_application_receipt_waits_for_committed_results() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact but no results");
+        assert!(
+            kura.persist_lane_block_application_receipt(&proposal)
+                .is_err(),
+            "receipt persistence must fail while canonical results are absent"
+        );
+        assert!(
+            !kura
+                .persist_lane_block_application_receipt_if_ready(&proposal)
+                .expect("not-ready receipt recovery is non-fatal"),
+            "if-ready receipt persistence should report not ready"
+        );
+        assert_eq!(
+            kura.read_lane_block_application_receipt(lane_id, lane_block_height),
+            None
+        );
+        assert!(!kura.lane_block_application_receipt_available(&proposal));
+    }
+
+    #[test]
+    fn lane_block_direct_application_receipt_persists_clean_preflight_results() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact but no canonical results");
+        assert!(
+            !kura
+                .persist_lane_block_application_receipt_if_ready(&proposal)
+                .expect("canonical receipt is not ready while block results are absent")
+        );
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input");
+        let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"direct application base state hash",
+        )));
+        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        kura.persist_lane_block_execution_preflight(&input, 7, state_hash, vec![result.clone()])
+            .expect("persist clean lane execution preflight");
+        let preflight = kura
+            .read_lane_block_execution_preflight(lane_id, lane_block_height)
+            .expect("lane execution preflight");
+
+        kura.persist_direct_lane_block_application_receipt(&input, &preflight)
+            .expect("persist direct lane application receipt");
+        kura.persist_direct_lane_block_application_receipt(&input, &preflight)
+            .expect("direct lane application receipt persistence is idempotent");
+
+        let receipt = kura
+            .read_lane_block_application_receipt(lane_id, lane_block_height)
+            .expect("direct lane application receipt");
+        assert_eq!(
+            receipt.format,
+            LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+        );
+        assert_eq!(receipt.application_block_height, 7);
+        assert_eq!(
+            receipt.application_block_hash,
+            preflight
+                .preflight_state_hash
+                .expect("direct receipt state hash")
+        );
+        assert_eq!(receipt.results, vec![result]);
+        assert!(kura.lane_block_application_receipt_available(&proposal));
+
+        let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
+        assert_eq!(
+            reloaded.read_lane_block_application_receipt(lane_id, lane_block_height),
+            Some(receipt)
+        );
+        assert!(reloaded.lane_block_application_receipt_available(&proposal));
+    }
+
+    #[test]
+    fn lane_block_direct_application_receipt_rejects_rejected_preflight() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input");
+        let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"rejected direct application base state hash",
+        )));
+        let rejected = TransactionResult(TransactionResultInner::Err(
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted(
+                    "direct receipt rejected preflight".to_owned(),
+                ),
+            ),
+        ));
+        kura.persist_lane_block_execution_preflight(&input, 7, state_hash, vec![rejected])
+            .expect("persist rejected lane execution preflight");
+        let preflight = kura
+            .read_lane_block_execution_preflight(lane_id, lane_block_height)
+            .expect("lane execution preflight");
+
+        assert!(
+            kura.persist_direct_lane_block_application_receipt(&input, &preflight)
+                .is_err(),
+            "direct receipts must reject failed preflight evidence"
+        );
+        assert_eq!(
+            kura.read_lane_block_application_receipt(lane_id, lane_block_height),
+            None
+        );
+        assert!(!kura.lane_block_application_receipt_available(&proposal));
+    }
+
+    #[test]
+    fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut block);
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(Arc::new(block))
+            .expect("store block with lane artifact and results");
+        kura.persist_lane_block_application_receipt(&proposal)
+            .expect("persist lane application receipt");
+        let mut tampered = kura
+            .read_lane_block_application_receipt(lane_id, lane_block_height)
+            .expect("lane application receipt");
+        tampered.result_hashes[0] = Hash::new(b"tampered persisted lane application receipt");
+        let payload = tampered
+            .encode_framed()
+            .expect("encode tampered lane application receipt");
+        let (data_path, index_path) =
+            Kura::lane_block_application_receipt_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "lane block application receipt",
+                FsyncMode::Off,
+                None,
+            ),
+            "tampered sidecar should overwrite the indexed application receipt entry"
+        );
+
+        assert_eq!(
+            kura.read_lane_block_application_receipt(lane_id, lane_block_height),
+            None,
+            "tampered application receipt sidecars must be rejected on read"
+        );
+        assert!(!kura.lane_block_application_receipt_available(&proposal));
+    }
+
+    #[test]
+    fn lane_block_execution_input_rejects_forged_entrypoint_hashes() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        let mut forged = LaneBlockExecutionInputArtifact::new(recovered);
+        forged.entrypoint_hashes[0] = Hash::new(b"forged lane execution input hash");
+
+        assert!(
+            kura.write_lane_block_execution_input_artifact(&forged)
+                .is_err(),
+            "forged execution input hashes must not be persisted"
+        );
+        assert_eq!(
+            kura.read_lane_block_execution_input(lane_id, lane_block_height),
+            None
+        );
+    }
+
+    #[test]
+    fn lane_block_execution_input_read_rejects_tampered_sidecar() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        let mut tampered = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input");
+        tampered.entrypoint_hashes[0] = Hash::new(b"tampered persisted lane execution input");
+        let payload = tampered
+            .encode_framed()
+            .expect("encode tampered lane execution input");
+        let (data_path, index_path) =
+            Kura::lane_block_execution_input_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "lane block execution input",
+                FsyncMode::Off,
+                None,
+            ),
+            "tampered sidecar should overwrite the indexed execution input entry"
+        );
+
+        assert_eq!(
+            kura.read_lane_block_execution_input(lane_id, lane_block_height),
+            None,
+            "tampered execution input sidecars must be rejected on read"
+        );
+        assert!(!kura.lane_block_execution_input_available(&proposal));
+
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("canonical recovery should overwrite stale execution input");
+        let healed = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("healed lane execution input");
+        assert_eq!(healed, LaneBlockExecutionInputArtifact::new(recovered));
+        assert!(
+            kura.lane_block_execution_input_available(&proposal),
+            "healed execution input should be available to the standalone executor"
+        );
+    }
+
+    #[test]
+    fn lane_block_execution_input_read_rejects_stale_canonical_artifact() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        assert!(
+            kura.lane_block_execution_input_available(&proposal),
+            "fresh execution input should be available before canonical artifact drift"
+        );
+
+        let stale_artifact = LaneBlockArtifact::new(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"stale canonical lane artifact block hash",
+            )),
+            ownership,
+        );
+        let payload = stale_artifact
+            .encode_framed()
+            .expect("encode stale lane artifact");
+        let (data_path, index_path) =
+            Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "lane block artifact",
+                FsyncMode::Off,
+                None,
+            ),
+            "stale lane artifact should overwrite the indexed artifact entry"
+        );
+
+        assert_eq!(
+            kura.read_lane_block_execution_input(lane_id, lane_block_height),
+            None,
+            "execution input must be rejected after canonical lane artifact drift"
+        );
+        assert!(
+            !kura.lane_block_execution_input_available(&proposal),
+            "stale recovered inputs must not be advertised to the standalone executor"
+        );
+    }
+
+    #[test]
+    fn lane_block_execution_preflight_persists_current_state_results_and_reloads() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input");
+        let state_hash = Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"preflight state hash",
+        )));
+        let results = vec![TransactionResult(TransactionResultInner::Ok(
+            DataTriggerSequence::new(),
+        ))];
+
+        kura.persist_lane_block_execution_preflight(&input, 7, state_hash.clone(), results.clone())
+            .expect("persist lane execution preflight");
+        kura.persist_lane_block_execution_preflight(&input, 7, state_hash.clone(), results.clone())
+            .expect("idempotent lane execution preflight persist");
+        let preflight = kura
+            .read_lane_block_execution_preflight(lane_id, lane_block_height)
+            .expect("lane execution preflight");
+        assert_eq!(preflight.format_label(), "lane.execution_preflight");
+        assert_eq!(preflight.proposal, proposal);
+        assert_eq!(
+            preflight.entrypoint_indices,
+            proposal.descriptor.accepted_candidate_indices
+        );
+        assert_eq!(
+            preflight.entrypoint_hashes,
+            proposal.descriptor.accepted_transaction_hashes
+        );
+        assert_eq!(preflight.results, results);
+        assert!(!preflight.has_rejections());
+        assert_eq!(
+            kura.lane_block_execution_preflight_has_rejections(&proposal, 7, state_hash.clone()),
+            Some(false)
+        );
+        let ready_input = kura
+            .read_preflighted_lane_block_execution_input_for_application(
+                &proposal,
+                7,
+                state_hash.clone(),
+            )
+            .expect("clean current-tip preflight should expose application input");
+        assert_eq!(ready_input, input);
+        assert!(
+            kura.read_preflighted_lane_block_execution_input_for_application(
+                &proposal,
+                8,
+                state_hash.clone()
+            )
+            .is_none(),
+            "stale preflight evidence must not expose application input"
+        );
+        assert_eq!(
+            kura.lane_block_execution_preflight_has_rejections(&proposal, 8, state_hash),
+            None,
+            "preflight evidence must be tied to the current local state tip"
+        );
+
+        let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
+        assert_eq!(
+            reloaded.read_lane_block_execution_preflight(lane_id, lane_block_height),
+            Some(preflight)
+        );
+    }
+
+    #[test]
+    fn lane_block_execution_preflight_rejects_result_count_drift() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input");
+
+        let err = kura
+            .persist_lane_block_execution_preflight(&input, 0, None, Vec::new())
+            .expect_err("preflight result count drift must be rejected");
+        match err {
+            Error::IO(io, _) => {
+                assert_eq!(io.kind(), ErrorKind::InvalidData);
+                assert!(
+                    io.to_string()
+                        .contains("execution preflight result count does not match entrypoints"),
+                    "unexpected preflight count-drift error: {io}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(
+            kura.read_lane_block_execution_preflight(lane_id, lane_block_height),
+            None,
+            "malformed preflight sidecar must not be readable after rejected persist"
+        );
+    }
+
+    #[test]
+    fn lane_block_direct_application_input_requires_predecessor_receipt() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 2;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input");
+        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        kura.persist_lane_block_execution_preflight(&input, 0, None, vec![result])
+            .expect("persist clean lane execution preflight");
+
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&proposal),
+            "height-two lane blocks must wait for their certified predecessor receipt"
+        );
+        assert!(
+            kura.read_preflighted_lane_block_execution_input_for_application(&proposal, 0, None)
+                .is_none(),
+            "clean preflight alone must not bypass lane predecessor application"
+        );
+    }
+
+    #[test]
+    fn lane_block_direct_application_input_rejects_conflicting_predecessor_receipt() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let dataspace_id = lane_entry.dataspace_id;
+
+        let mut generator = DummyBlocks::new();
+        let mut predecessor_block = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            dataspace_id,
+            1,
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut predecessor_block);
+        let predecessor_ownership = predecessor_block
+            .execution_context()
+            .expect("predecessor execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("predecessor lane ownership")
+            .clone();
+        let predecessor_proposal = lane_block_proposal_from_ownership(&predecessor_ownership);
+
+        let mut successor_block = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            dataspace_id,
+            2,
+        )
+        .as_ref()
+        .clone();
+        let successor_ownership = rebind_kura_lane_payload_predecessor(
+            &mut successor_block,
+            predecessor_proposal.descriptor.descriptor_hash,
+        );
+        let successor_proposal = lane_block_proposal_from_ownership(&successor_ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(Arc::new(predecessor_block))
+            .expect("store predecessor block with results");
+        let predecessor_recovered = kura
+            .recover_lane_block_payload(&predecessor_proposal)
+            .expect("recover predecessor lane payload");
+        kura.persist_lane_block_execution_input(&predecessor_recovered)
+            .expect("persist predecessor lane execution input");
+        let predecessor_input = kura
+            .read_lane_block_execution_input(lane_id, 1)
+            .expect("predecessor execution input");
+        let rejected = TransactionResult(TransactionResultInner::Err(
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted(
+                    "adversarial predecessor preflight mismatch".to_owned(),
+                ),
+            ),
+        ));
+        kura.persist_lane_block_execution_preflight(&predecessor_input, 0, None, vec![rejected])
+            .expect("persist conflicting predecessor preflight");
+        kura.persist_lane_block_application_receipt(&predecessor_proposal)
+            .expect("persist readable predecessor canonical receipt");
+        assert!(
+            kura.read_lane_block_application_receipt(lane_id, 1)
+                .is_some(),
+            "conflicting predecessor receipt remains readable as forensic evidence"
+        );
+        assert!(
+            !kura.lane_block_application_receipt_available(&predecessor_proposal),
+            "conflicting predecessor receipt must not count as applied"
+        );
+
+        kura.store_block(Arc::new(successor_block))
+            .expect("store successor block with predecessor descriptor");
+        let successor_recovered = kura
+            .recover_lane_block_payload(&successor_proposal)
+            .expect("recover successor lane payload");
+        kura.persist_lane_block_execution_input(&successor_recovered)
+            .expect("persist successor lane execution input");
+        let successor_input = kura
+            .read_lane_block_execution_input(lane_id, 2)
+            .expect("successor execution input");
+        let ok = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        kura.persist_lane_block_execution_preflight(&successor_input, 0, None, vec![ok])
+            .expect("persist clean successor preflight");
+
+        assert!(
+            !kura.lane_block_predecessor_application_receipt_available(&successor_proposal),
+            "conflict-tainted predecessor receipt must not unblock successor application"
+        );
+        assert!(
+            kura.read_preflighted_lane_block_execution_input_for_application(
+                &successor_proposal,
+                0,
+                None
+            )
+            .is_none(),
+            "clean successor preflight must remain blocked by conflicting predecessor receipt"
+        );
+    }
+
+    #[test]
+    fn lane_block_execution_preflight_read_rejects_tampered_sidecar() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input");
+        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        kura.persist_lane_block_execution_preflight(&input, 0, None, vec![result])
+            .expect("persist lane execution preflight");
+        let mut tampered = kura
+            .read_lane_block_execution_preflight(lane_id, lane_block_height)
+            .expect("lane execution preflight");
+        tampered.result_hashes[0] = Hash::new(b"tampered persisted lane preflight result");
+        let payload = tampered
+            .encode_framed()
+            .expect("encode tampered lane execution preflight");
+        let (data_path, index_path) =
+            Kura::lane_block_execution_preflight_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "lane block execution preflight",
+                FsyncMode::Off,
+                None,
+            ),
+            "tampered sidecar should overwrite the indexed preflight entry"
+        );
+
+        assert_eq!(
+            kura.read_lane_block_execution_preflight(lane_id, lane_block_height),
+            None,
+            "tampered execution preflight sidecars must be rejected on read"
+        );
+        assert_eq!(
+            kura.lane_block_execution_preflight_has_rejections(&proposal, 0, None),
+            None
+        );
+    }
+
+    #[test]
+    fn lane_block_application_receipt_conflicting_with_preflight_is_not_available() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        )
+        .as_ref()
+        .clone();
+        attach_ok_results_to_block(&mut block);
+        let ownership = block
+            .execution_context()
+            .expect("execution context")
+            .lane_payload_ownerships
+            .first()
+            .expect("lane ownership")
+            .clone();
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(Arc::new(block))
+            .expect("store block with lane artifact and results");
+        let recovered = kura
+            .recover_lane_block_payload(&proposal)
+            .expect("recover executable lane payload");
+        kura.persist_lane_block_execution_input(&recovered)
+            .expect("persist lane execution input");
+        let input = kura
+            .read_lane_block_execution_input(lane_id, lane_block_height)
+            .expect("lane execution input");
+        let rejected = TransactionResult(TransactionResultInner::Err(
+            iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                iroha_data_model::ValidationFail::NotPermitted(
+                    "adversarial lane preflight mismatch".to_owned(),
+                ),
+            ),
+        ));
+        kura.persist_lane_block_execution_preflight(&input, 0, None, vec![rejected])
+            .expect("persist conflicting lane execution preflight");
+        assert!(
+            kura.read_preflighted_lane_block_execution_input_for_application(&proposal, 0, None)
+                .is_none(),
+            "rejected direct preflights must not expose application input"
+        );
+        kura.persist_lane_block_application_receipt(&proposal)
+            .expect("persist canonical lane application receipt");
+
+        assert!(
+            kura.read_lane_block_application_receipt(lane_id, lane_block_height)
+                .is_some(),
+            "canonical receipt should still be readable as forensic evidence"
+        );
+        assert!(
+            kura.lane_block_application_receipt_conflicts_with_preflight(&proposal),
+            "direct-execution preflight mismatch must be detected"
+        );
+        assert!(
+            !kura.lane_block_application_receipt_available(&proposal),
+            "conflicting preflight evidence must keep the lane block from being treated as applied"
+        );
+
+        let (reloaded, _) = Kura::new(&config, &lane_config).expect("reload kura");
+        assert!(reloaded.lane_block_application_receipt_conflicts_with_preflight(&proposal));
+        assert!(!reloaded.lane_block_application_receipt_available(&proposal));
+    }
+
+    #[test]
+    fn lane_block_payload_availability_rejects_entrypoint_hash_drift() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut block = DummyBlocks::new().next().as_ref().clone();
+        let mut ownership = sample_lane_payload_ownership_for_kura(
+            &block,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        ownership.accepted_transaction_hashes = vec![Hash::new(b"forged lane payload hash")];
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("forged lane ownership replay hashes compute");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let execution_context =
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                    ownership.accepted_transaction_hashes[0],
+                ),
+                lane_id,
+                lane_entry.dataspace_id,
+            )])
+            .with_lane_payload_ownerships(vec![ownership]);
+        block.set_execution_context(Some(execution_context));
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(Arc::new(block))
+            .expect("store block with forged lane artifact");
+
+        assert_eq!(
+            kura.lane_block_payload_availability(&proposal),
+            LaneBlockPayloadAvailability::EntrypointHashMismatch
+        );
+        assert_eq!(
+            kura.recover_lane_block_payload(&proposal),
+            Err(LaneBlockPayloadAvailability::EntrypointHashMismatch)
+        );
+    }
+
+    #[test]
+    fn lane_block_payload_availability_rejects_missing_entrypoint_index() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let mut block = DummyBlocks::new().next().as_ref().clone();
+        let mut ownership = sample_lane_payload_ownership_for_kura(
+            &block,
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+        ownership.accepted_candidate_indices = vec![9];
+        ownership.accepted_transaction_hashes = vec![Hash::new(b"missing entrypoint hash")];
+        let replay_hashes = ownership
+            .compute_replay_hashes()
+            .expect("missing-index lane ownership replay hashes compute");
+        ownership.subject_hash = replay_hashes.subject_hash;
+        ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+        let proposal = lane_block_proposal_from_ownership(&ownership);
+        let execution_context =
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                    ownership.accepted_transaction_hashes[0],
+                ),
+                lane_id,
+                lane_entry.dataspace_id,
+            )])
+            .with_lane_payload_ownerships(vec![ownership]);
+        block.set_execution_context(Some(execution_context));
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(Arc::new(block))
+            .expect("store block with missing-index lane artifact");
+
+        assert_eq!(
+            kura.recover_lane_block_payload(&proposal),
+            Err(LaneBlockPayloadAvailability::MissingEntrypoint)
+        );
+    }
+
+    #[test]
+    fn certified_lane_block_persists_under_lane_segment_and_reloads() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let (session, signer_pops) = sample_committed_lane_block_session_for_kura(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified lane block");
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("duplicate certified lane block persistence is idempotent");
+
+        let artifact = kura
+            .read_certified_lane_block_artifact(lane_id, lane_block_height)
+            .expect("certified lane block");
+        assert_eq!(artifact.format_label(), "lane.certified_block");
+        assert_eq!(artifact.proposal, session.proposal);
+        assert_eq!(artifact.prepare_qc, session.prepare_qc);
+        assert_eq!(artifact.commit_qc, session.commit_qc);
+        assert_eq!(artifact.signer_pops, signer_pops);
+
+        let (data_path, index_path) =
+            Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            data_path.is_file(),
+            "certified lane block data file missing"
+        );
+        assert!(
+            index_path.is_file(),
+            "certified lane block index file missing"
+        );
+
+        drop(kura);
+        let (reloaded, _) = Kura::new(&config, &lane_config).expect("reopen kura");
+        assert_eq!(
+            reloaded.read_certified_lane_block_artifact(lane_id, lane_block_height),
+            Some(artifact)
+        );
+    }
+
+    #[test]
+    fn latest_certified_lane_block_filters_foreign_dataspace() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (active, active_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 2);
+        let (foreign, foreign_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, DataSpaceId::new(77), 3);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.persist_committed_lane_block_session(&active, &active_pops)
+            .expect("persist active certified lane block");
+        kura.persist_committed_lane_block_session(&foreign, &foreign_pops)
+            .expect("persist foreign certified lane block");
+
+        let latest = kura
+            .latest_certified_lane_block_artifact_for_dataspace(lane_id, lane_entry.dataspace_id)
+            .expect("latest certified active lane block");
+        assert_eq!(latest.proposal, active.proposal);
+        assert_eq!(latest.proposal.descriptor.lane_block_height, 2);
+    }
+
+    #[test]
+    fn certified_lane_block_artifacts_for_dataspace_replays_ordered_active_backlog() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let (first, first_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 1);
+        let (second, second_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, lane_entry.dataspace_id, 2);
+        let (foreign, foreign_pops) =
+            sample_committed_lane_block_session_for_kura(lane_id, DataSpaceId::new(77), 3);
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.persist_committed_lane_block_session(&first, &first_pops)
+            .expect("persist first active certified lane block");
+        kura.persist_committed_lane_block_session(&second, &second_pops)
+            .expect("persist second active certified lane block");
+        kura.persist_committed_lane_block_session(&foreign, &foreign_pops)
+            .expect("persist foreign certified lane block");
+
+        let active =
+            kura.certified_lane_block_artifacts_for_dataspace(lane_id, lane_entry.dataspace_id);
+        assert_eq!(
+            active
+                .iter()
+                .map(|artifact| artifact.proposal.descriptor.lane_block_height)
+                .collect::<Vec<_>>(),
+            vec![1, 2],
+            "all active certified lane blocks should replay in lane-local height order"
+        );
+        assert_eq!(active[0].proposal, first.proposal);
+        assert_eq!(active[1].proposal, second.proposal);
+
+        let latest = kura
+            .latest_certified_lane_block_artifact_for_dataspace(lane_id, lane_entry.dataspace_id)
+            .expect("latest certified active lane block");
+        assert_eq!(latest.proposal, second.proposal);
+    }
+
+    #[test]
+    fn certified_lane_block_read_rejects_qc_body_mismatch() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let (session, signer_pops) = sample_committed_lane_block_session_for_kura(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified lane block");
+        let mut tampered = CertifiedLaneBlockArtifact::new(session, signer_pops);
+        tampered.commit_qc.body.descriptor_hash = Hash::new(b"tampered descriptor");
+        let payload = tampered
+            .encode_framed()
+            .expect("encode tampered certified lane block");
+        let (data_path, index_path) =
+            Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "certified lane block",
+                FsyncMode::Off,
+                None,
+            ),
+            "tampered sidecar overwrite should be written for read rejection test"
+        );
+
+        assert!(
+            kura.read_certified_lane_block_artifact(lane_id, lane_block_height)
+                .is_none(),
+            "certified lane block reads must reject QC bodies that drift from the proposal"
+        );
+    }
+
+    #[test]
+    fn certified_lane_block_read_rejects_qc_signature_mismatch() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let (session, signer_pops) = sample_committed_lane_block_session_for_kura(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist certified lane block");
+        let mut tampered = CertifiedLaneBlockArtifact::new(session, signer_pops);
+        tampered.commit_qc.bls_aggregate_signature[0] ^= 0x01;
+        let payload = tampered
+            .encode_framed()
+            .expect("encode tampered certified lane block");
+        let (data_path, index_path) =
+            Kura::certified_lane_block_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "certified lane block",
+                FsyncMode::Off,
+                None,
+            ),
+            "tampered sidecar overwrite should be written for read rejection test"
+        );
+
+        assert!(
+            kura.read_certified_lane_block_artifact(lane_id, lane_block_height)
+                .is_none(),
+            "certified lane block reads must reject invalid QC aggregate signatures"
         );
     }
 
@@ -14813,6 +18456,110 @@ mod tests {
             kura.read_lane_block_artifact(lane_id, lane_block_height)
                 .is_none(),
             "forged global block hash must make the artifact unreadable"
+        );
+    }
+
+    #[test]
+    fn lane_block_artifact_read_rejects_replay_material_mismatch() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let lane_block_height = 1;
+        let block = dummy_block_with_lane_payload_ownership(
+            lane_id,
+            lane_entry.dataspace_id,
+            lane_block_height,
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(block)
+            .expect("store block with lane artifact");
+
+        let mut forged = kura
+            .read_lane_block_artifact(lane_id, lane_block_height)
+            .expect("lane block artifact");
+        forged.ownership.accepted_transaction_hashes[0] =
+            Hash::new(b"forged accepted transaction hash");
+        let payload = forged.encode_framed().expect("encode forged artifact");
+        let (data_path, index_path) =
+            Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                lane_block_height,
+                &payload,
+                "lane block artifact",
+                FsyncMode::Off,
+                None,
+            ),
+            "overwrite lane artifact with forged replay material"
+        );
+
+        assert!(
+            kura.read_lane_block_artifact(lane_id, lane_block_height)
+                .is_none(),
+            "forged descriptor replay material must make the artifact unreadable"
+        );
+    }
+
+    #[test]
+    fn latest_lane_block_artifact_skips_replay_material_mismatch() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let mut generator = DummyBlocks::new();
+        let first = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            lane_entry.dataspace_id,
+            1,
+        );
+        let later = dummy_block_with_lane_payload_ownership_from_generator(
+            &mut generator,
+            lane_id,
+            lane_entry.dataspace_id,
+            3,
+        );
+
+        let (kura, _) = Kura::new(&config, &lane_config).expect("init kura");
+        kura.store_block(first).expect("store first lane artifact");
+        kura.store_block(later)
+            .expect("store sparse later artifact");
+
+        let mut forged = kura
+            .read_lane_block_artifact(lane_id, 3)
+            .expect("later lane block artifact");
+        forged.ownership.lane_block_descriptor_validator_count = forged
+            .ownership
+            .lane_block_descriptor_validator_count
+            .saturating_add(1);
+        let payload = forged.encode_framed().expect("encode forged artifact");
+        let (data_path, index_path) =
+            Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+        assert!(
+            Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                3,
+                &payload,
+                "lane block artifact",
+                FsyncMode::Off,
+                None,
+            ),
+            "overwrite later lane artifact with forged replay material"
+        );
+
+        let latest = kura
+            .latest_lane_block_artifact(lane_id)
+            .expect("latest valid lane block artifact");
+        assert_eq!(
+            latest.ownership.lane_block_height, 1,
+            "latest artifact scan must skip corrupt newer replay material"
         );
     }
 

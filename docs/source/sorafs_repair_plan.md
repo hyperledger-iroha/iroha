@@ -81,7 +81,9 @@ rejects duplicate or unknown failure-source, route, lifecycle-status,
 handoff-target, and metric inputs before writing,
 auditor-roster and failure-bundle digest bindings, governance handoff digest
 bindings, auditor minimum counts, reviewed `repair-auditor-*` labels and
-`repair-failure-event-*` failure events matching their counts, derived
+`repair-failure-event-*` failure events matching their counts, default
+`--failure-event-count` values derived from the reviewed failure-source
+inventory, derived
 `status_count` and `handoff_target_count`
 fields for reviewed lifecycle-status and handoff-target inventories, route,
 event-lag, and repair-latency threshold facts,
@@ -465,6 +467,10 @@ before promotion can report ready.
 The summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the observability artifact fingerprint before final
+promotion can report ready. The repair gate fail-closes when more than one
+valid roster, failure bundle, handoff, or policy anchor appears, and clears the
+mixed `valid_roster_digests`, `valid_failure_bundle_digests`,
+`valid_handoff_digests`, or `valid_policy_digests` set before aggregate
 promotion can report ready.
 Aggregate promotion also rechecks the lane-proven repair digest relationships:
 roster-bound artifact fingerprints must match `valid_roster_digests`,

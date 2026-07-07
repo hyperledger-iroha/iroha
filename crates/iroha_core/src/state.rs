@@ -2,7 +2,7 @@
 #![allow(clippy::items_after_statements, clippy::used_underscore_binding)]
 use std::{
     cell::OnceCell,
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     fmt::Write,
     io, mem,
     num::{NonZeroU64, NonZeroUsize},
@@ -161,6 +161,7 @@ use mv::{
 use nonzero_ext::nonzero;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
+    codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
@@ -589,6 +590,9 @@ macro_rules! build_world_block {
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
             offline_note_replay_keys: $state.offline_note_replay_keys.$method(),
+            direct_lane_block_application_markers: $state
+                .direct_lane_block_application_markers
+                .$method(),
             public_lane_validators: $state.public_lane_validators.$method(),
             public_lane_stake_shares: $state.public_lane_stake_shares.$method(),
             public_lane_rewards: $state.public_lane_rewards.$method(),
@@ -810,6 +814,9 @@ macro_rules! build_world_transaction {
             repo_agreements_by_custodian: $state.repo_agreements_by_custodian.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
             offline_note_replay_keys: $state.offline_note_replay_keys.transaction(),
+            direct_lane_block_application_markers: $state
+                .direct_lane_block_application_markers
+                .transaction(),
             public_lane_validators: $state.public_lane_validators.transaction(),
             public_lane_stake_shares: $state.public_lane_stake_shares.transaction(),
             public_lane_rewards: $state.public_lane_rewards.transaction(),
@@ -1969,6 +1976,93 @@ pub enum BlockProofError {
     },
 }
 
+/// Key identifying a directly applied standalone lane block in world state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+pub struct DirectLaneBlockApplicationKey {
+    /// Lane that produced the directly applied block.
+    pub lane_id: LaneId,
+    /// Lane-local block height.
+    pub lane_block_height: u64,
+}
+
+impl mv::json::JsonKeyCodec for DirectLaneBlockApplicationKey {
+    fn encode_json_key(&self, out: &mut String) {
+        let key = format!("{}:{}", self.lane_id.as_u32(), self.lane_block_height);
+        json::write_json_string(&key, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let (lane_id, lane_block_height) = encoded.split_once(':').ok_or_else(|| {
+            json::Error::Message(
+                "expected direct lane application key to contain ':' separator".into(),
+            )
+        })?;
+        let lane_id = lane_id.parse::<u32>().map_err(|err| {
+            json::Error::Message(format!("invalid direct lane application lane id: {err}"))
+        })?;
+        let lane_block_height = lane_block_height.parse::<u64>().map_err(|err| {
+            json::Error::Message(format!(
+                "invalid direct lane application block height: {err}"
+            ))
+        })?;
+        Ok(Self {
+            lane_id: LaneId::new(lane_id),
+            lane_block_height,
+        })
+    }
+}
+
+/// World-state marker committed atomically with direct standalone lane-block effects.
+#[derive(
+    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+)]
+pub struct DirectLaneBlockApplicationMarker {
+    /// Lane that produced the directly applied block.
+    pub lane_id: LaneId,
+    /// Dataspace routed by the directly applied block.
+    pub dataspace_id: DataSpaceId,
+    /// Lane-local block height.
+    pub lane_block_height: u64,
+    /// Descriptor hash certified by the lane-block proposal.
+    pub descriptor_hash: Hash,
+    /// Proposal hash certified by the lane-block quorum certificates.
+    pub proposal_hash: Hash,
+    /// Committed world-state height used as the direct-execution base.
+    pub preflight_state_height: u64,
+    /// Committed world-state hash used as the direct-execution base.
+    pub preflight_state_hash: HashOf<BlockHeader>,
+    /// Hashes of committed transaction results in lane descriptor order.
+    pub result_hashes: Vec<Hash>,
+}
+
+impl DirectLaneBlockApplicationMarker {
+    pub(crate) fn from_direct_receipt(
+        receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
+    ) -> Option<Self> {
+        if receipt.format != crate::kura::LaneBlockApplicationReceiptArtifactFormat::DirectExecution
+        {
+            return None;
+        }
+        Some(Self {
+            lane_id: receipt.proposal.descriptor.lane_id,
+            dataspace_id: receipt.proposal.descriptor.dataspace_id,
+            lane_block_height: receipt.proposal.descriptor.lane_block_height,
+            descriptor_hash: receipt.proposal.descriptor.descriptor_hash,
+            proposal_hash: receipt.proposal.proposal_hash,
+            preflight_state_height: receipt.application_block_height,
+            preflight_state_hash: receipt.application_block_hash,
+            result_hashes: receipt.result_hashes.clone(),
+        })
+    }
+
+    pub(crate) fn key(&self) -> DirectLaneBlockApplicationKey {
+        DirectLaneBlockApplicationKey {
+            lane_id: self.lane_id,
+            lane_block_height: self.lane_block_height,
+        }
+    }
+}
+
 /// The global entity consisting of `domains`, `triggers` and etc.
 /// For example registration of domain, will have this as an ISI target.
 #[derive(Default, JsonSerialize)]
@@ -2390,6 +2484,9 @@ pub struct World {
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
     pub(crate) offline_note_replay_keys: Storage<Hash, ()>,
+    /// Direct standalone lane blocks already applied to world state.
+    pub(crate) direct_lane_block_application_markers:
+        Storage<DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
     /// Public-lane validators keyed by `(lane_id, validator account id)`.
     #[norito(skip)]
     pub(crate) public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -2845,6 +2942,9 @@ pub struct WorldBlock<'world> {
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
     pub(crate) offline_note_replay_keys: StorageBlock<'world, Hash, ()>,
+    /// Direct standalone lane blocks already applied to world state.
+    pub(crate) direct_lane_block_application_markers:
+        StorageBlock<'world, DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
     /// Public lane validator registry.
     pub(crate) public_lane_validators:
         StorageBlock<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -2983,6 +3083,10 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
         collect_reverts!(self.offline_note_replay_keys, OfflineNoteReplayKey);
+        collect_reverts!(
+            self.direct_lane_block_application_markers,
+            DirectLaneBlockApplicationMarker
+        );
 
         diff
     }
@@ -3034,6 +3138,10 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
         collect_payload!(self.offline_note_replay_keys, OfflineNoteReplayKey);
+        collect_payload!(
+            self.direct_lane_block_application_markers,
+            DirectLaneBlockApplicationMarker
+        );
 
         payload
     }
@@ -3518,6 +3626,13 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
     pub(crate) offline_note_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
+    /// Direct standalone lane blocks already applied to world state.
+    pub(crate) direct_lane_block_application_markers: StorageTransaction<
+        'block,
+        'world,
+        DirectLaneBlockApplicationKey,
+        DirectLaneBlockApplicationMarker,
+    >,
     pub(crate) public_lane_validators:
         StorageTransaction<'block, 'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
@@ -4953,6 +5068,9 @@ pub struct WorldView<'world> {
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
     /// Offline replay keys used for issued notes, certificates, nullifiers, and audit tokens.
     pub(crate) offline_note_replay_keys: StorageView<'world, Hash, ()>,
+    /// Direct standalone lane blocks already applied to world state.
+    pub(crate) direct_lane_block_application_markers:
+        StorageView<'world, DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
     pub(crate) public_lane_validators:
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
@@ -7905,6 +8023,8 @@ pub struct StateBlock<'state> {
     pending_da_pin_intents: Option<PendingDaPinIntentBundle>,
     /// Autoscale lane lifecycle prepared by this block and applied during commit.
     pending_autoscale_lifecycle: Option<PendingAutoscaleLaneLifecycle>,
+    /// Transaction hashes committed by direct standalone lane-block application.
+    direct_committed_transactions: HashSet<HashOf<SignedTransaction>>,
 
     pub(crate) _curr_block: BlockHeader,
     #[cfg(feature = "zk-preverify")]
@@ -8722,6 +8842,8 @@ pub struct StateView<'state> {
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this state view.
     pub nexus: iroha_config::parameters::actual::Nexus,
+    /// Lane governance manifest registry snapshot for this view.
+    pub lane_manifests: LaneManifestRegistryHandle,
     /// Fraud monitoring configuration snapshot for this view.
     pub fraud_monitoring: iroha_config::parameters::actual::FraudMonitoring,
     /// Zero-knowledge verification configuration snapshot for this view.
@@ -8775,6 +8897,8 @@ pub struct StateQueryView<'state> {
     pub crypto: Arc<iroha_config::parameters::actual::Crypto>,
     /// Nexus configuration snapshot for this state view.
     pub nexus: iroha_config::parameters::actual::Nexus,
+    /// Lane governance manifest registry snapshot for this view.
+    pub lane_manifests: LaneManifestRegistryHandle,
     /// Zero-knowledge verification configuration snapshot for this view.
     pub zk: iroha_config::parameters::actual::Zk,
     /// Content configuration snapshot for this view.
@@ -15539,6 +15663,9 @@ impl World {
             repo_agreements_by_custodian: self.repo_agreements_by_custodian.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
             offline_note_replay_keys: self.offline_note_replay_keys.view(),
+            direct_lane_block_application_markers: self
+                .direct_lane_block_application_markers
+                .view(),
             public_lane_validators: self.public_lane_validators.view(),
             public_lane_stake_shares: self.public_lane_stake_shares.view(),
             public_lane_rewards: self.public_lane_rewards.view(),
@@ -16138,6 +16265,10 @@ pub trait WorldReadOnly {
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
     /// Offline replay keys (read-only).
     fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
+    /// Direct standalone lane-block application markers (read-only).
+    fn direct_lane_block_application_markers(
+        &self,
+    ) -> &impl StorageReadOnly<DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>;
     /// Public lane validators keyed by `(lane_id, validator)` (read-only).
     fn public_lane_validators(
         &self,
@@ -17539,6 +17670,11 @@ macro_rules! impl_world_ro {
             fn offline_note_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
                 &self.offline_note_replay_keys
             }
+            fn direct_lane_block_application_markers(
+                &self,
+            ) -> &impl StorageReadOnly<DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker> {
+                &self.direct_lane_block_application_markers
+            }
             fn public_lane_validators(
                 &self,
             ) -> &impl StorageReadOnly<(LaneId, AccountId), PublicLaneValidatorRecord> {
@@ -18022,6 +18158,7 @@ impl<'world> WorldBlock<'world> {
             repo_agreements_by_custodian,
             settlement_ledgers,
             offline_note_replay_keys,
+            direct_lane_block_application_markers,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -18129,6 +18266,7 @@ impl<'world> WorldBlock<'world> {
         repo_agreements_by_custodian.commit();
         settlement_ledgers.commit();
         offline_note_replay_keys.commit();
+        direct_lane_block_application_markers.commit();
         domain_committees.commit();
         domain_endorsement_policies.commit();
         domain_endorsements.commit();
@@ -20157,6 +20295,11 @@ impl State {
         self.nexus.read().clone()
     }
 
+    /// Return the block storage backend used by state recovery and consensus sidecars.
+    pub(crate) fn kura(&self) -> &Kura {
+        &self.kura
+    }
+
     /// Install or clear the shared Soracloud runtime handle used by core execution paths.
     pub fn set_soracloud_runtime(
         &self,
@@ -21076,6 +21219,16 @@ impl State {
             .read()
             .reset_height_for_lane(lane_id)
             .is_none_or(|reset_height| block_height > reset_height)
+    }
+
+    fn lane_block_height_visible_after_reset(
+        reset_heights: &BTreeMap<LaneId, u64>,
+        lane_id: LaneId,
+        lane_block_height: u64,
+    ) -> bool {
+        reset_heights
+            .get(&lane_id)
+            .is_none_or(|reset_height| lane_block_height > *reset_height)
     }
 
     fn active_reset_lanes(
@@ -22770,6 +22923,7 @@ impl State {
             pending_da_commitments: None,
             pending_da_pin_intents: None,
             pending_autoscale_lifecycle: None,
+            direct_committed_transactions: HashSet::new(),
             exec_witness: None,
             gas_used_in_block: 0,
             confidential_gas_used_in_block: 0,
@@ -23215,6 +23369,98 @@ impl State {
         sb
     }
 
+    /// Create a block scope for direct standalone lane-state application.
+    ///
+    /// Unlike [`State::block`], this does not run start-of-block lifecycle effects.
+    /// A successful commit with no inserted canonical transaction block commits only
+    /// world-state changes and leaves the canonical block hash journal unchanged.
+    pub(crate) fn lane_application_block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
+        self.ensure_da_indexes_hydrated()
+            .expect("failed to hydrate DA indexes from Kura");
+        let nexus_snapshot = self.nexus_snapshot();
+        let (gas_limit_per_block, pre_block_npos_seed) = {
+            let mut world_view = self.world.view();
+            world_view.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
+            let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
+            let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
+                &world_view,
+                &self.chain_id,
+                curr_block.height().get(),
+            );
+            (gas_limit_per_block, pre_block_npos_seed)
+        };
+        let mut world = self.world.block();
+        world.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
+        StateBlock {
+            state_ref: self,
+            block_hashes: self.block_hashes.block(),
+            world,
+            merge_ledger: &self.merge_ledger,
+            transactions: self.transactions.block(),
+            commit_topology: self.commit_topology.block(),
+            prev_commit_topology: self.prev_commit_topology.block(),
+            ivm: &self.ivm,
+            kura: &self.kura,
+            query_handle: &self.query_handle,
+            soracloud_runtime: self.soracloud_runtime(),
+            accounts_snapshot_cache: SyncOnceCell::new(),
+            pipeline: self.pipeline.clone(),
+            oracle: self.oracle.clone(),
+            pacing_governor: self.pacing_governor,
+            crypto: self.crypto(),
+            nexus: self.nexus_snapshot(),
+            lane_manifests: self.lane_manifests.read().clone(),
+            lane_privacy_registry: self.lane_privacy_registry.read().clone(),
+            lane_compliance: self.lane_compliance.read().clone(),
+            fraud_monitoring: self.fraud_monitoring.clone(),
+            zk: self.zk_snapshot(),
+            gov: self.gov.clone(),
+            content: self.content.clone(),
+            settlement: self.settlement.clone(),
+            settlement_engine: self.settlement_engine.clone(),
+            chain_id: self.chain_id.clone(),
+            pre_block_npos_seed,
+            settlement_accumulator: crate::settlement::SettlementAccumulator::default(),
+            fastpq_transcripts: BTreeMap::new(),
+            fastpq_tx_set_hash: None,
+            fastpq_entry_dataspaces: BTreeMap::new(),
+            fastpq_witness_context: None,
+            axt_envelopes: Vec::new(),
+            verified_lane_relay_records: Vec::new(),
+            touched_lanes: BTreeSet::new(),
+            pending_da_commitments: None,
+            pending_da_pin_intents: None,
+            pending_autoscale_lifecycle: None,
+            direct_committed_transactions: HashSet::new(),
+            exec_witness: None,
+            gas_used_in_block: 0,
+            confidential_gas_used_in_block: 0,
+            zk_confidential_ops_in_block: 0,
+            zk_verify_calls_in_block: 0,
+            zk_proof_bytes_in_block: 0,
+            confidential_registry_dirty: false,
+            implicit_account_creations_in_block: 0,
+            mode_cutover_next_set_in_block: false,
+            mode_cutover_activation_set_in_block: false,
+            gas_limit_per_block,
+            #[cfg(feature = "telemetry")]
+            telemetry: &self.telemetry,
+            state_write_lock: &self.state_write_lock,
+            tiered_backend: Arc::clone(&self.tiered_backend),
+            da_commitments: &self.da_commitments,
+            da_receipt_cursors: &self.da_receipt_cursors,
+            da_shard_cursors: &self.da_shard_cursors,
+            da_pin_intents: &self.da_pin_intents,
+            _curr_block: curr_block,
+            #[cfg(feature = "zk-preverify")]
+            zk_dedup: Default::default(),
+            preverified_batch: None,
+            committed_fragments: 0,
+            replay_compatibility: false,
+            trust_committed_execution_results: false,
+        }
+    }
+
     /// Create structure to execute a block while reverting changes made in the latest block
     pub fn block_and_revert(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         let current_height = self.block_hashes.view().len() as u64;
@@ -23274,6 +23520,7 @@ impl State {
             pending_da_commitments: None,
             pending_da_pin_intents: None,
             pending_autoscale_lifecycle: None,
+            direct_committed_transactions: HashSet::new(),
             exec_witness: None,
             gas_used_in_block: 0,
             confidential_gas_used_in_block: 0,
@@ -23408,6 +23655,7 @@ impl State {
             oracle: self.oracle.clone(),
             crypto: self.crypto(),
             nexus: self.nexus_snapshot(),
+            lane_manifests: self.lane_manifests.read().clone(),
             zk: self.zk_snapshot(),
             content: self.content.clone(),
             chain_id: self.chain_id.clone(),
@@ -23605,6 +23853,69 @@ impl State {
         self.block_hashes.view().last().copied()
     }
 
+    /// Canonical committed WSV identity used to bind direct lane execution preflights.
+    ///
+    /// Direct lane-state application does not advance the canonical block hash, so
+    /// preflight freshness must be tied to the committed world-state surface rather
+    /// than only to the block journal tip.
+    #[track_caller]
+    pub(crate) fn lane_execution_state_hash(&self) -> HashOf<BlockHeader> {
+        HashOf::<BlockHeader>::from_untyped_unchecked(
+            crate::snapshot::canonical_state_snapshot_hash(self),
+        )
+    }
+
+    pub(crate) fn direct_lane_block_application_marker_matches(
+        &self,
+        receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
+        let Some(expected) = DirectLaneBlockApplicationMarker::from_direct_receipt(receipt) else {
+            return false;
+        };
+        self.world
+            .view()
+            .direct_lane_block_application_markers
+            .get(&expected.key())
+            .is_some_and(|marker| marker == &expected)
+    }
+
+    pub(crate) fn direct_lane_block_application_markers_snapshot(
+        &self,
+    ) -> Vec<(
+        DirectLaneBlockApplicationKey,
+        DirectLaneBlockApplicationMarker,
+    )> {
+        self.world
+            .view()
+            .direct_lane_block_application_markers
+            .iter()
+            .map(|(key, marker)| (*key, marker.clone()))
+            .collect()
+    }
+
+    pub(crate) fn direct_lane_block_application_marker_targets_active_lane(
+        &self,
+        marker: &DirectLaneBlockApplicationMarker,
+    ) -> bool {
+        self.lane_id_targets_active_dataspace(marker.lane_id, marker.dataspace_id)
+    }
+
+    pub(crate) fn direct_lane_block_application_receipt_targets_active_lane(
+        &self,
+        receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
+    ) -> bool {
+        let descriptor = &receipt.proposal.descriptor;
+        self.lane_id_targets_active_dataspace(descriptor.lane_id, descriptor.dataspace_id)
+    }
+
+    fn lane_id_targets_active_dataspace(&self, lane_id: LaneId, dataspace_id: DataSpaceId) -> bool {
+        let nexus = self.nexus.read();
+        nexus
+            .lane_config
+            .entry(lane_id)
+            .is_some_and(|entry| entry.dataspace_id == dataspace_id)
+    }
+
     /// Previous committed block hash (if any) derived from the block hash journal.
     ///
     /// This is cheaper than acquiring a full [`StateView`] and avoids locking
@@ -23621,6 +23932,15 @@ impl State {
     #[track_caller]
     pub fn has_committed_transaction(&self, hash: HashOf<SignedTransaction>) -> bool {
         self.transactions.view().get(&hash).is_some()
+    }
+
+    pub(crate) fn record_direct_committed_transactions(
+        &self,
+        transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
+        height: NonZeroUsize,
+    ) {
+        self.transactions
+            .record_direct_committed_membership(transactions, height);
     }
 
     /// Return the transaction admission limits used by ingress validation.
@@ -23945,6 +24265,7 @@ impl State {
                 oracle: self.oracle.clone(),
                 crypto: self.crypto(),
                 nexus,
+                lane_manifests: self.lane_manifests.read().clone(),
                 fraud_monitoring: self.fraud_monitoring.clone(),
                 zk: self.zk_snapshot(),
                 gov: self.gov.clone(),
@@ -24119,6 +24440,109 @@ impl State {
             tx.remove(key);
         }
         tx.commit();
+    }
+
+    fn direct_lane_block_application_marker_keys_for_lanes(
+        markers: &impl StorageReadOnly<DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
+        lanes_to_reset: &BTreeSet<LaneId>,
+    ) -> Vec<DirectLaneBlockApplicationKey> {
+        if lanes_to_reset.is_empty() {
+            return Vec::new();
+        }
+
+        markers
+            .iter()
+            .filter_map(|(key, marker)| {
+                (lanes_to_reset.contains(&key.lane_id) || lanes_to_reset.contains(&marker.lane_id))
+                    .then_some(*key)
+            })
+            .collect()
+    }
+
+    fn prune_direct_lane_block_application_markers_for_lanes(
+        &self,
+        lanes_to_reset: &BTreeSet<LaneId>,
+    ) {
+        let stale_keys = {
+            let markers = self.world.direct_lane_block_application_markers.view();
+            Self::direct_lane_block_application_marker_keys_for_lanes(&markers, lanes_to_reset)
+        };
+        if stale_keys.is_empty() {
+            return;
+        }
+
+        let mut tx = self.world.direct_lane_block_application_markers.block();
+        for key in stale_keys {
+            tx.remove(key);
+        }
+        tx.commit();
+    }
+
+    fn prune_direct_lane_block_application_markers_from_world_block(
+        world: &mut WorldBlock<'_>,
+        lanes_to_reset: &BTreeSet<LaneId>,
+    ) {
+        let stale_keys = Self::direct_lane_block_application_marker_keys_for_lanes(
+            &world.direct_lane_block_application_markers,
+            lanes_to_reset,
+        );
+        for key in stale_keys {
+            world.direct_lane_block_application_markers.remove(key);
+        }
+    }
+
+    fn prune_lane_lifecycle_world_block_state_for_lanes(
+        world: &mut WorldBlock<'_>,
+        lanes_to_reset: &BTreeSet<LaneId>,
+    ) {
+        if lanes_to_reset.is_empty() {
+            return;
+        }
+
+        let stale_axt_replay_keys =
+            Self::axt_replay_ledger_keys_for_lanes(&world.axt_replay_ledger, lanes_to_reset);
+        for key in stale_axt_replay_keys {
+            world.axt_replay_ledger.remove(key);
+        }
+
+        Self::prune_da_pin_intent_world_block_indexes_for_lanes(world, lanes_to_reset);
+        Self::prune_direct_lane_block_application_markers_from_world_block(world, lanes_to_reset);
+
+        let stale_public_lane_stake_share_keys = Self::public_lane_stake_share_keys_for_lanes(
+            &world.public_lane_stake_shares,
+            lanes_to_reset,
+        );
+        for key in stale_public_lane_stake_share_keys {
+            world.public_lane_stake_shares.remove(key);
+        }
+
+        let stale_public_lane_reward_keys =
+            Self::public_lane_reward_keys_for_lanes(&world.public_lane_rewards, lanes_to_reset);
+        for key in stale_public_lane_reward_keys {
+            world.public_lane_rewards.remove(key);
+        }
+
+        let stale_public_lane_reward_claim_keys = Self::public_lane_reward_claim_keys_for_lanes(
+            &world.public_lane_reward_claims,
+            lanes_to_reset,
+        );
+        for key in stale_public_lane_reward_claim_keys {
+            world.public_lane_reward_claims.remove(key);
+        }
+
+        let stale_verified_relay_keys = Self::verified_lane_relay_contract_state_keys_for_lanes(
+            &world.smart_contract_state,
+            lanes_to_reset,
+        );
+        for key in stale_verified_relay_keys {
+            world.smart_contract_state.remove(key);
+        }
+
+        let validator_updates =
+            public_lane_validator_reset_updates(&world.public_lane_validators, lanes_to_reset);
+        for (key, record) in validator_updates {
+            world.public_lane_validators.insert(key, record);
+        }
     }
 
     fn da_pin_intent_index_prune_keys_for_lanes(
@@ -24440,6 +24864,7 @@ impl State {
             let mut cursors = self.da_shard_cursors.write();
             cursors.prune_lanes(lanes_to_reset);
         }
+        self.prune_direct_lane_block_application_markers_for_lanes(lanes_to_reset);
         crate::sumeragi::status::prune_lane_scoped_snapshots(lanes_to_reset);
         crate::sumeragi::status::reset_public_lane_staking_lanes(lanes_to_reset);
         if self.da_indexes_hydrated.read().is_some() {
@@ -25584,13 +26009,13 @@ impl State {
 
     /// Snapshot latest committed lane-local artifacts for active catalog lanes.
     ///
-    /// Each tuple is `(lane_id, dataspace_id, latest_lane_block_height)`.
+    /// Each tuple is `(lane_id, dataspace_id, latest_lane_block_height, descriptor_hash)`.
     /// Artifacts whose persisted dataspace no longer matches the active lane
     /// catalog are skipped so proposal planning cannot cross lane incarnations.
     #[must_use]
     pub(crate) fn lane_block_artifact_tips_snapshot_cached(
         &self,
-    ) -> Vec<(LaneId, DataSpaceId, u64)> {
+    ) -> Vec<(LaneId, DataSpaceId, u64, Option<Hash>)> {
         let nexus = self.nexus_snapshot();
         if !nexus.enabled {
             return Vec::new();
@@ -25608,9 +26033,108 @@ impl State {
                     lane.id,
                     lane.dataspace_id,
                     artifact.ownership.lane_block_height,
+                    artifact.ownership.lane_block_descriptor_hash,
                 ))
             })
             .collect()
+    }
+
+    /// Snapshot latest certified standalone lane-local blocks for active catalog lanes.
+    ///
+    /// Each tuple is `(lane_id, dataspace_id, latest_lane_block_height, descriptor_hash)`.
+    /// Certified blocks whose persisted dataspace no longer matches the active
+    /// lane catalog, or whose lane-local height is not above the lane reset
+    /// watermark, are skipped so proposal planning cannot cross lane incarnations.
+    #[must_use]
+    pub(crate) fn certified_lane_block_tips_snapshot_cached(
+        &self,
+    ) -> Vec<(LaneId, DataSpaceId, u64, Option<Hash>)> {
+        let nexus = self.nexus_snapshot();
+        if !nexus.enabled {
+            return Vec::new();
+        }
+        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .filter_map(|lane| {
+                let artifact = self
+                    .kura
+                    .latest_certified_lane_block_artifact_for_dataspace(
+                        lane.id,
+                        lane.dataspace_id,
+                    )?;
+                let lane_block_height = artifact.proposal.descriptor.lane_block_height;
+                if !Self::lane_block_height_visible_after_reset(
+                    &reset_heights,
+                    lane.id,
+                    lane_block_height,
+                ) {
+                    return None;
+                }
+                Some((
+                    lane.id,
+                    lane.dataspace_id,
+                    lane_block_height,
+                    Some(artifact.proposal.descriptor.descriptor_hash),
+                ))
+            })
+            .collect()
+    }
+
+    /// Snapshot certified standalone lane-local sessions for active catalog lanes.
+    ///
+    /// The result is bounded by the active lane catalog: only valid certified
+    /// blocks for each lane's current dataspace above the lane reset watermark
+    /// are returned. Sessions are sorted deterministically so restart hydration
+    /// preserves lane-local height order for direct lane-state application.
+    #[must_use]
+    pub(crate) fn certified_lane_block_sessions_snapshot_cached(
+        &self,
+    ) -> Vec<crate::lane_consensus::CommittedLaneBlockSession> {
+        let nexus = self.nexus_snapshot();
+        if !nexus.enabled {
+            return Vec::new();
+        }
+        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+
+        let mut sessions = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .flat_map(|lane| {
+                self.kura
+                    .certified_lane_block_artifacts_for_dataspace(lane.id, lane.dataspace_id)
+                    .into_iter()
+                    .filter_map(|artifact| {
+                        let descriptor = &artifact.proposal.descriptor;
+                        Self::lane_block_height_visible_after_reset(
+                            &reset_heights,
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                        )
+                        .then_some(
+                            crate::lane_consensus::CommittedLaneBlockSession {
+                                proposal: artifact.proposal,
+                                prepare_qc: artifact.prepare_qc,
+                                commit_qc: artifact.commit_qc,
+                            },
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by_key(|session| {
+            let descriptor = &session.proposal.descriptor;
+            (
+                descriptor.lane_block_height,
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_block_view,
+            )
+        });
+        sessions
     }
 
     fn unmerged_merge_admissible_relay_progress(
@@ -25635,6 +26159,83 @@ impl State {
             .map(|relay| relay.block_height)
             .filter(|height| *height >= expected_height)?;
         Some((expected_height, latest_unmerged_height))
+    }
+
+    fn unapplied_certified_lane_block_height(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Option<u64> {
+        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        self.kura
+            .certified_lane_block_artifacts_for_dataspace(lane_id, dataspace_id)
+            .into_iter()
+            .find_map(|artifact| {
+                let lane_block_height = artifact.proposal.descriptor.lane_block_height;
+                if !Self::lane_block_height_visible_after_reset(
+                    &reset_heights,
+                    lane_id,
+                    lane_block_height,
+                ) {
+                    return None;
+                }
+                (!self
+                    .kura
+                    .lane_block_application_receipt_available(&artifact.proposal))
+                .then_some(lane_block_height)
+            })
+    }
+
+    fn direct_lane_application_marker_has_matching_receipt(
+        &self,
+        key: DirectLaneBlockApplicationKey,
+        marker: &DirectLaneBlockApplicationMarker,
+    ) -> bool {
+        if key != marker.key() {
+            return false;
+        }
+        self.kura
+            .read_lane_block_application_receipt(marker.lane_id, marker.lane_block_height)
+            .and_then(|receipt| DirectLaneBlockApplicationMarker::from_direct_receipt(&receipt))
+            .is_some_and(|receipt_marker| receipt_marker == marker.clone())
+    }
+
+    fn direct_lane_application_marker_height_visible_for_lane_after_reset(
+        reset_heights: &BTreeMap<LaneId, u64>,
+        lane_id: LaneId,
+        key: DirectLaneBlockApplicationKey,
+        marker: &DirectLaneBlockApplicationMarker,
+    ) -> Option<u64> {
+        let reset_height = reset_heights.get(&lane_id).copied();
+        [(key.lane_id == lane_id).then_some(key.lane_block_height)]
+            .into_iter()
+            .chain([(marker.lane_id == lane_id).then_some(marker.lane_block_height)])
+            .flatten()
+            .filter(|height| reset_height.is_none_or(|reset_height| *height > reset_height))
+            .min()
+    }
+
+    pub(crate) fn unrepaired_direct_lane_application_marker_height(
+        &self,
+        lane_id: LaneId,
+    ) -> Option<u64> {
+        let reset_heights = self.da_shard_cursors.read().reset_heights().clone();
+        self.world
+            .view()
+            .direct_lane_block_application_markers
+            .iter()
+            .filter_map(|(key, marker)| {
+                let lane_block_height =
+                    Self::direct_lane_application_marker_height_visible_for_lane_after_reset(
+                        &reset_heights,
+                        lane_id,
+                        *key,
+                        marker,
+                    )?;
+                (!self.direct_lane_application_marker_has_matching_receipt(*key, marker))
+                    .then_some(lane_block_height)
+            })
+            .min()
     }
 
     /// Access the unified settlement engine.
@@ -27124,6 +27725,7 @@ impl State {
         if !update.lanes_to_reset.is_empty() {
             self.prune_axt_replay_ledger_for_lanes(&update.lanes_to_reset);
             self.prune_da_pin_intent_world_indexes_for_lanes(&update.lanes_to_reset);
+            self.prune_direct_lane_block_application_markers_for_lanes(&update.lanes_to_reset);
             self.prune_public_lane_economic_state_for_lanes(&update.lanes_to_reset);
             self.prune_verified_lane_relay_contract_state_for_lanes(&update.lanes_to_reset);
             self.deactivate_public_lane_validators_for_reset_lanes(&update.lanes_to_reset);
@@ -27216,6 +27818,33 @@ impl State {
                 return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
                     transition: pending.transition.name(),
                     reason: "retire lane has unmerged relay progress",
+                });
+            }
+            if let Some(lane_block_height) =
+                self.unapplied_certified_lane_block_height(lane, dataspace_id)
+            {
+                warn!(
+                    lane = lane.as_u32(),
+                    dataspace = dataspace_id.as_u64(),
+                    lane_block_height,
+                    "rejecting staged autoscale scale-in because the retire candidate has unapplied certified lane-block progress"
+                );
+                return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
+                    transition: pending.transition.name(),
+                    reason: "retire lane has unapplied certified lane-block progress",
+                });
+            }
+            if let Some(lane_block_height) =
+                self.unrepaired_direct_lane_application_marker_height(lane)
+            {
+                warn!(
+                    lane = lane.as_u32(),
+                    lane_block_height,
+                    "rejecting staged autoscale scale-in because the retire candidate has an unrepaired direct lane application marker"
+                );
+                return Err(LaneLifecycleError::AutoscaleTransitionPlanMismatch {
+                    transition: pending.transition.name(),
+                    reason: "retire lane has unrepaired direct application marker",
                 });
             }
         }
@@ -28941,6 +29570,9 @@ pub trait StateReadOnly: WorldStateSnapshot {
     /// Cached snapshot of all account identifiers currently known to the state view.
     fn accounts_snapshot(&self) -> Arc<Vec<AccountId>>;
 
+    /// Resolve authoritative validator peer ids for a lane from the snapshot.
+    fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId>;
+
     /// Get a reference to the block one before the latest block.
     /// Returns None if at least 2 blocks are not committed.
     ///
@@ -29088,6 +29720,19 @@ macro_rules! impl_state_ro {
                             .collect(),
                     )
                 }))
+            }
+            fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
+                let validator_mode = self.nexus.staking.validator_mode(lane_id, &self.nexus.lane_catalog);
+                let block_height = u64::try_from(self.height()).unwrap_or(u64::MAX);
+                State::authoritative_lane_peer_ids_from_sources(
+                    self.world(),
+                    lane_id,
+                    validator_mode,
+                    self.lane_manifests.as_ref(),
+                    &self.nexus,
+                    self.commit_topology(),
+                    block_height,
+                )
             }
         }
     )*};
@@ -32167,6 +32812,38 @@ impl<'state> StateBlock<'state> {
         }
     }
 
+    pub(crate) fn stage_direct_lane_block_application_marker(
+        &mut self,
+        receipt: &crate::kura::LaneBlockApplicationReceiptArtifact,
+    ) -> core::result::Result<(), &'static str> {
+        let Some(marker) = DirectLaneBlockApplicationMarker::from_direct_receipt(receipt) else {
+            return Err("direct lane application marker requires a direct execution receipt");
+        };
+        let key = marker.key();
+        if let Some(existing) = self
+            .world
+            .direct_lane_block_application_markers
+            .get(&key)
+            .cloned()
+        {
+            if existing == marker {
+                return Ok(());
+            }
+            return Err("direct lane application marker conflicts with existing world state");
+        }
+        self.world
+            .direct_lane_block_application_markers
+            .insert(key, marker);
+        Ok(())
+    }
+
+    pub(crate) fn stage_direct_committed_transactions(
+        &mut self,
+        transactions: impl IntoIterator<Item = HashOf<SignedTransaction>>,
+    ) {
+        self.direct_committed_transactions.extend(transactions);
+    }
+
     /// Commit changes aggregated during application of block.
     ///
     /// # Errors
@@ -32193,11 +32870,12 @@ impl<'state> StateBlock<'state> {
             replay_compatibility,
             state_write_lock,
             tiered_backend,
-            verified_lane_relay_records,
+            mut verified_lane_relay_records,
             zk,
             pending_da_commitments,
             pending_da_pin_intents,
             pending_autoscale_lifecycle,
+            direct_committed_transactions,
             _curr_block,
             #[cfg(feature = "zk-preverify")]
                 zk_dedup: _,
@@ -32362,11 +33040,31 @@ impl<'state> StateBlock<'state> {
             let world_hold = if commit_error.is_none() {
                 let world_start = Instant::now();
                 *state_ref.sccp_route_manifests.write() = zk.sccp_route_manifests.clone();
+                if let Some(pending) = &pending_autoscale_lifecycle {
+                    State::prune_lane_lifecycle_world_block_state_for_lanes(
+                        &mut world,
+                        &pending.catalog_update.lanes_to_reset,
+                    );
+                    State::retain_verified_lane_relay_records_outside_lanes(
+                        &mut verified_lane_relay_records,
+                        &pending.catalog_update.lanes_to_reset,
+                    );
+                }
                 // Commit world storage before taking the block-hashes write lock.
                 // Validation workers build `StateBlock`s by acquiring block-hash read snapshots
                 // first and then world storage transactions; committing block hashes first can
                 // invert that order and deadlock under contention.
                 world.commit();
+                if !direct_committed_transactions.is_empty() {
+                    let direct_height = NonZeroUsize::new(
+                        usize::try_from(_curr_block.height().get()).unwrap_or(usize::MAX),
+                    )
+                    .expect("direct application block height is non-zero");
+                    state_ref.transactions.record_direct_committed_membership(
+                        direct_committed_transactions.iter().cloned(),
+                        direct_height,
+                    );
+                }
                 if let Some(pending) = &pending_autoscale_lifecycle {
                     state_ref.prune_committed_lane_lifecycle_state(&pending.catalog_update);
                 }
@@ -32967,58 +33665,14 @@ impl<'state> StateBlock<'state> {
         self.nexus.lane_config = lifecycle_update.updated_lane_config.clone();
 
         if !lifecycle_update.lanes_to_reset.is_empty() {
-            let stale_axt_replay_keys = State::axt_replay_ledger_keys_for_lanes(
-                &self.world.axt_replay_ledger,
-                &lifecycle_update.lanes_to_reset,
-            );
-            for key in stale_axt_replay_keys {
-                self.world.axt_replay_ledger.remove(key);
-            }
-            State::prune_da_pin_intent_world_block_indexes_for_lanes(
+            State::prune_lane_lifecycle_world_block_state_for_lanes(
                 &mut self.world,
                 &lifecycle_update.lanes_to_reset,
             );
-            let stale_public_lane_stake_share_keys = State::public_lane_stake_share_keys_for_lanes(
-                &self.world.public_lane_stake_shares,
-                &lifecycle_update.lanes_to_reset,
-            );
-            for key in stale_public_lane_stake_share_keys {
-                self.world.public_lane_stake_shares.remove(key);
-            }
-            let stale_public_lane_reward_keys = State::public_lane_reward_keys_for_lanes(
-                &self.world.public_lane_rewards,
-                &lifecycle_update.lanes_to_reset,
-            );
-            for key in stale_public_lane_reward_keys {
-                self.world.public_lane_rewards.remove(key);
-            }
-            let stale_public_lane_reward_claim_keys =
-                State::public_lane_reward_claim_keys_for_lanes(
-                    &self.world.public_lane_reward_claims,
-                    &lifecycle_update.lanes_to_reset,
-                );
-            for key in stale_public_lane_reward_claim_keys {
-                self.world.public_lane_reward_claims.remove(key);
-            }
-            let stale_verified_relay_keys =
-                State::verified_lane_relay_contract_state_keys_for_lanes(
-                    &self.world.smart_contract_state,
-                    &lifecycle_update.lanes_to_reset,
-                );
-            for key in stale_verified_relay_keys {
-                self.world.smart_contract_state.remove(key);
-            }
             State::retain_verified_lane_relay_records_outside_lanes(
                 &mut self.verified_lane_relay_records,
                 &lifecycle_update.lanes_to_reset,
             );
-            let validator_updates = public_lane_validator_reset_updates(
-                &self.world.public_lane_validators,
-                &lifecycle_update.lanes_to_reset,
-            );
-            for (key, record) in validator_updates {
-                self.world.public_lane_validators.insert(key, record);
-            }
         }
         let active_lane_ids: BTreeSet<_> = lifecycle_update
             .updated_catalog
@@ -33288,6 +33942,29 @@ impl<'state> StateBlock<'state> {
                 expected_height,
                 latest_unmerged_height,
                 "skipping deterministic lane autoscale scale-in because the retire candidate has unmerged relay progress"
+            );
+            return None;
+        }
+        if let Some(lane_block_height) = self
+            .state_ref
+            .unapplied_certified_lane_block_height(candidate, default_dataspace)
+        {
+            debug!(
+                lane = candidate.as_u32(),
+                dataspace = default_dataspace.as_u64(),
+                lane_block_height,
+                "skipping deterministic lane autoscale scale-in because the retire candidate has unapplied certified lane-block progress"
+            );
+            return None;
+        }
+        if let Some(lane_block_height) = self
+            .state_ref
+            .unrepaired_direct_lane_application_marker_height(candidate)
+        {
+            debug!(
+                lane = candidate.as_u32(),
+                lane_block_height,
+                "skipping deterministic lane autoscale scale-in because the retire candidate has an unrepaired direct lane application marker"
             );
             return None;
         }
@@ -34960,12 +35637,39 @@ mod committed_transaction_context_tests {
 mod tiered_snapshot_diff_tests {
     use super::*;
 
+    fn sample_direct_lane_marker() -> (
+        DirectLaneBlockApplicationKey,
+        DirectLaneBlockApplicationMarker,
+    ) {
+        let key = DirectLaneBlockApplicationKey {
+            lane_id: LaneId::new(7),
+            lane_block_height: 3,
+        };
+        let marker = DirectLaneBlockApplicationMarker {
+            lane_id: key.lane_id,
+            dataspace_id: DataSpaceId::new(11),
+            lane_block_height: key.lane_block_height,
+            descriptor_hash: iroha_crypto::Hash::new(b"direct marker descriptor"),
+            proposal_hash: iroha_crypto::Hash::new(b"direct marker proposal"),
+            preflight_state_height: 2,
+            preflight_state_hash: HashOf::<BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"direct marker preflight state"),
+            ),
+            result_hashes: vec![iroha_crypto::Hash::new(b"direct marker result")],
+        };
+        (key, marker)
+    }
+
     #[test]
     fn world_block_tiered_snapshot_diff_collects_changed_keys() {
         let world = World::default();
         let mut block = world.block();
         let hash = iroha_crypto::Hash::new([7_u8; 32]);
         block.contract_code.insert(hash, vec![1, 2, 3]);
+        let (marker_key, marker) = sample_direct_lane_marker();
+        block
+            .direct_lane_block_application_markers
+            .insert(marker_key, marker);
 
         let diff = block.tiered_snapshot_diff();
         assert!(
@@ -34973,6 +35677,9 @@ mod tiered_snapshot_diff_tests {
                 matches!(entry, TieredKeyHandle::ContractCode(key) if *key == hash)
             })
         );
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::DirectLaneBlockApplicationMarker(key) if *key == marker_key)
+        }));
     }
 
     #[test]
@@ -34981,6 +35688,10 @@ mod tiered_snapshot_diff_tests {
         let mut block = world.block();
         let hash = iroha_crypto::Hash::new([9_u8; 32]);
         block.contract_code.insert(hash, vec![4, 5, 6]);
+        let (marker_key, marker) = sample_direct_lane_marker();
+        block
+            .direct_lane_block_application_markers
+            .insert(marker_key, marker);
 
         let payload = block.tiered_snapshot_payload();
         let diff = TieredSnapshotDiff::from(&payload);
@@ -34989,6 +35700,9 @@ mod tiered_snapshot_diff_tests {
                 matches!(entry, TieredKeyHandle::ContractCode(key) if *key == hash)
             })
         );
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::DirectLaneBlockApplicationMarker(key) if *key == marker_key)
+        }));
     }
 }
 
@@ -42548,6 +43262,8 @@ pub(crate) mod deserialize {
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
         let offline_note_replay_keys = take_optional_default(&mut map, "offline_note_replay_keys")?;
+        let direct_lane_block_application_markers =
+            take_optional_default(&mut map, "direct_lane_block_application_markers")?;
         let lane_relay_emergency_validators =
             take_optional_default(&mut map, "lane_relay_emergency_validators")?;
         let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
@@ -42715,6 +43431,7 @@ pub(crate) mod deserialize {
             repo_agreements_by_custodian: Storage::default(),
             settlement_ledgers,
             offline_note_replay_keys,
+            direct_lane_block_application_markers,
             domain_committees: Storage::default(),
             domain_endorsement_policies: Storage::default(),
             domain_endorsements: Storage::default(),
@@ -43463,8 +44180,8 @@ mod tests {
     #[cfg(feature = "sm")]
     use iroha_crypto::sm::Sm2PublicKey;
     use iroha_crypto::{
-        Algorithm, Hash, HashOf, KeyPair, PolicyCommitment, RamLfeBackend, RamLfeVerificationMode,
-        Signature,
+        Algorithm, Hash, HashOf, KeyPair, PolicyCommitment, PublicKey, RamLfeBackend,
+        RamLfeVerificationMode, Signature,
     };
     use iroha_data_model::account::AccountDetails;
     use iroha_data_model::isi::verifying_keys;
@@ -43474,7 +44191,8 @@ mod tests {
         block::{
             BlockHeader, SignedBlock,
             consensus::{
-                LaneBlockCommitment, LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs,
+                CertPhase, LaneBlockCommitment, LaneBlockDescriptorV1, LaneBlockProposalV1,
+                LaneSettlementReceipt, NexusFeeReceipt, NexusFeeScheduleInputs,
             },
         },
         consensus::{ConsensusKeyRecord, ConsensusKeyStatus, VALIDATOR_SET_HASH_VERSION_V1},
@@ -43544,6 +44262,55 @@ mod tests {
             payload.extend_from_slice(part);
         }
         Hash::new(payload)
+    }
+
+    fn sample_direct_lane_application_marker(
+        key_lane_id: LaneId,
+        marker_lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        seed: u8,
+    ) -> (
+        DirectLaneBlockApplicationKey,
+        DirectLaneBlockApplicationMarker,
+    ) {
+        let key = DirectLaneBlockApplicationKey {
+            lane_id: key_lane_id,
+            lane_block_height,
+        };
+        let marker = DirectLaneBlockApplicationMarker {
+            lane_id: marker_lane_id,
+            dataspace_id,
+            lane_block_height,
+            descriptor_hash: Hash::prehashed([seed; 32]),
+            proposal_hash: Hash::prehashed([seed.wrapping_add(1); 32]),
+            preflight_state_height: u64::from(seed),
+            preflight_state_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+                [seed.wrapping_add(2); 32],
+            )),
+            result_hashes: vec![Hash::prehashed([seed.wrapping_add(3); 32])],
+        };
+        (key, marker)
+    }
+
+    fn seed_direct_lane_application_marker(
+        state: &State,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+        seed: u8,
+    ) -> DirectLaneBlockApplicationKey {
+        let (key, marker) = sample_direct_lane_application_marker(
+            lane_id,
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            seed,
+        );
+        let mut block = state.world.direct_lane_block_application_markers.block();
+        block.insert(key, marker);
+        block.commit();
+        key
     }
 
     fn install_test_nexus_lane_catalog(
@@ -47928,6 +48695,135 @@ mod tests {
         state_block
             .transactions
             .insert_block(std::collections::HashSet::new(), block_height);
+    }
+
+    fn signed_lane_block_vote_for_state_test(
+        proposal: &LaneBlockProposalV1,
+        phase: CertPhase,
+        keypair: &KeyPair,
+    ) -> crate::lane_consensus::LaneBlockVoteV1 {
+        let body = proposal.vote_body(phase);
+        let signature = Signature::try_new(keypair.private_key(), &body.signature_preimage())
+            .expect("state test lane block vote signature");
+        crate::lane_consensus::LaneBlockVoteV1 {
+            body,
+            signer: PeerId::new(keypair.public_key().clone()),
+            bls_signature: signature.payload().to_vec(),
+        }
+    }
+
+    fn sample_committed_lane_block_session_for_state_test(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_block_height: u64,
+    ) -> (
+        crate::lane_consensus::CommittedLaneBlockSession,
+        BTreeMap<PublicKey, Vec<u8>>,
+    ) {
+        let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let signer_pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+            .expect("state test certified lane signer PoP");
+        let peer_id = PeerId::new(keypair.public_key().clone());
+        let validator_set = vec![peer_id];
+        let mut signer_pops = BTreeMap::new();
+        signer_pops.insert(keypair.public_key().clone(), signer_pop);
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id,
+            dataspace_id,
+            previous_lane_block_height: lane_block_height.saturating_sub(1),
+            previous_lane_block_descriptor_hash: lane_block_height
+                .checked_sub(1)
+                .filter(|height| *height > 0)
+                .map(|previous| {
+                    Hash::new(
+                        format!(
+                            "state-certified-previous:{}:{}:{}",
+                            lane_id.as_u32(),
+                            dataspace_id.as_u64(),
+                            previous
+                        )
+                        .into_bytes(),
+                    )
+                }),
+            lane_block_height,
+            lane_block_view: 2,
+            subject_hash: Hash::new(
+                format!(
+                    "state-certified-subject:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    lane_block_height
+                )
+                .into_bytes(),
+            ),
+            payload_ownership_hash: Hash::new(
+                format!(
+                    "state-certified-ownership:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    lane_block_height
+                )
+                .into_bytes(),
+            ),
+            rbc_instance_hash: Hash::new(
+                format!(
+                    "state-certified-rbc:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    lane_block_height
+                )
+                .into_bytes(),
+            ),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::new(
+                format!(
+                    "state-certified-tx:{}:{}:{}",
+                    lane_id.as_u32(),
+                    dataspace_id.as_u64(),
+                    lane_block_height
+                )
+                .into_bytes(),
+            )],
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: "permissioned:state-certified-lane-block".to_string(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+
+        let prepare_vote =
+            signed_lane_block_vote_for_state_test(&proposal, CertPhase::Prepare, &keypair);
+        let prepare_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            prepare_vote.body.clone(),
+            validator_set.clone(),
+            std::slice::from_ref(&prepare_vote),
+        )
+        .expect("state test certified lane prepare QC");
+        let commit_vote =
+            signed_lane_block_vote_for_state_test(&proposal, CertPhase::Commit, &keypair);
+        let commit_qc = crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            commit_vote.body.clone(),
+            validator_set,
+            std::slice::from_ref(&commit_vote),
+        )
+        .expect("state test certified lane commit QC");
+
+        (
+            crate::lane_consensus::CommittedLaneBlockSession {
+                proposal,
+                prepare_qc,
+                commit_qc,
+            },
+            signer_pops,
+        )
     }
 
     fn insert_empty_transaction_block_for_test(state_block: &mut StateBlock<'_>) {
@@ -52800,6 +53696,163 @@ mod tests {
     }
 
     #[test]
+    fn autoscale_transition_scale_in_waits_for_unapplied_certified_lane_block() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let retired_lane_id = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                2,
+                200,
+            ))
+            .expect("apply autoscale test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![elastic_lane],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed elastic lane");
+
+        let (session, signer_pops) = sample_committed_lane_block_session_for_state_test(
+            retired_lane_id,
+            DataSpaceId::UNIVERSAL,
+            1,
+        );
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist unapplied certified lane block for retire candidate");
+        assert!(
+            !kura.lane_block_application_receipt_available(&session.proposal),
+            "test setup should leave the certified lane block unapplied"
+        );
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        let nexus = state_block.nexus.clone();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, retired_lane_id],
+            "autoscale scale-in must wait until certified lane-block progress is applied"
+        );
+        assert_eq!(
+            nexus.autoscale.last_transition_height, 0,
+            "suppressed scale-in with unapplied certified lane-block progress must not record a transition"
+        );
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_none(),
+            "suppressed scale-in must not stage lifecycle cleanup"
+        );
+        assert!(
+            kura.read_certified_lane_block_artifact(retired_lane_id, 1)
+                .is_some(),
+            "suppressed scale-in must preserve the certified lane block"
+        );
+    }
+
+    #[test]
+    fn autoscale_transition_scale_in_waits_for_unrepaired_direct_application_marker() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let retired_lane_id = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                2,
+                200,
+            ))
+            .expect("apply autoscale test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![elastic_lane],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed elastic lane");
+
+        let marker_key = seed_direct_lane_application_marker(
+            &state,
+            retired_lane_id,
+            DataSpaceId::UNIVERSAL,
+            1,
+            0xD1,
+        );
+        assert_eq!(
+            state.unrepaired_direct_lane_application_marker_height(retired_lane_id),
+            Some(1),
+            "test setup should leave the direct marker without a matching durable receipt"
+        );
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        kura.store_block(Arc::new(first))
+            .expect("store previous autoscale block");
+
+        let mut state_block = state.block(second.header());
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        state_block.maybe_apply_nexus_autoscale(&committed_second);
+
+        let nexus = state_block.nexus.clone();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, retired_lane_id],
+            "autoscale scale-in must wait until unrepaired direct lane application markers have matching receipts"
+        );
+        assert_eq!(
+            nexus.autoscale.last_transition_height, 0,
+            "suppressed scale-in with an unrepaired direct marker must not record a transition"
+        );
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_none(),
+            "suppressed scale-in must not stage lifecycle cleanup"
+        );
+        assert!(
+            state
+                .world
+                .view()
+                .direct_lane_block_application_markers()
+                .get(&marker_key)
+                .is_some(),
+            "suppressed scale-in must preserve the direct marker"
+        );
+    }
+
+    #[test]
     fn autoscale_transition_retires_managed_elastic_lane_when_window_is_cold() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -53150,6 +54203,205 @@ mod tests {
                 .iter()
                 .any(|relay| relay == &late_relay),
             "aborted autoscale scale-in must preserve the late relay"
+        );
+    }
+
+    #[test]
+    fn autoscale_commit_scale_in_rejects_late_unapplied_certified_lane_block() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let retired_lane_id = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                2,
+                200,
+            ))
+            .expect("apply autoscale test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![elastic_lane],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed elastic lane");
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
+
+        let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
+        let committed_second = ValidBlock::new_unverified_for_tests(second)
+            .commit_unchecked()
+            .unpack(|_| {});
+        let _events = state_block.apply_without_execution(&committed_second, Vec::new());
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_some(),
+            "cold window should stage autoscale scale-in before the late certified lane block arrives"
+        );
+
+        let (session, signer_pops) = sample_committed_lane_block_session_for_state_test(
+            retired_lane_id,
+            DataSpaceId::UNIVERSAL,
+            1,
+        );
+        kura.persist_committed_lane_block_session(&session, &signer_pops)
+            .expect("persist late unapplied certified lane block for retire candidate");
+        assert!(
+            !kura.lane_block_application_receipt_available(&session.proposal),
+            "test setup should inject unapplied certified lane-block progress after staging"
+        );
+
+        let err = state_block
+            .commit()
+            .expect_err("late unapplied certified lane block must abort staged scale-in commit");
+        assert!(matches!(
+            err,
+            TransactionsBlockError::AutoscaleLaneLifecycle
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, retired_lane_id],
+            "aborted autoscale scale-in must not publish the retired-lane catalog"
+        );
+        assert_eq!(
+            nexus.autoscale.last_transition_height, 0,
+            "aborted autoscale scale-in must not record a transition height"
+        );
+        assert_eq!(
+            state.transactions.view().latest_height_for_tests(),
+            1,
+            "aborted autoscale scale-in must not publish the failed block transaction height"
+        );
+        assert!(
+            kura.read_certified_lane_block_artifact(retired_lane_id, 1)
+                .is_some(),
+            "aborted autoscale scale-in must preserve the late certified lane block"
+        );
+    }
+
+    #[test]
+    fn autoscale_commit_scale_in_rejects_late_unrepaired_direct_application_marker() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let retired_lane_id = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                2,
+                200,
+            ))
+            .expect("apply autoscale test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![elastic_lane],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed elastic lane");
+
+        let marker_key = seed_direct_lane_application_marker(
+            &state,
+            retired_lane_id,
+            DataSpaceId::UNIVERSAL,
+            1,
+            0xD2,
+        );
+        assert_eq!(
+            state.unrepaired_direct_lane_application_marker_height(retired_lane_id),
+            Some(1),
+            "test setup should seed an unrepaired direct marker before commit revalidation"
+        );
+
+        let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
+        let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
+        commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &first);
+        store_block_for_state_commit(&kura, &second);
+        seed_predecessor_height_for_state_commit(&state, &second);
+
+        let mut state_block = state.block(second.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &second);
+        state_block
+            .apply_autoscale_lane_lifecycle(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: Vec::new(),
+                    retire: vec![retired_lane_id],
+                },
+                PendingAutoscaleTransition::ScaleIn {
+                    lane: retired_lane_id,
+                    active_lanes: 2,
+                    autoscale_capacity_lanes: 2,
+                    in_latency_ratio_permille: 0,
+                    in_utilization_p95_permille: 0,
+                },
+            )
+            .expect("stage autoscale scale-in for commit-time marker revalidation");
+        state_block.record_autoscale_transition_height(2);
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_some(),
+            "manual scale-in staging should prepare lifecycle cleanup before commit revalidation"
+        );
+
+        let err = state_block
+            .commit()
+            .expect_err("unrepaired direct marker must abort staged scale-in commit");
+        assert!(matches!(
+            err,
+            TransactionsBlockError::AutoscaleLaneLifecycle
+        ));
+
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .map(|lane| lane.id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::SINGLE, retired_lane_id],
+            "aborted autoscale scale-in must not publish the retired-lane catalog"
+        );
+        assert_eq!(
+            nexus.autoscale.last_transition_height, 0,
+            "aborted autoscale scale-in must not record a transition height"
+        );
+        assert_eq!(
+            state.transactions.view().latest_height_for_tests(),
+            1,
+            "aborted autoscale scale-in must not publish the failed block transaction height"
+        );
+        assert!(
+            state
+                .world
+                .view()
+                .direct_lane_block_application_markers()
+                .get(&marker_key)
+                .is_some(),
+            "aborted autoscale scale-in must preserve the late direct marker"
         );
     }
 
@@ -53998,16 +55250,74 @@ mod tests {
         let retained_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let retained_validator = AccountId::new(retained_keypair.public_key().clone());
         let retained_peer = PeerId::from(retained_keypair.public_key().clone());
+        let late_retired_keypair =
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let late_retired_validator = AccountId::new(late_retired_keypair.public_key().clone());
+        let late_retired_peer = PeerId::from(late_retired_keypair.public_key().clone());
+        let late_retained_keypair =
+            crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let late_retained_validator = AccountId::new(late_retained_keypair.public_key().clone());
+        let late_retained_peer = PeerId::from(late_retained_keypair.public_key().clone());
         let direct_validator_key = (retired_lane_id, direct_validator.clone());
         let embedded_validator_key = (LaneId::SINGLE, embedded_validator.clone());
         let retained_validator_key = (LaneId::SINGLE, retained_validator.clone());
+        let late_retired_validator_key = (retired_lane_id, late_retired_validator.clone());
+        let late_retained_validator_key = (LaneId::SINGLE, late_retained_validator.clone());
         let retired_replay_key = AxtHandleReplayKey::from_parts([0xD1; 32], 2, 41, retired_lane_id);
         let retained_replay_key = AxtHandleReplayKey::from_parts([0xE1; 32], 2, 42, LaneId::SINGLE);
+        let late_retired_replay_key =
+            AxtHandleReplayKey::from_parts([0xD5; 32], 2, 43, retired_lane_id);
+        let late_retained_replay_key =
+            AxtHandleReplayKey::from_parts([0xE5; 32], 2, 44, LaneId::SINGLE);
         let replay_record = |used_slot: u64| AxtReplayRecord {
             dataspace: DataSpaceId::UNIVERSAL,
             used_slot,
             retain_until_slot: used_slot.saturating_add(10_000),
         };
+        let (retired_direct_marker_key, retired_direct_marker) =
+            sample_direct_lane_application_marker(
+                retired_lane_id,
+                retired_lane_id,
+                DataSpaceId::UNIVERSAL,
+                1,
+                0xD2,
+            );
+        let (retained_direct_marker_key, retained_direct_marker) =
+            sample_direct_lane_application_marker(
+                LaneId::SINGLE,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                1,
+                0xE2,
+            );
+        let (embedded_retired_direct_marker_key, embedded_retired_direct_marker) =
+            sample_direct_lane_application_marker(
+                LaneId::SINGLE,
+                retired_lane_id,
+                DataSpaceId::UNIVERSAL,
+                2,
+                0xD3,
+            );
+        let (late_retired_direct_marker_key, late_retired_direct_marker) =
+            sample_direct_lane_application_marker(
+                retired_lane_id,
+                retired_lane_id,
+                DataSpaceId::UNIVERSAL,
+                3,
+                0xD4,
+            );
+        let (late_retained_direct_marker_key, late_retained_direct_marker) =
+            sample_direct_lane_application_marker(
+                LaneId::SINGLE,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+                4,
+                0xE3,
+            );
+        assert_ne!(
+            embedded_retired_direct_marker_key, late_retained_direct_marker_key,
+            "test setup must not mask an embedded retired-lane marker with a surviving marker that reuses its key"
+        );
 
         let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
         let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
@@ -54037,6 +55347,21 @@ mod tests {
             .world
             .axt_replay_ledger
             .insert(retained_replay_key, replay_record(2));
+        state_block
+            .world
+            .direct_lane_block_application_markers
+            .insert(retired_direct_marker_key, retired_direct_marker);
+        state_block
+            .world
+            .direct_lane_block_application_markers
+            .insert(retained_direct_marker_key, retained_direct_marker);
+        state_block
+            .world
+            .direct_lane_block_application_markers
+            .insert(
+                embedded_retired_direct_marker_key,
+                embedded_retired_direct_marker,
+            );
 
         assert!(
             matches!(
@@ -54069,6 +55394,14 @@ mod tests {
                 .get(&retired_replay_key)
                 .is_some(),
             "test setup must stage same-block retired-lane replay state"
+        );
+        assert!(
+            state_block
+                .world
+                .direct_lane_block_application_markers
+                .get(&retired_direct_marker_key)
+                .is_some(),
+            "test setup must stage same-block retired-lane direct marker"
         );
 
         let committed_second = ValidBlock::new_unverified_for_tests(second)
@@ -54128,6 +55461,95 @@ mod tests {
                 .is_some(),
             "autoscale scale-in must retain same-block replay entries for surviving lanes"
         );
+        assert!(
+            state_block
+                .world
+                .direct_lane_block_application_markers
+                .get(&retired_direct_marker_key)
+                .is_none(),
+            "autoscale scale-in must prune same-block direct markers keyed by a retired lane"
+        );
+        assert!(
+            state_block
+                .world
+                .direct_lane_block_application_markers
+                .get(&embedded_retired_direct_marker_key)
+                .is_none(),
+            "autoscale scale-in must prune same-block direct markers whose payload names a retired lane"
+        );
+        assert!(
+            state_block
+                .world
+                .direct_lane_block_application_markers
+                .get(&retained_direct_marker_key)
+                .is_some(),
+            "autoscale scale-in must retain same-block direct markers for surviving lanes"
+        );
+
+        state_block.world.public_lane_validators.insert(
+            late_retired_validator_key.clone(),
+            validator_record(retired_lane_id, &late_retired_validator, &late_retired_peer),
+        );
+        state_block.world.public_lane_validators.insert(
+            late_retained_validator_key.clone(),
+            validator_record(
+                LaneId::SINGLE,
+                &late_retained_validator,
+                &late_retained_peer,
+            ),
+        );
+        state_block
+            .world
+            .axt_replay_ledger
+            .insert(late_retired_replay_key, replay_record(3));
+        state_block
+            .world
+            .axt_replay_ledger
+            .insert(late_retained_replay_key, replay_record(4));
+        state_block
+            .world
+            .direct_lane_block_application_markers
+            .insert(late_retired_direct_marker_key, late_retired_direct_marker);
+        state_block
+            .world
+            .direct_lane_block_application_markers
+            .insert(late_retained_direct_marker_key, late_retained_direct_marker);
+        assert!(
+            state_block
+                .world
+                .direct_lane_block_application_markers
+                .get(&late_retired_direct_marker_key)
+                .is_some(),
+            "test setup must stage a retired-lane direct marker after autoscale cleanup"
+        );
+        assert!(
+            state_block
+                .world
+                .direct_lane_block_application_markers
+                .get(&late_retained_direct_marker_key)
+                .is_some(),
+            "test setup must stage a surviving-lane direct marker after autoscale cleanup"
+        );
+        assert!(
+            matches!(
+                state_block
+                    .world
+                    .public_lane_validators
+                    .get(&late_retired_validator_key)
+                    .expect("late retired-lane validator should be staged active")
+                    .status,
+                PublicLaneValidatorStatus::Active
+            ),
+            "test setup must stage an active retired-lane validator after autoscale cleanup"
+        );
+        assert!(
+            state_block
+                .world
+                .axt_replay_ledger
+                .get(&late_retired_replay_key)
+                .is_some(),
+            "test setup must stage a retired-lane replay entry after autoscale cleanup"
+        );
 
         insert_empty_transaction_block_for_test(&mut state_block);
         state_block
@@ -54172,6 +55594,68 @@ mod tests {
         assert!(
             view.axt_replay_ledger().get(&retained_replay_key).is_some(),
             "committed state must retain same-block surviving-lane replay state"
+        );
+        assert!(
+            view.axt_replay_ledger()
+                .get(&late_retired_replay_key)
+                .is_none(),
+            "committed state must not retain retired-lane replay state inserted after block-local cleanup"
+        );
+        assert!(
+            view.axt_replay_ledger()
+                .get(&late_retained_replay_key)
+                .is_some(),
+            "committed state must retain surviving-lane replay state inserted after block-local cleanup"
+        );
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&retired_direct_marker_key)
+                .is_none(),
+            "committed state must not retain same-block retired-lane direct markers"
+        );
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&embedded_retired_direct_marker_key)
+                .is_none(),
+            "committed state must not retain direct markers whose payload names the retired lane"
+        );
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&late_retired_direct_marker_key)
+                .is_none(),
+            "committed state must not retain retired-lane direct markers inserted after block-local cleanup"
+        );
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&retained_direct_marker_key)
+                .is_some(),
+            "committed state must retain same-block surviving-lane direct markers"
+        );
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&late_retained_direct_marker_key)
+                .is_some(),
+            "committed state must retain surviving-lane direct markers inserted after block-local cleanup"
+        );
+        assert!(
+            matches!(
+                view.public_lane_validators()
+                    .get(&late_retired_validator_key)
+                    .expect("late retired-lane validator should remain terminalized")
+                    .status,
+                PublicLaneValidatorStatus::Exited
+            ),
+            "committed state must terminalize retired-lane validators inserted after block-local cleanup"
+        );
+        assert!(
+            matches!(
+                view.public_lane_validators()
+                    .get(&late_retained_validator_key)
+                    .expect("late surviving-lane validator should remain active")
+                    .status,
+                PublicLaneValidatorStatus::Active
+            ),
+            "committed state must retain surviving-lane validators inserted after block-local cleanup"
         );
     }
 
@@ -64511,6 +65995,101 @@ mod tests {
     }
 
     #[test]
+    fn apply_lane_lifecycle_retire_prunes_direct_lane_application_markers() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        state.nexus.write().enabled = true;
+
+        let retired_lane = LaneId::new(1);
+        let retained_lane = LaneId::SINGLE;
+        let add_lane = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: vec![LaneConfig {
+                id: retired_lane,
+                alias: "direct-marker-retired".to_string(),
+                ..LaneConfig::default()
+            }],
+            retire: Vec::new(),
+        };
+        state
+            .apply_lane_lifecycle(&add_lane)
+            .expect("add direct-marker test lane");
+
+        let retired_key = seed_direct_lane_application_marker(
+            &state,
+            retired_lane,
+            DataSpaceId::UNIVERSAL,
+            1,
+            0x31,
+        );
+        let retained_key = seed_direct_lane_application_marker(
+            &state,
+            retained_lane,
+            DataSpaceId::UNIVERSAL,
+            1,
+            0x32,
+        );
+        let (embedded_retired_key, embedded_retired_marker) = sample_direct_lane_application_marker(
+            retained_lane,
+            retired_lane,
+            DataSpaceId::UNIVERSAL,
+            2,
+            0x33,
+        );
+        {
+            let mut block = state.world.direct_lane_block_application_markers.block();
+            block.insert(embedded_retired_key, embedded_retired_marker);
+            block.commit();
+        }
+
+        let retire_lane = iroha_data_model::nexus::LaneLifecyclePlan {
+            additions: Vec::new(),
+            retire: vec![retired_lane],
+        };
+        state
+            .apply_lane_lifecycle(&retire_lane)
+            .expect("retire direct-marker test lane");
+
+        let view = state.world.view();
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&retired_key)
+                .is_none(),
+            "lane retirement must prune direct markers keyed by the reset lane"
+        );
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&embedded_retired_key)
+                .is_none(),
+            "lane retirement must prune direct markers whose payload names the reset lane"
+        );
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&retained_key)
+                .is_some(),
+            "lane retirement must preserve unrelated direct markers"
+        );
+        drop(view);
+
+        state
+            .apply_lane_lifecycle(&add_lane)
+            .expect("recreate direct-marker test lane");
+        let view = state.world.view();
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&retired_key)
+                .is_none(),
+            "recreated lanes must not inherit old direct-application markers"
+        );
+        assert!(
+            view.direct_lane_block_application_markers()
+                .get(&retained_key)
+                .is_some(),
+            "recreation must still preserve unrelated direct markers"
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn apply_lane_lifecycle_retire_prunes_lane_relays() {
         let _status_guard = crate::sumeragi::status::lane_relay_test_guard();
@@ -65162,6 +66741,318 @@ mod tests {
                 .get_by_alias("old-incarnation-pin")
                 .is_none(),
             "persisted reset watermark must suppress old-incarnation pin after restart"
+        );
+    }
+
+    #[test]
+    fn set_nexus_same_lane_policy_change_hides_previous_certified_lane_block_sidecars_after_reset()
+    {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let recreated_lane_id = LaneId::new(1);
+        let lane1_config = LaneConfig {
+            id: recreated_lane_id,
+            alias: "certified-reset".to_string(),
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        let two_lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![LaneConfig::default(), lane1_config.clone()],
+        )
+        .expect("two-lane catalog");
+        let two_lane_config = RuntimeLaneConfig::from_catalog(&two_lane_catalog);
+        let kura = strict_kura_for_testing(
+            temp_dir.path().join("certified-sidecar-reset-kura"),
+            &two_lane_config,
+        );
+        let mut state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: two_lane_catalog.clone(),
+                lane_config: two_lane_config.clone(),
+                ..Default::default()
+            })
+            .expect("apply initial two-lane nexus catalog");
+
+        let keypair = crate::state::checked_keypair();
+        let old_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {})
+            .into();
+        let old_block_height = old_block.header().height().get();
+        kura.store_block(Arc::new(old_block.clone()))
+            .expect("store old-incarnation block");
+        {
+            let mut block_hashes = state.block_hashes.block();
+            block_hashes.push(old_block.hash());
+            block_hashes.commit_for_tests();
+        }
+
+        let (stale_session, stale_signer_pops) = sample_committed_lane_block_session_for_state_test(
+            recreated_lane_id,
+            DataSpaceId::UNIVERSAL,
+            old_block_height,
+        );
+        kura.persist_committed_lane_block_session(&stale_session, &stale_signer_pops)
+            .expect("persist old-incarnation certified lane block");
+        assert_eq!(
+            state.unapplied_certified_lane_block_height(recreated_lane_id, DataSpaceId::UNIVERSAL),
+            Some(old_block_height),
+            "test setup should expose the old certified sidecar before lane reset"
+        );
+        assert_eq!(
+            state.certified_lane_block_sessions_snapshot_cached().len(),
+            1,
+            "test setup should expose the old certified session before lane reset"
+        );
+        assert_eq!(
+            state
+                .certified_lane_block_tips_snapshot_cached()
+                .into_iter()
+                .map(|(_, _, height, _)| height)
+                .collect::<Vec<_>>(),
+            vec![old_block_height],
+            "test setup should expose the old certified tip before lane reset"
+        );
+
+        let policy_lane_config = LaneConfig {
+            visibility: LaneVisibility::Restricted,
+            ..lane1_config
+        };
+        let policy_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![LaneConfig::default(), policy_lane_config],
+        )
+        .expect("policy catalog");
+        let policy_config = RuntimeLaneConfig::from_catalog(&policy_catalog);
+        assert_eq!(
+            two_lane_config.shard_id(recreated_lane_id),
+            policy_config.shard_id(recreated_lane_id),
+            "test setup should keep the reset lane on the same storage shard"
+        );
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: policy_catalog.clone(),
+                ..Default::default()
+            })
+            .expect("same-lane policy reset should apply");
+
+        let reset_journal = DaShardCursorJournal::load(
+            &state.nexus_snapshot().lane_config,
+            &state.da_shard_cursor_journal_path(),
+        )
+        .expect("load reset journal");
+        assert_eq!(
+            reset_journal.reset_height_for_lane(recreated_lane_id),
+            Some(old_block_height),
+            "same-lane policy reset should persist a reset watermark at the old block height"
+        );
+        assert!(
+            kura.read_certified_lane_block_artifact(recreated_lane_id, old_block_height)
+                .is_some(),
+            "old certified sidecar should remain as historical proof material"
+        );
+        assert_eq!(
+            state.unapplied_certified_lane_block_height(recreated_lane_id, DataSpaceId::UNIVERSAL),
+            None,
+            "old-incarnation certified sidecar must not block fresh-lane scale-in checks"
+        );
+        assert!(
+            state
+                .certified_lane_block_sessions_snapshot_cached()
+                .is_empty(),
+            "old-incarnation certified sidecar must not hydrate execution sessions after reset"
+        );
+        assert!(
+            state.certified_lane_block_tips_snapshot_cached().is_empty(),
+            "old-incarnation certified sidecar must not seed fresh-lane proposal tips"
+        );
+
+        let restarted = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        {
+            let mut nexus = restarted.nexus.write();
+            nexus.enabled = true;
+            nexus.lane_catalog = policy_catalog;
+            nexus.lane_config = policy_config;
+        }
+        restarted
+            .ensure_da_indexes_hydrated()
+            .expect("restart should hydrate persisted reset watermark");
+        assert_eq!(
+            restarted
+                .da_shard_cursors
+                .read()
+                .reset_height_for_lane(recreated_lane_id),
+            Some(old_block_height),
+            "restart should restore the lane reset watermark before certified sidecar replay"
+        );
+        assert!(
+            restarted
+                .certified_lane_block_sessions_snapshot_cached()
+                .is_empty(),
+            "restart recovery must not hydrate old-incarnation certified sessions"
+        );
+
+        let fresh_height = old_block_height
+            .checked_add(1)
+            .expect("fresh lane-block height should fit");
+        let (fresh_session, fresh_signer_pops) = sample_committed_lane_block_session_for_state_test(
+            recreated_lane_id,
+            DataSpaceId::UNIVERSAL,
+            fresh_height,
+        );
+        kura.persist_committed_lane_block_session(&fresh_session, &fresh_signer_pops)
+            .expect("persist fresh recreated-lane certified block");
+
+        let restarted_sessions = restarted.certified_lane_block_sessions_snapshot_cached();
+        assert_eq!(
+            restarted_sessions.len(),
+            1,
+            "fresh post-reset certified sidecar must remain visible"
+        );
+        assert_eq!(
+            restarted_sessions[0].proposal.descriptor.lane_block_height,
+            fresh_height
+        );
+        assert_eq!(
+            restarted
+                .certified_lane_block_tips_snapshot_cached()
+                .into_iter()
+                .map(|(_, _, height, _)| height)
+                .collect::<Vec<_>>(),
+            vec![fresh_height],
+            "fresh post-reset certified sidecar must seed proposal tips"
+        );
+        assert_eq!(
+            restarted
+                .unapplied_certified_lane_block_height(recreated_lane_id, DataSpaceId::UNIVERSAL),
+            Some(fresh_height),
+            "fresh post-reset certified sidecar should still block unsafe scale-in"
+        );
+    }
+
+    #[test]
+    fn set_nexus_same_lane_policy_change_ignores_stale_direct_application_marker_after_reset() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let reset_lane_id = LaneId::new(1);
+        let lane1_config = LaneConfig {
+            id: reset_lane_id,
+            alias: "direct-marker-reset".to_string(),
+            visibility: LaneVisibility::Public,
+            ..LaneConfig::default()
+        };
+        let two_lane_catalog = LaneCatalog::new(
+            nonzero!(2_u32),
+            vec![LaneConfig::default(), lane1_config.clone()],
+        )
+        .expect("two-lane catalog");
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: two_lane_catalog.clone(),
+                ..Default::default()
+            })
+            .expect("apply initial two-lane nexus catalog");
+
+        let old_block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; Hash::LENGTH]));
+        state.push_block_hash_for_testing(old_block_hash);
+        let reset_height = 1_u64;
+        let stale_key = seed_direct_lane_application_marker(
+            &state,
+            reset_lane_id,
+            DataSpaceId::UNIVERSAL,
+            reset_height,
+            0xD3,
+        );
+        assert_eq!(
+            state.unrepaired_direct_lane_application_marker_height(reset_lane_id),
+            Some(reset_height),
+            "test setup should expose the old direct marker before lane reset"
+        );
+
+        let policy_lane_config = LaneConfig {
+            visibility: LaneVisibility::Restricted,
+            ..lane1_config
+        };
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: LaneCatalog::new(
+                    nonzero!(2_u32),
+                    vec![LaneConfig::default(), policy_lane_config],
+                )
+                .expect("policy catalog"),
+                ..Default::default()
+            })
+            .expect("same-lane policy reset should apply");
+        assert_eq!(
+            state
+                .da_shard_cursors
+                .read()
+                .reset_height_for_lane(reset_lane_id),
+            Some(reset_height),
+            "same-lane policy reset should install the reset watermark"
+        );
+        assert!(
+            state
+                .world
+                .view()
+                .direct_lane_block_application_markers()
+                .get(&stale_key)
+                .is_none(),
+            "same-lane policy reset should prune existing direct markers"
+        );
+
+        let stale_reintroduced_key = seed_direct_lane_application_marker(
+            &state,
+            reset_lane_id,
+            DataSpaceId::UNIVERSAL,
+            reset_height,
+            0xD4,
+        );
+        assert!(
+            state
+                .world
+                .view()
+                .direct_lane_block_application_markers()
+                .get(&stale_reintroduced_key)
+                .is_some(),
+            "test setup should manually reintroduce stale marker evidence after reset"
+        );
+        assert_eq!(
+            state.unrepaired_direct_lane_application_marker_height(reset_lane_id),
+            None,
+            "stale pre-reset direct marker evidence must not block the fresh lane"
+        );
+
+        let fresh_height = reset_height
+            .checked_add(1)
+            .expect("fresh direct marker height should fit");
+        seed_direct_lane_application_marker(
+            &state,
+            reset_lane_id,
+            DataSpaceId::UNIVERSAL,
+            fresh_height,
+            0xD5,
+        );
+        assert_eq!(
+            state.unrepaired_direct_lane_application_marker_height(reset_lane_id),
+            Some(fresh_height),
+            "fresh post-reset direct marker evidence must still block unsafe scale-in"
         );
     }
 

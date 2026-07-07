@@ -91,6 +91,39 @@ def test_path_diagnostic_label_sanitizes_malformed_values() -> None:
     assert path_diagnostic_label(b"reviewed.args") == "<non-path>"
 
 
+def test_path_diagnostic_label_sanitizes_unicode_control_values() -> None:
+    assert path_diagnostic_label(Path("runtime/reviewed\u200dargs.json")) == (
+        "<non-canonical-path>"
+    )
+    assert path_diagnostic_label(Path("runtime/reviewed\u202eargs.json")) == (
+        "<non-canonical-path>"
+    )
+
+
+def test_path_diagnostic_label_sanitizes_secret_looking_components() -> None:
+    assert path_diagnostic_label(Path("runtime/private_key.json")) == (
+        "<secret-looking-path>"
+    )
+    assert path_diagnostic_label(Path("runtime/private-key-summary.json")) == (
+        "<secret-looking-path>"
+    )
+    assert path_diagnostic_label(Path("runtime/private%26%2395%3Bkey.json")) == (
+        "<secret-looking-path>"
+    )
+    assert path_diagnostic_label(Path("/private/var/reviewed.args")) == (
+        "/private/var/reviewed.args"
+    )
+
+
+def test_path_diagnostic_label_sanitizes_unicode_obfuscated_secret_components() -> None:
+    assert path_diagnostic_label(Path("runtime/private\u200dkey.json")) == (
+        "<secret-looking-path>"
+    )
+    assert path_diagnostic_label(Path("runtime/ｐｒｉｖａｔｅ＿ｋｅｙ.json")) == (
+        "<secret-looking-path>"
+    )
+
+
 def test_error_diagnostic_label_sanitizes_malformed_values() -> None:
     assert error_diagnostic_label(RuntimeError("identity denied")) == "identity denied"
     assert (
@@ -102,6 +135,43 @@ def test_error_diagnostic_label_sanitizes_malformed_values() -> None:
             RuntimeError("identity denied"),
             path_label="<non-canonical-path>",
         )
+        == "<non-canonical-error>"
+    )
+    assert (
+        error_diagnostic_label(
+            RuntimeError("denied for /tmp/private_key.json"),
+            path_label="<secret-looking-path>",
+        )
+        == "<non-canonical-error>"
+    )
+    assert (
+        error_diagnostic_label(RuntimeError("private_key read denied"))
+        == "<non-canonical-error>"
+    )
+    assert (
+        error_diagnostic_label(RuntimeError("denied for private%26%2395%3Bkey"))
+        == "<non-canonical-error>"
+    )
+
+
+def test_error_diagnostic_label_sanitizes_unicode_control_text() -> None:
+    assert (
+        error_diagnostic_label(RuntimeError("identity denied \u200d"))
+        == "<non-canonical-error>"
+    )
+    assert (
+        error_diagnostic_label(RuntimeError("identity denied \u202e"))
+        == "<non-canonical-error>"
+    )
+
+
+def test_error_diagnostic_label_sanitizes_unicode_obfuscated_secret_text() -> None:
+    assert (
+        error_diagnostic_label(RuntimeError("denied for bearer\u200dtoken"))
+        == "<non-canonical-error>"
+    )
+    assert (
+        error_diagnostic_label(RuntimeError("denied for ｂｅａｒｅｒ＿ｔｏｋｅｎ"))
         == "<non-canonical-error>"
     )
 
@@ -127,7 +197,14 @@ def test_resolve_path_identity_rejects_malformed_existing_error_text(
     target = tmp_path / "file.txt"
     target.write_text("ok", encoding="utf-8")
 
-    for errors in ([""], [" old"], ["old "], ["old\nerror"]):
+    for errors in (
+        [""],
+        [" old"],
+        ["old "],
+        ["old\nerror"],
+        ["old\u200derror"],
+        ["old\u202eerror"],
+    ):
         try:
             resolve_path_identity(target, errors)
         except ValueError as error:
@@ -151,7 +228,15 @@ def test_resolve_path_identity_rejects_malformed_labels_before_resolution(
 
     monkeypatch.setattr(Path, "resolve", resolve)
 
-    for label in ("", " path", "path ", "path\nname", 7):
+    for label in (
+        "",
+        " path",
+        "path ",
+        "path\nname",
+        "path\u200dname",
+        "path\u202ename",
+        7,
+    ):
         errors: list[str] = []
         try:
             resolve_path_identity(target, errors, label=label)
@@ -185,6 +270,14 @@ def test_resolve_path_identity_rejects_malformed_failure_templates_before_resolu
         ),
         (
             "failed {path}: {error}\n",
+            "failure template must be a non-empty string",
+        ),
+        (
+            "failed {path}: {error}\u200d",
+            "failure template must be a non-empty string",
+        ),
+        (
+            "failed {path}: {error}\u202e",
             "failure template must be a non-empty string",
         ),
         ("failed {path}", "failure template must include {path} and {error}"),
@@ -269,3 +362,34 @@ def test_resolve_path_identity_sanitizes_noncanonical_resolver_failure(
         "failed to resolve @ARGFILE `<non-canonical-path>`: "
         "<non-canonical-error>"
     ]
+
+
+def test_resolve_path_identity_sanitizes_secret_resolver_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    argfile = tmp_path / "reviewed.args"
+    secret_path = tmp_path / "private_key.json"
+    original_resolve = Path.resolve
+
+    def resolve(self: Path, *args, **kwargs):
+        if self == argfile:
+            raise RuntimeError(f"identity denied for {secret_path}")
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    errors: list[str] = []
+
+    assert (
+        resolve_path_identity(
+            argfile,
+            errors,
+            label="@ARGFILE",
+            failure_template="failed to resolve @ARGFILE `{path}`: {error}",
+        )
+        is None
+    )
+    assert errors == [
+        f"failed to resolve @ARGFILE `{argfile}`: <non-canonical-error>"
+    ]
+    assert "private_key" not in errors[0]

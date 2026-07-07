@@ -49,7 +49,16 @@ from sorafs_checker_preflight import (  # noqa: E402
     write_all_checker_summary_bytes,
     validate_checker_output_parent,
 )
-from sorafs_path_identity import path_diagnostic_label  # noqa: E402
+from sorafs_path_identity import (  # noqa: E402
+    diagnostic_text_is_canonical,
+    error_diagnostic_label,
+    path_diagnostic_label,
+)
+from sorafs_evidence_validation import (  # noqa: E402
+    forbidden_non_production_markers,
+    require_rollout_deployment_id,
+    require_rollout_environment,
+)
 from sorafs_response_args import (  # noqa: E402
     EvidenceArgumentParser,
     expand_response_args,
@@ -65,14 +74,11 @@ HEX64_LEN = 64
 
 
 def split_csv_values(values: Sequence[str]) -> list[str]:
-    """Split repeated comma-separated CLI values into canonical strings."""
+    """Split repeated comma-separated CLI values into exact strings."""
 
     items: list[str] = []
     for value in values:
-        for item in value.split(","):
-            stripped = item.strip()
-            if stripped:
-                items.append(stripped)
+        items.extend(value.split(","))
     return items
 
 
@@ -156,14 +162,9 @@ def validate_hex64(value: str | None, *, option: str, errors: list[str]) -> None
 
 
 def validate_canonical_string(value: str | None, *, label: str, errors: list[str]) -> None:
-    """Require a non-empty canonical string without control characters."""
+    """Require a non-empty canonical string without control/format text."""
 
-    if (
-        not isinstance(value, str)
-        or not value.strip()
-        or value != value.strip()
-        or any(ord(character) < 32 or ord(character) == 127 for character in value)
-    ):
+    if not diagnostic_text_is_canonical(value):
         errors.append(f"{label} must be a non-empty canonical string")
 
 
@@ -180,11 +181,7 @@ def validate_provider_label_arg(
     if PROVIDER_LABEL_PATTERN.fullmatch(value) is None:
         errors.append(PROVIDER_LABEL_ERROR.replace("providers[].name", option))
         return
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_PROVIDER_LABEL_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_PROVIDER_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{option} must not contain non-production markers {forbidden}")
 
@@ -202,11 +199,7 @@ def validate_challenge_label_arg(
     if CHALLENGE_LABEL_PATTERN.fullmatch(value) is None:
         errors.append(CHALLENGE_LABEL_ERROR.replace("challenges[].name", option))
         return
-    forbidden = sorted(
-        marker
-        for marker in FORBIDDEN_CHALLENGE_LABEL_MARKERS
-        if marker in value.split("-")
-    )
+    forbidden = forbidden_non_production_markers(value, FORBIDDEN_CHALLENGE_LABEL_MARKERS)
     if forbidden:
         errors.append(f"{option} must not contain non-production markers {forbidden}")
 
@@ -395,8 +388,16 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
 
     errors: list[str] = []
     validate_output_path(args.out, errors)
-    validate_canonical_string(args.deployment_id, label="--deployment-id", errors=errors)
-    validate_canonical_string(args.environment, label="--environment", errors=errors)
+    require_rollout_deployment_id(
+        {"--deployment-id": args.deployment_id},
+        errors,
+        field="--deployment-id",
+    )
+    require_rollout_environment(
+        {"--environment": args.environment},
+        errors,
+        field="--environment",
+    )
     validate_thresholds(args, errors)
     if args.kind in SEED_REPLAY_DIGEST_KINDS:
         validate_hex64(
@@ -549,8 +550,11 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
     try:
         parent.mkdir(parents=True, exist_ok=True)
     except (OSError, RuntimeError) as error:
-        del error
-        return [f"--out parent `{path_diagnostic_label(parent)}` cannot be created"]
+        parent_label = path_diagnostic_label(parent)
+        return [
+            f"--out parent `{parent_label}` cannot be created: "
+            f"{error_diagnostic_label(error, path_label=parent_label)}"
+        ]
     tmp_name = f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     tmp_path = parent / tmp_name
     fd = -1
@@ -569,7 +573,7 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
         if parent_sync_errors:
             return parent_sync_errors
     except (OSError, RuntimeError) as error:
-        del error
+        path_label = path_diagnostic_label(path)
         try:
             if fd >= 0:
                 os.close(fd)
@@ -580,7 +584,10 @@ def write_payload_atomic(path: Path, payload: dict[str, Any]) -> list[str]:
                 pass
             except (OSError, RuntimeError):
                 pass
-        return [f"--out `{path_diagnostic_label(path)}` cannot be written"]
+        return [
+            f"--out `{path_label}` cannot be written: "
+            f"{error_diagnostic_label(error, path_label=path_label)}"
+        ]
     return []
 
 

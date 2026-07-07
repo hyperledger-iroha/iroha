@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_pdp_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 792a99c1f779613fd62836c100fddad83b29f1b0b700d7e963e946d2235039c2
-source_last_modified: "2026-07-05T00:59:36.862587+00:00"
-translation_last_reviewed: 2026-07-05
-source_mtime: "2026-07-05T00:59:36.862587+00:00"
+source_hash: bc24d4c18e37aa448fec644f34b11d4a002211cd370a4f7ef52c7bc5cc15c534
+source_last_modified: "2026-07-06T19:29:26.838406+00:00"
+translation_last_reviewed: 2026-07-06
+source_mtime: 2026-07-06T19:29:26.838406+00:00
 ---
 
 # Sora-PDP Hot Storage Proofs
@@ -83,7 +83,10 @@ Implemented locally:
   fingerprints must match `valid_policy_digests`, provider-roster-bound
   artifact fingerprints must match `valid_provider_roster_digests`, and
   repair-handoff metadata must match `valid_repair_handoff_digests` before
-  final promotion can report ready.
+  final promotion can report ready. PDP rollout summaries must expose exactly
+  one active proof summary digest, one active policy digest, one active
+  provider-roster digest, and one active repair-handoff digest; mixed valid
+  anchors fail closed before final promotion can report ready.
   Proof-summary mismatches are recorded on the offending artifact in the JSON
   summary before required-kind validity is reported. Policy and provider-roster
   mismatches are recorded on the offending governance approval artifact through

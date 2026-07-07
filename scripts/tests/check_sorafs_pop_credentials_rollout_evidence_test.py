@@ -23,6 +23,7 @@ NOW = 1_800_006_000
 GENERATED_AT = NOW - 120
 HEX = "ab" * 32
 HEX_2 = "cd" * 32
+HEX_3 = "ef" * 32
 DEPLOYMENT_ID = "pop-staging-a"
 ENVIRONMENT = "staging"
 
@@ -1311,7 +1312,7 @@ def test_deployment_context_is_required(tmp_path: Path) -> None:
 
     payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = payload["required"]["issuer_bundle"]["artifacts"][0]
-    assert "deployment_id must be a non-empty string" in artifact["errors"]
+    assert "deployment_id must be a non-empty canonical string" in artifact["errors"]
 
 
 def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
@@ -1447,6 +1448,80 @@ def test_governance_policy_digest_must_match_verifier_service(
         "governance_approval policy_digest_hex must match a valid "
         "verifier_service policy_digest_hex"
     ]
+
+
+def test_multiple_valid_root_anchors_fail_closed(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    issuer = complete_payloads()["issuer_bundle"]
+    issuer["root_digest_hex"] = HEX_3
+    write_json(evidence_dir / "issuer_bundle_alt.json", issuer)
+    commitment_root = complete_payloads()["commitment_root"]
+    commitment_root["root_digest_hex"] = HEX_3
+    write_json(evidence_dir / "commitment_root_alt.json", commitment_root)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["valid_root_digests"] == []
+    assert (
+        "valid_root_digests must contain exactly one active digest"
+        in payload["errors"]
+    )
+
+
+def test_multiple_valid_revocation_anchors_fail_closed(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    issuer = complete_payloads()["issuer_bundle"]
+    issuer["revocation_list_digest_hex"] = HEX_3
+    write_json(evidence_dir / "issuer_bundle_alt.json", issuer)
+    revocation = complete_payloads()["revocation_registry"]
+    revocation["revocation_list_digest_hex"] = HEX_3
+    write_json(evidence_dir / "revocation_registry_alt.json", revocation)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["valid_revocation_list_digests"] == []
+    assert (
+        "valid_revocation_list_digests must contain exactly one active digest"
+        in payload["errors"]
+    )
+
+
+def test_multiple_valid_policy_anchors_fail_closed(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    verifier = complete_payloads()["verifier_service"]
+    verifier["policy_digest_hex"] = HEX_3
+    write_json(evidence_dir / "verifier_service_alt.json", verifier)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["valid_policy_digests"] == []
+    assert (
+        "valid_policy_digests must contain exactly one active digest"
+        in payload["errors"]
+    )
+
+
+def test_multiple_valid_pop_snapshot_anchors_fail_closed(tmp_path: Path) -> None:
+    evidence_dir = write_complete_evidence(tmp_path)
+    moderation = complete_payloads()["moderation_integration"]
+    moderation["pop_snapshot_digest_hex"] = HEX_3
+    write_json(evidence_dir / "moderation_integration_alt.json", moderation)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(evidence_dir, "--summary-out", str(summary)) == 1
+
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    assert payload["valid_pop_snapshot_digests"] == []
+    assert (
+        "valid_pop_snapshot_digests must contain exactly one active digest"
+        in payload["errors"]
+    )
 
 
 def test_all_root_bound_artifacts_reject_published_root_mismatch(

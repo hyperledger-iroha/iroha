@@ -440,15 +440,8 @@ impl SoranetHandshakeConfig {
             return Ok(None);
         }
         if let Some(public_key) = self.signed_ticket_public_key.as_deref() {
-            match SignedTicket::decode(bytes) {
-                Ok(signed) => {
-                    return self.verify_signed_ticket_decoded(&signed, public_key);
-                }
-                Err(pow::Error::Malformed(_)) if bytes.len() == pow::TICKET_LEN => {
-                    // Fallback to unsigned tickets when the payload matches the raw PoW layout.
-                }
-                Err(err) => return Err(ChallengeVerifyError::Pow(err)),
-            }
+            let signed = SignedTicket::decode(bytes).map_err(ChallengeVerifyError::Pow)?;
+            return self.verify_signed_ticket_decoded(&signed, public_key);
         }
 
         self.verify_unsigned_ticket_bytes(bytes)
@@ -1144,7 +1137,7 @@ mod handshake_config_tests {
     }
 
     #[test]
-    fn raw_ticket_accepted_with_signed_key_present() {
+    fn raw_ticket_rejected_with_signed_key_present() {
         let pow_params = PowParameters::new(1, Duration::from_secs(300), Duration::from_secs(60));
         let limits = TicketRevocationStoreLimits::new(4, Duration::from_secs(900)).expect("limits");
         let store =
@@ -1178,11 +1171,13 @@ mod handshake_config_tests {
         .expect("mint pow ticket");
         let ticket_bytes = ticket.to_vec();
 
-        let admission = config
+        let err = config
             .verify_challenge_ticket(&ticket_bytes)
-            .expect("verify ticket")
-            .expect("admission");
-        assert_eq!(admission.pow.difficulty(), pow_params.difficulty());
+            .expect_err("raw ticket must fail when signed-ticket key is configured");
+        assert!(matches!(
+            err,
+            ChallengeVerifyError::Pow(pow::Error::Malformed(_))
+        ));
     }
 }
 

@@ -661,7 +661,7 @@ def test_deployment_context_is_required(tmp_path: Path) -> None:
 
     summary_payload = json.loads(summary.read_text(encoding="utf-8"))
     artifact = summary_payload["required"]["explorer"]["artifacts"][0]
-    assert "deployment_id must be a non-empty string" in artifact["errors"]
+    assert "deployment_id must be a non-empty canonical string" in artifact["errors"]
 
 
 def test_unreviewed_deployment_context_fails(tmp_path: Path) -> None:
@@ -986,6 +986,23 @@ def test_all_source_bound_artifacts_reject_source_entry_mismatch(
         ) in artifact["errors"]
 
 
+def test_multiple_valid_source_batch_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = source_entry_evidence()
+    payload["source_batch_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "source-entry-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_source_batch_digests"] == []
+    assert (
+        "valid_source_batch_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+
+
 def test_explorer_cycle_binding_must_match_publication(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     payload = explorer_evidence()
@@ -1018,6 +1035,28 @@ def test_all_cycle_bound_artifacts_reject_publication_cycle_mismatch(
             f"{kind_name} cycle_digest_hex must match "
             "a valid source-bound publication artifact"
         ) in artifact["errors"]
+
+
+def test_multiple_valid_publication_cycle_anchors_fail_closed(tmp_path: Path) -> None:
+    write_complete_evidence(tmp_path)
+    payload = publication_evidence()
+    payload["cycle_digest_hex"] = DIGEST_2
+    write_json(tmp_path / "publication-alt.json", payload)
+    summary = tmp_path / "summary.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
+
+    result = json.loads(summary.read_text(encoding="utf-8"))
+    assert result["valid_cycle_digests"] == []
+    assert result["valid_publication_bindings"] == []
+    assert (
+        "valid_cycle_digests must contain exactly one active digest"
+        in result["errors"]
+    )
+    assert (
+        "valid_publication_bindings must contain exactly one active binding"
+        in result["errors"]
+    )
 
 
 def test_invalid_publication_does_not_anchor_cycle_bound_evidence(tmp_path: Path) -> None:

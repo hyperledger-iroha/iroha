@@ -69,9 +69,7 @@ production-readiness gate also replays those lane-proven runner, workflow, and
 policy bindings over recognized artifact fingerprints before final promotion:
 committee artifacts must match `valid_runner_bindings`, workflow-bound operator,
 notification, executor, transparency, and Governance DAG artifacts must match
-`valid_workflow_digests`, and policy-bound Governance DAG artifacts must match
-`valid_policy_digests`.
-Committee artifacts also bind `result_count` to the unique canonical
+`valid_workflow_digests`, and policy-bound Governance DAG artifacts must match `valid_policy_digests`. The AI prescreen gate fail-closes when more than one valid runner, workflow, notification manifest, executor summary, or policy anchor appears, and clears the mixed `valid_runner_bindings`, `valid_workflow_digests`, `valid_notification_manifest_digests`, `valid_executor_summary_digests`, or `valid_policy_digests` set before aggregate promotion can report ready. Committee artifacts also bind `result_count` to the unique canonical
 `results[].name` inventory, require reviewed
 `ai-prescreen-committee-result-*` labels without non-production markers, and
 reject duplicate committee-result entries before promotion can report ready.
@@ -98,10 +96,11 @@ secret-looking host/path components cannot enter accepted staged evidence.
 Juror notification transport artifacts also bind `probe_count` and
 `accepted_count` to the unique canonical `probes[].delivery_id` inventory and
 require reviewed `ai-prescreen-notification-delivery-*` labels without
-non-production markers and at least one accepted notification delivery before
+non-production markers, at least one accepted notification delivery, and
+coverage for both shipped `submit_commit` and `submit_reveal` actions before
 promotion can report ready. Each probe's dedup key must also be unique, bound
-to its reviewed delivery ID, and accompanied by a shipped `submit_commit` or
-`submit_reveal` action plus non-empty case, round, and juror identifiers.
+to its reviewed delivery ID, and accompanied by one of those shipped actions
+plus non-empty case, round, and juror identifiers.
 Notification probe
 byte counts must also be well-formed: notification bodies require positive byte
 counts, webhook response byte counts must be non-negative, and malformed
@@ -918,8 +917,7 @@ Completed local foundations:
   production-readiness gate rechecks those exported summary relationships before
   final promotion: runner-bound committee fingerprints must match
   `valid_runner_bindings`, workflow-bound fingerprints must match
-  `valid_workflow_digests`, and policy-bound Governance DAG fingerprints must
-  match `valid_policy_digests`. Committee artifacts also bind
+  `valid_workflow_digests`, and policy-bound Governance DAG fingerprints must match `valid_policy_digests`. The AI prescreen gate fail-closes when more than one valid runner, workflow, notification manifest, executor summary, or policy anchor appears, and clears the mixed `valid_runner_bindings`, `valid_workflow_digests`, `valid_notification_manifest_digests`, `valid_executor_summary_digests`, or `valid_policy_digests` set before aggregate promotion can report ready. Committee artifacts also bind
   `result_count` to the unique canonical `results[].name` inventory, require
   reviewed `ai-prescreen-committee-result-*` labels without non-production
   markers, and reject duplicate committee-result entries before promotion can
@@ -934,9 +932,9 @@ Completed local foundations:
   operator route name, the reviewed JSON/browser content types, and a response
   body digest for every route. Juror notification transport artifacts
   bind delivery probes to reviewed `ai-prescreen-notification-delivery-*`
-  labels without non-production markers and require at least one accepted
-  delivery with positive notification byte counts and non-negative webhook
-  response byte counts, commit/reveal executor artifacts require the reviewed
+  labels without non-production markers and require accepted `submit_commit`
+  plus `submit_reveal` delivery coverage with positive notification byte counts
+  and non-negative webhook response byte counts, commit/reveal executor artifacts require the reviewed
   `executor.env` and `run.sh` bundle files with exact path and kind bindings
   plus the reviewed `sorafs-moderation-ballots-executor` service identity while
   rejecting unknown, swapped-path, mislabeled artifact names, malformed bundle
@@ -981,7 +979,9 @@ Completed local foundations:
   unique inventory matches `--result-count` and the
   `ai-prescreen-committee-result-*` production family, generated notification
   delivery labels in the `ai-prescreen-notification-delivery-*` production
-  family, complete operator route/transparency source/Governance DAG
+  family, `--probe-count` covers both shipped notification actions by default
+  and must continue to cover them, complete operator
+  route/transparency source/Governance DAG
   producer/workflow-step coverage where applicable,
   reviewed `--workflow-id` labels matching the gate's `sfm-4a-*` production
   shape,
@@ -989,7 +989,8 @@ Completed local foundations:
   source kinds, Governance DAG producers, and workflow steps before writing,
   Governance DAG `--edge-count` binding to the required producer inventory,
   reviewed `ai-prescreen-governance-edge-*` edge labels without non-production
-  markers, and
+  markers, commit/reveal executor action-count breakdowns that sum to
+  `--action-count`, and
   shared URL preflight for runner, committee, operator, and webhook URLs so
   userinfo, query strings, fragments, encoded traversal/separators/drive
   prefixes, URI-like path tokens, and secret-looking host/path components fail

@@ -134,10 +134,13 @@ Example usage:
   `--require-telemetry` whenever you supply the matching CLI flag.
   Use `XTASK_SORAFS_ADOPTION_FLAGS` to forward additional xtask arguments (for
   example `--allow-single-source` during an approved downgrade so the adoption
-  gate both tolerates and enforces the fallback). Only skip the adoption gate
-  with `--skip-adoption-check` when running local diagnostics; the roadmap
-  requires every regulated direct-mode run to include the adoption report
-  bundle.
+  gate both tolerates and enforces the fallback). Forwarded
+  `--allow-single-source` or `--allow-zero-weight` flags must also set
+  `SORAFS_ADOPTION_OVERRIDE_ID=<incident-or-approval-id>`. The wrapper rejects
+  `--skip-adoption-check` unless the caller also sets
+  `SORAFS_DIRECT_MODE_ALLOW_ADOPTION_SKIP=local-diagnostic`; reserve that
+  combination for local diagnostics. Every regulated direct-mode run must
+  include the adoption report bundle.
 
 ## 5. Rollout Checklist
 
@@ -203,8 +206,9 @@ cargo xtask sorafs-adoption-check \
   --scoreboard fetch_state/direct_mode_scoreboard.json \
   --summary fetch_state/direct_mode_summary.json \
   --allow-single-source \
+  --adoption-override-id INC-2026-07-DIRECT-FALLBACK \
   --require-direct-only \
-  --json-out artifacts/sorafs_direct_mode/adoption_report.json \
+  --report artifacts/sorafs_direct_mode/adoption_report.json \
   --require-telemetry
 ```
 

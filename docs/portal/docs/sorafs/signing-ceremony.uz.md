@@ -74,8 +74,9 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Agar manifest boshqa URL manzilida yashasa, `--manifest` ga o'ting. Imzosiz konvertlar
-mahalliy tutun oqimlari uchun `--allow-unsigned` o'rnatilmasa, rad etiladi.
+Pass `--manifest` if the manifest lives at a different URL or path. The
+command refuses unsigned envelopes; use the Parliament-published envelope or a
+locally generated council-signed envelope for smoke runs.
 
 - Manifestni bosqichma-bosqich shlyuz orqali tekshirishda, maqsad o'rniga Torii
   mahalliy yuklamalar:
