@@ -34425,8 +34425,8 @@ def test_source_and_top_level_commit_progress_spec_contract_errors_reject_init_h
             ),
         )
     ) == [
-        f"{source}:39 defines {source_root_kind} init operator Init, but "
-        f"helper HiddenInit at {source}:38 is not an initial-state predicate; "
+        f"{source}:16 defines {source_root_kind} init operator Init, but "
+        f"helper HiddenInit at {source}:15 is not an initial-state predicate; "
         f"{source_requirement}"
     ]
     assert module.top_level_commit_spec_contract_errors(
@@ -34441,8 +34441,8 @@ def test_source_and_top_level_commit_progress_spec_contract_errors_reject_init_h
             ),
         )
     ) == [
-        f"{top}:39 defines {top_root_kind} init operator Init, but helper "
-        f"HiddenInit at {top}:38 is not an initial-state predicate; "
+        f"{top}:37 defines {top_root_kind} init operator Init, but helper "
+        f"HiddenInit at {top}:36 is not an initial-state predicate; "
         f"{top_requirement}"
     ]
 
