@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/soranet/pq_rollout_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 008611a98157ab0ea7ec44c52b12339e16424fc5155d378dedaff5314d78f778
+source_hash: e70ba465f2df0605e26da8c260895c7315f24e237db082914ab1f7ff3becb1bc
 source_last_modified: "2026-01-22T15:38:30.717983+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -246,8 +246,8 @@ default phases trigger separate policy thresholds (`dashboards/alerts/soranet_ha
 ### Guardrail reminders
 
 - Reference `docs/source/ops/soranet_transport_rollback.md` whenever a demotion
-  occurs and log any temporary mitigation as a `TODO:` item in the rollout
-  tracker for follow-up work.
+  occurs and log any temporary mitigation as a follow-up item in the rollout
+  tracker.
 - Keep `dashboards/alerts/soranet_handshake_rules.yml` and
   `dashboards/alerts/soranet_privacy_rules.yml` under `promtool test rules`
   coverage before and after a rollback so alert drift is documented alongside

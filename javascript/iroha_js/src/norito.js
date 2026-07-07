@@ -684,12 +684,11 @@ export function noritoEncodeMultisigProposeRequest(request) {
 }
 
 function normalizeMultisigProposeValidationFeeMetadata(request) {
-  const policyVersion = request.validation_fee_policy_version ?? request.validationFeePolicyVersion ?? null;
-  const policyHash = request.validation_fee_policy_hash ?? request.validationFeePolicyHash ?? null;
-  const instructionIndex =
-    request.validation_fee_instruction_index ?? request.validationFeeInstructionIndex ?? null;
-  const transferEntryIndex =
-    request.validation_fee_transfer_entry_index ?? request.validationFeeTransferEntryIndex ?? null;
+  rejectValidationFeeCamelCaseDtoFields(request);
+  const policyVersion = request.validation_fee_policy_version ?? null;
+  const policyHash = request.validation_fee_policy_hash ?? null;
+  const instructionIndex = request.validation_fee_instruction_index ?? null;
+  const transferEntryIndex = request.validation_fee_transfer_entry_index ?? null;
   const hasPolicyVersion = policyVersion !== null && policyVersion !== undefined;
   const hasPolicyHash = policyHash !== null && policyHash !== undefined;
   const hasInstructionIndex = instructionIndex !== null && instructionIndex !== undefined;
@@ -739,6 +738,21 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
         ).toString()
       : null,
   };
+}
+
+function rejectValidationFeeCamelCaseDtoFields(request) {
+  for (const [camelName, snakeName] of [
+    ["validationFeePolicyVersion", "validation_fee_policy_version"],
+    ["validationFeePolicyHash", "validation_fee_policy_hash"],
+    ["validationFeeInstructionIndex", "validation_fee_instruction_index"],
+    ["validationFeeTransferEntryIndex", "validation_fee_transfer_entry_index"],
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(request, camelName)) {
+      throw new TypeError(
+        `MultisigProposeDto uses unsupported camelCase validation fee field ${camelName}; use ${snakeName}`,
+      );
+    }
+  }
 }
 
 function normalizeValidationFeePolicyHashString(value, context) {

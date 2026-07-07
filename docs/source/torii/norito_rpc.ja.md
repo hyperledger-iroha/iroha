@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/torii/norito_rpc.md
 status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 74f9f6a47b99a63cb24ec644e739f00b4f55f3fe84f1855b2356cbd87bdf59c1
+source_hash: 585053c17e351126d22f5294311a649b2c0a1ee8ed9b4f150c6cdee9ee7cd96d
 source_last_modified: "2026-04-04T15:25:30.327788+00:00"
 translation_last_reviewed: 2026-04-05
 ---
@@ -209,11 +209,18 @@ The catalogue above captures every handler that extracts or emits `NoritoJson`/`
   binary responses by setting the `Accept` header. Native Norito encoding helpers
   will land with NRPC-3.
 
-### 13. Future Work
+### 13. Delivered Follow-Ups
 
-- Document streaming (`norito-stream`) and relay encapsulation (SNNet-11).
-- Automate OpenAPI-to-Norito fixture generation (`cargo xtask openapi`) to keep
-  the schema catalogue in sync with Torii releases.
+- Norito streaming and relay encapsulation are documented in
+  `docs/source/norito_streaming.md`,
+  `docs/source/norito_streaming_transport_design.md`, and
+  `docs/source/soranet/spec.md`.
+- OpenAPI and Norito fixture automation is available through
+  `cargo xtask openapi`, `cargo xtask norito-rpc-fixtures`, and
+  `cargo xtask norito-rpc-verify`. The canonical payloads and schema hashes
+  live under `fixtures/norito_rpc/`, and
+  `scripts/run_norito_rpc_fixtures.sh` records SDK cadence evidence under
+  `artifacts/norito_rpc/`.
 
 ### 14. Stakeholder Brief & Distribution
 

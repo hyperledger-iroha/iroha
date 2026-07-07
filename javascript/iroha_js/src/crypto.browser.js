@@ -465,7 +465,7 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDIN
 export const KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
 export const KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME =
-  "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1";
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1";
 export const KAGEMUSHA_RECURSIVE_SPEND_APPEND_REQUEST_WIRE_NAME =
   "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1";
 export const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_WIRE_NAME =
@@ -1279,6 +1279,10 @@ export function buildKagemushaRecursiveSpendVerifierRecordRef() {
 
 export function encodeKagemushaRecursiveSpendInitRequest() {
   return unsupported("encodeKagemushaRecursiveSpendInitRequest");
+}
+
+export function encodeKagemushaRecursiveSpendTopUpRequest() {
+  return unsupported("encodeKagemushaRecursiveSpendTopUpRequest");
 }
 
 export function encodeKagemushaRecursiveSpendAppendRequest() {

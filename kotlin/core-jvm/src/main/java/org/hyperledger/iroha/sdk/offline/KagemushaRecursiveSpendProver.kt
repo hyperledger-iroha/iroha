@@ -77,7 +77,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     nativeBridgeAbiVersionProbe = { nativeBridgeAbiVersion() },
                     probeSymbol = {
                         expectIllegalArgumentProbe {
-                            nativeTopUpSpend(MALFORMED_NATIVE_PROBE_ARCHIVE)
+                            nativeTopUpInstruction(MALFORMED_NATIVE_PROBE_ARCHIVE)
                         }
                     },
                     requiredNativeBridgeAbiVersion = TOP_UP_REQUIRED_NATIVE_BRIDGE_ABI_VERSION,
@@ -702,13 +702,13 @@ class KagemushaRecursiveSpendProver private constructor() {
             call(
                 "top-up",
                 requestArchive,
-                ::nativeTopUpSpend,
+                ::nativeTopUpInstruction,
                 bridgeAvailable = nativeTopUpAvailable,
             )
 
         @JvmStatic
-        fun topUpSpend(request: InitSpendRequest): ByteArray =
-            topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeInitRequest(request))
+        fun topUpSpend(request: TopUpSpendRequest): ByteArray =
+            topUpSpend(KagemushaRecursiveSpendRequestCodecs.encodeTopUpRequest(request))
 
         @JvmStatic
         fun appendSpend(requestArchive: ByteArray?): ByteArray =
@@ -970,7 +970,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         private external fun nativeAppendSpend(requestArchive: ByteArray): ByteArray?
 
         @JvmStatic
-        private external fun nativeTopUpSpend(requestArchive: ByteArray): ByteArray?
+        private external fun nativeTopUpInstruction(requestArchive: ByteArray): ByteArray?
 
         @JvmStatic
         private external fun nativeTransitionProfileInit(requestArchive: ByteArray): ByteArray?

@@ -271,13 +271,13 @@ class TransactionDraft:
 
     def kagemusha_recursive_topup(
         self,
-        init_request_archive: FixedBytesLike,
+        topup_request_archive: FixedBytesLike,
     ) -> TransactionDraft:
         """Derive and append a recursive Kagemusha top-up instruction."""
 
         from .kagemusha import kagemusha_recursive_topup_instruction
 
-        self.add_instruction(kagemusha_recursive_topup_instruction(init_request_archive))
+        self.add_instruction(kagemusha_recursive_topup_instruction(topup_request_archive))
         return self
 
     def register_domain(

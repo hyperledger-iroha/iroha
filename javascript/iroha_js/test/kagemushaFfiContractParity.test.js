@@ -543,6 +543,9 @@ test("recursive Kagemusha ABI-6 C exports and shipped headers stay in parity", (
 });
 
 test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity", () => {
+  const androidJavaProver = source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java");
+  const kotlinProver = source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt");
+
   assertContainsAll(
     source("crates/iroha_js_host/src/lib.rs"),
     REQUIRED_JS_NATIVE_METHODS.map((name) => `js_name = "${name}"`),
@@ -603,7 +606,7 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
   );
 
   assertContainsAll(
-    source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"),
+    androidJavaProver,
     [
       "initSpend",
       "appendSpend",
@@ -617,12 +620,12 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "topUpSpend",
       "nativeTransitionProfileInit",
       "nativeTransitionProfileAppend",
-      "nativeTopUpSpend",
+      "nativeTopUpInstruction",
     ],
     "Android Java SDK",
   );
   assertContainsAll(
-    source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"),
+    kotlinProver,
     [
       "initSpend",
       "appendSpend",
@@ -636,11 +639,21 @@ test("recursive Kagemusha ABI-6 native host and SDK method names stay in parity"
       "topUpSpend",
       "nativeTransitionProfileInit",
       "nativeTransitionProfileAppend",
-      "nativeTopUpSpend",
+      "nativeTopUpInstruction",
       "nativeBuildPallasOpenEnvelopesArchive",
       "nativeBuildPreviousProofOpenEnvelopesArchive",
     ],
     "Kotlin JVM SDK",
+  );
+  assert.doesNotMatch(
+    androidJavaProver,
+    /nativeTopUpSpend/u,
+    "Android Java SDK must not expose the retired init-request top-up JNI symbol",
+  );
+  assert.doesNotMatch(
+    kotlinProver,
+    /nativeTopUpSpend/u,
+    "Kotlin JVM SDK must not expose the retired init-request top-up JNI symbol",
   );
   assertContainsAll(
     source("csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"),
@@ -688,7 +701,7 @@ test("Kagemusha Kotlin recursive spend JNI declarations stay static", () => {
     "nativeLineageWitnessAppendResult",
     "nativeVerifySpend",
     "nativeRedeemSpend",
-    "nativeTopUpSpend",
+    "nativeTopUpInstruction",
     "nativeBuildPallasOpenEnvelopesArchive",
     "nativeBuildPreviousProofOpenEnvelopesArchive",
   ];
@@ -1987,7 +2000,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "kagemushaRecursiveSpendRedeem",
       "kagemushaRecursiveRedeem.redeemRequestArchive",
       "kagemushaRecursiveSpendTopUp",
-      "kagemushaRecursiveTopUp.initRequestArchive",
+      "kagemushaRecursiveTopUp.topUpRequestArchive",
       "Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))",
       "Buffer.from(new Uint8Array(value))",
     ],
@@ -2001,7 +2014,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
     assert.match(
       transactionSource,
       /buildKagemushaRecursiveTopUpTransaction[\s\S]*?kagemushaRecursiveSpendTopUp[\s\S]*?buildKagemushaInstructionTransaction/u,
-      `${relative} must derive the top-up transfer instruction before signing`,
+      `${relative} must derive the top-up instruction before signing`,
     );
   }
   for (const relative of [
@@ -2025,6 +2038,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "KagemushaInstructionArchiveType",
       '"KagemushaTransfer"',
       '"RedeemKagemushaRecursive"',
+      '"TopUpKagemushaRecursive"',
       "KagemushaInstructionArchiveInput",
       "KagemushaInstructionTransactionInput",
       "KagemushaRecursiveRedeemTransactionBaseInput",
@@ -2037,6 +2051,8 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "buildKagemushaInstructionTransaction",
       "buildKagemushaRecursiveRedeemTransaction",
       "buildKagemushaRecursiveTopUpTransaction",
+      "topUpRequestArchive: BinaryLike;",
+      "top_up_request_archive: BinaryLike;",
       "initRequestArchive: BinaryLike;",
       "init_request_archive: BinaryLike;",
       "redeemRequestArchive: BinaryLike;",
@@ -2075,7 +2091,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "valid KagemushaTransfer Norito archive",
       "bytesBase64 must be canonical standard base64",
       "buildKagemushaInstructionTransaction wraps one archive instruction",
-      "buildKagemushaRecursiveTopUpTransaction derives transfer instruction before signing",
+      "buildKagemushaRecursiveTopUpTransaction derives top-up instruction before signing",
       "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
       "transaction builders reject padded authority and asset definition IDs before native dispatch",
       "authority must not contain surrounding whitespace",
@@ -2085,7 +2101,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "privateKaigiFeeSpend\\.verifyingKey\\.id\\.backend must not contain surrounding whitespace",
       "privateKaigiFeeSpend\\.verifyingKey\\.record\\.circuit_id must not contain surrounding whitespace",
       "instruction_type: \"KagemushaTransfer\"",
-      "kagemushaRecursiveTopUp\\.initRequestArchive must be a Buffer or ArrayBuffer view",
+      "kagemushaRecursiveTopUp\\.topUpRequestArchive must be a Buffer or ArrayBuffer view",
       "top-up native rejected",
       "redeemRequestArchive must be a Buffer or ArrayBuffer view",
       "redeem native rejected",

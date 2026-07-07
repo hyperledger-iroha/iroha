@@ -6211,21 +6211,37 @@ impl<'a> DecodeFromSlice<'a> for GovernanceManifestActivation {
 }
 
 fn build_sumeragi_status(metrics: &Metrics) -> SumeragiConsensusStatus {
+    let commit_qc_height = metrics.sumeragi_commit_qc_height.get();
+    let commit_qc_view = metrics.sumeragi_commit_qc_view.get();
+    let highest_qc_height = metrics
+        .sumeragi_highest_qc_height
+        .get()
+        .max(commit_qc_height);
+    let raw_locked_qc_height = metrics.sumeragi_locked_qc_height.get();
+    let raw_locked_qc_view = metrics.sumeragi_locked_qc_view.get();
+    let (locked_qc_height, locked_qc_view) = if commit_qc_height > 0
+        && (raw_locked_qc_height, raw_locked_qc_view) < (commit_qc_height, commit_qc_view)
+    {
+        (commit_qc_height, commit_qc_view)
+    } else {
+        (raw_locked_qc_height, raw_locked_qc_view)
+    };
+
     SumeragiConsensusStatus {
         mode_tag: metrics.sumeragi_mode_tag(),
         staged_mode_tag: metrics.sumeragi_staged_mode_tag(),
         staged_mode_activation_height: metrics.sumeragi_staged_mode_activation_height(),
         mode_activation_lag_blocks: metrics.sumeragi_mode_activation_lag_blocks(),
         leader_index: metrics.sumeragi_leader_index.get(),
-        highest_qc_height: metrics.sumeragi_highest_qc_height.get(),
-        locked_qc_height: metrics.sumeragi_locked_qc_height.get(),
-        locked_qc_view: metrics.sumeragi_locked_qc_view.get(),
+        highest_qc_height,
+        locked_qc_height,
+        locked_qc_view,
         commit_signatures_present: metrics.sumeragi_commit_signatures_present.get(),
         commit_signatures_counted: metrics.sumeragi_commit_signatures_counted.get(),
         commit_signatures_set_b: metrics.sumeragi_commit_signatures_set_b.get(),
         commit_signatures_required: metrics.sumeragi_commit_signatures_required.get(),
-        commit_qc_height: metrics.sumeragi_commit_qc_height.get(),
-        commit_qc_view: metrics.sumeragi_commit_qc_view.get(),
+        commit_qc_height,
+        commit_qc_view,
         commit_qc_epoch: metrics.sumeragi_commit_qc_epoch.get(),
         commit_qc_signatures_total: metrics.sumeragi_commit_qc_signatures_total.get(),
         commit_qc_validator_set_len: metrics.sumeragi_commit_qc_validator_set_len.get(),
@@ -20563,6 +20579,40 @@ mod test {
         assert_eq!(status.staged_mode_tag.as_deref(), Some("next-mode"));
         assert_eq!(status.staged_mode_activation_height, Some(42));
         assert_eq!(status.mode_activation_lag_blocks, Some(3));
+    }
+
+    #[test]
+    fn build_sumeragi_status_promotes_stale_qc_gauges_to_commit_qc() {
+        let metrics = Metrics::default();
+        metrics.sumeragi_highest_qc_height.set(3_052);
+        metrics.sumeragi_locked_qc_height.set(3_052);
+        metrics.sumeragi_locked_qc_view.set(1);
+        metrics.sumeragi_commit_qc_height.set(4_468);
+        metrics.sumeragi_commit_qc_view.set(7);
+
+        let status = build_sumeragi_status(&metrics);
+
+        assert_eq!(status.commit_qc_height, 4_468);
+        assert_eq!(status.commit_qc_view, 7);
+        assert_eq!(status.highest_qc_height, 4_468);
+        assert_eq!(status.locked_qc_height, 4_468);
+        assert_eq!(status.locked_qc_view, 7);
+    }
+
+    #[test]
+    fn build_sumeragi_status_preserves_qc_gauges_newer_than_commit_qc() {
+        let metrics = Metrics::default();
+        metrics.sumeragi_highest_qc_height.set(4_470);
+        metrics.sumeragi_locked_qc_height.set(4_469);
+        metrics.sumeragi_locked_qc_view.set(2);
+        metrics.sumeragi_commit_qc_height.set(4_468);
+        metrics.sumeragi_commit_qc_view.set(7);
+
+        let status = build_sumeragi_status(&metrics);
+
+        assert_eq!(status.highest_qc_height, 4_470);
+        assert_eq!(status.locked_qc_height, 4_469);
+        assert_eq!(status.locked_qc_view, 2);
     }
 
     #[test]

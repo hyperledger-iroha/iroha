@@ -57,7 +57,7 @@ pub fn ffi_impl_opaque(_: TokenStream, item: TokenStream) -> Result<TokenStream>
 ///         # stringify!(
 ///         ...
 ///         # );
-///         # unimplemented!()
+///         # Obj::Uint(vec.len() as u32)
 ///     }
 /// }
 /// ```

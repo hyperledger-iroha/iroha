@@ -173,6 +173,23 @@ function fail(code, message, path) {
   throw createValidationError(code, message, path);
 }
 
+function rejectValidationFeeSnakeCaseInputs(source, context) {
+  for (const [snakeName, camelName] of [
+    ["validation_fee_policy_version", "validationFeePolicyVersion"],
+    ["validation_fee_policy_hash", "validationFeePolicyHash"],
+    ["validation_fee_instruction_index", "validationFeeInstructionIndex"],
+    ["validation_fee_transfer_entry_index", "validationFeeTransferEntryIndex"],
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(source, snakeName)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} uses unsupported snake_case validation fee field ${snakeName}; use ${camelName}`,
+        `${context}.${snakeName}`,
+      );
+    }
+  }
+}
+
 function canonicalHashLiteral(buf) {
   const normalized = Buffer.from(buf);
   if (normalized.length !== 32) {
@@ -10993,6 +11010,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
  */
 export function buildMultisigProposeRequest(options) {
   const source = assertPlainObject(options, "multisigPropose");
+  rejectValidationFeeSnakeCaseInputs(source, "multisigPropose");
   const instructions = source.instructions;
   if (!Array.isArray(instructions) || instructions.length === 0) {
     fail(
@@ -11040,14 +11058,10 @@ export function buildMultisigProposeRequest(options) {
   if (privateKey !== null) {
     payload.private_key = privateKey;
   }
-  const validationFeePolicyVersion =
-    source.validationFeePolicyVersion ?? source.validation_fee_policy_version;
-  const validationFeePolicyHash =
-    source.validationFeePolicyHash ?? source.validation_fee_policy_hash;
-  const validationFeeInstructionIndex =
-    source.validationFeeInstructionIndex ?? source.validation_fee_instruction_index;
-  const validationFeeTransferEntryIndex =
-    source.validationFeeTransferEntryIndex ?? source.validation_fee_transfer_entry_index;
+  const validationFeePolicyVersion = source.validationFeePolicyVersion;
+  const validationFeePolicyHash = source.validationFeePolicyHash;
+  const validationFeeInstructionIndex = source.validationFeeInstructionIndex;
+  const validationFeeTransferEntryIndex = source.validationFeeTransferEntryIndex;
   const hasValidationFeePolicyVersion =
     validationFeePolicyVersion !== undefined && validationFeePolicyVersion !== null;
   const hasValidationFeePolicyHash =

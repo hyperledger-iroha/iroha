@@ -8824,17 +8824,16 @@ pub mod isi {
         destination_rollout: &iroha_sccp::SccpDestinationRolloutV1,
         route_allowlist: &iroha_sccp::SccpRouteAllowlistReadinessV1,
     ) -> Result<(), Error> {
-        let Some((_, launch_policy_label, _)) = configured_sccp_single_lane_launch_policy_v1()
+        let Some((launch_domain, launch_policy_label, launch_source_label)) =
+            configured_sccp_single_lane_launch_policy_v1()
         else {
             return validate_configured_sccp_all_lanes_launch_ready(zk_config);
         };
-        let launch_policy_label =
-            match configured_sccp_single_lane_launch_policy_v1().map(|(domain, _, _)| domain) {
-                Some(launch_domain) if domain != launch_domain => {
-                    "on-chain SCCP lane activation policy"
-                }
-                _ => launch_policy_label,
-            };
+        if domain != launch_domain {
+            return Err(invalid_bridge_proof(format!(
+                "{launch_policy_label} only admits {launch_source_label} source proofs before domain {domain} is enabled"
+            )));
+        }
 
         let readiness =
             iroha_sccp::sccp_lane_production_readiness_with_deployment_materials_for_domain(
@@ -8956,6 +8955,9 @@ pub mod isi {
                 &route_allowlist,
             )?;
         }
+        let taira_diagnostic_local_admission = state_transaction.chain_id.as_str()
+            == iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1
+            && iroha_sccp::verify_sccp_taira_tron_xor_diagnostic_transparent_proof(artifact);
         let artifact_structure_is_valid = if let (Some(material), Some(deployment)) = (
             configured_source_material.as_ref(),
             configured_source_deployment.as_ref(),
@@ -8969,6 +8971,8 @@ pub mod isi {
                 material,
                 deployment,
             )
+        } else if taira_diagnostic_local_admission {
+            true
         } else {
             iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(artifact)
                 && iroha_sccp::verify_message_bundle_structure(&artifact.bundle)
@@ -8987,6 +8991,9 @@ pub mod isi {
                 })?;
             validate_sccp_finality_against_state(&finality, state_transaction)
         } else {
+            if taira_diagnostic_local_admission {
+                return Ok(());
+            }
             if let (Some(material), Some(deployment)) = (
                 configured_source_material.as_ref(),
                 configured_source_deployment.as_ref(),
@@ -9836,14 +9843,12 @@ pub mod isi {
     fn sccp_route_manifest_to_actual(
         manifest: bridge::SccpRouteManifest,
     ) -> Result<iroha_config::parameters::actual::SccpRouteManifest, Error> {
-        let is_bsc = manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_BSC;
-        let source_bridge_address = manifest.sccp_tron_source_bridge_address;
-        let verifier_address = manifest.tron_verifier_address;
         let user_manifest = iroha_config::parameters::user::SccpRouteManifest {
             version: manifest.version,
             route_id: manifest.route_id,
             asset_key: manifest.asset_key,
-            tron_network: manifest.tron_network,
+            network: manifest.network,
+            tron_network: None,
             chain: manifest.chain,
             chain_id_hex: manifest.chain_id_hex,
             explorer_url: manifest.explorer_url,
@@ -9857,17 +9862,18 @@ pub mod isi {
             network_id_hex: manifest.network_id_hex,
             taira_xor_token_address: manifest.taira_xor_token_address,
             taira_xor_bridge_address: manifest.taira_xor_bridge_address,
-            source_bridge_address: None,
-            sccp_bsc_source_bridge_address: is_bsc.then(|| source_bridge_address.clone()),
+            source_bridge_address: Some(manifest.source_bridge_address),
+            sccp_bsc_source_bridge_address: None,
             bsc_source_bridge_address: None,
-            sccp_tron_source_bridge_address: (!is_bsc).then_some(source_bridge_address),
-            destination_verifier_address: None,
+            sccp_tron_source_bridge_address: None,
+            destination_verifier_address: Some(manifest.destination_verifier_address),
             verifier_address: None,
-            sccp_bsc_destination_verifier_address: is_bsc.then(|| verifier_address.clone()),
+            sccp_bsc_destination_verifier_address: None,
             ton_finalize_message_value_nano: manifest.ton_finalize_message_value_nano,
             bsc_verifier_address: None,
             evm_verifier_address: None,
-            tron_verifier_address: (!is_bsc).then_some(verifier_address),
+            tron_verifier_address: None,
+            sccp_tron_destination_verifier_address: None,
             verifier_code_hash: manifest.verifier_code_hash,
             verifier_key_hash: manifest.verifier_key_hash,
             proof_artifact_hash: manifest.proof_artifact_hash,

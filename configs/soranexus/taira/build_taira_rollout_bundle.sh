@@ -99,6 +99,16 @@ sha256_file() {
   fi
 }
 
+case "$OUTPUT_DIR" in
+  /*)
+    ;;
+  *)
+    OUTPUT_DIR="$(pwd -P)/${OUTPUT_DIR}"
+    ;;
+esac
+mkdir -p "$OUTPUT_DIR"
+OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd -P)"
+
 git_head="$(git -C "$REPO_ROOT" rev-parse HEAD)"
 git_status="$(git -C "$REPO_ROOT" status --short)"
 if [[ -n "$git_status" && $ALLOW_DIRTY -ne 1 ]]; then

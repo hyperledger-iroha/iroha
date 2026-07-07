@@ -7496,8 +7496,15 @@ only the pure candidate-enumeration families listed above may inject
 `TlcSingletonOrEmpty`, and each of their `*-fast` and `*-bug-*` TLC runner
 branches must keep that exact constraint so no future TLC mode can silently
 narrow its proof obligation with an undocumented bound.
+TLC singleton constraint-family diagnostics must stay line-aware, so missing
+required singleton constraints identify the runner case line and wrong or
+undocumented `tlc_constraint` assignments identify the exact runner assignment
+line before constraint-family errors are grouped.
 The TLC runner must keep an empty top-level tlc_constraint default, so
 unconstrained TLC modes cannot inherit a hidden global state-space bound.
+Top-level runner default diagnostics must stay line-aware, so duplicate
+`expect_failure`, `typecheck_only`, or `tlc_constraint` defaults identify their
+exact runner assignment lines before default errors are grouped.
 The top-level Sumeragi proof CFGs must remain unconstrained: root fast, deep,
 TLC-fast, and focused Byzantine top CFGs may rely on explicit constants and
 proof checks, but not static CFG `CONSTRAINT` directives that would silently
@@ -18338,6 +18345,9 @@ as `APALACHE_BIN`, `APALACHE_VERSION`, `APALACHE_DOCKER_IMAGE`, `TLC_JAR`, or
 CI, workflow, and README formal commands must use strict Apalache/TLC runner shapes,
 so direct runner invocations cannot hide extra arguments or malformed mode tokens
 outside the central scripts.
+Runner case block shape diagnostics must stay line-aware, so duplicate
+`case "$mode" in` declarations and missing `esac` terminators identify their
+runner script line before malformed runner-case errors are grouped.
 Apalache/TLC runner case inventories must stay duplicate-free,
 so repeated runner branches cannot overwrite or obscure the checked proof mode body.
 Apalache runner-mode CI reachability diagnostics must stay line-aware,
@@ -18408,6 +18418,16 @@ identify the length-table line before length mode sets are collapsed.
 README Apalache length mismatch diagnostics must stay line-aware,
 so documented length drift identifies both the README length-table line and the
 Apalache runner case line before row maps are collapsed.
+Apalache length proof-input diagnostics must stay line-aware,
+so invalid or duplicate runner `apalache_length` assignments identify the exact
+assignment line before length proof-input errors are grouped.
+Apalache/TLC expected-failure assignment diagnostics must stay line-aware,
+so duplicate or explicit per-case `expect_failure=0` assignments identify the
+exact runner assignment line before expected-failure assignment errors are grouped.
+Apalache typecheck-only assignment diagnostics must stay line-aware,
+so duplicate, explicit default, or unallowlisted `typecheck_only=1` assignments
+identify the exact runner assignment line before typecheck-only mode errors are
+grouped.
 README fast-mode table modes must stay duplicate-free,
 so repeated fast-mode rows cannot collapse before TLC fast coverage comparison.
 README fast-mode table TLC support diagnostics must stay line-aware,
@@ -18431,6 +18451,10 @@ expected-failure CI command line and the Apalache runner case line.
 Apalache baseline expected-failure diagnostics must stay line-aware,
 so PR or scheduled/manual Apalache modes with unexpected `expect_failure=1`
 identify the CI command line and the Apalache runner case line.
+Unexpected expected-failure marker diagnostics must stay assignment-line-aware,
+so PR, scheduled/manual, or non-mutation TLC modes with unexpected
+`expect_failure=1` identify the exact runner assignment line before marker
+errors are grouped.
 Apalache CI mutation-surface diagnostics must stay line-aware,
 so PR CI mutation modes and expected-failure CI non-mutation modes identify the
 active CI command line before CI mode sets are collapsed.
@@ -18443,12 +18467,28 @@ command line before mutation mode sets are collapsed.
 TLC module identity diagnostics must stay line-aware,
 so Apalache/TLC module drift identifies the README or CI command line before
 TLC mode sets are collapsed.
+TLC module proof-input diagnostics must stay line-aware,
+so dynamic, duplicate, or invalid TLC `module` assignments identify the exact runner
+assignment line before module proof-input errors are grouped.
+TLC module assignment-count diagnostics must stay line-aware,
+so duplicate TLC `module` assignments identify their exact runner assignment
+lines before module proof-input errors are grouped.
+TLC constraint proof-input diagnostics must stay line-aware,
+so dynamic, duplicate, undefined, arity-mismatched, or trivial TLC
+`tlc_constraint` assignments identify the exact runner assignment line before
+constraint proof-input errors are grouped.
 Apalache/TLC unused runner-case diagnostics must stay line-aware,
 so stale runner branches identify the runner case line before used-case sets
 are collapsed.
 Apalache/TLC missing formal-file diagnostics must stay line-aware,
 so missing spec, CFG, or TLC module references identify the runner case line
 before missing-file sets are collapsed.
+Apalache/TLC proof-input path diagnostics must stay line-aware,
+so dynamic, duplicate, wrong-suffix, nested, or escaping proof-input paths identify the
+exact runner assignment line before proof-input errors are grouped.
+Apalache/TLC proof-input assignment-count diagnostics must stay line-aware,
+so duplicate `spec_file` or `cfg_file` assignments identify their exact runner
+assignment lines before proof-input errors are grouped.
 Apalache/TLC CFG shape diagnostics must stay line-aware,
 so malformed runner-selected CFGs identify the runner case line before
 CFG-shape errors are grouped.
@@ -18470,6 +18510,15 @@ constant-binding errors are grouped.
 Apalache/TLC CFG trivial-target diagnostics must stay line-aware,
 so runner-selected trivial CFG checks identify the runner case line before
 trivial-target errors are grouped.
+Apalache/TLC CFG correctness-envelope diagnostics must stay line-aware,
+so runner-selected correctness-envelope checks identify the runner case line
+before envelope-shape errors are grouped.
+Apalache/TLC CFG direct-exactness diagnostics must stay line-aware,
+so runner-selected direct exactness checks identify the runner case line before
+exactness-shape errors are grouped.
+Apalache/TLC CFG exactness-pairing diagnostics must stay line-aware,
+so runner-selected direct exactness/envelope pairing checks identify the runner
+case line before pairing errors are grouped.
 TLC non-mutation expected-failure diagnostics must stay line-aware,
 so non-mutation TLC modes with unexpected `expect_failure=1` identify the
 README or CI command line and the TLC runner case line.
@@ -18700,6 +18749,9 @@ ambiguous transcript.
 Formal shell entrypoints must use `set -euo pipefail`, so failed proof,
 installation, or piped evidence commands stop the script instead of being
 masked by later commands.
+Formal shell entrypoint preflight diagnostics must stay line-aware, so missing
+or drifted shebang and strict-mode lines identify the exact script line and
+observed text before strict-shell errors are grouped.
 Apalache runner proof invocations must route through `run_with_expected_status`,
 so positive proofs and expected counterexample checks cannot bypass the shared
 exit-status contract in local, installed-binary, or Docker execution paths.
@@ -31571,7 +31623,799 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   before set-based contract comparisons run.
   Static fairness action contract inventories must stay duplicate-free before
   set-based fairness comparisons run.
+  Progress specs must keep exactly one direct transition-closure conjunct,
+  so liveness proofs cannot satisfy the documented `[][Next]_vars` family by
+  hiding it in a nested expression or duplicating the transition relation.
+  Progress spec bodies must compose only Init, their direct transition closure, and their named fairness aggregate,
+  so literal or compound temporal conjuncts cannot alter the proof surface
+  outside the documented liveness shape.
+  Source and top-level progress spec bodies must reject hidden or extra direct conjuncts,
+  so the inventory wrappers prove the same liveness-shape boundary as the
+  projected progress spec.
+  Source and top-level progress specs must reject duplicate direct transition closures,
+  so direct and top-level liveness checks cannot count repeated temporal
+  closure clauses as independent proof obligations.
+  Source and top-level progress specs must reject compound raw WF_vars fairness clauses,
+  so named fairness aggregates cannot be bypassed by inlining multi-action
+  fairness directly into source or top-level specs.
+  Progress specs must resolve Init as a defined zero-arity operator, so a
+  liveness spec cannot bind the documented initial-state predicate to a missing
+  or parameterized helper.
+  Progress Init operators must stay initial-state predicates, so direct specs
+  and projection aliases cannot replace the initial-state boundary with
+  next-state actions, fairness clauses, or temporal eventualities, including
+  through onward init aliases.
+  Progress Init local aliases must resolve to initial-state predicates, so
+  local helper names cannot hide action-only or temporal syntax from the
+  initial-state boundary check.
+  Progress Init local aliases must resolve to defined zero-arity initial-state predicates,
+  so local helper names cannot point at missing or parameterized initial
+  predicates.
+  Progress Init local aliases must resolve to inspectable initial-state predicates,
+  so local helper names cannot point at empty or otherwise uninspectable
+  predicate definitions.
+  Progress Init local aliases must inherit recursive resolution for onward local aliases,
+  so local helper names cannot hide a missing, undefined, parameterized, or
+  uninspectable inner initial-state predicate behind another local helper.
+  Progress Init aliases must be acyclic, so recursive local or imported
+  aliases cannot satisfy the initial-state predicate boundary without
+  resolving to an inspectable predicate.
+  Progress Init aliases must resolve through named local INSTANCE declarations,
+  so imported Init aliases cannot rely on implicit or misspelled module
+  aliases.
+  Progress Init aliases must inherit recursive resolution for onward aliases inside imported Init targets,
+  so imported Init aliases cannot hide a missing, undefined, parameterized,
+  recursive, or uninspectable inner initial-state predicate.
+  Progress Init aliases must inherit helper target guards inside imported Init targets,
+  so imported Init aliases cannot hide action-shaped, parameterized, or
+  uninspectable helper operands inside the imported initial-state predicate.
+  Progress Init aliases must inherit helper acyclicity inside imported Init targets,
+  so imported Init aliases cannot hide recursive helper operands inside the
+  imported initial-state predicate.
+  Progress Init aliases must inherit module-alias helper target guards inside imported Init targets,
+  so imported Init aliases cannot hide missing instance aliases, missing
+  modules, undefined operators, action-shaped targets, parameterized targets,
+  or uninspectable targets behind imported helper operands.
+  Progress Init aliases must inherit module-alias helper acyclicity inside imported Init targets,
+  so imported Init aliases cannot hide recursive module-alias helper operands
+  inside the imported initial-state predicate.
+  Progress Init aliases must inherit recursive module-alias helper resolution inside imported Init targets,
+  so imported Init aliases cannot hide missing, undefined, action-shaped,
+  parameterized, recursive, or uninspectable onward aliases behind imported
+  helper operands.
+  Progress Init aliases must inherit nested helper guards behind imported module-alias helpers,
+  so imported Init aliases cannot hide action-shaped, parameterized,
+  recursive, or uninspectable local helper operands inside imported helper
+  targets.
+  Progress Init aliases must inherit nested helper alias resolution behind imported module-alias helpers,
+  so imported Init aliases cannot hide missing instance aliases, missing
+  modules, undefined operators, action-shaped targets, parameterized targets,
+  recursive aliases, or uninspectable targets behind local helper aliases
+  inside imported helper targets.
+  Progress Init aliases must inherit nested module-alias helper guards behind imported module-alias helpers,
+  so imported Init aliases cannot hide missing instance aliases, missing
+  modules, undefined operators, action-shaped targets, parameterized targets,
+  recursive module-alias helper operands, or uninspectable targets inside
+  imported helper targets.
+  Progress Init aliases must inherit nested module-alias helper onward resolution behind imported module-alias helpers,
+  so imported Init aliases cannot hide missing instance aliases, missing
+  modules, undefined operators, action-shaped targets, parameterized targets,
+  recursive onward aliases, or uninspectable targets behind nested
+  module-alias helper operands.
+  Progress Init aliases must inherit nested module-alias target helper guards behind imported module-alias helpers,
+  so imported Init aliases cannot hide action-shaped, parameterized,
+  recursive, or uninspectable local helper operands inside nested module-alias
+  helper targets.
+  Progress Init aliases must inherit nested module-alias target helper alias resolution behind imported module-alias helpers,
+  so imported Init aliases cannot hide missing instance aliases, missing
+  modules, undefined operators, action-shaped targets, parameterized targets,
+  recursive aliases, or uninspectable targets behind local helper aliases
+  inside nested module-alias helper targets.
+  Progress Init aliases must inherit nested module-alias target helper alias onward resolution behind imported module-alias helpers,
+  so imported Init aliases cannot hide missing instance aliases, missing
+  modules, undefined operators, action-shaped targets, parameterized targets,
+  recursive onward aliases, or uninspectable targets behind local helper
+  alias targets inside nested module-alias helper targets.
+  Progress Init aliases must inherit nested module-alias target helper alias onward target helper guards behind imported module-alias helpers,
+  so imported Init aliases cannot hide action-shaped, parameterized,
+  recursive, or uninspectable local helper operands inside onward alias
+  targets reached from nested module-alias helper targets.
+  Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias resolution behind imported module-alias helpers,
+  so imported Init aliases cannot hide missing instance aliases, missing
+  modules, undefined operators, action-shaped targets, parameterized targets,
+  recursive aliases, or uninspectable targets behind local helper aliases
+  inside onward alias targets reached from nested module-alias helper targets.
+  Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias onward resolution behind imported module-alias helpers,
+  so imported Init aliases cannot hide missing instance aliases, missing
+  modules, undefined operators, action-shaped targets, parameterized targets,
+  recursive onward aliases, or uninspectable targets behind second-hop
+  onward aliases from local helper alias targets.
+  Progress Init aliases must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so imported Init aliases cannot hide action-shaped, parameterized,
+  recursive, or uninspectable helper operands after several alternating
+  module-alias and local-alias hops.
+  Progress Init aliases must resolve to local modules with defined zero-arity initial-state predicates,
+  so imported Init aliases cannot point at missing modules, undefined
+  operators, or parameterized helpers.
+  Progress Init aliases must resolve to inspectable initial-state predicates,
+  so imported Init aliases cannot point at empty or otherwise uninspectable
+  helper predicates.
+  Progress Init helper conjuncts must resolve to initial-state predicates, so
+  composed Init formulas cannot bury action-only or temporal syntax in named
+  helper operands.
+  Progress Init helpers must be acyclic, so composed Init formulas cannot
+  satisfy the initial-state boundary through recursive local helper operands.
+  Progress Init helper conjuncts must inherit recursive resolution for onward aliases inside named helper operands,
+  so composed Init formulas cannot hide a missing, undefined, parameterized,
+  recursive, or uninspectable inner initial-state predicate behind a local
+  helper name.
+  Progress Init boolean helper operands must resolve to initial-state predicates,
+  so disjunctive or otherwise boolean Init formulas cannot bury action-only or
+  temporal syntax in named helper operands.
+  Progress Init boolean helper operands must resolve to defined zero-arity initial-state predicates,
+  so disjunctive or otherwise boolean Init formulas cannot hide
+  parameterized helper predicates.
+  Progress Init boolean helper operands must resolve to inspectable initial-state predicates,
+  so disjunctive or otherwise boolean Init formulas cannot hide empty or
+  otherwise uninspectable helper predicates.
+  Progress Init boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands,
+  so disjunctive or otherwise boolean Init formulas cannot hide a missing,
+  undefined, parameterized, recursive, or uninspectable inner initial-state
+  predicate behind a local helper name.
+  Progress Init module-alias helper operands must resolve to initial-state predicates,
+  so composed Init formulas cannot bury action-only or temporal syntax behind
+  imported helper operands.
+  Progress Init module-alias helpers must be acyclic, so composed Init
+  formulas cannot satisfy the initial-state boundary through recursive
+  imported helper operands.
+  Progress Init module-alias helper operands must resolve through named local INSTANCE declarations,
+  so composed Init formulas cannot rely on implicit or misspelled imported
+  helper aliases.
+  Progress Init module-alias boolean helper operands must resolve through named local INSTANCE declarations,
+  so disjunctive or otherwise boolean Init formulas cannot rely on implicit
+  or misspelled imported helper aliases.
+  Progress Init module-alias helper operands must inherit recursive resolution for onward aliases inside imported helper targets,
+  so composed Init formulas cannot hide a missing, undefined, parameterized,
+  recursive, or uninspectable inner initial-state predicate behind an imported
+  helper.
+  Progress Init module-alias boolean helper operands must inherit recursive resolution for onward aliases inside imported helper targets,
+  so disjunctive or otherwise boolean Init formulas cannot hide a missing,
+  undefined, parameterized, recursive, or uninspectable inner initial-state
+  predicate behind an imported helper.
+  Progress Init module-alias boolean helper operands must resolve to local modules with defined zero-arity initial-state predicates,
+  so disjunctive or otherwise boolean Init formulas cannot point at missing
+  modules, undefined operators, or parameterized helpers behind imported
+  operands.
+  Progress Init module-alias boolean helper operands must resolve to inspectable initial-state predicates,
+  so disjunctive or otherwise boolean Init formulas cannot point at empty or
+  otherwise uninspectable imported helper predicates.
+  Progress Init module-alias helper operands must resolve to local modules with defined zero-arity initial-state predicates,
+  so composed Init formulas cannot point at missing modules, undefined
+  operators, or parameterized helpers behind imported operands.
+  Progress Init module-alias helper operands must resolve to inspectable initial-state predicates,
+  so composed Init formulas cannot point at empty or otherwise uninspectable
+  imported helper predicates.
+  Progress transition disjuncts must resolve to named action-shaped operators,
+  so the checked `[][Next]_vars` closure cannot hide literal, temporal, or
+  static helper branches outside real transition actions, including inside
+  direct imported `Next` aliases.
+  Progress transition disjuncts must stay single-branch action predicates, so
+  one apparent transition branch cannot hide nested disjunction alternatives,
+  fairness clauses, or temporal operators beside a valid action witness,
+  including inside direct imported `Next` aliases.
+  Progress transition disjuncts must stay bare named action or aggregate references,
+  so progress `Next` branches cannot hide literal or static conjuncts beside a
+  valid action witness, including inside direct imported `Next` aliases.
+  Guarded transition disjuncts must not mix multiple action witnesses, so a
+  branch guard cannot conjoin two reviewed transition actions into one
+  ambiguous proof branch, including inside direct imported `Next` aliases.
+  Nested progress transition aggregates must recursively obey the same branch contract,
+  so helper `Next` aggregates cannot hide literal, temporal, or static branches
+  beneath a top-level action witness.
+  Single-reference progress transition wrappers must expose nested aggregate contracts,
+  so helper aliases cannot hide malformed aggregate branches from recursive
+  transition-shape checks or guarded action expressions behind a bare wrapper
+  name, including when reached through direct imported `Next` aliases.
+  Progress transition disjunct inventories must stay duplicate-free, so
+  repeated action or helper branches, including inside direct imported `Next`
+  aliases, cannot collapse before transition-shape checks run.
+  Progress transition action witness inventories must stay duplicate-free, so
+  wrapper helpers cannot duplicate the same reachable action while keeping
+  textual disjunct labels distinct, including through bare module-alias
+  disjuncts, direct imported `Next` aliases, and direct or transitive imported
+  action aliases.
+  Progress transition aliases must be acyclic, so imported `Next` wrappers
+  cannot satisfy the transition closure without resolving to inspectable
+  transition operators, and direct imported `Next` wrappers still satisfy
+  same-name imported fair-action reachability when they resolve to
+  action-shaped targets.
+  Progress transition aliases must resolve through named local INSTANCE declarations,
+  so imported `Next` wrappers cannot rely on implicit or misspelled module
+  aliases, including onward aliases inside imported transition targets.
+  Progress transition aliases must resolve to local modules, so imported
+  `Next` wrappers cannot point at missing modules, including onward aliases
+  inside imported transition targets.
+  Progress transition aliases must resolve to defined zero-arity transition operators,
+  so imported `Next` wrappers cannot point at undefined or parameterized
+  transition operators, including onward aliases inside imported transition
+  targets.
+  Progress transition aliases must resolve to inspectable transition operators,
+  so imported `Next` wrappers cannot point at empty or otherwise
+  uninspectable transition operators, including onward aliases inside imported
+  transition targets.
+  The regression suite pins each direct transition-alias resolution stage:
+  missing `INSTANCE` aliases, missing target modules, undefined targets,
+  parameterized targets, and uninspectable target definitions, including
+  onward aliases, all fail before fairness reachability can mask the
+  structural error.
+  Progress transition helper wrappers must be acyclic, so local wrapper chains
+  cannot satisfy transition disjunct resolution without reaching an
+  inspectable action or aggregate.
+  Progress transition boolean-gated helper wrappers must be acyclic, so
+  identity-literal boolean structure cannot obscure recursive wrapper chains.
+  Progress transition identity-gated helper wrappers must be acyclic, so
+  identity-literal conjunction, disjunction, implication, or equivalence gates
+  cannot downgrade recursive helper chains into generic non-bare branch
+  diagnostics.
+  Progress transition helper cycle diagnostics must precede nested aggregate expansion,
+  so recursive wrappers fail with the proof-cycle diagnostic before identity
+  gates are expanded into literal transition branches.
+  Progress transition module-alias helper wrappers must resolve through named local INSTANCE declarations,
+  so imported helper aliases cannot rely on implicit or misspelled module
+  aliases.
+  Progress transition module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets,
+  so local helper aliases cannot hide a missing, undefined, parameterized, or
+  uninspectable inner imported target.
+  Progress transition module-alias helper wrappers must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so imported transition helper wrappers cannot hide bad terminal helper
+  targets after alternating module-alias and local-helper hops.
+  Progress transition module-alias helper wrappers must resolve to defined zero-arity transition operators,
+  so imported helper aliases cannot point at missing modules, undefined
+  operators, or parameterized helpers.
+  Progress transition module-alias helper wrappers must resolve to inspectable transition operators,
+  so imported helper aliases cannot point at empty or otherwise uninspectable
+  transition operators.
+  Progress transition identity-gated module-alias helper wrappers must be acyclic,
+  so imported helper aliases hidden behind identity-literal gates cannot recurse
+  without surfacing the transition-helper cycle.
+  Progress transition identity-gated module-alias helper wrappers must resolve through named local INSTANCE declarations,
+  so imported helper aliases hidden behind identity-literal gates cannot rely on
+  implicit or misspelled module aliases.
+  Progress transition identity-gated module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets,
+  so identity-gated local helper aliases cannot hide a missing, undefined,
+  parameterized, or uninspectable inner imported target.
+  Progress transition identity-gated module-alias helper wrappers must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so identity-gated imported transition helper wrappers cannot hide bad
+  terminal helper targets after alternating module-alias and local-helper
+  hops.
+  Progress transition identity-gated module-alias helper wrappers must resolve to defined zero-arity transition operators,
+  so imported helper aliases hidden behind identity-literal gates cannot point
+  at missing modules, undefined operators, or parameterized helpers.
+  Progress transition identity-gated module-alias helper wrappers must resolve to inspectable transition operators,
+  so imported helper aliases hidden behind identity-literal gates cannot point
+  at empty or otherwise uninspectable transition operators.
+  Progress transition module-alias disjuncts must be acyclic, so imported
+  transition branches cannot recurse without surfacing the transition-helper
+  cycle.
+  Progress transition module-alias disjuncts must resolve through named local INSTANCE declarations,
+  so imported transition branches cannot rely on
+  implicit or misspelled module aliases.
+  Bare module-alias transition disjuncts remain valid when they resolve to
+  inspectable action-shaped zero-arity imported transition operators.
+  Bare module-alias transition disjuncts must inherit helper-wrapper
+  resolution for onward aliases inside imported transition branches, so a
+  valid top-level imported branch cannot hide a missing, undefined,
+  parameterized, or uninspectable inner imported target.
+  Progress transition module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so imported transition branches cannot hide bad terminal helper targets
+  after alternating module-alias and local-helper hops.
+  Progress transition module-alias disjuncts must resolve to defined zero-arity transition operators,
+  so imported transition branches cannot point at missing modules, undefined
+  operators, or parameterized helpers.
+  Progress transition module-alias disjuncts must resolve to inspectable transition operators,
+  so imported transition branches cannot point at empty or otherwise
+  uninspectable transition operators.
+  Progress transition identity-gated module-alias disjuncts must be acyclic,
+  so imported transition branches hidden behind identity-literal gates cannot
+  recurse without surfacing the transition-helper cycle.
+  Progress transition identity-gated module-alias disjuncts must resolve through named local INSTANCE declarations,
+  so imported transition branches hidden behind identity-literal gates cannot
+  rely on implicit or misspelled module aliases.
+  Identity-gated module-alias transition disjuncts must inherit
+  helper-wrapper resolution for onward aliases inside imported transition
+  branches, so a valid top-level identity-gated imported branch cannot hide a
+  missing, undefined, parameterized, or uninspectable inner imported target.
+  Progress transition identity-gated module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so identity-gated imported transition branches cannot hide bad terminal
+  helper targets after alternating module-alias and local-helper hops.
+  Progress transition identity-gated module-alias disjuncts must resolve to defined zero-arity transition operators,
+  so imported transition branches hidden behind identity-literal gates cannot
+  point at missing modules, undefined operators, or parameterized helpers.
+  Progress transition identity-gated module-alias disjuncts must resolve to inspectable transition operators,
+  so imported transition branches hidden behind identity-literal gates cannot
+  point at empty or otherwise uninspectable transition operators.
+  The regression suite pins identity-gated module-alias disjunct resolution
+  for missing `INSTANCE` aliases, missing target modules, undefined targets,
+  parameterized targets, and uninspectable targets.
   `WF_vars` fairness operands must stay named zero-arity operators.
+  Progress fairness aggregate operators must be defined zero-arity operators,
+  so named fairness aggregates cannot disappear or become parameterized before
+  their `WF_vars` clauses are checked.
+  Source and top-level progress fairness aggregate roots must stay present and zero-arity,
+  so the source corridor and top-level Sumeragi progress specs cannot rely on
+  projected-only root coverage.
+  Progress fairness aggregates must contain only direct WF_vars(Action) clauses,
+  so named fairness assumptions cannot hide extra temporal predicates, literal
+  conjuncts, or nested fairness compositions.
+  Progress fairness action definitions must be action-shaped transition definitions,
+  so fair action names cannot resolve to static predicates or hide nested
+  fairness clauses behind action aliases.
+  Progress fairness action definitions must not contain fairness or temporal operators,
+  so fair action names cannot smuggle liveness assumptions or temporal
+  eventualities into the transition-action surface.
+  Progress fairness action definitions must not compose other fair actions, so
+  one fair action cannot smuggle another reviewed transition action behind an
+  action-shaped wrapper.
+  Progress fairness action definitions must not hide other fair actions in boolean structure,
+  so one fair action cannot bury another reviewed transition action behind
+  disjunction, implication, equivalence, or negation.
+  Progress fairness action helper references must resolve to defined zero-arity helper definitions,
+  so declared helpers used by fairness actions cannot be parameterized
+  operators that static traversal cannot inspect as named action predicates.
+  Progress fairness action helper references must resolve to inspectable helper definitions,
+  so declared helpers used by fairness actions cannot be empty or otherwise
+  uninspectable operator bodies.
+  Progress fairness action helper references must inherit multi-hop recursive local-helper guards,
+  so local fairness action bodies cannot hide parameterized or uninspectable
+  helper definitions behind several local helper hops.
+  Progress fairness action helper wrappers must not hide composed fair actions,
+  so local static helper chains cannot obscure the same cross-action
+  composition from the fairness-action review, even when helper bodies use
+  boolean structure.
+  Progress fairness action helper wrappers must inherit multi-hop local-helper composed-action guards,
+  so local static helper chains cannot hide composed fair actions several
+  helper-wrapper hops below a reviewed fair action.
+  Progress fairness action helper wrappers must be acyclic, so local static
+  helper chains cannot satisfy the fairness-action review by recursing instead
+  of reaching inspectable helper definitions.
+  Progress fairness action helper wrappers must inherit multi-hop local-helper cycle guards,
+  so local static helper chains cannot hide recursive helper-wrapper loops
+  several hops below a reviewed fair action.
+  Progress fairness action helper wrappers must inspect boolean operands,
+  so local static helper names used outside direct conjunctions cannot hide
+  composed fair actions, including through helper bodies that use boolean
+  structure.
+  Progress fairness action helper actions must not hide composed fair actions,
+  so local action-shaped helper chains cannot obscure the same cross-action
+  composition from the fairness-action review, even when helper bodies use
+  boolean structure.
+  Progress fairness action helper actions must inherit multi-hop local-helper composed-action guards,
+  so local action-shaped helper chains cannot hide composed fair actions
+  several helper-action hops below a reviewed fair action.
+  Progress fairness action helper actions must be acyclic, so recursive
+  action-shaped helper chains cannot satisfy the fairness-action review without
+  reaching inspectable helper definitions.
+  Progress fairness action helper actions must inherit multi-hop local-helper cycle guards,
+  so local action-shaped helper chains cannot hide recursive helper-action
+  loops several hops below a reviewed fair action.
+  Progress fairness action helper actions must inspect boolean operands,
+  so local action-shaped helper names used outside direct conjunctions cannot
+  hide composed fair actions, including through helper bodies that use boolean
+  structure.
+  Progress fairness action helper aliases must not hide composed fair actions,
+  so local helper chains cannot import a composed fair action through a
+  module-instance alias, alias onward through nested module aliases, point
+  directly at an imported fair-action target, or hide it behind boolean
+  structure in the imported helper body.
+  Progress fairness action helper aliases must be acyclic, so helper chains
+  that traverse module-instance aliases cannot satisfy the fairness-action
+  review by recursing back to an already visited helper.
+  Progress fairness action helper aliases must inherit multi-hop module-alias cycle guards behind imported helper targets,
+  so local fairness helper aliases cannot hide recursive module-alias loops
+  after several imported and local helper hops.
+  Progress fairness action helper aliases must inspect boolean operands,
+  so local helper aliases used outside direct conjunctions cannot bypass
+  resolution or composed-action checks, including direct imported fair-action
+  composition, boolean-structured imported fair-action composition, nested
+  module-alias fair-action composition, missing modules, undefined targets,
+  parameterized imported targets, uninspectable imported targets, and imported
+  helper references with invalid arity or opaque definitions.
+  Progress fairness action helper aliases must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so local fairness helper aliases cannot hide bad terminal helper targets
+  after alternating module-alias and local-helper hops.
+  Progress fairness action helper aliases must resolve through named local INSTANCE declarations,
+  so local helper chains cannot rely on implicit or misspelled module aliases.
+  Progress fairness action helper aliases must resolve to local action modules,
+  so local helper chains cannot point at missing imported action modules.
+  Progress fairness action helper aliases must resolve to defined zero-arity actions,
+  so local helper chains cannot point at undefined or parameterized imported
+  action operators.
+  Progress fairness action helper aliases must resolve imported helper references to defined zero-arity helper definitions,
+  so imported helper bodies reached through module-instance aliases cannot
+  hide parameterized local helper operators from the fairness-action review.
+  Progress fairness action helper aliases must resolve imported helper references to inspectable helper definitions,
+  so imported helper bodies reached through module-instance aliases cannot
+  hide empty or otherwise uninspectable local helper operators, including the
+  helper alias target itself.
+  Progress fairness action module-alias conjuncts must not hide composed fair actions,
+  so local action bodies cannot compose imported fair-action helpers directly
+  beside their own action update, even when the imported operand aliases onward
+  through nested module aliases or reaches boolean helper bodies.
+  Progress fairness action module-alias conjuncts must be acyclic, so imported
+  action operands cannot recurse through local or imported helpers without
+  surfacing a fairness-action cycle diagnostic.
+  Progress fairness action module-alias conjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so imported conjunct operands cannot hide bad terminal helper targets after
+  alternating module-alias and local-helper hops.
+  Progress fairness action module-alias conjuncts must resolve through named local INSTANCE declarations,
+  so local action bodies cannot rely on implicit or misspelled imported
+  conjunct aliases.
+  Progress fairness action module-alias conjuncts must resolve to local action modules,
+  so local action bodies cannot reference missing imported action modules.
+  Progress fairness action module-alias conjuncts must resolve to defined zero-arity actions,
+  so local action bodies cannot reference undefined or parameterized imported
+  conjunct operands.
+  Progress fairness action module-alias conjuncts must resolve to inspectable action definitions,
+  so local action bodies cannot point conjunct operands at empty or otherwise
+  uninspectable imported action operators.
+  Progress fairness action module-alias boolean operands must not hide composed fair actions,
+  so local action bodies cannot bury imported fair-action helpers behind
+  boolean structure, even when the imported operand aliases onward through
+  nested module aliases or reaches boolean helper bodies.
+  Progress fairness action module-alias boolean operands must be acyclic, so
+  imported operands hidden behind boolean structure cannot recurse through
+  local or imported helpers without surfacing a fairness-action cycle
+  diagnostic.
+  Progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains,
+  so imported boolean operands cannot hide bad terminal helper targets after
+  alternating module-alias and local-helper hops.
+  Progress fairness action module-alias boolean operands must resolve through named local INSTANCE declarations,
+  so local action bodies cannot rely on implicit or misspelled imported
+  boolean operands.
+  Progress fairness action module-alias boolean operands must resolve to local action modules,
+  so local action bodies cannot bury references to missing imported action
+  modules behind boolean structure.
+  Progress fairness action module-alias boolean operands must resolve to defined zero-arity actions,
+  so local action bodies cannot bury undefined or parameterized imported action
+  operands behind boolean structure.
+  Progress fairness action module-alias boolean operands must resolve to inspectable action definitions,
+  so local action bodies cannot bury empty or otherwise uninspectable imported
+  action operators behind boolean structure.
+  Progress fairness action aliases must be acyclic, so fair action definitions
+  that delegate through module-instance aliases cannot recurse through imported
+  action modules instead of resolving to inspectable transition definitions.
+  Progress fairness action aliases must not resolve directly to other fair actions,
+  so one reviewed fair action cannot delegate to a different fair action through
+  a module-instance alias.
+  Progress fairness action aliases must not resolve to definitions that compose other fair actions,
+  so imported action targets cannot hide the same cross-action composition
+  behind a module-instance alias.
+  Progress fairness action aliases must not resolve to definitions that hide other fair actions in boolean structure,
+  so imported action targets cannot bury another reviewed transition action
+  behind disjunction, implication, equivalence, or negation.
+  Progress fairness action aliases must not resolve through helper wrappers that compose other fair actions,
+  so imported action targets cannot hide cross-action composition behind local
+  static helper chains in the target module, including when helper names are
+  reached through boolean structure with direct fair-action targets or helper
+  bodies use boolean structure.
+  Progress fairness action aliases must inherit helper-wrapper multi-hop local-helper composed-action guards inside imported action targets,
+  so imported action targets cannot hide composed fair actions several static
+  helper-wrapper hops below the resolved action alias.
+  Progress fairness action aliases must resolve helper references to defined zero-arity helper definitions,
+  so declared helpers inside imported action targets cannot be parameterized
+  operators that static traversal cannot inspect as named action predicates.
+  Progress fairness action aliases must resolve helper references to inspectable helper definitions,
+  so declared helpers inside imported action targets cannot be empty or
+  otherwise uninspectable operator bodies.
+  Progress fairness action aliases must inherit helper-reference multi-hop recursive local-helper guards inside imported action targets,
+  so imported action targets cannot hide parameterized or uninspectable helper
+  definitions behind several local helper hops, including boolean helper paths.
+  Progress fairness action aliases must resolve through acyclic helper wrappers,
+  so imported action targets cannot satisfy the alias review through recursive
+  static helper chains in the target module.
+  Progress fairness action aliases must not resolve through helper actions that compose other fair actions,
+  so imported action targets cannot hide cross-action composition behind local
+  action-shaped helper chains in the target module, including when helper names
+  are reached through boolean structure with direct fair-action targets or
+  helper bodies use boolean structure.
+  Progress fairness action aliases must inherit helper-action multi-hop local-helper composed-action guards inside imported action targets,
+  so imported action targets cannot hide composed fair actions several
+  action-shaped helper hops below the resolved action alias.
+  Progress fairness action aliases must resolve through acyclic helper actions,
+  so imported action targets cannot satisfy the alias review through recursive
+  action-shaped helper chains in the target module.
+  Progress fairness action aliases must not resolve through helper aliases that compose other fair actions,
+  so imported action targets cannot hide cross-action composition behind local
+  module-instance helper aliases in the target module, nested module-alias
+  targets, or direct imported fair-action targets, including when helper
+  aliases are reached through boolean structure with direct imported
+  fair-action targets or helper bodies use boolean structure.
+  Progress fairness action aliases must resolve through acyclic helper aliases,
+  so imported action targets cannot satisfy the alias review through recursive
+  module-instance helper alias chains, including cycles hidden behind boolean
+  helper operands.
+  Progress fairness action aliases must inherit helper-alias multi-hop module-alias cycle guards inside imported action targets,
+  so imported action targets cannot hide recursive module-alias helper loops
+  several helper and module hops below the resolved action alias.
+  Progress fairness action aliases must resolve helper aliases through named local INSTANCE declarations,
+  so imported action targets cannot hide unresolved helper module aliases
+  behind a resolved fair-action alias.
+  Progress fairness action aliases must resolve helper aliases to local action modules,
+  so imported action targets cannot point helper aliases at absent local
+  modules.
+  Progress fairness action aliases must resolve helper aliases to defined zero-arity actions,
+  so imported action targets cannot point helper aliases at undefined or
+  parameterized imported operators.
+  Progress fairness action aliases must resolve helper-alias helper references to defined zero-arity helper definitions,
+  so imported helper bodies reached through alias-target helper aliases cannot
+  hide parameterized local helper operators from the fairness-action review.
+  Progress fairness action aliases must resolve helper-alias helper references to inspectable helper definitions,
+  so imported helper bodies reached through alias-target helper aliases cannot
+  hide empty or otherwise uninspectable local helper operators, including the
+  helper alias target itself.
+  Progress fairness action aliases must inherit helper-alias multi-hop recursive helper guards inside imported action targets,
+  so imported action targets cannot hide parameterized or uninspectable
+  terminal helper definitions after several module-alias and local-helper hops.
+  Progress fairness action aliases must not resolve through module-alias conjuncts that compose other fair actions,
+  so imported action targets cannot compose direct imported fair-action
+  operators beside their own action update, even when the imported operand
+  aliases onward or reaches boolean helper bodies.
+  Progress fairness action aliases must resolve through acyclic module-alias conjuncts,
+  so imported action targets cannot satisfy the alias review through recursive
+  module-alias conjunct chains.
+  Progress fairness action aliases must inherit module-alias conjunct multi-hop cycle guards behind imported module-alias chains,
+  so imported action targets cannot hide recursive module-alias conjunct loops
+  after several imported and local helper hops.
+  Progress fairness action aliases must resolve module-alias conjuncts through named local INSTANCE declarations,
+  so imported action targets cannot hide unresolved conjunct module aliases
+  behind a resolved fair-action alias.
+  Progress fairness action aliases must resolve module-alias conjuncts to local action modules,
+  so imported action targets cannot point conjunct operands at absent local
+  modules.
+  Progress fairness action aliases must resolve module-alias conjuncts to defined zero-arity actions,
+  so imported action targets cannot point conjunct operands at undefined or
+  parameterized imported operators.
+  Progress fairness action aliases must resolve module-alias conjuncts to inspectable action definitions,
+  so imported action targets cannot point conjunct operands at empty or
+  otherwise uninspectable imported action operators.
+  Progress fairness action aliases must inherit module-alias conjunct multi-hop recursive helper guards behind imported module-alias chains,
+  so imported action targets cannot hide bad terminal conjunct helper targets
+  after alternating module-alias and local-helper hops.
+  Progress fairness action aliases must not resolve through module-alias boolean operands that compose other fair actions,
+  so imported action targets cannot bury direct imported fair-action operators
+  behind boolean structure, even when the imported operand aliases onward or
+  reaches boolean helper bodies.
+  Progress fairness action aliases must resolve through acyclic module-alias boolean operands,
+  so imported action targets cannot satisfy the alias review through recursive
+  module-alias boolean operand chains.
+  Progress fairness action aliases must inherit module-alias boolean operand multi-hop cycle guards behind imported module-alias chains,
+  so imported action targets cannot hide recursive module-alias boolean
+  operand loops after several imported and local helper hops.
+  Progress fairness action aliases must resolve module-alias boolean operands through named local INSTANCE declarations,
+  so imported action targets cannot hide unresolved boolean-operand module
+  aliases behind a resolved fair-action alias.
+  Progress fairness action aliases must resolve module-alias boolean operands to local action modules,
+  so imported action targets cannot point boolean operands at absent local
+  modules.
+  Progress fairness action aliases must resolve module-alias boolean operands to defined zero-arity actions,
+  so imported action targets cannot point boolean operands at undefined or
+  parameterized imported operators.
+  Progress fairness action aliases must resolve module-alias boolean operands to inspectable action definitions,
+  so imported action targets cannot point boolean operands at empty or
+  otherwise uninspectable imported action operators.
+  Progress fairness action aliases must inherit module-alias boolean operand multi-hop recursive helper guards behind imported module-alias chains,
+  so imported action targets cannot hide bad terminal boolean helper targets
+  after alternating module-alias and local-helper hops.
+  Progress fairness action aliases must resolve through named local INSTANCE declarations,
+  so projection fairness cannot point at an undeclared module alias or a
+  static predicate in the imported action module.
+  Same-name imported fair-action aliases remain valid when the imported
+  action target is an inspectable action-shaped transition definition.
+  Progress fairness action aliases must resolve to local action modules,
+  so projection fairness cannot point at absent imported action modules.
+  Progress fairness action aliases must resolve to defined zero-arity actions,
+  so projection fairness cannot point at undefined or parameterized imported
+  action operators.
+  Progress fairness action aliases must resolve to inspectable actions, so
+  projection fairness cannot point at empty or otherwise uninspectable imported
+  action operators.
+  Progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets,
+  so projection fairness cannot hide recursive action-alias loops several
+  imported modules below the resolved fair-action alias.
+  Progress fairness action aliases must not resolve through onward action aliases inside imported action targets,
+  so projection fairness cannot accept an imported fair-action target that
+  aliases onward instead of being the inspected action-shaped transition
+  definition.
+  Progress fairness action aliases must resolve to action definitions without fairness clauses,
+  so projection fairness cannot hide nested `WF_vars` obligations inside an
+  imported action alias target.
+  Progress fairness action aliases must resolve to transition definitions without fairness or temporal operators,
+  so projection fairness cannot hide temporal syntax inside an imported action
+  alias target.
+  Progress fairness action aliases must resolve to transition definitions that mention next-state updates or UNCHANGED,
+  so projection fairness cannot point at static imported predicates.
+  Progress transition closures must keep static [][Next]_vars shape, so
+  progress liveness cannot switch to a dynamic or temporal closure outside the
+  checked transition operator.
+  Progress transition operators must be defined zero-arity operators, so
+  progress liveness cannot point at missing or parameterized transition roots.
+  Progress fairness actions must be reachable from the checked transition closure,
+  so a liveness spec cannot keep the expected fairness aggregate while closing
+  over a `Next` relation that omits one of those fair actions, including when
+  fair actions and transition branches are paired through same-name imported
+  module aliases.
+  Source commit progress spec contract inventories must stay duplicate-free, so
+  repeated source progress spec rows cannot inflate fairness coverage before
+  spec/fairness wiring is checked.
+  Top-level commit spec contract inventories must stay duplicate-free, so
+  repeated root Sumeragi spec rows cannot inflate fairness coverage before
+  top-level spec/fairness wiring is checked.
+  Progress finality property contract inventories must stay duplicate-free, so
+  repeated progress finality property rows cannot inflate eventuality coverage
+  before finality stack wiring is checked.
+  Progress finality properties must be defined zero-arity operators, so
+  progress CFG property bindings cannot disappear or become parameterized.
+  Progress finality stacks must be defined zero-arity operators, so eventual
+  progress properties cannot point at missing or parameterized stack
+  predicates.
+  Progress finality properties must be direct <>FinalityStack obligations,
+  so progress CFGs cannot check a weakened eventuality that bypasses the
+  documented finality stack.
+  Progress finality stacks must retain committed/finality evidence conjuncts,
+  so eventual progress keeps checking the committed state and finality evidence
+  required by each corridor/interleaving/projection model.
+  Progress finality stack conjunct contracts must stay duplicate-free, so
+  repeated expected finality obligations cannot collapse before stack shape
+  checks run.
+  Progress finality stack definitions must stay duplicate-free, so repeated
+  evidence conjuncts in the TLA stack cannot collapse before exact stack shape
+  checks run.
+  Progress finality stacks must stay on the documented finality evidence conjunct contract,
+  so progress liveness cannot add or remove finality evidence outside the
+  reviewed corridor/interleaving/projection stack inventories.
+  Top-level Byzantine direct-commit aggregate definitions must reject missing, literal, and unreviewed obligations,
+  so the direct-commit proof envelope cannot disappear, hide literal
+  conjuncts, or add unreviewed witnesses outside the documented top-level
+  Byzantine aggregate contract.
+  Top-level Byzantine direct-commit aggregate operators must be defined zero-arity aggregates,
+  so top-level Byzantine aggregate proof operators cannot disappear or become
+  parameterized.
+  Top-level Byzantine direct-commit aggregate conjuncts must stay named, duplicate-free, and documented,
+  so top-level Byzantine aggregate definitions cannot hide literal, repeated,
+  or unreviewed obligations.
+  Top-level Byzantine direct-commit expected aggregate conjuncts must stay duplicate-free,
+  so repeated top-level Byzantine aggregate obligations cannot collapse before
+  aggregate validation.
+  Top-level Byzantine direct-commit implication aggregates must keep their documented top-level antecedents,
+  so guarded top-level Byzantine obligations cannot silently move under a
+  weaker antecedent.
+  Top-level Byzantine direct-commit implication antecedent contracts must stay duplicate-free,
+  so repeated top-level Byzantine implication rows cannot collapse before
+  antecedent validation.
+  Direct delivered-first progress safety operators must be defined zero-arity aggregates,
+  so the delivered-first progress CFG cannot lose or parameterize the safety
+  envelope that accompanies the temporal finality proof.
+  Direct delivered-first progress safety aggregate conjuncts must stay named, duplicate-free, and documented,
+  so the delivered-first progress safety envelope cannot hide literal,
+  repeated, or unreviewed obligations.
+  Direct delivered-first progress safety expected aggregate conjuncts must stay duplicate-free,
+  so repeated delivered-first progress-safety obligations cannot collapse
+  before aggregate validation.
+  Direct vote-first progress safety operators must be defined zero-arity aggregates,
+  so the vote-first progress CFG cannot lose or parameterize the safety
+  envelope that accompanies the temporal finality proof.
+  Direct vote-first progress safety aggregate conjuncts must stay named, duplicate-free, and documented,
+  so the vote-first progress safety envelope cannot hide literal, repeated, or
+  unreviewed obligations.
+  Direct vote-first progress safety expected aggregate conjuncts must stay duplicate-free,
+  so repeated vote-first progress-safety obligations cannot collapse before
+  aggregate validation.
+  Direct interleaving progress safety operators must be defined zero-arity aggregates,
+  so the direct interleaving progress CFG cannot lose or parameterize the
+  safety envelope that accompanies the temporal finality proof.
+  Direct interleaving progress safety aggregate conjuncts must stay named, duplicate-free, and documented,
+  so the direct interleaving progress safety envelope cannot hide literal,
+  repeated, or unreviewed obligations.
+  Direct interleaving progress safety expected aggregate conjuncts must stay duplicate-free,
+  so repeated direct interleaving progress-safety obligations cannot collapse
+  before aggregate validation.
+  Byzantine interleaving progress safety operators must be defined zero-arity aggregates,
+  so the Byzantine interleaving progress CFG cannot lose or parameterize the
+  safety envelope that accompanies the temporal finality proof.
+  Byzantine interleaving progress safety aggregate conjuncts must stay named, duplicate-free, and documented,
+  so the Byzantine interleaving progress safety envelope cannot hide literal,
+  repeated, or unreviewed obligations.
+  Byzantine interleaving progress safety expected aggregate conjuncts must stay duplicate-free,
+  so repeated Byzantine interleaving progress-safety obligations cannot
+  collapse before aggregate validation.
+  Projection gate aggregate operators must be defined zero-arity aggregates,
+  so projection proof envelopes cannot disappear or become parameterized.
+  Projection gate unguarded aggregate conjuncts must stay named, duplicate-free, and documented,
+  so unguarded projection envelopes cannot hide literal, repeated, or
+  unreviewed obligations outside the implication-specific contract.
+  Projection gate expected aggregate conjuncts must stay duplicate-free, so
+  repeated projection gate aggregate obligations cannot collapse before
+  aggregate validation.
+  Projection gate implication aggregates must keep their documented top-level antecedents,
+  so guarded projection bridge obligations cannot silently move under a weaker
+  antecedent.
+  Projection gate implication antecedent contracts must stay duplicate-free, so
+  repeated bridge implication rows cannot collapse before antecedent validation.
+  Projection bridge interleaving alignment rows must reference existing bridge contracts,
+  so missing projected-top, source-core, or composed bridge contracts cannot
+  skip exact bridge-shape validation.
+  Projection bridge interleaving expected obligations must stay duplicate-free,
+  so repeated projected top or source-core components cannot collapse before
+  exact bridge-shape validation.
+  Projection bridge interleaving actual obligations must stay duplicate-free,
+  so repeated bridge obligations inside the composed projection bridge cannot
+  collapse before exact bridge-shape validation.
+  Projection bridge core/source alignment rows must reference existing source and bridge contracts,
+  so missing source exactness or projected bridge-core contracts cannot skip
+  source/core mirror validation.
+  Projection bridge core/source expected obligations must stay duplicate-free,
+  so repeated source exactness obligations cannot collapse before projection
+  bridge core/source mirror validation.
+  Projection bridge core/source actual obligations must stay duplicate-free,
+  so repeated projected bridge-core obligations cannot collapse before
+  projection bridge core/source mirror validation.
+  Projected commit progress expected obligations must stay duplicate-free, so
+  repeated projected progress bridge components cannot collapse before progress
+  safety envelope validation.
+  Projected commit progress actual obligations must stay duplicate-free, so
+  repeated projected progress envelope obligations cannot collapse before
+  progress safety envelope validation.
+  Source progress safety expected obligations must stay duplicate-free, so
+  repeated source progress envelope components cannot collapse before source
+  progress safety validation.
+  Source progress safety actual obligations must stay duplicate-free, so
+  repeated source progress envelope obligations cannot collapse before source
+  progress safety validation.
+  Source progress safety alignment rows must reference existing envelope contracts,
+  so missing source progress envelopes cannot skip composition validation.
+  Byzantine interleaving exactness alignment rows must reference existing direct and Byzantine contracts,
+  so missing direct or Byzantine interleaving exactness contracts cannot skip
+  extension validation.
+  Byzantine interleaving expected exactness obligations must stay duplicate-free,
+  so repeated direct-core obligations cannot collapse before the Byzantine
+  interleaving extension is checked.
+  Byzantine interleaving actual exactness obligations must stay duplicate-free,
+  so repeated Byzantine-only exactness obligations cannot collapse before the
+  Byzantine interleaving extension is checked.
+  Byzantine top corridor expected obligations must stay duplicate-free, so
+  repeated vote/direct wait obligations cannot collapse before top-corridor
+  shape validation.
+  Byzantine top corridor actual obligations must stay duplicate-free, so
+  repeated top-corridor obligations cannot collapse before top-corridor shape
+  validation.
+  Byzantine top corridor alignment rows must reference existing exactness contracts,
+  so missing delivered-first, vote-first, or direct top-corridor exactness
+  contracts cannot skip family-shape validation.
+  Byzantine top/projection source obligations must stay duplicate-free, so
+  repeated source top obligations cannot collapse before projection mirror
+  validation.
+  Byzantine top/projection expected obligations must stay duplicate-free, so
+  projected top obligations cannot collapse after literal projection mapping.
+  Byzantine top/projection actual obligations must stay duplicate-free, so
+  repeated projected top obligations cannot collapse before projection mirror
+  validation.
+  Byzantine top/projection alignment rows must reference existing top and projected contracts,
+  so missing source or projected top envelopes cannot skip projection mirror
+  validation.
+  Byzantine top/projection implication rows must map through the operator alignment inventory,
+  so guarded top-level Byzantine obligations cannot lose their projected
+  bridge counterpart before antecedent mirror validation.
+  Projected commit progress alignment rows must reference existing bridge contracts,
+  so missing projection bridge inputs cannot skip progress envelope validation.
+  Projected commit progress alignment rows must reference existing progress envelope contracts,
+  so missing projected progress envelopes cannot skip bridge composition
+  validation.
+  Progress fairness WF_vars actions must resolve to defined zero-arity operators,
+  so liveness evidence cannot reference an undefined action name or a
+  parameterized helper that TLC would not treat as the documented action.
+  Progress fairness WF_vars diagnostics must stay line-aware, so raw, compound,
+  repeated, or unexpected fairness clauses identify the exact source line before
+  progress-spec liveness errors are grouped.
   The correctness root composes `TypeInvariant`, `SumeragiConsensusCoreAlwaysMatchesExactness`,
   `SumeragiConsensusCoreAlwaysMatchesStateAndTemporalSafetyEnvelope`, and `EventuallyCommit` directly.
   The state+temporal, exactness, and fast roots keep their documented direct conjuncts.
@@ -32136,6 +32980,9 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   CI, workflow, and README formal commands must use strict Apalache/TLC runner shapes,
   so direct runner invocations cannot hide extra arguments or malformed mode tokens
   outside the central scripts.
+  Runner case block shape diagnostics must stay line-aware, so duplicate
+  `case "$mode" in` declarations and missing `esac` terminators identify their
+  runner script line before malformed runner-case errors are grouped.
   Apalache/TLC runner case inventories must stay duplicate-free,
   so repeated runner branches cannot overwrite or obscure the checked proof mode body.
   Apalache runner-mode CI reachability diagnostics must stay line-aware,
@@ -32206,6 +33053,16 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   README Apalache length mismatch diagnostics must stay line-aware,
   so documented length drift identifies both the README length-table line and
   the Apalache runner case line before row maps are collapsed.
+  Apalache length proof-input diagnostics must stay line-aware,
+  so invalid or duplicate runner `apalache_length` assignments identify the exact
+  assignment line before length proof-input errors are grouped.
+  Apalache/TLC expected-failure assignment diagnostics must stay line-aware,
+  so duplicate or explicit per-case `expect_failure=0` assignments identify the
+  exact runner assignment line before expected-failure assignment errors are grouped.
+  Apalache typecheck-only assignment diagnostics must stay line-aware,
+  so duplicate, explicit default, or unallowlisted `typecheck_only=1` assignments
+  identify the exact runner assignment line before typecheck-only mode errors are
+  grouped.
   README fast-mode table modes must stay duplicate-free,
   so repeated fast-mode rows cannot collapse before TLC fast coverage comparison.
   README fast-mode table TLC support diagnostics must stay line-aware,
@@ -32229,6 +33086,10 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Apalache baseline expected-failure diagnostics must stay line-aware,
   so PR or scheduled/manual Apalache modes with unexpected `expect_failure=1`
   identify the CI command line and the Apalache runner case line.
+  Unexpected expected-failure marker diagnostics must stay assignment-line-aware,
+  so PR, scheduled/manual, or non-mutation TLC modes with unexpected
+  `expect_failure=1` identify the exact runner assignment line before marker
+  errors are grouped.
   Apalache CI mutation-surface diagnostics must stay line-aware,
   so PR CI mutation modes and expected-failure CI non-mutation modes identify
   the active CI command line before CI mode sets are collapsed.
@@ -32241,12 +33102,28 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   TLC module identity diagnostics must stay line-aware,
   so Apalache/TLC module drift identifies the README or CI command line before
   TLC mode sets are collapsed.
+  TLC module proof-input diagnostics must stay line-aware,
+  so dynamic, duplicate, or invalid TLC `module` assignments identify the exact runner
+  assignment line before module proof-input errors are grouped.
+  TLC module assignment-count diagnostics must stay line-aware,
+  so duplicate TLC `module` assignments identify their exact runner assignment
+  lines before module proof-input errors are grouped.
+  TLC constraint proof-input diagnostics must stay line-aware,
+  so dynamic, duplicate, undefined, arity-mismatched, or trivial TLC
+  `tlc_constraint` assignments identify the exact runner assignment line before
+  constraint proof-input errors are grouped.
   Apalache/TLC unused runner-case diagnostics must stay line-aware,
   so stale runner branches identify the runner case line before used-case sets
   are collapsed.
   Apalache/TLC missing formal-file diagnostics must stay line-aware,
   so missing spec, CFG, or TLC module references identify the runner case line
   before missing-file sets are collapsed.
+  Apalache/TLC proof-input path diagnostics must stay line-aware,
+  so dynamic, duplicate, wrong-suffix, nested, or escaping proof-input paths identify the
+  exact runner assignment line before proof-input errors are grouped.
+  Apalache/TLC proof-input assignment-count diagnostics must stay line-aware,
+  so duplicate `spec_file` or `cfg_file` assignments identify their exact runner
+  assignment lines before proof-input errors are grouped.
   Apalache/TLC CFG shape diagnostics must stay line-aware,
   so malformed runner-selected CFGs identify the runner case line before
   CFG-shape errors are grouped.
@@ -32268,6 +33145,15 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   Apalache/TLC CFG trivial-target diagnostics must stay line-aware,
   so runner-selected trivial CFG checks identify the runner case line before
   trivial-target errors are grouped.
+  Apalache/TLC CFG correctness-envelope diagnostics must stay line-aware,
+  so runner-selected correctness-envelope checks identify the runner case line
+  before envelope-shape errors are grouped.
+  Apalache/TLC CFG direct-exactness diagnostics must stay line-aware,
+  so runner-selected direct exactness checks identify the runner case line before
+  exactness-shape errors are grouped.
+  Apalache/TLC CFG exactness-pairing diagnostics must stay line-aware,
+  so runner-selected direct exactness/envelope pairing checks identify the runner
+  case line before pairing errors are grouped.
   TLC non-mutation expected-failure diagnostics must stay line-aware,
   so non-mutation TLC modes with unexpected `expect_failure=1` identify the
   README or CI command line and the TLC runner case line.
@@ -32402,6 +33288,9 @@ collapsed before exact setup-action transcript checks run.
   Formal shell entrypoints must use `set -euo pipefail`, so failed proof,
   installation, or piped evidence commands stop the script instead of being
   masked by later commands.
+  Formal shell entrypoint preflight diagnostics must stay line-aware, so
+  missing or drifted shebang and strict-mode lines identify the exact script
+  line and observed text before strict-shell errors are grouped.
   Apalache runner proof invocations must route through `run_with_expected_status`,
   so positive proofs and expected counterexample checks cannot bypass the shared
   exit-status contract in local, installed-binary, or Docker execution paths.
@@ -32425,9 +33314,16 @@ collapsed before exact setup-action transcript checks run.
   inject `TlcSingletonOrEmpty`, and those branches must keep that exact
   constraint so arbitrary TLC modes cannot silently narrow their proof
   obligations.
+  TLC singleton constraint-family diagnostics must stay line-aware, so missing
+  required singleton constraints identify the runner case line and wrong or
+  undocumented `tlc_constraint` assignments identify the exact runner assignment
+  line before constraint-family errors are grouped.
   The TLC runner must keep an empty top-level tlc_constraint default, so modes
   without explicit documented constraints cannot inherit a hidden global
   state-space bound.
+  Top-level runner default diagnostics must stay line-aware, so duplicate
+  `expect_failure`, `typecheck_only`, or `tlc_constraint` defaults identify their
+  exact runner assignment lines before default errors are grouped.
   The top-level Sumeragi proof CFGs must remain unconstrained: root fast, deep,
   TLC-fast, and focused Byzantine top CFGs must not bind static CFG
   `CONSTRAINT` directives, so their correctness checks cannot be satisfied only
@@ -32453,6 +33349,9 @@ collapsed before exact setup-action transcript checks run.
   mode token after the runner path.
   Duplicate fast-mode rows or duplicated Apalache/TLC commands are rejected so
   one repeated mode cannot hide a missing one, and
+  duplicate runner case-block declarations and missing case-block terminators
+  identify their runner script line before malformed runner-case errors are grouped,
+  while
   malformed Apalache/TLC runner case labels, malformed case terminators,
   unindented case-block content, duplicate Apalache/TLC runner case labels,
   shell-case wildcard shadowing, or CI/README Apalache commands, including

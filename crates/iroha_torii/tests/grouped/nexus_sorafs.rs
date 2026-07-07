@@ -20,6 +20,8 @@ mod nexus_public_lanes;
 mod offline_readiness_smoke;
 #[path = "../offline_v2_kagemusha_redeem_smoke.rs"]
 mod offline_v2_kagemusha_redeem_smoke;
+#[path = "../offline_v2_kagemusha_topup_smoke.rs"]
+mod offline_v2_kagemusha_topup_smoke;
 #[path = "../offline_v2_readiness_smoke.rs"]
 mod offline_v2_readiness_smoke;
 #[path = "../push_bridge.rs"]

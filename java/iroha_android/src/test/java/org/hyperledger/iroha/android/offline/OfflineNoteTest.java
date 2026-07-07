@@ -78,6 +78,7 @@ public final class OfflineNoteTest {
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
+    decodeExternalPaymentTextWhenRequested();
     paymentTokenCodecRoundTripsNoritoTextAndQrFrames();
     offlineBearerCashPolicyAndPrefixesUseSingleAppSurface();
     offlineBearerCashPolicyRejectsNonPositiveAndInvertedLimits();
@@ -1584,6 +1585,30 @@ public final class OfflineNoteTest {
     assertEquals("iroha:qr:", string(fountain, "frame_prefix"), "fountain QR prefix");
   }
 
+  private static void decodeExternalPaymentTextWhenRequested() throws Exception {
+    final String path = System.getenv("OFFLINE_NOTE_PAYMENT_TEXT_FILE");
+    if (path == null || path.trim().isEmpty()) {
+      return;
+    }
+    final String text = Files.readString(Paths.get(path.trim()), StandardCharsets.UTF_8).trim();
+    final OfflineNotePaymentToken token = OfflineNotePaymentTokenCodec.decodeText(text);
+    System.out.println(
+        "offline_note_external_payment_text token_id="
+            + token.tokenIdHex()
+            + " bearer_audit_trail_count="
+            + token.bearerAuditTrail().size());
+    for (int index = 0; index < token.bearerAuditTrail().size(); index++) {
+      final OfflineNote.AuditBundle audit = token.bearerAuditTrail().get(index);
+      System.out.println(
+          "offline_note_external_payment_text audit_index="
+              + index
+              + " token_id="
+              + OfflineNoteWallet.hexLower(audit.tokenId())
+              + " java_halo2_verified="
+              + OfflineNoteHalo2Prover.verifyAudit(audit));
+    }
+  }
+
   private static void paymentTokenCodecRoundTripsNoritoTextAndQrFrames() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> derivation = obj(obj(fixture, "chain_vectors"), "derivation");
@@ -1635,9 +1660,51 @@ public final class OfflineNoteTest {
         token.tokenIdHex(),
         OfflineBearerCashTextCodec.decodePaymentText(text).tokenIdHex(),
         "Bearer Cash text token id");
+    final String compactText =
+        OfflineNotePaymentTokenCodec.TEXT_PREFIX
+            + OfflineNotePaymentTokenCodec.COMPACT_TEXT_MARKER
+            + text.substring(OfflineNotePaymentTokenCodec.TEXT_PREFIX.length());
+    assertEquals(
+        token.tokenIdHex(),
+        OfflineNotePaymentTokenCodec.decodeText(compactText).tokenIdHex(),
+        "compact marker payment token text token id");
+    assertEquals(
+        token.tokenIdHex(),
+        OfflineBearerCashTextCodec.decodePaymentText(compactText).tokenIdHex(),
+        "compact marker Bearer Cash text token id");
+    final OfflineNotePaymentToken compactTokenWithoutTerminalAudit =
+        new OfflineNotePaymentToken(
+            token.chainId(),
+            token.paymentRequestId(),
+            token.tokenNonce(),
+            token.tokenId(),
+            token.audit(),
+            Collections.emptyList(),
+            token.createdAtMs());
+    final String compactTextWithoutTerminalAudit =
+        OfflineNotePaymentTokenCodec.TEXT_PREFIX
+            + OfflineNotePaymentTokenCodec.COMPACT_TEXT_MARKER
+            + Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(
+                    OfflineNotePaymentTokenCodec.encodeNorito(compactTokenWithoutTerminalAudit));
+    final OfflineNotePaymentToken compactDecodedWithRestoredAudit =
+        OfflineNotePaymentTokenCodec.decodeText(compactTextWithoutTerminalAudit);
+    assertEquals(
+        1L,
+        compactDecodedWithRestoredAudit.bearerAuditTrail().size(),
+        "compact marker payment token restores terminal bearer audit");
+    assertEquals(
+        token.tokenIdHex(),
+        OfflineNoteWallet.hexLower(
+            compactDecodedWithRestoredAudit.bearerAuditTrail().get(0).tokenId()),
+        "compact marker payment token restored audit token id");
     assertTrue(
         OfflineBearerCashPayloadKindV1.PAYMENT == OfflineBearerCashTextCodec.payloadKind(text),
         "payment text payload kind");
+    assertTrue(
+        OfflineBearerCashPayloadKindV1.PAYMENT == OfflineBearerCashTextCodec.payloadKind(compactText),
+        "compact marker payment text payload kind");
     assertThrows(
         () -> OfflineNotePaymentTokenCodec.decodeText(" " + text),
         "leading-whitespace payment token text should reject");

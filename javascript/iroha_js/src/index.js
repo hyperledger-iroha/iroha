@@ -183,6 +183,7 @@ export {
   buildKagemushaRecursiveSpendableNoteDescriptor,
   buildKagemushaRecursiveSpendVerifierRecordRef,
   encodeKagemushaRecursiveSpendInitRequest,
+  encodeKagemushaRecursiveSpendTopUpRequest,
   encodeKagemushaRecursiveSpendAppendRequest,
   encodeKagemushaRecursiveSpendVerifyRequest,
   encodeKagemushaRecursiveSpendRedeemRequest,

@@ -57,6 +57,7 @@ import {
   deriveConfidentialOwnerTagV2,
   encodeKagemushaRecursiveSpendAppendRequest,
   encodeKagemushaRecursiveSpendInitRequest,
+  encodeKagemushaRecursiveSpendTopUpRequest,
   encodeKagemushaRecursiveSpendRedeemRequest,
   encodeKagemushaRecursiveSpendVerifyRequest,
   isKagemushaCompactPaymentTokenNativeAvailable,
@@ -112,6 +113,7 @@ import {
 
 const UNSUPPORTED_RECURSIVE_SPEND_PROOF_CIRCUIT_ID =
   "kagemusha-recursive-spend-lineage-badhop-v1";
+const KAGEMUSHA_TEST_ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
 function withNativeBinding(binding, fn) {
   const previous = globalThis.__IROHA_NATIVE_BINDING__;
@@ -4568,20 +4570,28 @@ test("Kagemusha recursive spend typed helpers delegate encoded requests", () => 
       calls.at(-1)[1],
       KAGEMUSHA_RECURSIVE_SPEND_INIT_REQUEST_WIRE_NAME,
     );
+    const initRequestArchive = calls.at(-1)[1];
 
     assert.ok(
       kagemushaRecursiveSpendTopUpTyped({
-        recordBundle,
-        pallasOpenEnvelopes,
-        currentNote: note,
-        lineageVerifierKey: initLineageVerifierKey,
-        lineageProvingKeyArchive: initLineageProvingKeyArchive,
+        assetId: `${KAGEMUSHA_TEST_ASSET_DEFINITION_ID}#${recursiveSpendRecipient()}`,
+        amount: "7",
+        initRequestArchive,
       }).subarray(0, 4).equals(Buffer.from("NRT0", "ascii")),
     );
     assert.equal(calls.at(-1)[0], "topup");
     assertKagemushaArchiveSchema(
       calls.at(-1)[1],
       KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME,
+    );
+    assert.deepEqual(
+      calls.at(-1)[1],
+      encodeKagemushaRecursiveSpendTopUpRequest({
+        assetDefinitionId: KAGEMUSHA_TEST_ASSET_DEFINITION_ID,
+        accountId: recursiveSpendRecipient(),
+        amount: "7",
+        initRequestArchive,
+      }),
     );
 
     assert.ok(

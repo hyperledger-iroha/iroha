@@ -203,6 +203,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemOfflineNote>,
     dispatch_instruction::<iroha_data_model::isi::offline::AuditOfflineNote>,
     dispatch_instruction::<iroha_data_model::isi::offline::KagemushaTransfer>,
+    dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursive>,
     dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>,
     dispatch_instruction::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>,

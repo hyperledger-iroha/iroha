@@ -12313,7 +12313,7 @@ test("getSccpCapabilities normalizes discovery response", async () => {
   });
 });
 
-test("getSccpCapabilities accepts live legacy burn registry backend field", async () => {
+test("getSccpCapabilities rejects legacy burn registry backend field", async () => {
   const fetchImpl = async (url) => {
     assert.equal(url, `${BASE_URL}/v1/sccp/capabilities`);
     return createResponse({
@@ -12339,8 +12339,10 @@ test("getSccpCapabilities accepts live legacy burn registry backend field", asyn
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.getSccpCapabilities();
-  assert.equal(result.burnRegistryBackend, "bridge/sccp/burn-v1");
+  await assert.rejects(
+    () => client.getSccpCapabilities(),
+    /sccp capabilities response\.burn_registry_backend/u,
+  );
 });
 
 test("getSccpProofManifests normalizes typed manifest response", async () => {
@@ -22427,6 +22429,21 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     () => client.proposeMultisig({ ...request, creationTimeMs: -1 }),
     /non-negative integer/,
   );
+  for (const [fieldName, value] of Object.entries({
+    validation_fee_policy_version: 7,
+    validation_fee_policy_hash: "ab".repeat(32),
+    validation_fee_instruction_index: 1,
+    validation_fee_transfer_entry_index: 2,
+  })) {
+    await assert.rejects(
+      () => client.proposeMultisig({ ...request, [fieldName]: value }),
+      /unsupported snake_case validation fee field/,
+    );
+    assert.throws(
+      () => buildMultisigProposeRequest({ ...request, [fieldName]: value }),
+      /unsupported snake_case validation fee field/,
+    );
+  }
   await assert.rejects(
     () =>
       client.proposeMultisig({

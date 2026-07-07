@@ -6,7 +6,7 @@ use iroha_data_model::{
         AddSignatory, BurnBox, CustomInstruction, GrantBox, MintBox, RegisterBox,
         RemoveAssetKeyValue, RemoveKeyValueBox, RemoveSignatory, RevokeBox, SetAccountQuorum,
         SetAssetKeyValue, SetKeyValueBox, TransferAssetBatch, TransferBox, UnregisterBox,
-        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote},
+        offline::{AuditOfflineNote, IssueOfflineNote, RedeemOfflineNote, TopUpKagemushaRecursive},
         staking::RecordPublicLaneRewards,
     },
     prelude::InstructionBox,
@@ -224,6 +224,10 @@ fn collect_instruction_account_activities(
             &issue.issue.key_certificate.account_id,
             AccountActivityRole::Incoming,
         );
+        return;
+    }
+    if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursive>() {
+        push_unique(out, topup.asset.account(), AccountActivityRole::Outgoing);
         return;
     }
     if let Some(redeem) = any.downcast_ref::<RedeemOfflineNote>() {

@@ -200,6 +200,40 @@ class InitSpendRequest @JvmOverloads constructor(
     val lineageProvingKeyArchive: ByteArray? get() = lineageProvingKeyArchiveBytes?.copyOf()
 }
 
+/** Typed request for `KagemushaRecursiveSpendTopUpRequestV1`. */
+class TopUpSpendRequest(
+    assetId: String,
+    amount: String,
+    initRequestArchive: ByteArray,
+) {
+    val assetId: String = canonicalAssetId(assetId, "assetId")
+    val amount: String = canonicalU128Decimal(amount, "amount")
+    private val initRequestArchiveBytes = initRequestArchive.copyOf()
+
+    init {
+        KagemushaRecursiveSpendRequestCodecs.compactPayloadForRequest(
+            initRequestArchiveBytes,
+            KagemushaRecursiveSpendRequestCodecs.SCHEMA_INIT_REQUEST,
+            "initRequestArchive",
+        )
+    }
+
+    @JvmOverloads
+    constructor(
+        accountId: String,
+        assetDefinitionId: String,
+        amount: String,
+        initRequestArchive: ByteArray,
+        dataspaceId: Long? = null,
+    ) : this(
+        assetId = canonicalAssetId(accountId, assetDefinitionId, dataspaceId),
+        amount = amount,
+        initRequestArchive = initRequestArchive,
+    )
+
+    val initRequestArchive: ByteArray get() = initRequestArchiveBytes.copyOf()
+}
+
 /** Typed request for `KagemushaRecursiveSpendAppendRequestV1`. */
 class AppendSpendRequest @JvmOverloads constructor(
     previousBundle: ByteArray,
@@ -534,6 +568,8 @@ class SpendBundleSummary(
 object KagemushaRecursiveSpendRequestCodecs {
     const val SCHEMA_INIT_REQUEST: String =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
+    const val SCHEMA_TOP_UP_REQUEST: String =
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1"
     const val SCHEMA_APPEND_REQUEST: String =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendAppendRequestV1"
     const val SCHEMA_VERIFY_REQUEST: String =
@@ -597,6 +633,10 @@ object KagemushaRecursiveSpendRequestCodecs {
     @JvmStatic
     fun encodeInitRequest(request: InitSpendRequest): ByteArray =
         NoritoCodec.encode(request, SCHEMA_INIT_REQUEST, InitRequestAdapter, REQUEST_FLAGS)
+
+    @JvmStatic
+    fun encodeTopUpRequest(request: TopUpSpendRequest): ByteArray =
+        NoritoCodec.encode(request, SCHEMA_TOP_UP_REQUEST, TopUpRequestAdapter, REQUEST_FLAGS)
 
     @JvmStatic
     fun encodeAppendRequest(request: AppendSpendRequest): ByteArray =
@@ -725,6 +765,25 @@ object KagemushaRecursiveSpendRequestCodecs {
             ),
         )
     }
+
+    @JvmStatic
+    fun buildRecursiveSpendTopUpRequest(
+        assetId: String,
+        amount: String,
+        initRequestArchive: ByteArray,
+    ): ByteArray = encodeTopUpRequest(TopUpSpendRequest(assetId, amount, initRequestArchive))
+
+    @JvmStatic
+    @JvmOverloads
+    fun buildRecursiveSpendTopUpRequest(
+        accountId: String,
+        assetDefinitionId: String,
+        amount: String,
+        initRequestArchive: ByteArray,
+        dataspaceId: Long? = null,
+    ): ByteArray = encodeTopUpRequest(
+        TopUpSpendRequest(accountId, assetDefinitionId, amount, initRequestArchive, dataspaceId),
+    )
 
     @JvmStatic
     @JvmOverloads
@@ -1280,6 +1339,21 @@ object KagemushaRecursiveSpendRequestCodecs {
         }
 
         override fun decode(decoder: NoritoDecoder): InitSpendRequest {
+            throw UnsupportedOperationException("recursive spend requests are encode-only")
+        }
+    }
+
+    private object TopUpRequestAdapter : TypeAdapter<TopUpSpendRequest> {
+        override fun encode(encoder: NoritoEncoder, value: TopUpSpendRequest) {
+            writeField(encoder) { writeAssetId(it, value.assetId) }
+            writeField(encoder) { writeNumeric(it, value.amount) }
+            writeRawField(
+                encoder,
+                compactPayloadForRequest(value.initRequestArchive, SCHEMA_INIT_REQUEST, "initRequestArchive"),
+            )
+        }
+
+        override fun decode(decoder: NoritoDecoder): TopUpSpendRequest {
             throw UnsupportedOperationException("recursive spend requests are encode-only")
         }
     }
@@ -2492,6 +2566,13 @@ private fun writeSpendableNote(encoder: NoritoEncoder, value: SpendableNoteDescr
     writeField(encoder) { writeNumeric(it, value.amount) }
 }
 
+private fun writeAssetId(encoder: NoritoEncoder, assetId: String) {
+    val parsed = parseAssetId(assetId, "assetId")
+    writeField(encoder) { writeAccountId(it, parsed.accountId) }
+    writeField(encoder) { writeAssetDefinitionId(it, parsed.assetDefinitionId) }
+    writeField(encoder) { writeAssetBalanceScope(it, parsed.dataspaceId) }
+}
+
 private fun writeChainId(encoder: NoritoEncoder, value: String) {
     requirePortableId(value, "chainId")
     writeField(encoder) { writeString(it, value) }
@@ -2504,6 +2585,15 @@ private fun writeAssetDefinitionId(encoder: NoritoEncoder, value: String) {
         throw IllegalArgumentException("asset must be a canonical asset definition id", ex)
     }
     encoder.writeBytes(bytes)
+}
+
+private fun writeAssetBalanceScope(encoder: NoritoEncoder, dataspaceId: Long?) {
+    if (dataspaceId == null) {
+        encoder.writeUInt(0, 32)
+        return
+    }
+    encoder.writeUInt(1, 32)
+    writeField(encoder) { it.writeUInt(dataspaceId, 64) }
 }
 
 private fun writeFixed32Vec(encoder: NoritoEncoder, values: List<ByteArray>) {
@@ -2574,6 +2664,66 @@ private fun writeAccountId(encoder: NoritoEncoder, accountId: String) {
     encoder.writeUInt(1, 32)
     writeField(encoder) { writeMultisigPolicy(it, multisig) }
 }
+
+private fun canonicalAssetId(value: String, field: String): String {
+    val parsed = parseAssetId(value, field)
+    val base = "${parsed.assetDefinitionId}#${parsed.accountId}"
+    return parsed.dataspaceId?.let { "$base#dataspace:$it" } ?: base
+}
+
+private fun canonicalAssetId(
+    accountId: String,
+    assetDefinitionId: String,
+    dataspaceId: Long?,
+): String {
+    require(dataspaceId == null || dataspaceId >= 0L) { "dataspaceId must be non-negative" }
+    val definition = try {
+        AssetDefinitionIdEncoder.encodeFromBytes(AssetDefinitionIdEncoder.parseAddressBytes(assetDefinitionId))
+    } catch (ex: IllegalArgumentException) {
+        throw IllegalArgumentException("assetDefinitionId must be a canonical asset definition id", ex)
+    }
+    writeAccountId(NoritoEncoder(0), accountId)
+    val base = "$definition#$accountId"
+    return dataspaceId?.let { "$base#dataspace:$it" } ?: base
+}
+
+private fun parseAssetId(value: String, field: String): ParsedAssetId {
+    val parts = value.split('#')
+    require(parts.size == 2 || parts.size == 3) {
+        "$field must use '<asset-definition>#<account>' with optional '#dataspace:<id>'"
+    }
+    val definition = try {
+        AssetDefinitionIdEncoder.encodeFromBytes(AssetDefinitionIdEncoder.parseAddressBytes(parts[0]))
+    } catch (ex: IllegalArgumentException) {
+        throw IllegalArgumentException("$field.definition must be a canonical asset definition id", ex)
+    }
+    writeAccountId(NoritoEncoder(0), parts[1])
+    val dataspaceId = if (parts.size == 3) {
+        val scope = parts[2]
+        require(scope.startsWith("dataspace:")) { "$field.scope must use dataspace:<id>" }
+        val raw = scope.substring("dataspace:".length)
+        require(isCanonicalUnsignedDecimal(raw)) { "$field.scope must use canonical dataspace:<id>" }
+        try {
+            raw.toLong()
+        } catch (ex: NumberFormatException) {
+            throw IllegalArgumentException("$field.scope must fit in signed 64-bit range", ex)
+        }
+    } else {
+        null
+    }
+    return ParsedAssetId(parts[1], definition, dataspaceId)
+}
+
+private fun isCanonicalUnsignedDecimal(value: String): Boolean =
+    value.isNotEmpty() &&
+        (value == "0" || !value.startsWith("0")) &&
+        value.all { it in '0'..'9' }
+
+private data class ParsedAssetId(
+    val accountId: String,
+    val assetDefinitionId: String,
+    val dataspaceId: Long?,
+)
 
 private fun writeMultisigPolicy(encoder: NoritoEncoder, policy: MultisigPolicyPayload) {
     require(policy.version == MULTISIG_POLICY_VERSION) { "unsupported multisig policy version" }

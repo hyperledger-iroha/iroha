@@ -222,8 +222,9 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
 /// The common use-case:
 ///
 /// ```
-/// use iroha_data_model::{IdBox, Identifiable};
+/// use iroha_data_model::{IdBox, Identifiable, name::Name, parameter::CustomParameterId};
 /// use iroha_data_model_derive::IdEqOrdHash;
+/// use std::str::FromStr;
 ///
 /// #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 /// struct Id {
@@ -237,7 +238,9 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
 ///
 /// # impl From<Id> for IdBox {
 /// #     fn from(_source: Id) -> Self {
-/// #         unimplemented!("Only present to make the example work")
+/// #         IdBox::CustomParameterId(CustomParameterId::new(
+/// #             Name::from_str("id_eq_ord_hash_example").expect("valid parameter id"),
+/// #         ))
 /// #     }
 /// # }
 ///
@@ -282,8 +285,9 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
 /// Manual selection of the identifier field:
 ///
 /// ```
-/// use iroha_data_model::{IdBox, Identifiable};
+/// use iroha_data_model::{IdBox, Identifiable, name::Name, parameter::CustomParameterId};
 /// use iroha_data_model_derive::IdEqOrdHash;
+/// use std::str::FromStr;
 ///
 /// #[derive(Debug, IdEqOrdHash)]
 /// struct InnerStruct {
@@ -293,7 +297,9 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
 ///
 /// # impl From<Id> for IdBox {
 /// #     fn from(_source: Id) -> Self {
-/// #         unimplemented!("Only present to make the example work")
+/// #         IdBox::CustomParameterId(CustomParameterId::new(
+/// #             Name::from_str("inner_id_eq_ord_hash_example").expect("valid parameter id"),
+/// #         ))
 /// #     }
 /// # }
 ///
@@ -305,13 +311,17 @@ pub fn instruction(attr: TokenStream, input: TokenStream) -> Result<TokenStream>
 ///
 /// # impl From<InnerStruct> for IdBox {
 /// #     fn from(_source: InnerStruct) -> Self {
-/// #         unimplemented!("Only present to make the example work")
+/// #         IdBox::CustomParameterId(CustomParameterId::new(
+/// #             Name::from_str("inner_struct_example").expect("valid parameter id"),
+/// #         ))
 /// #     }
 /// # }
 ///
 /// # impl From<Struct> for IdBox {
 /// #     fn from(_source: Struct) -> Self {
-/// #         unimplemented!("Only present to make the example work")
+/// #         IdBox::CustomParameterId(CustomParameterId::new(
+/// #             Name::from_str("struct_example").expect("valid parameter id"),
+/// #         ))
 /// #     }
 /// # }
 ///
@@ -355,8 +365,13 @@ pub fn id_eq_ord_hash(input: TokenStream) -> TokenStream {
 /// # Examples
 ///
 /// ```
-/// use iroha_data_model::prelude::{HasOrigin, IdBox, Identifiable};
+/// use iroha_data_model::{
+///     name::Name,
+///     parameter::CustomParameterId,
+///     prelude::{HasOrigin, IdBox, Identifiable},
+/// };
 /// use iroha_data_model_derive::{HasOrigin, IdEqOrdHash};
+/// use std::str::FromStr;
 ///
 /// #[derive(Debug, Clone, HasOrigin)]
 /// #[has_origin(origin = Layer)]
@@ -395,13 +410,17 @@ pub fn id_eq_ord_hash(input: TokenStream) -> TokenStream {
 ///
 /// # impl From<LayerId> for IdBox {
 /// #     fn from(_source: LayerId) -> Self {
-/// #         unimplemented!("Only present to make the example work")
+/// #         IdBox::CustomParameterId(CustomParameterId::new(
+/// #             Name::from_str("layer_example").expect("valid parameter id"),
+/// #         ))
 /// #     }
 /// # }
 ///
 /// # impl From<SubLayerId> for IdBox {
 /// #     fn from(_source: SubLayerId) -> Self {
-/// #         unimplemented!("Only present to make the example work")
+/// #         IdBox::CustomParameterId(CustomParameterId::new(
+/// #             Name::from_str("sub_layer_example").expect("valid parameter id"),
+/// #         ))
 /// #     }
 /// # }
 ///

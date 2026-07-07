@@ -114,39 +114,39 @@ use rust_decimal::Decimal;
 use sha2::Digest as _;
 
 #[derive(Clone, Debug, Encode)]
-struct ExecutionContextLaneBlockSubjectPreimage {
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
+pub(crate) struct ExecutionContextLaneBlockSubjectPreimage {
+    pub(crate) version: u8,
+    pub(crate) lane_id: LaneId,
+    pub(crate) dataspace_id: DataSpaceId,
+    pub(crate) lane_block_height: u64,
+    pub(crate) lane_block_view: u64,
+    pub(crate) candidate_indices: Vec<u64>,
+    pub(crate) qc_mode_tag: String,
 }
 
 #[derive(Clone, Debug, Encode)]
-struct ExecutionContextLanePayloadOwnershipPreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
+pub(crate) struct ExecutionContextLanePayloadOwnershipPreimage {
+    pub(crate) purpose: String,
+    pub(crate) version: u8,
+    pub(crate) lane_id: LaneId,
+    pub(crate) dataspace_id: DataSpaceId,
+    pub(crate) lane_block_height: u64,
+    pub(crate) lane_block_view: u64,
+    pub(crate) subject_hash: Hash,
+    pub(crate) candidate_indices: Vec<u64>,
+    pub(crate) qc_mode_tag: String,
 }
 
 #[derive(Clone, Debug, Encode)]
-struct ExecutionContextLaneRbcInstancePreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    payload_ownership_hash: Hash,
+pub(crate) struct ExecutionContextLaneRbcInstancePreimage {
+    pub(crate) purpose: String,
+    pub(crate) version: u8,
+    pub(crate) lane_id: LaneId,
+    pub(crate) dataspace_id: DataSpaceId,
+    pub(crate) lane_block_height: u64,
+    pub(crate) lane_block_view: u64,
+    pub(crate) subject_hash: Hash,
+    pub(crate) payload_ownership_hash: Hash,
 }
 
 const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
@@ -229,6 +229,10 @@ fn pk2_staging_legacy_replay_execution_context_hash_mismatch(
     is_genesis: bool,
 ) -> bool {
     allow_missing_legacy_context && !is_genesis && is_pk2_staging_chain_id(chain_id)
+}
+
+fn pk2_staging_lane_payload_subject_hash_compatibility(chain_id: &ChainId) -> bool {
+    is_pk2_staging_chain_id(chain_id)
 }
 
 #[cfg(feature = "bls")]
@@ -6581,6 +6585,7 @@ pub(crate) mod valid {
 
         fn validate_execution_context_lane_payload_ownerships(
             block: &SignedBlock,
+            chain_id: &ChainId,
             bundle: &BlockExecutionContextBundle,
         ) -> Result<(), BlockValidationError> {
             if bundle.lane_payload_ownerships.is_empty() {
@@ -6701,9 +6706,27 @@ pub(crate) mod valid {
                     "lane block subject",
                 )?;
                 if ownership.subject_hash != expected_subject_hash {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} subject hash mismatch"
-                    )));
+                    if pk2_staging_lane_payload_subject_hash_compatibility(chain_id) {
+                        iroha_logger::warn!(
+                            block_height = proposal_height,
+                            proposal_view,
+                            chain_id = chain_id.as_str(),
+                            ownership_idx,
+                            lane_id = ownership.lane_id.as_u32(),
+                            dataspace_id = ownership.dataspace_id.as_u64(),
+                            lane_block_height = ownership.lane_block_height,
+                            lane_block_view = ownership.lane_block_view,
+                            candidate_indices = ?candidate_indices,
+                            qc_mode_tag = %ownership.qc_mode_tag,
+                            expected = ?expected_subject_hash,
+                            actual = ?ownership.subject_hash,
+                            "accepting PK2 staging lane payload ownership subject hash mismatch"
+                        );
+                    } else {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} subject hash mismatch"
+                        )));
+                    }
                 }
 
                 let expected_payload_ownership_hash = Self::execution_context_preimage_hash(
@@ -6834,7 +6857,7 @@ pub(crate) mod valid {
             };
 
             Self::validate_execution_context_alignment(block, bundle)?;
-            Self::validate_execution_context_lane_payload_ownerships(block, bundle)?;
+            Self::validate_execution_context_lane_payload_ownerships(block, chain_id, bundle)?;
             Self::validate_execution_context_lane_payload_artifacts(block, state, bundle)?;
             if allow_missing_legacy_context || block.header().is_genesis() {
                 return Ok(());
@@ -15584,6 +15607,85 @@ pub(crate) mod valid {
                 "lane-payload-context-subject-tamper",
                 |ownership| ownership.subject_hash = Hash::new(b"tampered lane subject"),
                 "subject hash mismatch",
+            );
+        }
+
+        fn recompute_lane_payload_ownership_derived_hashes(
+            ownership: &mut SumeragiLanePayloadOwnership,
+        ) {
+            ownership.payload_ownership_hash = Hash::new(
+                norito::to_bytes(&ExecutionContextLanePayloadOwnershipPreimage {
+                    purpose: "nexus:lane-payload-ownership:v1".to_string(),
+                    version: 1,
+                    lane_id: ownership.lane_id,
+                    dataspace_id: ownership.dataspace_id,
+                    lane_block_height: ownership.lane_block_height,
+                    lane_block_view: ownership.lane_block_view,
+                    subject_hash: ownership.subject_hash,
+                    candidate_indices: ownership.accepted_candidate_indices.clone(),
+                    qc_mode_tag: ownership.qc_mode_tag.clone(),
+                })
+                .expect("lane payload ownership preimage encodes"),
+            );
+            ownership.rbc_instance_hash = Hash::new(
+                norito::to_bytes(&ExecutionContextLaneRbcInstancePreimage {
+                    purpose: "nexus:lane-rbc-instance:v1".to_string(),
+                    version: 1,
+                    lane_id: ownership.lane_id,
+                    dataspace_id: ownership.dataspace_id,
+                    lane_block_height: ownership.lane_block_height,
+                    lane_block_view: ownership.lane_block_view,
+                    subject_hash: ownership.subject_hash,
+                    payload_ownership_hash: ownership.payload_ownership_hash,
+                })
+                .expect("lane RBC instance preimage encodes"),
+            );
+        }
+
+        #[test]
+        fn validate_execution_context_accepts_pk2_staging_subject_hash_compatibility_only() {
+            let (state, _topology, _time_source, signed) =
+                signed_default_lane_block_with_execution_context(
+                    "lane-payload-context-pk2-subject-compat",
+                    1,
+                    |transactions| {
+                        let mut ownership = sample_lane_payload_ownership_for_context(
+                            2,
+                            0,
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                            vec![0],
+                        );
+                        ownership.subject_hash = Hash::new(b"pk2-staging-subject-compat");
+                        recompute_lane_payload_ownership_derived_hashes(&mut ownership);
+                        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                            transactions[0].hash_as_entrypoint(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )])
+                        .with_lane_payload_ownerships(vec![ownership])
+                    },
+                );
+            let view = state.query_view();
+            let pk2_chain_id = ChainId::from(PK2_STAGING_CHAIN_ID);
+
+            ValidBlock::validate_execution_context_with_state(&signed, &pk2_chain_id, &view, false)
+                .expect("PK2 staging preserves compatibility for self-consistent subject hashes");
+
+            let err = ValidBlock::validate_execution_context_with_state(
+                &signed,
+                &state.chain_id,
+                &view,
+                false,
+            )
+            .expect_err("non-PK2 chains must retain strict subject hash validation");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("subject hash mismatch")
+                ),
+                "unexpected validation error: {err:?}"
             );
         }
 

@@ -227,9 +227,11 @@ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_PUBLIC_METHODS = (
 REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS = (
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
     "KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME",
+    "KAGEMUSHA_TOPUP_RECURSIVE_INSTRUCTION_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME",
     "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
@@ -398,7 +400,7 @@ JNI_METHODS = (
     "nativeLineageWitnessAppendResult",
     "nativeVerifySpend",
     "nativeRedeemSpend",
-    "nativeTopUpSpend",
+    "nativeTopUpInstruction",
 )
 
 REQUIRED_RECURSIVE_COMPACT_JNI_METHODS = (
@@ -8810,9 +8812,7 @@ def check_offline_readiness_artifact_contract(texts, errors):
         texts,
         "crates/iroha_torii/src/lib.rs",
             (
-                "Mobile artifact archives are",
-                "served and gated by Core API",
-                "let offline_kagemusha_recursive_compact_artifacts = false;",
+                "let offline_kagemusha_recursive_compact_artifacts =\n        offline_kagemusha_recursive_compact_available;",
                 '"offline_kagemusha_recursive_compact_artifacts_available"',
             ),
             "Torii offline readiness artifact contract",
@@ -8832,7 +8832,7 @@ def check_offline_readiness_artifact_contract(texts, errors):
             texts,
             relative,
             (
-                '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+                '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
             ),
             label,
             errors,
@@ -18356,7 +18356,7 @@ def check_javascript(texts, errors):
             "KagemushaInstructionArchive:",
             "bytes_base64: string;",
             "redeemRequestArchive: BinaryLike;",
-            "initRequestArchive: BinaryLike;",
+            "topUpRequestArchive: BinaryLike;",
         ),
         "JavaScript TypeScript Kagemusha instruction transaction declarations",
         errors,
@@ -18388,7 +18388,7 @@ def check_javascript(texts, errors):
                 "kagemushaRecursiveSpendRedeem",
                 "kagemushaRecursiveRedeem.redeemRequestArchive",
                 "kagemushaRecursiveSpendTopUp",
-                "kagemushaRecursiveTopUp.initRequestArchive",
+                "kagemushaRecursiveTopUp.topUpRequestArchive",
                 "Buffer.from(new Uint8Array(value.buffer, value.byteOffset, value.byteLength))",
                 "Buffer.from(new Uint8Array(value))",
             ),
@@ -18457,7 +18457,7 @@ def check_javascript(texts, errors):
             "bytesBase64 must be canonical standard base64",
             "buildKagemushaInstructionTransaction wraps one archive instruction",
             "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
-            "buildKagemushaRecursiveTopUpTransaction derives transfer instruction before signing",
+            "buildKagemushaRecursiveTopUpTransaction derives top-up instruction before signing",
             "transaction builders reject padded authority and asset definition IDs before native dispatch",
             "authority must not contain surrounding whitespace",
             r"assetDefinition\.assetDefinitionId must not contain surrounding whitespace",
@@ -18472,7 +18472,7 @@ def check_javascript(texts, errors):
             r"privateEndKaigi\.chainId must not contain surrounding whitespace",
             r"privateEndKaigi\.callId must not contain surrounding whitespace",
             "redeemRequestArchive must be a Buffer or ArrayBuffer view",
-            "initRequestArchive must be a Buffer or ArrayBuffer view",
+            "topUpRequestArchive must be a Buffer or ArrayBuffer view",
             "redeem native rejected",
             "top-up native rejected",
             "buildKagemusha transaction helpers copy mutable buffers before native calls",
@@ -18480,7 +18480,7 @@ def check_javascript(texts, errors):
             "mutableRedeemInstructionArchive",
             "mutableRedeemRequestArchive",
             "mutableTopUpInstructionArchive",
-            "mutableInitRequestArchive",
+            "mutableTopUpRequestArchive",
             "mutablePrivateKey",
             "fill(0xa5)",
         ),
@@ -18510,7 +18510,7 @@ def check_javascript(texts, errors):
             "mutableRedeemInstructionArchive",
             "mutableRedeemRequestArchive",
             "mutableTopUpInstructionArchive",
-            "mutableInitRequestArchive",
+            "mutableTopUpRequestArchive",
             "mutablePrivateKey",
             "fill(0xa5)",
         ),
@@ -20805,10 +20805,10 @@ def check_python(texts, errors):
             "instructions=(instruction,)",
             "_archive_bytes_named(private_key, \"private_key\")",
             "_norito_archive_bytes_named(redeem_request_archive, \"redeem_request_archive\")",
-            "instruction_archive = kagemusha_recursive_spend_topup(init_request_archive)",
-            "kagemusha_instruction_archive_instruction(\n        KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,",
+            "instruction_archive = kagemusha_recursive_spend_topup(topup_request_archive)",
+            "kagemusha_instruction_archive_instruction(\n        KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TOPUP_RECURSIVE,",
             "instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)",
-            "instruction = kagemusha_recursive_topup_instruction(init_request_archive)",
+            "instruction = kagemusha_recursive_topup_instruction(topup_request_archive)",
         ),
         "Python Kagemusha instruction transaction builder",
         errors,
@@ -20923,9 +20923,9 @@ def check_python(texts, errors):
             "fn kagemusha_instruction_archive_box(",
             "fn kagemusha_instruction_archive(",
             "fn kagemusha_recursive_redeem(",
-            "fn kagemusha_recursive_spend_topup_instruction_from_init_request(",
+            "fn kagemusha_recursive_spend_topup_instruction_from_request(",
             "fn kagemusha_recursive_spend_topup_py(",
-            "KagemushaTransfer",
+            "TopUpKagemushaRecursive",
             "RedeemKagemushaRecursive",
             "decode_from_bytes(instruction_archive)",
             "kagemusha_recursive_spend_redeem_instruction_from_request(request)",
@@ -20942,7 +20942,7 @@ def check_python(texts, errors):
         (
             "test_kagemusha_instruction_archive_transaction_helpers_wrap_redeem_archive",
             "test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing",
-            "test_kagemusha_recursive_topup_transaction_helper_derives_transfer_before_signing",
+            "test_kagemusha_recursive_topup_transaction_helper_derives_topup_before_signing",
             "test_kagemusha_instruction_transaction_helpers_copy_mutable_archives_before_building",
             "test_kagemusha_instruction_transaction_helpers_reject_padded_chain_and_authority_before_signing",
             "test_python_transaction_builder_rejects_padded_chain_and_authority_before_signing",
@@ -20963,16 +20963,17 @@ def check_python(texts, errors):
             "redeem_instruction_archive = bytearray(",
             "redeem_request_archive = bytearray(",
             "top_up_instruction_archive = bytearray(",
-            "init_request_archive = bytearray(",
+            "topup_request_archive = bytearray(",
             "private_key = bytearray(keypair.private_key)",
             "memoryview(redeem_instruction_archive)",
             "memoryview(redeem_request_archive)",
             "expected_top_up_instruction_archive = bytes(top_up_instruction_archive)",
-            "memoryview(init_request_archive)",
+            "expected_topup_request_archive = bytes(topup_request_archive)",
+            "memoryview(topup_request_archive)",
             "memoryview(private_key)",
             "_shared_recursive_spend_abi7_archive(\"redeem_instruction\")",
             "_shared_recursive_spend_abi7_archive(\"redeem_request\")",
-            "_shared_recursive_spend_archive(\"init_request\")",
+            "KAGEMUSHA_RECURSIVE_TOPUP_REQUEST_WIRE_NAME",
             "_instruction_archive_bytes(instruction)",
             "committed_instruction = kagemusha.kagemusha_instruction_archive_instruction",
             "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
@@ -20990,7 +20991,7 @@ def check_python(texts, errors):
             "bad_request_flags[39] = 0x20",
             "redeem_request_archive must be a valid Norito archive",
             "draft.kagemusha_recursive_redeem(request_archive)",
-            "draft.kagemusha_recursive_topup(init_request_archive)",
+            "draft.kagemusha_recursive_topup(topup_request_archive)",
         ),
         "Python Kagemusha instruction transaction tests",
         errors,
@@ -22149,7 +22150,7 @@ def check_swift(texts, errors):
         (
             "private static func supportedPlatform(",
             "switch value {",
-            "case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:",
+            "case OfflineNoteV2Constants.iosPlatform,\n             OfflineNoteV2Constants.androidPlatform:",
             "return value",
             "guard binding.platform == Self.platform else",
             "guard proof.platform == Self.platform else",
@@ -22497,7 +22498,7 @@ def check_swift(texts, errors):
             "KagemushaRecursiveSpendRequestCodecs.encodeRedeemRequest",
             "KagemushaRecursiveSpendRequestCodecs.decodeBundle",
             "KagemushaRecursiveSpendRequestCodecs.decodeVerifyResult",
-            "lineageVerifierKey: nil",
+            "lineageVerifierKey: Data()",
             "u128MaxPlusOne",
             "KagemushaRecursiveSpendRedeemRequest(",
             "publicAmount: amount",
@@ -22561,7 +22562,7 @@ def check_swift(texts, errors):
     require_regex(
         texts,
         request_codecs_test,
-        r'lineageVerifierKey: nil,[\s\S]*?lineageProvingKeyArchive: nil[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
+        r'lineageVerifierKey: Data\(\),[\s\S]*?lineageProvingKeyArchive: lineageProvingKeyArchive[\s\S]*?\.invalidField\("lineageVerifierKey"\)',
         "Swift typed recursive spend init lineage-key exact diagnostics",
         errors,
         flags=re.S,
@@ -41145,36 +41146,36 @@ if mode == "--negative-control-offline-readiness-artifact-contract":
             "crates/iroha_torii/src/lib.rs",
             (
                 (
+                    "let offline_kagemusha_recursive_compact_artifacts =\n        offline_kagemusha_recursive_compact_available;",
                     "let offline_kagemusha_recursive_compact_artifacts = false;",
-                    "let offline_kagemusha_recursive_compact_artifacts = true;",
                 ),
             ),
             (
-                "Torii offline readiness artifact contract missing let offline_kagemusha_recursive_compact_artifacts = false;",
+                "Torii offline readiness artifact contract missing let offline_kagemusha_recursive_compact_artifacts =\n        offline_kagemusha_recursive_compact_available;",
             ),
         ),
         (
             "crates/iroha_torii/tests/offline_readiness_smoke.rs",
             (
                 (
-                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                     '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
+                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                 ),
             ),
             (
-                'Torii offline readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+                'Torii offline readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
             ),
         ),
         (
             "crates/iroha_torii/tests/offline_v2_readiness_smoke.rs",
             (
                 (
-                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                     '\\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
+                    '\\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
                 ),
             ),
             (
-                'Torii offline V2 readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":false',
+                'Torii offline V2 readiness smoke artifact contract missing \\"offline_kagemusha_recursive_compact_artifacts_available\\":true',
             ),
         ),
         (
@@ -67086,10 +67087,12 @@ if mode == "--negative-control-swift-offline-proof-platform-exactness":
     source_replacements = (
         (
             '        switch value {\n'
-            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
+            '        case OfflineNoteV2Constants.iosPlatform,\n'
+            '             OfflineNoteV2Constants.androidPlatform:\n'
             "            return value\n",
             '        switch value.lowercased() {\n'
-            '        case OfflineNoteV2Constants.iosPlatform, OfflineNoteV2Constants.androidPlatform:\n'
+            '        case OfflineNoteV2Constants.iosPlatform,\n'
+            '             OfflineNoteV2Constants.androidPlatform:\n'
             "            return value.lowercased()\n",
         ),
         (

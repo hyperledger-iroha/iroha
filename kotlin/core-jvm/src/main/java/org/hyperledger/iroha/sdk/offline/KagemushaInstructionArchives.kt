@@ -10,8 +10,9 @@ import org.hyperledger.iroha.sdk.norito.SchemaHash
 object KagemushaWireNames {
     const val TRANSFER_INSTRUCTION: String = "iroha_data_model::isi::offline::KagemushaTransfer"
     const val REDEEM_RECURSIVE_INSTRUCTION: String = "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
+    const val TOP_UP_RECURSIVE_INSTRUCTION: String = "iroha_data_model::isi::offline::TopUpKagemushaRecursive"
     const val RECURSIVE_TOP_UP_REQUEST: String =
-        "iroha_data_model::offline::model::KagemushaRecursiveSpendInitRequestV1"
+        "iroha_data_model::offline::model::KagemushaRecursiveSpendTopUpRequestV1"
     const val RECURSIVE_REDEEM_REQUEST: String =
         "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
 }
@@ -27,6 +28,10 @@ enum class KagemushaInstructionType(
     REDEEM_RECURSIVE(
         "RedeemKagemushaRecursive",
         KagemushaWireNames.REDEEM_RECURSIVE_INSTRUCTION,
+    ),
+    TOP_UP_RECURSIVE(
+        "TopUpKagemushaRecursive",
+        KagemushaWireNames.TOP_UP_RECURSIVE_INSTRUCTION,
     ),
 }
 
@@ -46,11 +51,11 @@ object KagemushaInstructionArchives {
 
     @JvmStatic
     fun topUpInstructionBox(instructionArchive: ByteArray): InstructionBox =
-        instructionBox(KagemushaInstructionType.TRANSFER, instructionArchive)
+        instructionBox(KagemushaInstructionType.TOP_UP_RECURSIVE, instructionArchive)
 
     @JvmStatic
-    fun topUpInstructionBoxFromInitRequest(initRequestArchive: ByteArray): InstructionBox =
-        topUpInstructionBox(KagemushaRecursiveSpendProver.topUpSpend(initRequestArchive))
+    fun topUpInstructionBoxFromRequest(topUpRequestArchive: ByteArray): InstructionBox =
+        topUpInstructionBox(KagemushaRecursiveSpendProver.topUpSpend(topUpRequestArchive))
 
     @JvmStatic
     fun recursiveRedeemInstructionBoxFromRequest(redeemRequestArchive: ByteArray): InstructionBox =
@@ -106,7 +111,7 @@ object KagemushaInstructionArchives {
         nonce: Int? = null,
         metadata: Map<String, *> = emptyMap<String, Any>(),
     ): TransactionPayload = transactionPayload(
-        instructionType = KagemushaInstructionType.TRANSFER,
+        instructionType = KagemushaInstructionType.TOP_UP_RECURSIVE,
         instructionArchive = instructionArchive,
         chainId = chainId,
         authority = authority,
@@ -117,8 +122,8 @@ object KagemushaInstructionArchives {
     )
 
     @JvmStatic
-    fun topUpTransactionPayloadFromInitRequest(
-        initRequestArchive: ByteArray,
+    fun topUpTransactionPayloadFromRequest(
+        topUpRequestArchive: ByteArray,
         chainId: String,
         authority: String,
         creationTimeMs: Long,
@@ -129,7 +134,7 @@ object KagemushaInstructionArchives {
         val exactChainId = requireNonBlankUnpadded(chainId, "chainId")
         val exactAuthority = requireNonBlankUnpadded(authority, "authority")
         return topUpTransactionPayload(
-            instructionArchive = KagemushaRecursiveSpendProver.topUpSpend(initRequestArchive),
+            instructionArchive = KagemushaRecursiveSpendProver.topUpSpend(topUpRequestArchive),
             chainId = exactChainId,
             authority = exactAuthority,
             creationTimeMs = creationTimeMs,

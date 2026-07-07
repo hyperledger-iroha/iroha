@@ -1067,6 +1067,11 @@ def test_sccp_production_corridor_dotnet_phase_covers_native_bsc_facades() -> No
         in script
     )
     assert "method_has_expected_assembly" in script
+    assert (
+        "requires SCCP TRX definitions to reference only "
+        "Hyperledger.Iroha.Sdk.Tests.dll assembly paths"
+        in script
+    )
     assert "definition_values" not in script
     assert "sccp_test_id_to_names" in script
     assert "sccp_execution_id_to_names" in script
@@ -4309,6 +4314,19 @@ esac
             "requires canonical TRX assembly path values",
         ),
         (
+            "assembly-conflicting-method-codebase",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed" /></Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" storage="Hyperledger.Iroha.Sdk.Tests.dll">'
+                '<TestMethod codeBase="Other.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires SCCP TRX definitions to reference only Hyperledger.Iroha.Sdk.Tests.dll assembly paths",
+        ),
+        (
             "assembly-storage-path-splice",
             (
                 '<TestRun><Results><UnitTestResult testId="sccp-test" '
@@ -4475,6 +4493,19 @@ esac
                 'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
             ),
             "requires canonical TRX assembly path values",
+        ),
+        (
+            "assembly-conflicting-unit-storage",
+            (
+                '<TestRun><Results><UnitTestResult testId="sccp-test" '
+                'testName="Hyperledger.Iroha.Sdk.Tests.SccpFake.Passes" '
+                'outcome="Passed" /></Results><TestDefinitions>'
+                '<UnitTest id="sccp-test" storage="Other.Tests.dll">'
+                '<TestMethod codeBase="Hyperledger.Iroha.Sdk.Tests.dll" '
+                'className="Hyperledger.Iroha.Sdk.Tests.SccpFake" '
+                'name="Passes" /></UnitTest></TestDefinitions></TestRun>\n'
+            ),
+            "requires SCCP TRX definitions to reference only Hyperledger.Iroha.Sdk.Tests.dll assembly paths",
         ),
         (
             "non-sccp-passed-result",

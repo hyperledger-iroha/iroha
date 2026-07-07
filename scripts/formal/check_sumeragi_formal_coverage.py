@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypeVar
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -16,6 +16,7 @@ SPEC_DIR = ROOT_DIR / "docs" / "formal" / "sumeragi"
 WORKFLOW_DIR = ROOT_DIR / ".github" / "workflows"
 APALACHE_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_apalache.sh"
 TLC_RUNNER = ROOT_DIR / "scripts" / "formal" / "sumeragi_tlc.sh"
+IdentityOperand = TypeVar("IdentityOperand")
 SUMERAGI_FAST_CFG = SPEC_DIR / "Sumeragi_fast.cfg"
 SUMERAGI_DEEP_CFG = SPEC_DIR / "Sumeragi_deep.cfg"
 SUMERAGI_TLC_FAST_CFG = SPEC_DIR / "Sumeragi_tlc_fast.cfg"
@@ -1765,14 +1766,248 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "projection progress spec composes the named fairness aggregate",
     "source progress specs compose their named fairness aggregates",
     "top-level Sumeragi specs compose their named fairness aggregates",
+    "Progress spec bodies must compose only Init, their direct transition closure, and their named fairness aggregate",
+    "Source and top-level progress spec bodies must reject hidden or extra direct conjuncts",
+    "Source and top-level progress specs must reject duplicate direct transition closures",
+    "Source and top-level progress specs must reject compound raw WF_vars fairness clauses",
+    "Progress specs must resolve Init as a defined zero-arity operator",
+    "Progress Init operators must stay initial-state predicates",
+    "Progress Init local aliases must resolve to initial-state predicates",
+    "Progress Init local aliases must resolve to defined zero-arity initial-state predicates",
+    "Progress Init local aliases must resolve to inspectable initial-state predicates",
+    "Progress Init local aliases must inherit recursive resolution for onward local aliases",
+    "Progress Init aliases must be acyclic",
+    "Progress Init aliases must resolve through named local INSTANCE declarations",
+    "Progress Init aliases must inherit recursive resolution for onward aliases inside imported Init targets",
+    "Progress Init aliases must inherit helper target guards inside imported Init targets",
+    "Progress Init aliases must inherit helper acyclicity inside imported Init targets",
+    "Progress Init aliases must inherit module-alias helper target guards inside imported Init targets",
+    "Progress Init aliases must inherit module-alias helper acyclicity inside imported Init targets",
+    "Progress Init aliases must inherit recursive module-alias helper resolution inside imported Init targets",
+    "Progress Init aliases must inherit nested helper guards behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested helper alias resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias helper guards behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias helper onward resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper guards behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias onward resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias onward target helper guards behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit nested module-alias target helper alias onward target helper alias onward resolution behind imported module-alias helpers",
+    "Progress Init aliases must inherit multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress Init aliases must resolve to local modules with defined zero-arity initial-state predicates",
+    "Progress Init aliases must resolve to inspectable initial-state predicates",
+    "Progress Init helper conjuncts must resolve to initial-state predicates",
+    "Progress Init helpers must be acyclic",
+    "Progress Init helper conjuncts must inherit recursive resolution for onward aliases inside named helper operands",
+    "Progress Init boolean helper operands must resolve to initial-state predicates",
+    "Progress Init boolean helper operands must resolve to defined zero-arity initial-state predicates",
+    "Progress Init boolean helper operands must resolve to inspectable initial-state predicates",
+    "Progress Init boolean helper operands must inherit recursive resolution for onward aliases inside named helper operands",
+    "Progress Init module-alias helper operands must resolve to initial-state predicates",
+    "Progress Init module-alias helpers must be acyclic",
+    "Progress Init module-alias helper operands must resolve through named local INSTANCE declarations",
+    "Progress Init module-alias boolean helper operands must resolve through named local INSTANCE declarations",
+    "Progress Init module-alias helper operands must inherit recursive resolution for onward aliases inside imported helper targets",
+    "Progress Init module-alias boolean helper operands must inherit recursive resolution for onward aliases inside imported helper targets",
+    "Progress Init module-alias boolean helper operands must resolve to local modules with defined zero-arity initial-state predicates",
+    "Progress Init module-alias boolean helper operands must resolve to inspectable initial-state predicates",
+    "Progress Init module-alias helper operands must resolve to local modules with defined zero-arity initial-state predicates",
+    "Progress Init module-alias helper operands must resolve to inspectable initial-state predicates",
+    "Progress transition disjuncts must resolve to named action-shaped operators",
+    "Progress transition disjuncts must stay single-branch action predicates",
+    "Progress transition disjuncts must stay bare named action or aggregate references",
+    "Guarded transition disjuncts must not mix multiple action witnesses",
+    "Nested progress transition aggregates must recursively obey the same branch contract",
+    "Single-reference progress transition wrappers must expose nested aggregate contracts",
+    "Progress transition disjunct inventories must stay duplicate-free",
+    "Progress transition action witness inventories must stay duplicate-free",
+    "Progress transition aliases must be acyclic",
+    "Progress transition aliases must resolve through named local INSTANCE declarations",
+    "Progress transition aliases must resolve to local modules",
+    "Progress transition aliases must resolve to defined zero-arity transition operators",
+    "Progress transition aliases must resolve to inspectable transition operators",
+    "Progress transition helper wrappers must be acyclic",
+    "Progress transition boolean-gated helper wrappers must be acyclic",
+    "Progress transition identity-gated helper wrappers must be acyclic",
+    "Progress transition helper cycle diagnostics must precede nested aggregate expansion",
+    "Progress transition module-alias helper wrappers must resolve through named local INSTANCE declarations",
+    "Progress transition module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets",
+    "Progress transition module-alias helper wrappers must inherit multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress transition module-alias helper wrappers must resolve to defined zero-arity transition operators",
+    "Progress transition module-alias helper wrappers must resolve to inspectable transition operators",
+    "Progress transition identity-gated module-alias helper wrappers must be acyclic",
+    "Progress transition identity-gated module-alias helper wrappers must resolve through named local INSTANCE declarations",
+    "Progress transition identity-gated module-alias helper wrappers must inherit helper-wrapper resolution for onward aliases inside imported helper targets",
+    "Progress transition identity-gated module-alias helper wrappers must inherit multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress transition identity-gated module-alias helper wrappers must resolve to defined zero-arity transition operators",
+    "Progress transition identity-gated module-alias helper wrappers must resolve to inspectable transition operators",
+    "Progress transition module-alias disjuncts must be acyclic",
+    "Progress transition module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress transition module-alias disjuncts must resolve through named local INSTANCE declarations",
+    "Progress transition module-alias disjuncts must resolve to defined zero-arity transition operators",
+    "Progress transition module-alias disjuncts must resolve to inspectable transition operators",
+    "Progress transition identity-gated module-alias disjuncts must be acyclic",
+    "Progress transition identity-gated module-alias disjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress fairness action definitions must be action-shaped transition definitions",
+    "Progress fairness action definitions must not contain fairness or temporal operators",
+    "Progress fairness action definitions must not compose other fair actions",
+    "Progress fairness action definitions must not hide other fair actions in boolean structure",
+    "Progress fairness action helper references must resolve to defined zero-arity helper definitions",
+    "Progress fairness action helper references must resolve to inspectable helper definitions",
+    "Progress fairness action helper references must inherit multi-hop recursive local-helper guards",
+    "Progress fairness action helper wrappers must not hide composed fair actions",
+    "Progress fairness action helper wrappers must inherit multi-hop local-helper composed-action guards",
+    "Progress fairness action helper wrappers must be acyclic",
+    "Progress fairness action helper wrappers must inherit multi-hop local-helper cycle guards",
+    "Progress fairness action helper wrappers must inspect boolean operands",
+    "Progress fairness action helper actions must not hide composed fair actions",
+    "Progress fairness action helper actions must inherit multi-hop local-helper composed-action guards",
+    "Progress fairness action helper actions must be acyclic",
+    "Progress fairness action helper actions must inherit multi-hop local-helper cycle guards",
+    "Progress fairness action helper actions must inspect boolean operands",
+    "Progress fairness action helper aliases must not hide composed fair actions",
+    "Progress fairness action helper aliases must be acyclic",
+    "Progress fairness action helper aliases must inherit multi-hop module-alias cycle guards behind imported helper targets",
+    "Progress fairness action helper aliases must inspect boolean operands",
+    "Progress fairness action helper aliases must inherit multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress fairness action helper aliases must resolve through named local INSTANCE declarations",
+    "Progress fairness action helper aliases must resolve to local action modules",
+    "Progress fairness action helper aliases must resolve to defined zero-arity actions",
+    "Progress fairness action helper aliases must resolve imported helper references to defined zero-arity helper definitions",
+    "Progress fairness action helper aliases must resolve imported helper references to inspectable helper definitions",
+    "Progress fairness action module-alias conjuncts must not hide composed fair actions",
+    "Progress fairness action module-alias conjuncts must be acyclic",
+    "Progress fairness action module-alias conjuncts must inherit multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress fairness action module-alias conjuncts must resolve through named local INSTANCE declarations",
+    "Progress fairness action module-alias conjuncts must resolve to local action modules",
+    "Progress fairness action module-alias conjuncts must resolve to defined zero-arity actions",
+    "Progress fairness action module-alias conjuncts must resolve to inspectable action definitions",
+    "Progress fairness action module-alias boolean operands must not hide composed fair actions",
+    "Progress fairness action module-alias boolean operands must be acyclic",
+    "Progress fairness action module-alias boolean operands must inherit multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress fairness action module-alias boolean operands must resolve through named local INSTANCE declarations",
+    "Progress fairness action module-alias boolean operands must resolve to local action modules",
+    "Progress fairness action module-alias boolean operands must resolve to defined zero-arity actions",
+    "Progress fairness action module-alias boolean operands must resolve to inspectable action definitions",
+    "Progress fairness action aliases must be acyclic",
+    "Progress fairness action aliases must not resolve directly to other fair actions",
+    "Progress fairness action aliases must not resolve to definitions that compose other fair actions",
+    "Progress fairness action aliases must not resolve to definitions that hide other fair actions in boolean structure",
+    "Progress fairness action aliases must not resolve through helper wrappers that compose other fair actions",
+    "Progress fairness action aliases must inherit helper-wrapper multi-hop local-helper composed-action guards inside imported action targets",
+    "Progress fairness action aliases must resolve helper references to defined zero-arity helper definitions",
+    "Progress fairness action aliases must resolve helper references to inspectable helper definitions",
+    "Progress fairness action aliases must inherit helper-reference multi-hop recursive local-helper guards inside imported action targets",
+    "Progress fairness action aliases must resolve through acyclic helper wrappers",
+    "Progress fairness action aliases must not resolve through helper actions that compose other fair actions",
+    "Progress fairness action aliases must inherit helper-action multi-hop local-helper composed-action guards inside imported action targets",
+    "Progress fairness action aliases must resolve through acyclic helper actions",
+    "Progress fairness action aliases must not resolve through helper aliases that compose other fair actions",
+    "Progress fairness action aliases must resolve through acyclic helper aliases",
+    "Progress fairness action aliases must inherit helper-alias multi-hop module-alias cycle guards inside imported action targets",
+    "Progress fairness action aliases must resolve helper aliases through named local INSTANCE declarations",
+    "Progress fairness action aliases must resolve helper aliases to local action modules",
+    "Progress fairness action aliases must resolve helper aliases to defined zero-arity actions",
+    "Progress fairness action aliases must resolve helper-alias helper references to defined zero-arity helper definitions",
+    "Progress fairness action aliases must resolve helper-alias helper references to inspectable helper definitions",
+    "Progress fairness action aliases must inherit helper-alias multi-hop recursive helper guards inside imported action targets",
+    "Progress fairness action aliases must not resolve through module-alias conjuncts that compose other fair actions",
+    "Progress fairness action aliases must resolve through acyclic module-alias conjuncts",
+    "Progress fairness action aliases must inherit module-alias conjunct multi-hop cycle guards behind imported module-alias chains",
+    "Progress fairness action aliases must resolve module-alias conjuncts through named local INSTANCE declarations",
+    "Progress fairness action aliases must resolve module-alias conjuncts to local action modules",
+    "Progress fairness action aliases must resolve module-alias conjuncts to defined zero-arity actions",
+    "Progress fairness action aliases must resolve module-alias conjuncts to inspectable action definitions",
+    "Progress fairness action aliases must inherit module-alias conjunct multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress fairness action aliases must not resolve through module-alias boolean operands that compose other fair actions",
+    "Progress fairness action aliases must resolve through acyclic module-alias boolean operands",
+    "Progress fairness action aliases must inherit module-alias boolean operand multi-hop cycle guards behind imported module-alias chains",
+    "Progress fairness action aliases must resolve module-alias boolean operands through named local INSTANCE declarations",
+    "Progress fairness action aliases must resolve module-alias boolean operands to local action modules",
+    "Progress fairness action aliases must resolve module-alias boolean operands to defined zero-arity actions",
+    "Progress fairness action aliases must resolve module-alias boolean operands to inspectable action definitions",
+    "Progress fairness action aliases must inherit module-alias boolean operand multi-hop recursive helper guards behind imported module-alias chains",
+    "Progress fairness action aliases must resolve through named local INSTANCE declarations",
+    "Progress fairness action aliases must resolve to local action modules",
+    "Progress fairness action aliases must resolve to defined zero-arity actions",
+    "Progress fairness action aliases must resolve to inspectable actions",
+    "Progress fairness action aliases must inherit multi-hop module-alias cycle guards behind imported action targets",
+    "Progress fairness action aliases must not resolve through onward action aliases inside imported action targets",
+    "Progress fairness action aliases must resolve to action definitions without fairness clauses",
+    "Progress fairness action aliases must resolve to transition definitions without fairness or temporal operators",
+    "Progress fairness action aliases must resolve to transition definitions that mention next-state updates or UNCHANGED",
+    "Progress transition closures must keep static [][Next]_vars shape",
+    "Progress transition operators must be defined zero-arity operators",
+    "Progress fairness actions must be reachable from the checked transition closure",
+    "Source commit progress spec contract inventories must stay duplicate-free",
+    "Top-level commit spec contract inventories must stay duplicate-free",
+    "Progress finality property contract inventories must stay duplicate-free",
+    "Progress finality properties must be defined zero-arity operators",
+    "Progress finality stacks must be defined zero-arity operators",
+    "Progress finality properties must be direct <>FinalityStack obligations",
+    "Progress finality stacks must retain committed/finality evidence conjuncts",
+    "Progress finality stack conjunct contracts must stay duplicate-free",
+    "Progress finality stack definitions must stay duplicate-free",
+    "Progress finality stacks must stay on the documented finality evidence conjunct contract",
+    "Top-level Byzantine direct-commit aggregate definitions must reject missing, literal, and unreviewed obligations",
+    "Top-level Byzantine direct-commit aggregate operators must be defined zero-arity aggregates",
+    "Top-level Byzantine direct-commit aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Top-level Byzantine direct-commit expected aggregate conjuncts must stay duplicate-free",
+    "Top-level Byzantine direct-commit implication aggregates must keep their documented top-level antecedents",
+    "Top-level Byzantine direct-commit implication antecedent contracts must stay duplicate-free",
+    "Direct delivered-first progress safety operators must be defined zero-arity aggregates",
+    "Direct delivered-first progress safety aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Direct delivered-first progress safety expected aggregate conjuncts must stay duplicate-free",
+    "Direct vote-first progress safety operators must be defined zero-arity aggregates",
+    "Direct vote-first progress safety aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Direct vote-first progress safety expected aggregate conjuncts must stay duplicate-free",
+    "Direct interleaving progress safety operators must be defined zero-arity aggregates",
+    "Direct interleaving progress safety aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Direct interleaving progress safety expected aggregate conjuncts must stay duplicate-free",
+    "Byzantine interleaving progress safety operators must be defined zero-arity aggregates",
+    "Byzantine interleaving progress safety aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Byzantine interleaving progress safety expected aggregate conjuncts must stay duplicate-free",
+    "Projection gate aggregate operators must be defined zero-arity aggregates",
+    "Projection gate unguarded aggregate conjuncts must stay named, duplicate-free, and documented",
+    "Projection gate expected aggregate conjuncts must stay duplicate-free",
+    "Projection gate implication aggregates must keep their documented top-level antecedents",
+    "Projection gate implication antecedent contracts must stay duplicate-free",
+    "Projection bridge interleaving alignment rows must reference existing bridge contracts",
+    "Projection bridge interleaving expected obligations must stay duplicate-free",
+    "Projection bridge interleaving actual obligations must stay duplicate-free",
+    "Projection bridge core/source alignment rows must reference existing source and bridge contracts",
+    "Projection bridge core/source expected obligations must stay duplicate-free",
+    "Projection bridge core/source actual obligations must stay duplicate-free",
+    "Projected commit progress expected obligations must stay duplicate-free",
+    "Projected commit progress actual obligations must stay duplicate-free",
+    "Source progress safety expected obligations must stay duplicate-free",
+    "Source progress safety actual obligations must stay duplicate-free",
+    "Source progress safety alignment rows must reference existing envelope contracts",
+    "Byzantine interleaving exactness alignment rows must reference existing direct and Byzantine contracts",
+    "Byzantine interleaving expected exactness obligations must stay duplicate-free",
+    "Byzantine interleaving actual exactness obligations must stay duplicate-free",
+    "Byzantine top corridor expected obligations must stay duplicate-free",
+    "Byzantine top corridor actual obligations must stay duplicate-free",
+    "Byzantine top corridor alignment rows must reference existing exactness contracts",
+    "Byzantine top/projection source obligations must stay duplicate-free",
+    "Byzantine top/projection expected obligations must stay duplicate-free",
+    "Byzantine top/projection actual obligations must stay duplicate-free",
+    "Byzantine top/projection alignment rows must reference existing top and projected contracts",
+    "Byzantine top/projection implication rows must map through the operator alignment inventory",
+    "Projected commit progress alignment rows must reference existing bridge contracts",
+    "Projected commit progress alignment rows must reference existing progress envelope contracts",
     "temporal CFGs bind their documented behavior operators",
     "TLC runner constraint injections stay on documented singleton-or-empty families",
+    "TLC singleton constraint-family diagnostics must stay line-aware",
     "The TLC runner must keep an empty top-level tlc_constraint default",
+    "Top-level runner default diagnostics must stay line-aware",
     "Sumeragi formal proof commands must not set APALACHE_LENGTH",
     "Sumeragi formal proof commands must not set toolchain override variables",
     "CI, workflow, and README formal commands must use strict Apalache/TLC runner shapes",
     "README formal runner commands must be standalone command lines",
     "README formal runner commands must live in shell fenced code blocks",
+    "Runner case block shape diagnostics must stay line-aware",
     "Apalache/TLC runner case inventories must stay duplicate-free",
     "Apalache runner-mode CI reachability diagnostics must stay line-aware",
     "README Apalache command support diagnostics must stay line-aware",
@@ -1782,6 +2017,7 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Workflow and baseline formal entrypoint commands must be active run/script lines",
     "Workflow active command extraction must ignore block-scalar bodies",
     "Formal preflight, sweep, and success ordering checks must use exact command lines",
+    "Formal shell entrypoint preflight diagnostics must stay line-aware",
     "CI and workflow mode inventories must count only active direct runner commands",
     "Active CI/workflow TLC modes must be supported by the TLC runner and documented by README TLC commands",
     "Active CI/workflow TLC inventory diagnostics must stay line-aware",
@@ -1796,6 +2032,9 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "README Apalache length table modes must stay duplicate-free",
     "README Apalache length table coverage diagnostics must stay line-aware",
     "README Apalache length mismatch diagnostics must stay line-aware",
+    "Apalache length proof-input diagnostics must stay line-aware",
+    "Apalache/TLC expected-failure assignment diagnostics must stay line-aware",
+    "Apalache typecheck-only assignment diagnostics must stay line-aware",
     "README fast-mode table modes must stay duplicate-free",
     "README fast-mode table TLC support diagnostics must stay line-aware",
     "TLC exact fast-mode README coverage diagnostics must stay line-aware",
@@ -1804,12 +2043,18 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "README mutation-mode expected-failure CI coverage diagnostics must stay line-aware",
     "Apalache expected-failure CI marker diagnostics must stay line-aware",
     "Apalache baseline expected-failure diagnostics must stay line-aware",
+    "Unexpected expected-failure marker diagnostics must stay assignment-line-aware",
     "Apalache CI mutation-surface diagnostics must stay line-aware",
     "README mutation CFG equivalence diagnostics must stay line-aware",
     "README mutation CFG-name diagnostics must stay line-aware",
     "TLC module identity diagnostics must stay line-aware",
+    "TLC module proof-input diagnostics must stay line-aware",
+    "TLC constraint proof-input diagnostics must stay line-aware",
+    "TLC module assignment-count diagnostics must stay line-aware",
     "Apalache/TLC unused runner-case diagnostics must stay line-aware",
     "Apalache/TLC missing formal-file diagnostics must stay line-aware",
+    "Apalache/TLC proof-input path diagnostics must stay line-aware",
+    "Apalache/TLC proof-input assignment-count diagnostics must stay line-aware",
     "Apalache/TLC CFG shape diagnostics must stay line-aware",
     "Apalache/TLC TLA validation diagnostics must stay line-aware",
     "Apalache/TLC CFG inventory diagnostics must stay line-aware",
@@ -1817,6 +2062,9 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Apalache/TLC CFG module-binding diagnostics must stay line-aware",
     "Apalache/TLC CFG constant-binding diagnostics must stay line-aware",
     "Apalache/TLC CFG trivial-target diagnostics must stay line-aware",
+    "Apalache/TLC CFG correctness-envelope diagnostics must stay line-aware",
+    "Apalache/TLC CFG direct-exactness diagnostics must stay line-aware",
+    "Apalache/TLC CFG exactness-pairing diagnostics must stay line-aware",
     "TLC non-mutation expected-failure diagnostics must stay line-aware",
     "Formal coverage audit must run before Apalache, TLC, and expected-failure evidence commands",
     "Formal workflow triggers must keep the checked PR and scheduled/manual surfaces",
@@ -2232,7 +2480,13 @@ FORMAL_README_GUARD_CONTRACT_SNIPPETS = (
     "Static aggregate conjunct contract inventories must stay duplicate-free",
     "Source/projection static alignment contract inventories must stay duplicate-free",
     "Static fairness action contract inventories must stay duplicate-free",
+    "Progress specs must keep exactly one direct transition-closure conjunct",
     "`WF_vars` fairness operands must stay named zero-arity operators",
+    "Progress fairness aggregate operators must be defined zero-arity operators",
+    "Source and top-level progress fairness aggregate roots must stay present and zero-arity",
+    "Progress fairness aggregates must contain only direct WF_vars(Action) clauses",
+    "Progress fairness WF_vars actions must resolve to defined zero-arity operators",
+    "Progress fairness WF_vars diagnostics must stay line-aware",
     "The state+temporal, exactness, and fast roots keep their documented direct conjuncts",
     "Sumeragi_fast.cfg pins the fast correctness envelope",
     "Every direct conjunct of `SumeragiConsensusCoreStateMatchesEnvelope` must be checked",
@@ -2824,6 +3078,13 @@ CFG_NESTED_CONSTANT_BINDING_RE = re.compile(
     r"(^|\s)([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|<-)"
 )
 TLA_WF_VARS_START_RE = re.compile(r"\bWF_vars\s*\(")
+TLA_MODULE_OPERATOR_ALIAS_RE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]*)!([A-Za-z_][A-Za-z0-9_]*)$"
+)
+TLA_PROGRESS_NEXT_CLOSURE_RE = re.compile(
+    r"^\[\]\[([A-Za-z_][A-Za-z0-9_]*)\]_vars$"
+)
+TLA_IDENTIFIER_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 CFG_CONSTANT_DIRECTIVES = {"CONSTANT", "CONSTANTS"}
 CFG_CHECK_DIRECTIVES = {"INVARIANT", "INVARIANTS", "PROPERTY", "PROPERTIES"}
 CFG_MISC_DIRECTIVES = {"CHECK_DEADLOCK"}
@@ -3299,6 +3560,101 @@ BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS = (
 )
 BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATIONS = frozenset(
     BYZANTINE_PROGRESS_SAFETY_ONLY_MUTATION_CONTRACTS
+)
+SUMERAGI_PROGRESS_FINALITY_PROPERTY_CONTRACTS = (
+    (
+        SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate.tla",
+        "EventualDirectDeliveredFirstFinalityStack",
+        "DirectDeliveredFirstFinalityStack",
+        (
+            'step = "commit_final"',
+            "ActualCommitted(step)",
+            'ActualPhase(step) = "Committed"',
+            'ActualRbcState(step) = "Delivered"',
+            "ActualChunkCount(step) = 2",
+            "ActualReadyVotes(step) = 3",
+            "ActualHeaderSeen(step)",
+            "ActualDigestValid(step)",
+            "ActualPrepareVotes(step) = 3",
+            "ActualCommitVotes(step) = 3",
+            "ActualStakeSigned(step) = 9",
+            "ActualCommitEvidenceVotes(step) = 3",
+            "ActualCommitEvidenceStake(step) = 9",
+        ),
+        "direct delivered-first progress finality",
+    ),
+    (
+        SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate.tla",
+        "EventualDirectVoteFirstFinalityStack",
+        "DirectVoteFirstFinalityStack",
+        (
+            'step = "deliver_final"',
+            "ActualCommitted(step)",
+            'ActualPhase(step) = "Committed"',
+            'ActualRbcState(step) = "Delivered"',
+            "ActualChunkCount(step) = 2",
+            "ActualReadyVotes(step) = 3",
+            "ActualHeaderSeen(step)",
+            "ActualDigestValid(step)",
+            "ActualPrepareVotes(step) = 3",
+            "ActualCommitVotes(step) = 3",
+            "ActualStakeSigned(step) = 9",
+            "ActualCommitEvidenceVotes(step) = 3",
+            "ActualCommitEvidenceStake(step) = 9",
+        ),
+        "direct vote-first progress finality",
+    ),
+    (
+        SPEC_DIR / "SumeragiDirectCommitInterleavingGate.tla",
+        "EventualDirectCommitFinalityStack",
+        "DirectCommitFinalityStack",
+        (
+            "committed",
+            'phase = "Committed"',
+            "prepareVotes = CommitQuorum",
+            "commitVotes = CommitQuorum",
+            "stakeSigned = StakeQuorum",
+            'rbcState = "Delivered"',
+            "readyVotes = CommitQuorum",
+            "chunkCount = MaxChunks",
+            "headerSeen",
+            "digestValid",
+            "commitEvidenceVotes = CommitQuorum",
+            "commitEvidenceStake = StakeQuorum",
+        ),
+        "direct commit interleaving progress finality",
+    ),
+    (
+        SPEC_DIR / "SumeragiByzantineCommitInterleavingGate.tla",
+        "EventualByzantineCommitFinalityStack",
+        "ByzantineCommitFinalityStack",
+        (
+            "committed",
+            'phase = "Committed"',
+            "prepareVotes = CommitQuorum",
+            "commitVotesHonest + commitVotesByz >= CommitQuorum",
+            "commitVotesHonest >= HonestSupportThreshold",
+            "commitVotesByz <= MaxByzVotes",
+            "stakeSigned = StakeFor(commitVotesHonest, commitVotesByz)",
+            "stakeSigned >= StakeQuorum",
+            'rbcState = "Delivered"',
+            "commitEvidenceVotes = commitVotesHonest + commitVotesByz",
+            "commitEvidenceStake = stakeSigned",
+            "commitEvidenceVotes >= CommitQuorum",
+            "commitEvidenceStake >= StakeQuorum",
+        ),
+        "Byzantine commit interleaving progress finality",
+    ),
+    (
+        SPEC_DIR / "SumeragiByzantineCommitProjectionGate.tla",
+        "EventualProjectedCommitFinalityStack",
+        "ProjectedCommitFinalityStack",
+        (
+            "committed",
+            "ProjectedFinalityCertificateStackPresent",
+        ),
+        "projected commit progress finality",
+    ),
 )
 MUTATION_CFG_CUSTOM_INIT_OPERATOR_CONTRACTS = (
     (
@@ -4025,14 +4381,16 @@ def strict_shell_errors(
     for path in paths:
         lines = read_text(path).splitlines()
         if not lines or lines[0] != "#!/bin/bash":
+            found = lines[0] if lines else "<missing>"
             errors.append(
-                f"formal shell entrypoint {display_path(path)} must start "
-                "with #!/bin/bash"
+                f"formal shell entrypoint {display_path(path)}:1 must start "
+                f"with #!/bin/bash, found {found}"
             )
         if len(lines) < 2 or lines[1] != "set -euo pipefail":
+            found = lines[1] if len(lines) >= 2 else "<missing>"
             errors.append(
-                f"formal shell entrypoint {display_path(path)} must set "
-                "-euo pipefail immediately after the shebang"
+                f"formal shell entrypoint {display_path(path)}:2 must set "
+                f"-euo pipefail immediately after the shebang, found {found}"
             )
     return errors
 
@@ -4377,8 +4735,18 @@ def runner_case_shape_errors(path: Path, runner_name: str) -> list[str]:
         index for index, line in enumerate(lines) if line == 'case "$mode" in'
     ]
     if len(starts) != 1:
+        start_lines = [index + 1 for index in starts]
+        if start_lines:
+            line_context = (
+                " at line "
+                + str(start_lines[0])
+                if len(start_lines) == 1
+                else " at lines " + ", ".join(str(line) for line in start_lines)
+            )
+        else:
+            line_context = ""
         errors.append(
-            f"{runner_name} runner {display_path(path)} declares "
+            f"{runner_name} runner {display_path(path)}{line_context} declares "
             f'{len(starts)} mode case blocks'
         )
         return errors
@@ -4391,7 +4759,8 @@ def runner_case_shape_errors(path: Path, runner_name: str) -> list[str]:
         )
     except StopIteration:
         errors.append(
-            f"{runner_name} runner {display_path(path)} mode case block has no esac"
+            f"{runner_name} runner {display_path(path)}:{start + 1} "
+            "mode case block has no esac"
         )
         return errors
 
@@ -5012,6 +5381,7 @@ def formal_file_path(
     case: RunnerCase,
     variable: str,
     resolved: str,
+    line_number: int,
 ) -> tuple[Path | None, list[str]]:
     candidate = Path(resolved)
     expected_suffix = {"spec_file": ".tla", "cfg_file": ".cfg"}.get(variable)
@@ -5020,6 +5390,7 @@ def formal_file_path(
             None,
             [
                 f"{mode}: {variable} in runner case {case.label!r} "
+                f"line {line_number} "
                 f"must reference a {expected_suffix} file: {resolved}"
             ],
         )
@@ -5028,6 +5399,7 @@ def formal_file_path(
             None,
             [
                 f"{mode}: {variable} in runner case {case.label!r} "
+                f"line {line_number} "
                 f"must reference a flat Sumeragi formal file: {resolved}"
             ],
         )
@@ -5037,6 +5409,7 @@ def formal_file_path(
             None,
             [
                 f"{mode}: {variable} in runner case {case.label!r} "
+                f"line {line_number} "
                 f"escapes Sumeragi formal directory: {resolved}"
             ],
         )
@@ -5048,7 +5421,7 @@ def referenced_files(
     case: RunnerCase,
     required_variables: tuple[str, ...] = ("spec_file", "cfg_file"),
 ) -> tuple[list[Path], list[str]]:
-    assignments: dict[str, list[str]] = {}
+    assignments: dict[str, list[tuple[int, str]]] = {}
     errors: list[str] = []
     for offset, line in enumerate(case.body.splitlines(), 1):
         if PROOF_INPUT_MUTATION_RE.match(line) and ASSIGN_RE.match(line) is None:
@@ -5057,27 +5430,37 @@ def referenced_files(
                 f"{mode}: runner case {case.label!r} line {line_number} "
                 f"has malformed proof-input assignment: {line.strip()}"
             )
-    for variable, value in ASSIGN_RE.findall(case.body):
-        assignments.setdefault(variable, []).append(value)
+    for offset, line in enumerate(case.body.splitlines(), 1):
+        match = ASSIGN_RE.match(line)
+        if match is None:
+            continue
+        line_number = case.line + offset - 1
+        variable = match.group(1)
+        value = match.group(2)
+        assignments.setdefault(variable, []).append((line_number, value))
     files: list[Path] = []
 
     for variable in required_variables:
-        values = assignments.get(variable, [])
-        if len(values) != 1:
+        assignment_values = assignments.get(variable, [])
+        if len(assignment_values) != 1:
+            line_context = assignment_count_context(case, assignment_values)
             errors.append(
-                f"{mode}: runner case {case.label!r} at line {case.line} "
-                f"assigns {variable} {len(values)} times"
+                f"{mode}: runner case {case.label!r} {line_context} "
+                f"assigns {variable} {len(assignment_values)} times"
             )
             continue
-        value = values[0]
+        line_number, value = assignment_values[0]
         resolved = resolve_spec_path(mode, case, value)
         if "$" in resolved or "{" in resolved:
             errors.append(
                 f"{mode}: {variable} in runner case {case.label!r} "
+                f"line {line_number} "
                 f"did not resolve statically: {resolved}"
             )
             continue
-        path, path_errors = formal_file_path(mode, case, variable, resolved)
+        path, path_errors = formal_file_path(
+            mode, case, variable, resolved, line_number
+        )
         errors.extend(path_errors)
         if path is not None:
             files.append(path)
@@ -5125,28 +5508,71 @@ def malformed_scalar_assignment_errors(
     return errors
 
 
+def scalar_assignment_values(
+    case: RunnerCase, assignment_re: re.Pattern[str]
+) -> list[tuple[int, str]]:
+    """Return scalar assignment values with source line numbers."""
+
+    assignments: list[tuple[int, str]] = []
+    for offset, line in enumerate(case.body.splitlines(), 1):
+        match = assignment_re.match(line)
+        if match is None:
+            continue
+        line_number = case.line + offset - 1
+        assignments.append((line_number, match.group(1)))
+    return assignments
+
+
+def assignment_count_context(
+    case: RunnerCase, assignments: list[tuple[int, str]]
+) -> str:
+    """Return line context for zero-or-many assignment diagnostics."""
+
+    if assignments:
+        lines = ", ".join(str(line_number) for line_number, _ in assignments)
+        return f"at lines {lines}"
+    return f"at line {case.line}"
+
+
+def top_level_assignment_count_context(assignments: list[tuple[int, str]]) -> str:
+    """Return line context for top-level assignment-count diagnostics."""
+
+    if not assignments:
+        return ""
+    lines = ", ".join(str(line_number) for line_number, _ in assignments)
+    return f" at lines {lines}"
+
+
 def tlc_module_files(mode: str, case: RunnerCase) -> tuple[list[Path], list[str]]:
     errors = malformed_scalar_assignment_errors(
         mode, case, "module", MODULE_ASSIGN_RE, "TLC runner"
     )
-    modules = MODULE_ASSIGN_RE.findall(case.body)
-    if len(modules) != 1:
+    assignments: list[tuple[int, str]] = []
+    for offset, line in enumerate(case.body.splitlines(), 1):
+        match = MODULE_ASSIGN_RE.match(line)
+        if match is None:
+            continue
+        line_number = case.line + offset - 1
+        assignments.append((line_number, match.group(1)))
+    if len(assignments) != 1:
+        line_context = assignment_count_context(case, assignments)
         return (
             [],
             errors
             + [
-                f"{mode}: TLC runner case {case.label!r} at line {case.line} "
-                f"assigns module {len(modules)} times"
+                f"{mode}: TLC runner case {case.label!r} {line_context} "
+                f"assigns module {len(assignments)} times"
             ],
         )
 
-    module = modules[0]
+    line_number, module = assignments[0]
     if "$" in module or "{" in module or "/" in module:
         return (
             [],
             errors
             + [
                 f"{mode}: module in TLC runner case {case.label!r} "
+                f"line {line_number} "
                 f"did not resolve statically: {module}"
             ],
         )
@@ -5156,6 +5582,7 @@ def tlc_module_files(mode: str, case: RunnerCase) -> tuple[list[Path], list[str]
             errors
             + [
                 f"{mode}: module in TLC runner case {case.label!r} "
+                f"line {line_number} "
                 f"must be a TLA identifier: {module}"
             ],
         )
@@ -5171,20 +5598,28 @@ def tlc_runner_constraint_errors(
     errors = malformed_scalar_assignment_errors(
         mode, case, "tlc_constraint", TLC_CONSTRAINT_ASSIGN_RE, "TLC runner"
     )
-    values = TLC_CONSTRAINT_ASSIGN_RE.findall(case.body)
-    if len(values) > 1:
+    assignments: list[tuple[int, str]] = []
+    for offset, line in enumerate(case.body.splitlines(), 1):
+        match = TLC_CONSTRAINT_ASSIGN_RE.match(line)
+        if match is None:
+            continue
+        line_number = case.line + offset - 1
+        assignments.append((line_number, match.group(1)))
+    if len(assignments) > 1:
+        lines = ", ".join(str(line_number) for line_number, _ in assignments)
         errors.append(
-            f"{mode}: TLC runner case {case.label!r} at line {case.line} "
-            f"assigns tlc_constraint {len(values)} times"
+            f"{mode}: TLC runner case {case.label!r} at lines {lines} "
+            f"assigns tlc_constraint {len(assignments)} times"
         )
         return errors
-    if len(values) == 0:
+    if len(assignments) == 0:
         return errors
 
-    constraint = values[0]
+    line_number, constraint = assignments[0]
     if not TLA_IDENTIFIER_RE.match(constraint):
         errors.append(
             f"{mode}: tlc_constraint in TLC runner case {case.label!r} "
+            f"line {line_number} "
             f"does not name a static TLA operator: {constraint}"
         )
         return errors
@@ -5196,9 +5631,10 @@ def tlc_runner_constraint_errors(
         if signature is not None and signature[1] != 0:
             definition_line, arity = signature
             errors.append(
-                f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
-                f"{constraint}, but {display_path(module_path)}:{definition_line} "
-                f"defines it with arity {arity}; TLC runner constraints must "
+                f"{mode}: TLC runner case {case.label!r} line {line_number} "
+                f"appends CONSTRAINT {constraint}, but "
+                f"{display_path(module_path)}:{definition_line} defines it "
+                f"with arity {arity}; TLC runner constraints must "
                 "target zero-arity operators"
             )
             return errors
@@ -5212,16 +5648,18 @@ def tlc_runner_constraint_errors(
         value = chain[-1][2]
         if len(chain) == 1 and value in {"TRUE", "FALSE"}:
             errors.append(
-                f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
-                f"{constraint}, but {display_path(module_path)}:{definition_line} "
-                f"defines it as literal {value}"
+                f"{mode}: TLC runner case {case.label!r} line {line_number} "
+                f"appends CONSTRAINT {constraint}, but "
+                f"{display_path(module_path)}:{definition_line} defines it "
+                f"as literal {value}"
             )
             return errors
         if len(chain) == 1 and value == "TypeInvariant":
             errors.append(
-                f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
-                f"{constraint}, but {display_path(module_path)}:{definition_line} "
-                "aliases TypeInvariant directly"
+                f"{mode}: TLC runner case {case.label!r} line {line_number} "
+                f"appends CONSTRAINT {constraint}, but "
+                f"{display_path(module_path)}:{definition_line} aliases "
+                "TypeInvariant directly"
             )
             return errors
 
@@ -5234,14 +5672,16 @@ def tlc_runner_constraint_errors(
         else:
             terminal = value
         errors.append(
-            f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
-            f"{constraint}, but {chain_text} resolves to {terminal}"
+            f"{mode}: TLC runner case {case.label!r} line {line_number} "
+            f"appends CONSTRAINT {constraint}, but {chain_text} resolves "
+            f"to {terminal}"
         )
         return errors
 
     errors.append(
-        f"{mode}: TLC runner case {case.label!r} appends CONSTRAINT "
-        f"{constraint}, but {display_path(module_path)} does not define it"
+        f"{mode}: TLC runner case {case.label!r} line {line_number} "
+        f"appends CONSTRAINT {constraint}, but {display_path(module_path)} "
+        "does not define it"
     )
     return errors
 
@@ -5277,30 +5717,33 @@ def tlc_runner_constraint_contract_errors(
         )
 
     for case in case_list:
-        values = TLC_CONSTRAINT_ASSIGN_RE.findall(case.body)
+        assignments = scalar_assignment_values(case, TLC_CONSTRAINT_ASSIGN_RE)
         expected = case.label in expected_labels
         if expected:
-            if not values:
+            if not assignments:
                 errors.append(
-                    f"TLC runner case {case.label!r} must assign "
+                    f"TLC runner case {case.label!r} at line {case.line} "
+                    "must assign "
                     f'tlc_constraint="{singleton_constraint}" for documented '
                     "singleton-or-empty state-space splitting"
                 )
                 continue
-            for value in values:
+            for line_number, value in assignments:
                 if value == singleton_constraint:
                     continue
                 errors.append(
-                    f"TLC runner case {case.label!r} assigns "
+                    f"TLC runner case {case.label!r} line {line_number} "
+                    "assigns "
                     f'tlc_constraint="{value}", expected '
                     f'"{singleton_constraint}" for documented '
                     "singleton-or-empty state-space splitting"
                 )
             continue
 
-        for value in values:
+        for line_number, value in assignments:
             errors.append(
-                f"TLC runner case {case.label!r} assigns undocumented "
+                f"TLC runner case {case.label!r} line {line_number} "
+                "assigns undocumented "
                 f'tlc_constraint="{value}"; only documented '
                 "singleton-or-empty families may narrow TLC state space"
             )
@@ -5314,18 +5757,29 @@ def apalache_length_value(
     errors = malformed_scalar_assignment_errors(
         mode, case, "apalache_length", APALACHE_LENGTH_ASSIGN_RE, "runner"
     )
-    values = APALACHE_LENGTH_ASSIGN_RE.findall(case.body)
-    if len(values) != 1:
+    assignments: list[tuple[int, str]] = []
+    for offset, line in enumerate(case.body.splitlines(), 1):
+        match = APALACHE_LENGTH_ASSIGN_RE.match(line)
+        if match is None:
+            continue
+        line_number = case.line + offset - 1
+        assignments.append((line_number, match.group(1)))
+    if len(assignments) != 1:
+        if assignments:
+            lines = ", ".join(str(line_number) for line_number, _ in assignments)
+            line_context = f"at lines {lines}"
+        else:
+            line_context = f"at line {case.line}"
         return (
             None,
             errors
             + [
-                f"{mode}: runner case {case.label!r} at line {case.line} "
-                f"assigns apalache_length {len(values)} times"
+                f"{mode}: runner case {case.label!r} {line_context} "
+                f"assigns apalache_length {len(assignments)} times"
             ],
         )
 
-    value = values[0]
+    line_number, value = assignments[0]
     try:
         length = int(value)
     except ValueError:
@@ -5334,6 +5788,7 @@ def apalache_length_value(
             errors
             + [
                 f"{mode}: apalache_length in runner case {case.label!r} "
+                f"line {line_number} "
                 f"is not a non-negative integer: {value}"
             ],
         )
@@ -5343,6 +5798,7 @@ def apalache_length_value(
             errors
             + [
                 f"{mode}: apalache_length in runner case {case.label!r} "
+                f"line {line_number} "
                 f"is not a non-negative integer: {value}"
             ],
         )
@@ -8939,15 +9395,23 @@ def implication_antecedent_contract_errors(
 
 def byzantine_top_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "Sumeragi.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
+    implication_contracts: dict[str, str] | tuple[tuple[str, str], ...] = (
+        SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACT_ROWS
+    ),
 ) -> list[str]:
     """Return errors for top-level Byzantine corridor aggregate proof drift."""
 
+    implication_operators = frozenset(
+        operator for operator, _ in implication_contract_items(implication_contracts)
+    )
     errors = consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_BYZANTINE_TOP_CONJUNCT_CONTRACTS,
-        allow_non_named_conjunct_operators=frozenset(
-            SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACTS
-        ),
+        contracts,
+        allow_non_named_conjunct_operators=implication_operators,
         root_kind="top-level Byzantine direct-commit aggregate",
         zero_arity_requirement=(
             "top-level Byzantine direct-commit aggregate operators must be "
@@ -8965,7 +9429,7 @@ def byzantine_top_conjunct_contract_errors(
     errors.extend(
         implication_antecedent_contract_errors(
             module_path,
-            SUMERAGI_BYZANTINE_TOP_IMPLICATION_CONTRACT_ROWS,
+            implication_contracts,
             "Byzantine top implication antecedent contract",
         )
     )
@@ -9657,18 +10121,27 @@ def projected_commit_progress_contract_alignment_errors(
     return errors
 
 
-def tla_wf_vars_operands(body: str) -> tuple[str, ...]:
-    """Return operands referenced by WF_vars clauses."""
+def tla_wf_vars_operand_occurrences(
+    body_lines: tuple[tuple[int, str], ...],
+) -> tuple[tuple[str, int], ...]:
+    """Return operands and source lines referenced by WF_vars clauses."""
 
-    comment_free_body = "\n".join(
-        tla_line_without_comment_or_strings(line) for line in body.splitlines()
+    comment_free_lines = tuple(
+        (line_number, tla_line_without_comment_or_strings(line))
+        for line_number, line in body_lines
     )
-    operands: list[str] = []
+    comment_free_body = "\n".join(line for _line_number, line in comment_free_lines)
+    offset_lines: list[int] = []
+    for line_number, line in comment_free_lines:
+        offset_lines.extend([line_number] * len(line))
+        offset_lines.append(line_number)
+    operands: list[tuple[str, int]] = []
     index = 0
     while True:
         match = TLA_WF_VARS_START_RE.search(comment_free_body, index)
         if match is None:
             break
+        line_number = offset_lines[match.start()]
         open_index = match.end() - 1
         close_index = tla_delimited_expression_end(
             comment_free_body,
@@ -9677,11 +10150,100 @@ def tla_wf_vars_operands(body: str) -> tuple[str, ...]:
             ")",
         )
         if close_index is None:
-            operands.append(comment_free_body[open_index + 1 :].strip())
+            operands.append((comment_free_body[open_index + 1 :].strip(), line_number))
             break
-        operands.append(comment_free_body[open_index + 1 : close_index].strip())
+        operands.append(
+            (comment_free_body[open_index + 1 : close_index].strip(), line_number)
+        )
         index = close_index + 1
     return tuple(operands)
+
+
+def tla_wf_vars_operands(body: str) -> tuple[str, ...]:
+    """Return operands referenced by WF_vars clauses."""
+
+    return tuple(
+        operand
+        for operand, _line_number in tla_wf_vars_operand_occurrences(
+            tuple(
+                (line_number, line)
+                for line_number, line in enumerate(body.splitlines(), 1)
+            )
+        )
+    )
+
+
+def line_number_context(line_numbers: list[int] | tuple[int, ...]) -> str:
+    """Return a compact source-line description."""
+
+    unique_lines = tuple(dict.fromkeys(line_numbers))
+    if len(unique_lines) == 1:
+        return f"line {unique_lines[0]}"
+    return "lines " + ", ".join(str(line_number) for line_number in unique_lines)
+
+
+def named_items_with_line_context(
+    items: list[str] | tuple[str, ...],
+    item_lines: dict[str, list[int]],
+) -> str:
+    """Return named items annotated with source-line context."""
+
+    return ", ".join(
+        f"{item} at {line_number_context(item_lines[item])}" for item in items
+    )
+
+
+def direct_conjunct_occurrence_count(body: str, expected_conjunct: str) -> int:
+    """Return how often an exact expression appears as a direct conjunct."""
+
+    compact_expected = "".join(expected_conjunct.split())
+    return sum(
+        1
+        for conjunct in tla_top_level_conjuncts(body)
+        if "".join(strip_static_outer_parentheses(conjunct).split())
+        == compact_expected
+    )
+
+
+def direct_wf_vars_conjunct_operand(conjunct: str) -> str | None:
+    """Return the operand when a direct conjunct is exactly WF_vars(...)."""
+
+    normalized = strip_static_outer_parentheses(" ".join(conjunct.split()))
+    match = TLA_WF_VARS_START_RE.match(normalized)
+    if match is None:
+        return None
+    open_index = match.end() - 1
+    close_index = tla_delimited_expression_end(normalized, open_index, "(", ")")
+    if close_index is None or normalized[close_index + 1 :].strip():
+        return None
+    return normalized[open_index + 1 : close_index].strip()
+
+
+def unexpected_progress_spec_direct_non_named_conjuncts(
+    body: str,
+    next_closure: str,
+    fairness_operator: str,
+) -> list[str]:
+    """Return direct progress-spec conjuncts outside the documented shape."""
+
+    compact_next_closure = "".join(next_closure.split())
+    expected_named_conjuncts = {"Init", fairness_operator}
+    unexpected: list[str] = []
+    for conjunct in tla_top_level_conjuncts(body):
+        normalized = " ".join(strip_static_outer_parentheses(conjunct).split())
+        if normalized in expected_named_conjuncts:
+            continue
+        if "".join(normalized.split()) == compact_next_closure:
+            continue
+        if direct_wf_vars_conjunct_operand(conjunct) is not None:
+            continue
+        if (
+            TLA_IDENTIFIER_RE.fullmatch(normalized)
+            and is_tla_user_identifier(normalized)
+        ):
+            continue
+        unexpected.append(normalized or "<empty>")
+    return unexpected
 
 
 def normalized_wf_vars_action_operand(operand: str) -> str | None:
@@ -9691,6 +10253,4689 @@ def normalized_wf_vars_action_operand(operand: str) -> str | None:
     if TLA_IDENTIFIER_RE.fullmatch(normalized) and is_tla_user_identifier(normalized):
         return normalized
     return None
+
+
+def tla_module_operator_alias(expression: str) -> tuple[str, str] | None:
+    """Return a static Module!Operator alias, if the expression is one."""
+
+    normalized = strip_static_outer_parentheses(" ".join(expression.split()))
+    match = TLA_MODULE_OPERATOR_ALIAS_RE.fullmatch(normalized)
+    if match is None:
+        return None
+    module_name, operator_name = match.groups()
+    if not (
+        is_tla_user_identifier(module_name)
+        and is_tla_user_identifier(operator_name)
+    ):
+        return None
+    return module_name, operator_name
+
+
+def tla_user_identifier_alias(expression: str) -> str | None:
+    """Return a static local operator alias, if the expression is one."""
+
+    normalized = strip_static_outer_parentheses(" ".join(expression.split()))
+    if TLA_IDENTIFIER_RE.fullmatch(normalized) and is_tla_user_identifier(
+        normalized
+    ):
+        return normalized
+    return None
+
+
+def tla_module_operator_conjunct_aliases(expression: str) -> list[tuple[str, str]]:
+    """Return Module!Operator aliases used as direct conjunction parts."""
+
+    aliases: list[tuple[str, str]] = []
+    conjuncts = tla_top_level_conjuncts(expression)
+    if len(conjuncts) <= 1:
+        return aliases
+    for conjunct in conjuncts:
+        alias = tla_module_operator_alias(conjunct)
+        if alias is not None:
+            aliases.append(alias)
+    return aliases
+
+
+def tla_module_operator_boolean_aliases(expression: str) -> list[tuple[str, str]]:
+    """Return Module!Operator aliases hidden below boolean structure."""
+
+    aliases: list[tuple[str, str]] = []
+
+    def record(alias: tuple[str, str]) -> None:
+        if alias not in aliases:
+            aliases.append(alias)
+
+    def collect(current: str, hidden: bool = False) -> None:
+        normalized = strip_static_outer_parentheses(" ".join(current.split()))
+        if not normalized:
+            return
+        alias = tla_module_operator_alias(normalized)
+        if alias is not None:
+            if hidden:
+                record(alias)
+            return
+
+        negated_operand = tla_static_negation_operand(normalized)
+        if negated_operand is not None:
+            collect(negated_operand, True)
+            return
+
+        conjuncts = tla_top_level_conjuncts(normalized)
+        if len(conjuncts) > 1:
+            for conjunct in conjuncts:
+                collect(conjunct, hidden)
+            return
+
+        for parts in (
+            tla_top_level_disjuncts(normalized),
+            tla_top_level_implication_operands(normalized),
+            tla_top_level_equivalence_operands(normalized),
+        ):
+            if len(parts) > 1:
+                for part in parts:
+                    collect(part, True)
+                return
+
+    collect(expression)
+    return aliases
+
+
+def tla_expression_mentions_next_state_marker(expression: str) -> bool:
+    """Return whether an expression mentions next-state or unchanged state."""
+
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(expression):
+        char = expression[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if char == "'":
+            return True
+        match = TLA_IDENTIFIER_TOKEN_RE.match(expression, index)
+        if match is not None:
+            if match.group(0) == "UNCHANGED":
+                return True
+            index = match.end()
+            continue
+        index += 1
+    return False
+
+
+def tla_expression_mentions_temporal_or_next_state_marker(expression: str) -> bool:
+    """Return whether an expression mentions temporal/action-only syntax."""
+
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(expression):
+        char = expression[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if char == "'":
+            return True
+        if expression.startswith("[]", index) or expression.startswith("<>", index):
+            return True
+        match = TLA_IDENTIFIER_TOKEN_RE.match(expression, index)
+        if match is not None:
+            token = match.group(0)
+            if (
+                token in {"UNCHANGED", "ENABLED"}
+                or token.startswith("WF_")
+                or token.startswith("SF_")
+            ):
+                return True
+            index = match.end()
+            continue
+        index += 1
+    return False
+
+
+def fairness_action_definition_is_action_shaped(body: str) -> bool:
+    """Return whether a fair action definition has transition-action shape."""
+
+    return (
+        tla_module_operator_alias(body) is not None
+        or tla_expression_mentions_next_state_marker(body)
+    )
+
+
+def fairness_action_boolean_hidden_fair_actions(
+    body: str,
+    expected_action_set: set[str],
+) -> list[str]:
+    """Return expected fair actions hidden outside direct conjunction parts."""
+
+    direct_conjuncts = set(tla_zero_arity_conjunct_references(body))
+    fair_actions: list[str] = []
+    for reference in tla_zero_arity_boolean_references(body):
+        if reference not in expected_action_set or reference in direct_conjuncts:
+            continue
+        if reference not in fair_actions:
+            fair_actions.append(reference)
+    return fair_actions
+
+
+def fairness_action_helper_entry_references(body: str) -> list[str]:
+    """Return helper references visible from a fair-action definition body."""
+
+    references: list[str] = []
+    seen: set[str] = set()
+    for reference in (
+        tla_zero_arity_conjunct_references(body)
+        + tla_zero_arity_boolean_references(body)
+    ):
+        if reference in seen:
+            continue
+        seen.add(reference)
+        references.append(reference)
+    return references
+
+
+def fairness_action_helper_reference_resolution_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_body: str,
+    action_reference_lines: list[int],
+    expected_action_set: set[str],
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return resolution errors for local fair-action helper references."""
+
+    signatures = tla_operator_signatures(module_path)
+    definitions = tla_single_expression_operator_definitions(module_path)
+    errors: list[str] = []
+
+    def collect(
+        reference: str,
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        if reference in expected_action_set:
+            return
+        key = (module_path, reference)
+        if key in current_seen:
+            return
+        signature = signatures.get(reference)
+        if signature is None:
+            return
+        helper_line, helper_arity = signature
+        if helper_arity != 0:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} reaches helper "
+                f"{reference} at {display_path(module_path)}:{helper_line}, "
+                f"but helper has arity {helper_arity}; {root_kind} fairness "
+                "action helper references must resolve to defined zero-arity "
+                "helper definitions"
+            )
+            return
+        definition = definitions.get(reference)
+        if definition is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} reaches helper "
+                f"{reference} at {display_path(module_path)}:{helper_line}, "
+                "but helper is not an inspectable single-expression "
+                f"definition; {root_kind} fairness action helper references "
+                "must resolve to inspectable helper definitions"
+            )
+            return
+
+        _definition_line, helper_body = definition
+        if tla_module_operator_alias(helper_body) is not None:
+            return
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+
+        next_seen = current_seen | frozenset({key})
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            collect(nested_reference, next_seen)
+
+    for reference in fairness_action_helper_entry_references(action_body):
+        collect(reference, seen)
+    return errors
+
+
+def fairness_action_helper_wrapped_fair_actions(
+    module_path: Path,
+    body: str,
+    expected_action_set: set[str],
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return expected fair actions hidden behind static helper wrappers."""
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    fair_actions: list[str] = []
+
+    def record(action: str) -> None:
+        if action not in fair_actions:
+            fair_actions.append(action)
+
+    def collect(reference: str, current_seen: frozenset[tuple[Path, str]]) -> None:
+        key = (module_path, reference)
+        if key in current_seen:
+            return
+        signature = signatures.get(reference)
+        if signature is None or signature[1] != 0:
+            return
+        definition = definitions.get(reference)
+        if definition is None:
+            return
+        _line, reference_body = definition
+        if tla_module_operator_alias(reference_body) is not None:
+            return
+        if tla_expression_mentions_temporal_or_next_state_marker(reference_body):
+            return
+
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(reference_body)
+            + tla_zero_arity_boolean_references(reference_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        next_seen = current_seen | frozenset({key})
+        for nested_reference in nested_references:
+            if nested_reference in expected_action_set:
+                record(nested_reference)
+            else:
+                collect(nested_reference, next_seen)
+
+    for reference in fairness_action_helper_entry_references(body):
+        if reference not in expected_action_set:
+            collect(reference, seen)
+
+    return fair_actions
+
+
+def fairness_action_helper_wrapper_cycle_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_body: str,
+    action_reference_lines: list[int],
+    expected_action_set: set[str],
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return cycle errors for static fair-action helper wrappers."""
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    errors: list[str] = []
+
+    def collect(reference: str, current_seen: frozenset[tuple[Path, str]]) -> None:
+        key = (module_path, reference)
+        signature = signatures.get(reference)
+        if signature is None or signature[1] != 0:
+            return
+        definition = definitions.get(reference)
+        if definition is None:
+            return
+        helper_line, helper_body = definition
+        if key in current_seen:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} reaches helper "
+                f"{reference} at {display_path(module_path)}:{helper_line}, "
+                f"but fairness helper wrapper resolution cycles at "
+                f"{reference}; {root_kind} fairness action helper wrappers "
+                "must be acyclic and resolve to inspectable helper "
+                "definitions"
+            )
+            return
+
+        if tla_module_operator_alias(helper_body) is not None:
+            return
+        if tla_expression_mentions_temporal_or_next_state_marker(helper_body):
+            return
+
+        next_seen = current_seen | frozenset({key})
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            if nested_reference in expected_action_set:
+                continue
+            collect(nested_reference, next_seen)
+
+    for reference in fairness_action_helper_entry_references(action_body):
+        if reference not in expected_action_set:
+            collect(reference, seen)
+    return errors
+
+
+def fairness_action_helper_action_fair_actions(
+    module_path: Path,
+    body: str,
+    expected_action_set: set[str],
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return expected fair actions hidden behind action-shaped helpers."""
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    fair_actions: list[str] = []
+
+    def record(action: str) -> None:
+        if action not in fair_actions:
+            fair_actions.append(action)
+
+    def collect(
+        reference: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_action_helper: bool,
+    ) -> None:
+        key = (module_path, reference)
+        if key in current_seen:
+            return
+        signature = signatures.get(reference)
+        if signature is None or signature[1] != 0:
+            return
+        definition = definitions.get(reference)
+        if definition is None:
+            return
+        _line, reference_body = definition
+        if tla_module_operator_alias(reference_body) is not None:
+            return
+        if tla_expression_mentions_fairness_or_temporal_marker(reference_body):
+            return
+
+        next_seen = current_seen | frozenset({key})
+        next_through_action = (
+            through_action_helper
+            or tla_expression_mentions_next_state_marker(reference_body)
+        )
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(reference_body)
+            + tla_zero_arity_boolean_references(reference_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            if nested_reference in expected_action_set:
+                if next_through_action:
+                    record(nested_reference)
+            else:
+                collect(nested_reference, next_seen, next_through_action)
+
+    for reference in fairness_action_helper_entry_references(body):
+        if reference not in expected_action_set:
+            collect(reference, seen, False)
+
+    return fair_actions
+
+
+def fairness_action_helper_action_cycle_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_body: str,
+    action_reference_lines: list[int],
+    expected_action_set: set[str],
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return cycle errors for action-shaped fair-action helpers."""
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    signatures = tla_operator_signatures(module_path)
+    errors: list[str] = []
+
+    def collect(
+        reference: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_action_helper: bool,
+    ) -> None:
+        key = (module_path, reference)
+        signature = signatures.get(reference)
+        if signature is None or signature[1] != 0:
+            return
+        definition = definitions.get(reference)
+        if definition is None:
+            return
+        helper_line, helper_body = definition
+        if key in current_seen:
+            if through_action_helper:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} reaches helper "
+                    f"{reference} at {display_path(module_path)}:{helper_line}, "
+                    "but fairness action helper resolution cycles at "
+                    f"{reference}; {root_kind} fairness action helper "
+                    "actions must be acyclic and resolve to inspectable "
+                    "helper definitions"
+                )
+            return
+
+        if tla_module_operator_alias(helper_body) is not None:
+            return
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+
+        next_seen = current_seen | frozenset({key})
+        next_through_action = (
+            through_action_helper
+            or tla_expression_mentions_next_state_marker(helper_body)
+        )
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            if nested_reference in expected_action_set:
+                continue
+            collect(nested_reference, next_seen, next_through_action)
+
+    for reference in fairness_action_helper_entry_references(action_body):
+        if reference not in expected_action_set:
+            collect(reference, seen, False)
+    return errors
+
+
+def fairness_action_helper_alias_fair_actions(
+    module_path: Path,
+    body: str,
+    expected_action_set: set[str],
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return expected fair actions hidden behind helper module aliases."""
+
+    fair_actions: list[str] = []
+
+    def record(action: str) -> None:
+        if action not in fair_actions:
+            fair_actions.append(action)
+
+    def collect_body(
+        current_path: Path,
+        current_body: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_helper_alias: bool,
+    ) -> None:
+        alias = tla_module_operator_alias(current_body)
+        if alias is not None:
+            alias_name, target_operator = alias
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                return
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                return
+            collect_operator(
+                target_path,
+                target_operator,
+                current_seen,
+                True,
+            )
+            return
+
+        if tla_expression_mentions_fairness_or_temporal_marker(current_body):
+            return
+
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(current_body)
+            + tla_zero_arity_boolean_references(current_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            if nested_reference in expected_action_set:
+                if through_helper_alias:
+                    record(nested_reference)
+            else:
+                collect_operator(
+                    current_path,
+                    nested_reference,
+                    current_seen,
+                    through_helper_alias,
+                )
+
+    def collect_operator(
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_helper_alias: bool,
+    ) -> None:
+        key = (current_path, operator)
+        if key in current_seen:
+            return
+        if operator in expected_action_set:
+            if through_helper_alias:
+                record(operator)
+            return
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return
+        _line, operator_body = definition
+        collect_body(
+            current_path,
+            operator_body,
+            current_seen | frozenset({key}),
+            through_helper_alias,
+        )
+
+    for reference in fairness_action_helper_entry_references(body):
+        if reference not in expected_action_set:
+            collect_operator(module_path, reference, seen, False)
+
+    return fair_actions
+
+
+def fairness_action_helper_alias_cycle_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_body: str,
+    action_reference_lines: list[int],
+    expected_action_set: set[str],
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return cycle errors for helper chains that traverse module aliases."""
+
+    errors: list[str] = []
+
+    def collect_body(
+        current_path: Path,
+        current_body: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_helper_alias: bool,
+    ) -> None:
+        alias = tla_module_operator_alias(current_body)
+        if alias is not None:
+            alias_name, target_operator = alias
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                return
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                return
+            collect_operator(
+                target_path,
+                target_operator,
+                current_seen,
+                True,
+            )
+            return
+
+        if tla_expression_mentions_fairness_or_temporal_marker(current_body):
+            return
+
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(current_body)
+            + tla_zero_arity_boolean_references(current_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            if nested_reference in expected_action_set:
+                continue
+            collect_operator(
+                current_path,
+                nested_reference,
+                current_seen,
+                through_helper_alias,
+            )
+
+    def collect_operator(
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_helper_alias: bool,
+    ) -> None:
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return
+        helper_line, operator_body = definition
+        key = (current_path, operator)
+        if key in current_seen:
+            if through_helper_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} reaches helper "
+                    f"{operator} at {display_path(current_path)}:{helper_line}, "
+                    "but fairness helper alias resolution cycles at "
+                    f"{operator}; {root_kind} fairness action helper "
+                    "aliases must be acyclic and resolve to inspectable "
+                    "helper definitions"
+                )
+            return
+        collect_body(
+            current_path,
+            operator_body,
+            current_seen | frozenset({key}),
+            through_helper_alias,
+        )
+
+    for reference in fairness_action_helper_entry_references(action_body):
+        if reference not in expected_action_set:
+            collect_operator(module_path, reference, seen, False)
+    return errors
+
+
+def fairness_action_helper_alias_resolution_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_body: str,
+    action_reference_lines: list[int],
+    expected_action_set: set[str],
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return resolution errors for local helpers that alias module operators."""
+
+    errors: list[str] = []
+
+    def collect_operator(
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_helper_alias: bool,
+    ) -> None:
+        key = (current_path, operator)
+        if key in current_seen or operator in expected_action_set:
+            return
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None:
+            return
+        helper_line, helper_arity = signature
+        if helper_arity != 0:
+            if through_helper_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} reaches helper "
+                    f"{operator} at {display_path(current_path)}:{helper_line}, "
+                    f"but helper has arity {helper_arity}; {root_kind} "
+                    "fairness action helper aliases must resolve imported "
+                    "helper references to defined zero-arity helper definitions"
+                )
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            if through_helper_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} reaches helper "
+                    f"{operator} at {display_path(current_path)}:{helper_line}, "
+                    "but helper is not an inspectable single-expression "
+                    f"definition; {root_kind} fairness action helper aliases "
+                    "must resolve imported helper references to inspectable "
+                    "helper definitions"
+                )
+            return
+        helper_line, helper_body = definition
+
+        alias = tla_module_operator_alias(helper_body)
+        if alias is not None:
+            alias_name, target_operator = alias
+            target_label = f"{alias_name}!{target_operator}"
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} reaches helper "
+                    f"{operator} at {display_path(current_path)}:{helper_line} "
+                    f"aliasing {target_label} without a named INSTANCE alias "
+                    f"{alias_name}; {root_kind} fairness action helper "
+                    "aliases must resolve through named local INSTANCE "
+                    "declarations"
+                )
+                return
+
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} reaches helper "
+                    f"{operator} at {display_path(current_path)}:{helper_line} "
+                    f"aliasing {target_label}, but target module "
+                    f"{display_path(target_path)} does not exist; {root_kind} "
+                    "fairness action helper aliases must resolve to local "
+                    "action modules"
+                )
+                return
+
+            target_signature = tla_operator_signatures(target_path).get(
+                target_operator
+            )
+            if target_signature is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} reaches helper "
+                    f"{operator} at {display_path(current_path)}:{helper_line} "
+                    f"aliasing {target_label}, but target "
+                    f"{display_path(target_path)} does not define "
+                    f"{target_operator}; {root_kind} fairness action helper "
+                    "aliases must resolve to defined zero-arity actions"
+                )
+                return
+
+            target_line, target_arity = target_signature
+            if target_arity != 0:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} reaches helper "
+                    f"{operator} at {display_path(current_path)}:{helper_line} "
+                    f"aliasing {target_label}, but target "
+                    f"{display_path(target_path)}:{target_line} has arity "
+                    f"{target_arity}; {root_kind} fairness action helper "
+                    "aliases must resolve to defined zero-arity actions"
+                )
+                return
+
+            collect_operator(
+                target_path,
+                target_operator,
+                current_seen | frozenset({key}),
+                True,
+            )
+            return
+
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+
+        next_seen = current_seen | frozenset({key})
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            collect_operator(
+                current_path,
+                nested_reference,
+                next_seen,
+                through_helper_alias,
+            )
+
+    for reference in fairness_action_helper_entry_references(action_body):
+        collect_operator(module_path, reference, seen, False)
+    return errors
+
+
+def fairness_action_module_alias_conjunct_fair_actions(
+    module_path: Path,
+    body: str,
+    expected_action_set: set[str],
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return expected fair actions hidden behind Module!Operator conjuncts."""
+
+    fair_actions: list[str] = []
+
+    def record(action: str) -> None:
+        if action not in fair_actions:
+            fair_actions.append(action)
+
+    def collect_operator(
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_module_alias: bool,
+    ) -> None:
+        key = (current_path, operator)
+        if key in current_seen:
+            return
+        if operator in expected_action_set:
+            if through_module_alias:
+                record(operator)
+            return
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return
+        _line, operator_body = definition
+        collect_body(
+            current_path,
+            operator_body,
+            current_seen | frozenset({key}),
+            through_module_alias,
+        )
+
+    def collect_body(
+        current_path: Path,
+        current_body: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_module_alias: bool,
+    ) -> None:
+        if tla_expression_mentions_fairness_or_temporal_marker(current_body):
+            return
+
+        direct_alias = tla_module_operator_alias(current_body)
+        if direct_alias is not None and through_module_alias:
+            alias_name, target_operator = direct_alias
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                return
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                return
+            collect_operator(
+                target_path,
+                target_operator,
+                current_seen,
+                True,
+            )
+            return
+
+        module_aliases = tla_module_operator_conjunct_aliases(current_body)
+        if through_module_alias:
+            module_aliases += tla_module_operator_boolean_aliases(current_body)
+        for alias_name, target_operator in module_aliases:
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                continue
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                continue
+            collect_operator(
+                target_path,
+                target_operator,
+                current_seen,
+                True,
+            )
+
+        nested_references = tla_zero_arity_conjunct_references(current_body)
+        if through_module_alias:
+            nested_references += tla_zero_arity_boolean_references(current_body)
+        seen_nested: set[str] = set()
+        for nested_reference in nested_references:
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            if nested_reference in expected_action_set:
+                if through_module_alias:
+                    record(nested_reference)
+            else:
+                collect_operator(
+                    current_path,
+                    nested_reference,
+                    current_seen,
+                    through_module_alias,
+                )
+
+    collect_body(module_path, body, seen, False)
+    return fair_actions
+
+
+def fairness_action_module_alias_boolean_fair_actions(
+    module_path: Path,
+    body: str,
+    expected_action_set: set[str],
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return fair actions hidden behind Module!Operator boolean operands."""
+
+    fair_actions: list[str] = []
+
+    def record(action: str) -> None:
+        if action not in fair_actions:
+            fair_actions.append(action)
+
+    def collect_operator(
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        key = (current_path, operator)
+        if key in current_seen:
+            return
+        if operator in expected_action_set:
+            record(operator)
+            return
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return
+        _line, operator_body = definition
+        if tla_expression_mentions_fairness_or_temporal_marker(operator_body):
+            return
+        next_seen = current_seen | frozenset({key})
+
+        direct_alias = tla_module_operator_alias(operator_body)
+        if direct_alias is not None:
+            alias_name, target_operator = direct_alias
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                return
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                return
+            collect_operator(target_path, target_operator, next_seen)
+            return
+
+        for alias_name, target_operator in (
+            tla_module_operator_conjunct_aliases(operator_body)
+            + tla_module_operator_boolean_aliases(operator_body)
+        ):
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                continue
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                continue
+            collect_operator(target_path, target_operator, next_seen)
+
+        for reference in tla_zero_arity_boolean_references(operator_body):
+            if reference in expected_action_set:
+                record(reference)
+            else:
+                collect_operator(current_path, reference, next_seen)
+
+    for alias_name, target_operator in tla_module_operator_boolean_aliases(body):
+        instance = tla_instance_alias_modules(module_path).get(alias_name)
+        if instance is None:
+            continue
+        _alias_line, target_module = instance
+        target_path = module_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            continue
+        collect_operator(target_path, target_operator, seen)
+
+    return fair_actions
+
+
+def fairness_action_module_alias_cycle_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_body: str,
+    action_reference_lines: list[int],
+    expected_action_set: set[str],
+    root_kind: str,
+) -> list[str]:
+    """Return cycle errors for module-alias operands in fair actions."""
+
+    errors: list[str] = []
+
+    def report_cycle(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        operator: str,
+        operator_line: int,
+    ) -> None:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} uses {operand_kind} "
+            f"{root_label}, but {operand_kind} resolution cycles at "
+            f"{display_path(current_path)}:{operator_line} {operator}; "
+            f"{root_kind} fairness action {requirement_label} must be "
+            "acyclic and resolve to inspectable action modules"
+        )
+
+    def collect_conjunct_body(
+        root_label: str,
+        current_path: Path,
+        current_body: str,
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        if tla_expression_mentions_fairness_or_temporal_marker(current_body):
+            return
+
+        direct_alias = tla_module_operator_alias(current_body)
+        if direct_alias is not None:
+            alias_name, target_operator = direct_alias
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                return
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                return
+            collect_conjunct_operator(
+                root_label,
+                target_path,
+                target_operator,
+                current_seen,
+            )
+            return
+
+        for alias_name, target_operator in (
+            tla_module_operator_conjunct_aliases(current_body)
+            + tla_module_operator_boolean_aliases(current_body)
+        ):
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                continue
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                continue
+            collect_conjunct_operator(
+                root_label,
+                target_path,
+                target_operator,
+                current_seen,
+            )
+
+        nested_references = (
+            tla_zero_arity_conjunct_references(current_body)
+            + tla_zero_arity_boolean_references(current_body)
+        )
+        seen_nested: set[str] = set()
+        for nested_reference in nested_references:
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            if nested_reference in expected_action_set:
+                continue
+            collect_conjunct_operator(
+                root_label,
+                current_path,
+                nested_reference,
+                current_seen,
+            )
+
+    def collect_conjunct_operator(
+        root_label: str,
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return
+        operator_line, operator_body = definition
+        key = (current_path, operator)
+        if key in current_seen:
+            report_cycle(
+                root_label,
+                "module-alias conjunct",
+                "module-alias conjuncts",
+                current_path,
+                operator,
+                operator_line,
+            )
+            return
+        collect_conjunct_body(
+            root_label,
+            current_path,
+            operator_body,
+            current_seen | frozenset({key}),
+        )
+
+    def collect_boolean_operator(
+        root_label: str,
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return
+        operator_line, operator_body = definition
+        key = (current_path, operator)
+        if key in current_seen:
+            report_cycle(
+                root_label,
+                "module-alias boolean operand",
+                "module-alias boolean operands",
+                current_path,
+                operator,
+                operator_line,
+            )
+            return
+        if tla_expression_mentions_fairness_or_temporal_marker(operator_body):
+            return
+        next_seen = current_seen | frozenset({key})
+
+        direct_alias = tla_module_operator_alias(operator_body)
+        if direct_alias is not None:
+            alias_name, target_operator = direct_alias
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                return
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                return
+            collect_boolean_operator(root_label, target_path, target_operator, next_seen)
+            return
+
+        for alias_name, target_operator in (
+            tla_module_operator_conjunct_aliases(operator_body)
+            + tla_module_operator_boolean_aliases(operator_body)
+        ):
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                continue
+            _alias_line, target_module = instance
+            target_path = current_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                continue
+            collect_boolean_operator(root_label, target_path, target_operator, next_seen)
+
+        for reference in tla_zero_arity_boolean_references(operator_body):
+            if reference in expected_action_set:
+                continue
+            collect_boolean_operator(root_label, current_path, reference, next_seen)
+
+    for alias_name, target_operator in tla_module_operator_conjunct_aliases(
+        action_body
+    ):
+        instance = tla_instance_alias_modules(module_path).get(alias_name)
+        if instance is None:
+            continue
+        _alias_line, target_module = instance
+        target_path = module_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            continue
+        collect_conjunct_operator(
+            f"{alias_name}!{target_operator}",
+            target_path,
+            target_operator,
+            frozenset(),
+        )
+
+    for alias_name, target_operator in tla_module_operator_boolean_aliases(
+        action_body
+    ):
+        instance = tla_instance_alias_modules(module_path).get(alias_name)
+        if instance is None:
+            continue
+        _alias_line, target_module = instance
+        target_path = module_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            continue
+        collect_boolean_operator(
+            f"{alias_name}!{target_operator}",
+            target_path,
+            target_operator,
+            frozenset(),
+        )
+
+    return errors
+
+
+def fairness_action_module_alias_operand_resolution_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_body: str,
+    action_reference_lines: list[int],
+    root_kind: str,
+) -> list[str]:
+    """Return resolution errors for module-alias operands in fair actions."""
+
+    errors: list[str] = []
+
+    def collect_operator(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        from_module_alias: bool,
+    ) -> None:
+        key = (current_path, operator)
+        if key in current_seen:
+            return
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None:
+            return
+        helper_line, helper_arity = signature
+        if helper_arity != 0:
+            if from_module_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} uses "
+                    f"{operand_kind} {root_label}, but helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line} has arity "
+                    f"{helper_arity}; {root_kind} fairness action "
+                    f"{requirement_label} must resolve to defined "
+                    "zero-arity actions"
+                )
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            if from_module_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} uses "
+                    f"{operand_kind} {root_label}, but helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line} is not an "
+                    "inspectable single-expression definition; "
+                    f"{root_kind} fairness action {requirement_label} must "
+                    "resolve to inspectable action definitions"
+                )
+            return
+
+        helper_line, helper_body = definition
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+        next_seen = current_seen | frozenset({key})
+
+        direct_alias = tla_module_operator_alias(helper_body)
+        if direct_alias is not None:
+            collect_alias(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                operator,
+                helper_line,
+                direct_alias,
+                next_seen,
+            )
+            return
+
+        nested_aliases = (
+            tla_module_operator_conjunct_aliases(helper_body)
+            + tla_module_operator_boolean_aliases(helper_body)
+        )
+        seen_aliases: set[tuple[str, str]] = set()
+        for alias in nested_aliases:
+            if alias in seen_aliases:
+                continue
+            seen_aliases.add(alias)
+            collect_alias(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                operator,
+                helper_line,
+                alias,
+                next_seen,
+            )
+
+        nested_references = (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        )
+        seen_references: set[str] = set()
+        for nested_reference in nested_references:
+            if nested_reference in seen_references:
+                continue
+            seen_references.add(nested_reference)
+            collect_operator(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                nested_reference,
+                next_seen,
+                from_module_alias,
+            )
+
+    def collect_alias(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        helper_name: str,
+        helper_line: int,
+        alias: tuple[str, str],
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        alias_name, target_operator = alias
+        target_label = f"{alias_name}!{target_operator}"
+        instance = tla_instance_alias_modules(current_path).get(alias_name)
+        if instance is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} uses {operand_kind} "
+                f"{root_label}, but helper {helper_name} at "
+                f"{display_path(current_path)}:{helper_line} aliases "
+                f"{target_label} without a named INSTANCE alias "
+                f"{alias_name}; {root_kind} fairness action "
+                f"{requirement_label} must resolve through named local "
+                "INSTANCE declarations"
+            )
+            return
+
+        _alias_line, target_module = instance
+        target_path = current_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} uses {operand_kind} "
+                f"{root_label}, but helper {helper_name} at "
+                f"{display_path(current_path)}:{helper_line} aliases "
+                f"{target_label}, but target module "
+                f"{display_path(target_path)} does not exist; {root_kind} "
+                f"fairness action {requirement_label} must resolve to local "
+                "action modules"
+            )
+            return
+
+        target_signature = tla_operator_signatures(target_path).get(target_operator)
+        if target_signature is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} uses {operand_kind} "
+                f"{root_label}, but helper {helper_name} at "
+                f"{display_path(current_path)}:{helper_line} aliases "
+                f"{target_label}, but target {display_path(target_path)} "
+                f"does not define {target_operator}; {root_kind} fairness "
+                f"action {requirement_label} must resolve to defined "
+                "zero-arity actions"
+            )
+            return
+
+        target_line, target_arity = target_signature
+        if target_arity != 0:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} uses {operand_kind} "
+                f"{root_label}, but helper {helper_name} at "
+                f"{display_path(current_path)}:{helper_line} aliases "
+                f"{target_label}, but target {display_path(target_path)}:"
+                f"{target_line} has arity {target_arity}; {root_kind} "
+                f"fairness action {requirement_label} must resolve to "
+                "defined zero-arity actions"
+            )
+            return
+
+        collect_operator(
+            root_label,
+            operand_kind,
+            requirement_label,
+            target_path,
+            target_operator,
+            current_seen,
+            True,
+        )
+
+    def extend_for_aliases(
+        aliases: list[tuple[str, str]],
+        operand_kind: str,
+        requirement_label: str,
+    ) -> None:
+        seen_aliases: set[tuple[str, str]] = set()
+        for alias_name, operator_name in aliases:
+            alias = (alias_name, operator_name)
+            if alias in seen_aliases:
+                continue
+            seen_aliases.add(alias)
+            target_label = f"{alias_name}!{operator_name}"
+            instance = tla_instance_alias_modules(module_path).get(alias_name)
+            if instance is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} uses "
+                    f"{operand_kind} {target_label} without a named INSTANCE "
+                    f"alias {alias_name}; {root_kind} fairness action "
+                    f"{requirement_label} must resolve through named local "
+                    "INSTANCE declarations"
+                )
+                continue
+
+            _alias_line, target_module = instance
+            target_path = module_path.with_name(f"{target_module}.tla")
+            if not target_path.exists():
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} uses "
+                    f"{operand_kind} {target_label}, but target module "
+                    f"{display_path(target_path)} does not exist; "
+                    f"{root_kind} fairness action {requirement_label} must "
+                    "resolve to local action modules"
+                )
+                continue
+
+            target_signature = tla_operator_signatures(target_path).get(operator_name)
+            if target_signature is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} uses "
+                    f"{operand_kind} {target_label}, but target "
+                    f"{display_path(target_path)} does not define "
+                    f"{operator_name}; {root_kind} fairness action "
+                    f"{requirement_label} must resolve to defined zero-arity "
+                    "actions"
+                )
+                continue
+
+            target_line, target_arity = target_signature
+            if target_arity != 0:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} uses "
+                    f"{operand_kind} {target_label}, but target "
+                    f"{display_path(target_path)}:{target_line} has arity "
+                    f"{target_arity}; {root_kind} fairness action "
+                    f"{requirement_label} must resolve to defined zero-arity "
+                    "actions"
+                )
+                continue
+
+            target_definition = tla_single_expression_operator_definitions(
+                target_path
+            ).get(operator_name)
+            if target_definition is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} uses "
+                    f"{operand_kind} {target_label}, but target "
+                    f"{display_path(target_path)}:{target_line} is not an "
+                    f"inspectable single-expression definition; {root_kind} "
+                    f"fairness action {requirement_label} must resolve to "
+                    "inspectable action definitions"
+                )
+                continue
+
+            collect_operator(
+                target_label,
+                operand_kind,
+                requirement_label,
+                target_path,
+                operator_name,
+                frozenset(),
+                False,
+            )
+
+    extend_for_aliases(
+        tla_module_operator_conjunct_aliases(action_body),
+        "module-alias conjunct",
+        "module-alias conjuncts",
+    )
+    extend_for_aliases(
+        tla_module_operator_boolean_aliases(action_body),
+        "module-alias boolean operand",
+        "module-alias boolean operands",
+    )
+    return errors
+
+
+def fairness_action_alias_cycle_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_body: str,
+    action_reference_lines: list[int],
+    root_kind: str,
+) -> list[str]:
+    """Return cycle errors for fair actions that alias module operators."""
+
+    alias = tla_module_operator_alias(action_body)
+    if alias is None:
+        return []
+
+    alias_name, operator_name = alias
+    instance = tla_instance_alias_modules(module_path).get(alias_name)
+    if instance is None:
+        return []
+    _alias_line, target_module = instance
+    target_path = module_path.with_name(f"{target_module}.tla")
+    if not target_path.exists():
+        return []
+
+    root_label = f"{alias_name}!{operator_name}"
+
+    def collect(
+        current_path: Path,
+        operator: str,
+        seen: frozenset[tuple[Path, str]],
+    ) -> list[str]:
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return []
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return []
+        operator_line, operator_body = definition
+        key = (current_path, operator)
+        if key in seen:
+            return [
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(action_reference_lines)} whose "
+                f"definition at line {action_line} aliases {root_label}, but "
+                "fairness action alias resolution cycles at "
+                f"{display_path(current_path)}:{operator_line} {operator}; "
+                f"{root_kind} fairness action aliases must be acyclic and "
+                "resolve to inspectable transition definitions"
+            ]
+
+        nested_alias = tla_module_operator_alias(operator_body)
+        if nested_alias is None:
+            return []
+        nested_alias_name, nested_operator = nested_alias
+        nested_instance = tla_instance_alias_modules(current_path).get(
+            nested_alias_name
+        )
+        if nested_instance is None:
+            return []
+        _nested_alias_line, nested_module = nested_instance
+        nested_path = current_path.with_name(f"{nested_module}.tla")
+        if not nested_path.exists():
+            return []
+        return collect(nested_path, nested_operator, seen | frozenset({key}))
+
+    return collect(target_path, operator_name, frozenset())
+
+
+def fairness_action_alias_target_helper_reference_resolution_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_reference_lines: list[int],
+    alias_label: str,
+    target_path: Path,
+    target_line: int,
+    target_body: str,
+    expected_action_set: set[str],
+    root_kind: str,
+) -> list[str]:
+    """Return local helper-reference resolution errors inside alias targets."""
+
+    signatures = tla_operator_signatures(target_path)
+    definitions = tla_single_expression_operator_definitions(target_path)
+    errors: list[str] = []
+
+    def collect(
+        reference: str,
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        if reference in expected_action_set:
+            return
+        key = (target_path, reference)
+        if key in current_seen:
+            return
+        signature = signatures.get(reference)
+        if signature is None:
+            return
+        helper_line, helper_arity = signature
+        if helper_arity != 0:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} reaches helper {reference} at "
+                f"{display_path(target_path)}:{helper_line}, but helper has "
+                f"arity {helper_arity}; {root_kind} fairness action aliases "
+                "must resolve helper references to defined zero-arity helper "
+                "definitions"
+            )
+            return
+        definition = definitions.get(reference)
+        if definition is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} reaches helper {reference} at "
+                f"{display_path(target_path)}:{helper_line}, but helper is "
+                "not an inspectable single-expression definition; "
+                f"{root_kind} fairness action aliases must resolve helper "
+                "references to inspectable helper definitions"
+            )
+            return
+
+        _definition_line, helper_body = definition
+        if tla_module_operator_alias(helper_body) is not None:
+            return
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+
+        next_seen = current_seen | frozenset({key})
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            collect(nested_reference, next_seen)
+
+    for reference in fairness_action_helper_entry_references(target_body):
+        collect(reference, frozenset())
+    return errors
+
+
+def fairness_action_alias_target_helper_wrapper_cycle_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_reference_lines: list[int],
+    alias_label: str,
+    target_path: Path,
+    target_line: int,
+    target_body: str,
+    expected_action_set: set[str],
+    root_kind: str,
+) -> list[str]:
+    """Return static helper-wrapper cycle errors inside alias targets."""
+
+    definitions = tla_single_expression_operator_definitions(target_path)
+    signatures = tla_operator_signatures(target_path)
+    errors: list[str] = []
+
+    def collect(reference: str, current_seen: frozenset[tuple[Path, str]]) -> None:
+        key = (target_path, reference)
+        signature = signatures.get(reference)
+        if signature is None or signature[1] != 0:
+            return
+        definition = definitions.get(reference)
+        if definition is None:
+            return
+        helper_line, helper_body = definition
+        if key in current_seen:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(action_reference_lines)} whose "
+                f"definition at line {action_line} aliases {alias_label}, but "
+                f"target {display_path(target_path)}:{target_line} reaches "
+                f"helper {reference} at {display_path(target_path)}:"
+                f"{helper_line}, but fairness action alias helper wrapper "
+                f"resolution cycles at {reference}; {root_kind} fairness "
+                "action aliases must resolve through acyclic helper wrappers"
+            )
+            return
+
+        if tla_module_operator_alias(helper_body) is not None:
+            return
+        if tla_expression_mentions_temporal_or_next_state_marker(helper_body):
+            return
+
+        next_seen = current_seen | frozenset({key})
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            if nested_reference in expected_action_set:
+                continue
+            collect(nested_reference, next_seen)
+
+    for reference in fairness_action_helper_entry_references(target_body):
+        if reference not in expected_action_set:
+            collect(reference, frozenset())
+    return errors
+
+
+def fairness_action_alias_target_helper_action_cycle_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_reference_lines: list[int],
+    alias_label: str,
+    target_path: Path,
+    target_line: int,
+    target_body: str,
+    expected_action_set: set[str],
+    root_kind: str,
+) -> list[str]:
+    """Return action-helper cycle errors inside alias targets."""
+
+    definitions = tla_single_expression_operator_definitions(target_path)
+    signatures = tla_operator_signatures(target_path)
+    errors: list[str] = []
+
+    def collect(
+        reference: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_action_helper: bool,
+    ) -> None:
+        key = (target_path, reference)
+        signature = signatures.get(reference)
+        if signature is None or signature[1] != 0:
+            return
+        definition = definitions.get(reference)
+        if definition is None:
+            return
+        helper_line, helper_body = definition
+        if key in current_seen:
+            if through_action_helper:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} reaches helper {reference} at "
+                    f"{display_path(target_path)}:{helper_line}, but fairness "
+                    "action alias helper action resolution cycles at "
+                    f"{reference}; {root_kind} fairness action aliases must "
+                    "resolve through acyclic helper actions"
+                )
+            return
+
+        if tla_module_operator_alias(helper_body) is not None:
+            return
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+
+        next_seen = current_seen | frozenset({key})
+        next_through_action = (
+            through_action_helper
+            or tla_expression_mentions_next_state_marker(helper_body)
+        )
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            if nested_reference in expected_action_set:
+                continue
+            collect(nested_reference, next_seen, next_through_action)
+
+    for reference in fairness_action_helper_entry_references(target_body):
+        if reference not in expected_action_set:
+            collect(reference, frozenset(), False)
+    return errors
+
+
+def fairness_action_alias_target_helper_alias_cycle_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_reference_lines: list[int],
+    alias_label: str,
+    target_path: Path,
+    target_line: int,
+    target_body: str,
+    expected_action_set: set[str],
+    root_kind: str,
+) -> list[str]:
+    """Return helper-alias cycle errors inside alias targets."""
+
+    errors: list[str] = []
+
+    def collect_body(
+        current_path: Path,
+        current_body: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_helper_alias: bool,
+    ) -> None:
+        alias = tla_module_operator_alias(current_body)
+        if alias is not None:
+            alias_name, target_operator = alias
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                return
+            _alias_line, target_module = instance
+            nested_path = current_path.with_name(f"{target_module}.tla")
+            if not nested_path.exists():
+                return
+            collect_operator(
+                nested_path,
+                target_operator,
+                current_seen,
+                True,
+            )
+            return
+
+        if tla_expression_mentions_fairness_or_temporal_marker(current_body):
+            return
+
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(current_body)
+            + tla_zero_arity_boolean_references(current_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            if nested_reference in expected_action_set:
+                continue
+            collect_operator(
+                current_path,
+                nested_reference,
+                current_seen,
+                through_helper_alias,
+            )
+
+    def collect_operator(
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_helper_alias: bool,
+    ) -> None:
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return
+        helper_line, operator_body = definition
+        key = (current_path, operator)
+        if key in current_seen:
+            if through_helper_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} reaches helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line}, but "
+                    "fairness action alias helper alias resolution cycles at "
+                    f"{operator}; {root_kind} fairness action aliases must "
+                    "resolve through acyclic helper aliases"
+                )
+            return
+        collect_body(
+            current_path,
+            operator_body,
+            current_seen | frozenset({key}),
+            through_helper_alias,
+        )
+
+    for reference in fairness_action_helper_entry_references(target_body):
+        if reference not in expected_action_set:
+            collect_operator(target_path, reference, frozenset(), False)
+    return errors
+
+
+def fairness_action_alias_target_helper_alias_resolution_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_reference_lines: list[int],
+    alias_label: str,
+    target_path: Path,
+    target_line: int,
+    target_body: str,
+    expected_action_set: set[str],
+    root_kind: str,
+) -> list[str]:
+    """Return resolution errors for helper aliases inside alias targets."""
+
+    errors: list[str] = []
+
+    def collect_operator(
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        through_helper_alias: bool,
+    ) -> None:
+        key = (current_path, operator)
+        if key in current_seen or operator in expected_action_set:
+            return
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None:
+            return
+        helper_line, helper_arity = signature
+        if helper_arity != 0:
+            if through_helper_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} reaches helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line}, but helper "
+                    f"has arity {helper_arity}; {root_kind} fairness action "
+                    "aliases must resolve helper-alias helper references to "
+                    "defined zero-arity helper definitions"
+                )
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            if through_helper_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} reaches helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line}, but helper "
+                    "is not an inspectable single-expression definition; "
+                    f"{root_kind} fairness action aliases must resolve "
+                    "helper-alias helper references to inspectable helper "
+                    "definitions"
+                )
+            return
+        helper_line, helper_body = definition
+
+        helper_alias = tla_module_operator_alias(helper_body)
+        if helper_alias is not None:
+            alias_name, target_operator = helper_alias
+            helper_alias_label = f"{alias_name}!{target_operator}"
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} reaches helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line} aliasing "
+                    f"{helper_alias_label} without a named INSTANCE alias "
+                    f"{alias_name}; {root_kind} fairness action aliases must "
+                    "resolve helper aliases through named local INSTANCE "
+                    "declarations"
+                )
+                return
+
+            _alias_line, target_module = instance
+            helper_target_path = current_path.with_name(f"{target_module}.tla")
+            if not helper_target_path.exists():
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} reaches helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line} aliasing "
+                    f"{helper_alias_label}, but target module "
+                    f"{display_path(helper_target_path)} does not exist; "
+                    f"{root_kind} fairness action aliases must resolve helper "
+                    "aliases to local action modules"
+                )
+                return
+
+            target_signature = tla_operator_signatures(helper_target_path).get(
+                target_operator
+            )
+            if target_signature is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} reaches helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line} aliasing "
+                    f"{helper_alias_label}, but target "
+                    f"{display_path(helper_target_path)} does not define "
+                    f"{target_operator}; {root_kind} fairness action aliases "
+                    "must resolve helper aliases to defined zero-arity actions"
+                )
+                return
+
+            target_operator_line, target_arity = target_signature
+            if target_arity != 0:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} reaches helper {operator} at "
+                    f"{display_path(current_path)}:{helper_line} aliasing "
+                    f"{helper_alias_label}, but target "
+                    f"{display_path(helper_target_path)}:{target_operator_line} "
+                    f"has arity {target_arity}; {root_kind} fairness action "
+                    "aliases must resolve helper aliases to defined "
+                    "zero-arity actions"
+                )
+                return
+
+            collect_operator(
+                helper_target_path,
+                target_operator,
+                current_seen | frozenset({key}),
+                True,
+            )
+            return
+
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+
+        next_seen = current_seen | frozenset({key})
+        nested_references: list[str] = []
+        seen_nested: set[str] = set()
+        for nested_reference in (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        ):
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            nested_references.append(nested_reference)
+        for nested_reference in nested_references:
+            collect_operator(
+                current_path,
+                nested_reference,
+                next_seen,
+                through_helper_alias,
+            )
+
+    for reference in fairness_action_helper_entry_references(target_body):
+        collect_operator(target_path, reference, frozenset(), False)
+    return errors
+
+
+def fairness_action_alias_target_module_alias_operand_resolution_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_reference_lines: list[int],
+    alias_label: str,
+    target_path: Path,
+    target_line: int,
+    target_body: str,
+    root_kind: str,
+) -> list[str]:
+    """Return resolution errors for module-alias operands inside alias targets."""
+
+    errors: list[str] = []
+
+    def collect_operator(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+        from_module_alias: bool,
+    ) -> None:
+        key = (current_path, operator)
+        if key in current_seen:
+            return
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None:
+            return
+        helper_line, helper_arity = signature
+        if helper_arity != 0:
+            if from_module_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} uses {operand_kind} {root_label}, but "
+                    f"helper {operator} at {display_path(current_path)}:"
+                    f"{helper_line} has arity {helper_arity}; {root_kind} "
+                    f"fairness action aliases must resolve {requirement_label} "
+                    "to defined zero-arity actions"
+                )
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            if from_module_alias:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} uses {operand_kind} {root_label}, but "
+                    f"helper {operator} at {display_path(current_path)}:"
+                    f"{helper_line} is not an inspectable single-expression "
+                    f"definition; {root_kind} fairness action aliases must "
+                    f"resolve {requirement_label} to inspectable action "
+                    "definitions"
+                )
+            return
+
+        helper_line, helper_body = definition
+        if tla_expression_mentions_fairness_or_temporal_marker(helper_body):
+            return
+        next_seen = current_seen | frozenset({key})
+
+        direct_alias = tla_module_operator_alias(helper_body)
+        if direct_alias is not None:
+            collect_alias(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                operator,
+                helper_line,
+                direct_alias,
+                next_seen,
+            )
+            return
+
+        nested_aliases = (
+            tla_module_operator_conjunct_aliases(helper_body)
+            + tla_module_operator_boolean_aliases(helper_body)
+        )
+        seen_aliases: set[tuple[str, str]] = set()
+        for alias in nested_aliases:
+            if alias in seen_aliases:
+                continue
+            seen_aliases.add(alias)
+            collect_alias(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                operator,
+                helper_line,
+                alias,
+                next_seen,
+            )
+
+        nested_references = (
+            tla_zero_arity_conjunct_references(helper_body)
+            + tla_zero_arity_boolean_references(helper_body)
+        )
+        seen_references: set[str] = set()
+        for nested_reference in nested_references:
+            if nested_reference in seen_references:
+                continue
+            seen_references.add(nested_reference)
+            collect_operator(
+                root_label,
+                operand_kind,
+                requirement_label,
+                current_path,
+                nested_reference,
+                next_seen,
+                from_module_alias,
+            )
+
+    def collect_alias(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        helper_name: str,
+        helper_line: int,
+        alias: tuple[str, str],
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        alias_name, target_operator = alias
+        helper_alias_label = f"{alias_name}!{target_operator}"
+        instance = tla_instance_alias_modules(current_path).get(alias_name)
+        if instance is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} uses {operand_kind} {root_label}, but helper "
+                f"{helper_name} at {display_path(current_path)}:{helper_line} "
+                f"aliases {helper_alias_label} without a named INSTANCE "
+                f"alias {alias_name}; {root_kind} fairness action aliases "
+                f"must resolve {requirement_label} through named local "
+                "INSTANCE declarations"
+            )
+            return
+
+        _alias_line, helper_target_module = instance
+        helper_target_path = current_path.with_name(f"{helper_target_module}.tla")
+        if not helper_target_path.exists():
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} uses {operand_kind} {root_label}, but helper "
+                f"{helper_name} at {display_path(current_path)}:{helper_line} "
+                f"aliases {helper_alias_label}, but target module "
+                f"{display_path(helper_target_path)} does not exist; "
+                f"{root_kind} fairness action aliases must resolve "
+                f"{requirement_label} to local action modules"
+            )
+            return
+
+        target_signature = tla_operator_signatures(helper_target_path).get(
+            target_operator
+        )
+        if target_signature is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} uses {operand_kind} {root_label}, but helper "
+                f"{helper_name} at {display_path(current_path)}:{helper_line} "
+                f"aliases {helper_alias_label}, but target "
+                f"{display_path(helper_target_path)} does not define "
+                f"{target_operator}; {root_kind} fairness action aliases "
+                f"must resolve {requirement_label} to defined zero-arity "
+                "actions"
+            )
+            return
+
+        helper_target_line, helper_target_arity = target_signature
+        if helper_target_arity != 0:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action "
+                f"{action} at {line_number_context(action_reference_lines)} "
+                f"whose definition at line {action_line} aliases "
+                f"{alias_label}, but target {display_path(target_path)}:"
+                f"{target_line} uses {operand_kind} {root_label}, but helper "
+                f"{helper_name} at {display_path(current_path)}:{helper_line} "
+                f"aliases {helper_alias_label}, but target "
+                f"{display_path(helper_target_path)}:{helper_target_line} "
+                f"has arity {helper_target_arity}; {root_kind} fairness "
+                f"action aliases must resolve {requirement_label} to "
+                "defined zero-arity actions"
+            )
+            return
+
+        collect_operator(
+            root_label,
+            operand_kind,
+            requirement_label,
+            helper_target_path,
+            target_operator,
+            current_seen,
+            True,
+        )
+
+    def extend_for_aliases(
+        aliases: list[tuple[str, str]],
+        operand_kind: str,
+        requirement_label: str,
+    ) -> None:
+        seen_aliases: set[tuple[str, str]] = set()
+        for alias_name, operator_name in aliases:
+            alias = (alias_name, operator_name)
+            if alias in seen_aliases:
+                continue
+            seen_aliases.add(alias)
+            operand_label = f"{alias_name}!{operator_name}"
+            instance = tla_instance_alias_modules(target_path).get(alias_name)
+            if instance is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} uses {operand_kind} {operand_label} "
+                    f"without a named INSTANCE alias {alias_name}; "
+                    f"{root_kind} fairness action aliases must resolve "
+                    f"{requirement_label} through named local INSTANCE "
+                    "declarations"
+                )
+                continue
+
+            _alias_line, target_module = instance
+            operand_path = target_path.with_name(f"{target_module}.tla")
+            if not operand_path.exists():
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} uses {operand_kind} {operand_label}, but "
+                    f"target module {display_path(operand_path)} does not "
+                    f"exist; {root_kind} fairness action aliases must "
+                    f"resolve {requirement_label} to local action modules"
+                )
+                continue
+
+            operand_signature = tla_operator_signatures(operand_path).get(
+                operator_name
+            )
+            if operand_signature is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} uses {operand_kind} {operand_label}, but "
+                    f"target {display_path(operand_path)} does not define "
+                    f"{operator_name}; {root_kind} fairness action aliases "
+                    f"must resolve {requirement_label} to defined "
+                    "zero-arity actions"
+                )
+                continue
+
+            operand_line, operand_arity = operand_signature
+            if operand_arity != 0:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} uses {operand_kind} {operand_label}, but "
+                    f"target {display_path(operand_path)}:{operand_line} has "
+                    f"arity {operand_arity}; {root_kind} fairness action "
+                    f"aliases must resolve {requirement_label} to defined "
+                    "zero-arity actions"
+                )
+                continue
+
+            operand_definition = tla_single_expression_operator_definitions(
+                operand_path
+            ).get(operator_name)
+            if operand_definition is None:
+                errors.append(
+                    f"{display_path(module_path)}:{fairness_line} defines "
+                    f"{fairness_operator}, but references WF_vars action "
+                    f"{action} at {line_number_context(action_reference_lines)} "
+                    f"whose definition at line {action_line} aliases "
+                    f"{alias_label}, but target {display_path(target_path)}:"
+                    f"{target_line} uses {operand_kind} {operand_label}, but "
+                    f"target {display_path(operand_path)}:{operand_line} is "
+                    "not an inspectable single-expression definition; "
+                    f"{root_kind} fairness action aliases must resolve "
+                    f"{requirement_label} to inspectable action definitions"
+                )
+                continue
+
+            collect_operator(
+                operand_label,
+                operand_kind,
+                requirement_label,
+                operand_path,
+                operator_name,
+                frozenset(),
+                False,
+            )
+
+    extend_for_aliases(
+        tla_module_operator_conjunct_aliases(target_body),
+        "module-alias conjunct",
+        "module-alias conjuncts",
+    )
+    extend_for_aliases(
+        tla_module_operator_boolean_aliases(target_body),
+        "module-alias boolean operand",
+        "module-alias boolean operands",
+    )
+    return errors
+
+
+def fairness_action_alias_target_module_alias_cycle_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_reference_lines: list[int],
+    alias_label: str,
+    target_path: Path,
+    target_line: int,
+    target_body: str,
+    expected_action_set: set[str],
+    root_kind: str,
+) -> list[str]:
+    """Return module-alias cycle errors inside alias targets."""
+
+    errors: list[str] = []
+
+    def report_cycle(
+        root_label: str,
+        operand_kind: str,
+        requirement_label: str,
+        current_path: Path,
+        operator: str,
+        operator_line: int,
+    ) -> None:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases {alias_label}, but "
+            f"target {display_path(target_path)}:{target_line} uses "
+            f"{operand_kind} {root_label}, but {operand_kind} resolution "
+            f"cycles at {display_path(current_path)}:{operator_line} "
+            f"{operator}; {root_kind} fairness action aliases must resolve "
+            f"through acyclic {requirement_label}"
+        )
+
+    def collect_conjunct_body(
+        root_label: str,
+        current_path: Path,
+        current_body: str,
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        if tla_expression_mentions_fairness_or_temporal_marker(current_body):
+            return
+
+        direct_alias = tla_module_operator_alias(current_body)
+        if direct_alias is not None:
+            alias_name, target_operator = direct_alias
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                return
+            _alias_line, target_module = instance
+            nested_path = current_path.with_name(f"{target_module}.tla")
+            if not nested_path.exists():
+                return
+            collect_conjunct_operator(
+                root_label,
+                nested_path,
+                target_operator,
+                current_seen,
+            )
+            return
+
+        for alias_name, target_operator in (
+            tla_module_operator_conjunct_aliases(current_body)
+            + tla_module_operator_boolean_aliases(current_body)
+        ):
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                continue
+            _alias_line, target_module = instance
+            nested_path = current_path.with_name(f"{target_module}.tla")
+            if not nested_path.exists():
+                continue
+            collect_conjunct_operator(
+                root_label,
+                nested_path,
+                target_operator,
+                current_seen,
+            )
+
+        nested_references = (
+            tla_zero_arity_conjunct_references(current_body)
+            + tla_zero_arity_boolean_references(current_body)
+        )
+        seen_nested: set[str] = set()
+        for nested_reference in nested_references:
+            if nested_reference in seen_nested:
+                continue
+            seen_nested.add(nested_reference)
+            if nested_reference in expected_action_set:
+                continue
+            collect_conjunct_operator(
+                root_label,
+                current_path,
+                nested_reference,
+                current_seen,
+            )
+
+    def collect_conjunct_operator(
+        root_label: str,
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return
+        operator_line, operator_body = definition
+        key = (current_path, operator)
+        if key in current_seen:
+            report_cycle(
+                root_label,
+                "module-alias conjunct",
+                "module-alias conjuncts",
+                current_path,
+                operator,
+                operator_line,
+            )
+            return
+        collect_conjunct_body(
+            root_label,
+            current_path,
+            operator_body,
+            current_seen | frozenset({key}),
+        )
+
+    def collect_boolean_operator(
+        root_label: str,
+        current_path: Path,
+        operator: str,
+        current_seen: frozenset[tuple[Path, str]],
+    ) -> None:
+        signature = tla_operator_signatures(current_path).get(operator)
+        if signature is None or signature[1] != 0:
+            return
+        definition = tla_single_expression_operator_definitions(current_path).get(
+            operator
+        )
+        if definition is None:
+            return
+        operator_line, operator_body = definition
+        key = (current_path, operator)
+        if key in current_seen:
+            report_cycle(
+                root_label,
+                "module-alias boolean operand",
+                "module-alias boolean operands",
+                current_path,
+                operator,
+                operator_line,
+            )
+            return
+        if tla_expression_mentions_fairness_or_temporal_marker(operator_body):
+            return
+        next_seen = current_seen | frozenset({key})
+
+        direct_alias = tla_module_operator_alias(operator_body)
+        if direct_alias is not None:
+            alias_name, target_operator = direct_alias
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                return
+            _alias_line, target_module = instance
+            nested_path = current_path.with_name(f"{target_module}.tla")
+            if not nested_path.exists():
+                return
+            collect_boolean_operator(root_label, nested_path, target_operator, next_seen)
+            return
+
+        for alias_name, target_operator in (
+            tla_module_operator_conjunct_aliases(operator_body)
+            + tla_module_operator_boolean_aliases(operator_body)
+        ):
+            instance = tla_instance_alias_modules(current_path).get(alias_name)
+            if instance is None:
+                continue
+            _alias_line, target_module = instance
+            nested_path = current_path.with_name(f"{target_module}.tla")
+            if not nested_path.exists():
+                continue
+            collect_boolean_operator(root_label, nested_path, target_operator, next_seen)
+
+        for reference in tla_zero_arity_boolean_references(operator_body):
+            if reference in expected_action_set:
+                continue
+            collect_boolean_operator(root_label, current_path, reference, next_seen)
+
+    for alias_name, target_operator in tla_module_operator_conjunct_aliases(
+        target_body
+    ):
+        instance = tla_instance_alias_modules(target_path).get(alias_name)
+        if instance is None:
+            continue
+        _alias_line, target_module = instance
+        nested_path = target_path.with_name(f"{target_module}.tla")
+        if not nested_path.exists():
+            continue
+        collect_conjunct_operator(
+            f"{alias_name}!{target_operator}",
+            nested_path,
+            target_operator,
+            frozenset(),
+        )
+
+    for alias_name, target_operator in tla_module_operator_boolean_aliases(
+        target_body
+    ):
+        instance = tla_instance_alias_modules(target_path).get(alias_name)
+        if instance is None:
+            continue
+        _alias_line, target_module = instance
+        nested_path = target_path.with_name(f"{target_module}.tla")
+        if not nested_path.exists():
+            continue
+        collect_boolean_operator(
+            f"{alias_name}!{target_operator}",
+            nested_path,
+            target_operator,
+            frozenset(),
+        )
+
+    return errors
+
+
+def fairness_action_alias_resolution_errors(
+    module_path: Path,
+    fairness_line: int,
+    fairness_operator: str,
+    action: str,
+    action_line: int,
+    action_body: str,
+    action_reference_lines: list[int],
+    expected_action_set: set[str],
+    root_kind: str,
+) -> list[str]:
+    """Return errors for a fair action definition that aliases Module!Operator."""
+
+    alias = tla_module_operator_alias(action_body)
+    if alias is None:
+        return []
+
+    alias_name, operator_name = alias
+    alias_modules = tla_instance_alias_modules(module_path)
+    instance = alias_modules.get(alias_name)
+    if instance is None:
+        return [
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name} without a named INSTANCE alias "
+            f"{alias_name}; {root_kind} fairness action aliases must resolve "
+            "through named local INSTANCE declarations"
+        ]
+
+    _alias_line, target_module = instance
+    target_path = module_path.with_name(f"{target_module}.tla")
+    if not target_path.exists():
+        return [
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target module "
+            f"{display_path(target_path)} does not exist; {root_kind} "
+            "fairness action aliases must resolve to local action modules"
+        ]
+
+    target_signature = tla_operator_signatures(target_path).get(operator_name)
+    if target_signature is None:
+        return [
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)} does not define {operator_name}; "
+            f"{root_kind} fairness action aliases must resolve to defined "
+            "zero-arity actions"
+        ]
+
+    target_line, target_arity = target_signature
+    if target_arity != 0:
+        return [
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} has arity "
+            f"{target_arity}; {root_kind} fairness action aliases must "
+            "resolve to defined zero-arity actions"
+        ]
+    if operator_name in expected_action_set and operator_name != action:
+        return [
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, which names fair action "
+            f"{operator_name}; {root_kind} fairness action aliases must not "
+            "resolve directly to other fair actions"
+        ]
+
+    target_definition = tla_single_expression_operator_definitions(target_path).get(
+        operator_name
+    )
+    if target_definition is None:
+        return [
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} is not an "
+            f"inspectable single-expression definition; {root_kind} "
+            "fairness action aliases must resolve to inspectable actions"
+        ]
+
+    target_line, target_body = target_definition
+    target_body_lines = tla_single_expression_operator_definition_body_lines(
+        target_path
+    ).get(operator_name, (target_line, ()))[1]
+    nested_fairness_occurrences = tla_wf_vars_operand_occurrences(target_body_lines)
+    errors: list[str] = []
+    if nested_fairness_occurrences:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} contains nested "
+            "WF_vars clause(s) at "
+            f"{line_number_context([line for _operand, line in nested_fairness_occurrences])}: "
+            f"{', '.join(' '.join(operand.split()) for operand, _line in nested_fairness_occurrences)}; "
+            f"{root_kind} fairness action aliases must resolve to action "
+            "definitions without fairness clauses"
+        )
+    elif tla_expression_mentions_fairness_or_temporal_marker(target_body):
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} contains fairness or "
+            f"temporal syntax; {root_kind} fairness action aliases must "
+            "resolve to transition definitions without fairness or temporal "
+            "operators"
+        )
+    target_nested_fair_actions = [
+        reference
+        for reference in tla_zero_arity_conjunct_references(target_body)
+        if reference in expected_action_set
+    ]
+    if target_nested_fair_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} directly composes "
+            f"fair action(s) {', '.join(target_nested_fair_actions)}; "
+            f"{root_kind} fairness action aliases must not resolve to "
+            "definitions that compose other fair actions"
+        )
+    target_boolean_hidden_fair_actions = fairness_action_boolean_hidden_fair_actions(
+        target_body,
+        expected_action_set,
+    )
+    if target_boolean_hidden_fair_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} hides fair "
+            f"action(s) {', '.join(target_boolean_hidden_fair_actions)} "
+            "inside boolean structure; "
+            f"{root_kind} fairness action aliases must not resolve to "
+            "definitions that hide other fair actions in boolean structure"
+        )
+    errors.extend(
+        fairness_action_alias_target_helper_reference_resolution_errors(
+            module_path,
+            fairness_line,
+            fairness_operator,
+            action,
+            action_line,
+            action_reference_lines,
+            f"{alias_name}!{operator_name}",
+            target_path,
+            target_line,
+            target_body,
+            expected_action_set,
+            root_kind,
+        )
+    )
+    errors.extend(
+        fairness_action_alias_target_helper_wrapper_cycle_errors(
+            module_path,
+            fairness_line,
+            fairness_operator,
+            action,
+            action_line,
+            action_reference_lines,
+            f"{alias_name}!{operator_name}",
+            target_path,
+            target_line,
+            target_body,
+            expected_action_set,
+            root_kind,
+        )
+    )
+    target_helper_wrapped_fair_actions = fairness_action_helper_wrapped_fair_actions(
+        target_path,
+        target_body,
+        expected_action_set,
+    )
+    if target_helper_wrapped_fair_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} reaches fair "
+            f"action(s) {', '.join(target_helper_wrapped_fair_actions)} "
+            "through static helper wrapper(s); "
+            f"{root_kind} fairness action aliases must not resolve through "
+            "helper wrappers that compose other fair actions"
+        )
+    errors.extend(
+        fairness_action_alias_target_helper_action_cycle_errors(
+            module_path,
+            fairness_line,
+            fairness_operator,
+            action,
+            action_line,
+            action_reference_lines,
+            f"{alias_name}!{operator_name}",
+            target_path,
+            target_line,
+            target_body,
+            expected_action_set,
+            root_kind,
+        )
+    )
+    target_helper_action_fair_actions = fairness_action_helper_action_fair_actions(
+        target_path,
+        target_body,
+        expected_action_set,
+    )
+    if target_helper_action_fair_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} reaches fair "
+            f"action(s) {', '.join(target_helper_action_fair_actions)} "
+            "through action helper(s); "
+            f"{root_kind} fairness action aliases must not resolve through "
+            "helper actions that compose other fair actions"
+        )
+    errors.extend(
+        fairness_action_alias_target_helper_alias_resolution_errors(
+            module_path,
+            fairness_line,
+            fairness_operator,
+            action,
+            action_line,
+            action_reference_lines,
+            f"{alias_name}!{operator_name}",
+            target_path,
+            target_line,
+            target_body,
+            expected_action_set,
+            root_kind,
+        )
+    )
+    errors.extend(
+        fairness_action_alias_target_helper_alias_cycle_errors(
+            module_path,
+            fairness_line,
+            fairness_operator,
+            action,
+            action_line,
+            action_reference_lines,
+            f"{alias_name}!{operator_name}",
+            target_path,
+            target_line,
+            target_body,
+            expected_action_set,
+            root_kind,
+        )
+    )
+    target_helper_alias_fair_actions = fairness_action_helper_alias_fair_actions(
+        target_path,
+        target_body,
+        expected_action_set,
+    )
+    if target_helper_alias_fair_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} reaches fair "
+            f"action(s) {', '.join(target_helper_alias_fair_actions)} "
+            "through helper alias(es); "
+            f"{root_kind} fairness action aliases must not resolve through "
+            "helper aliases that compose other fair actions"
+        )
+    errors.extend(
+        fairness_action_alias_target_module_alias_operand_resolution_errors(
+            module_path,
+            fairness_line,
+            fairness_operator,
+            action,
+            action_line,
+            action_reference_lines,
+            f"{alias_name}!{operator_name}",
+            target_path,
+            target_line,
+            target_body,
+            root_kind,
+        )
+    )
+    errors.extend(
+        fairness_action_alias_target_module_alias_cycle_errors(
+            module_path,
+            fairness_line,
+            fairness_operator,
+            action,
+            action_line,
+            action_reference_lines,
+            f"{alias_name}!{operator_name}",
+            target_path,
+            target_line,
+            target_body,
+            expected_action_set,
+            root_kind,
+        )
+    )
+    target_module_alias_conjunct_fair_actions = (
+        fairness_action_module_alias_conjunct_fair_actions(
+            target_path,
+            target_body,
+            expected_action_set,
+        )
+    )
+    if target_module_alias_conjunct_fair_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} reaches fair "
+            f"action(s) {', '.join(target_module_alias_conjunct_fair_actions)} "
+            "through module-alias conjunct(s); "
+            f"{root_kind} fairness action aliases must not resolve through "
+            "module-alias conjuncts that compose other fair actions"
+        )
+    target_module_alias_boolean_fair_actions = (
+        fairness_action_module_alias_boolean_fair_actions(
+            target_path,
+            target_body,
+            expected_action_set,
+        )
+    )
+    if target_module_alias_boolean_fair_actions:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} reaches fair "
+            f"action(s) {', '.join(target_module_alias_boolean_fair_actions)} "
+            "through module-alias boolean operand(s); "
+            f"{root_kind} fairness action aliases must not resolve through "
+            "module-alias boolean operands that compose other fair actions"
+        )
+    if not tla_expression_mentions_next_state_marker(target_body):
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but references WF_vars action {action} "
+            f"at {line_number_context(action_reference_lines)} whose "
+            f"definition at line {action_line} aliases "
+            f"{alias_name}!{operator_name}, but target "
+            f"{display_path(target_path)}:{target_line} is not "
+            f"action-shaped; {root_kind} fairness action aliases must resolve "
+            "to transition definitions that mention next-state updates or "
+            "UNCHANGED"
+        )
+    return errors
+
+
+def progress_next_operator_from_closure(next_closure: str) -> str | None:
+    """Return the operator inside a []()[Next]_vars-style progress closure."""
+
+    normalized = "".join(next_closure.split())
+    match = TLA_PROGRESS_NEXT_CLOSURE_RE.fullmatch(normalized)
+    if match is None:
+        return None
+    return match.group(1)
+
+
+def transition_direct_named_references(expression: str) -> set[str]:
+    """Return direct named action references from a transition expression."""
+
+    normalized = strip_static_outer_parentheses(" ".join(expression.split()))
+    references: set[str] = set()
+    if TLA_IDENTIFIER_RE.fullmatch(normalized) and is_tla_user_identifier(
+        normalized
+    ):
+        references.add(normalized)
+    references.update(tla_zero_arity_conjunct_references(normalized))
+    return references
+
+
+def transition_disjunct_is_bare_named_reference(expression: str) -> bool:
+    """Return whether a transition disjunct is a single named reference."""
+
+    normalized = strip_static_outer_parentheses(" ".join(expression.split()))
+    return bool(
+        TLA_IDENTIFIER_RE.fullmatch(normalized)
+        and is_tla_user_identifier(normalized)
+    )
+
+
+def tla_identity_gated_single_operand(
+    expression: str,
+    operand_parser: Callable[[str], IdentityOperand | None],
+) -> IdentityOperand | None:
+    """Return the single operand behind identity-literal boolean gates."""
+
+    seen: set[str] = set()
+
+    def collect(current: str) -> list[IdentityOperand] | None:
+        normalized = strip_static_outer_parentheses(" ".join(current.split()))
+        if not normalized or normalized in seen:
+            return None
+        seen.add(normalized)
+        operand = operand_parser(normalized)
+        if operand is not None:
+            return [operand]
+
+        def literal_gated_references(
+            parts: list[str],
+            neutral: str,
+        ) -> list[IdentityOperand] | None:
+            references: list[IdentityOperand] = []
+            for part in parts:
+                literal = tla_static_temporal_boolean_literal(part)
+                if literal is not None:
+                    if literal != neutral:
+                        return None
+                    continue
+                nested_references = collect(part)
+                if nested_references is None:
+                    return None
+                references.extend(nested_references)
+            return references if len(references) == 1 else None
+
+        conjunct_references = literal_gated_references(
+            tla_top_level_conjuncts(normalized),
+            "TRUE",
+        )
+        if conjunct_references is not None:
+            return conjunct_references
+
+        disjunct_references = literal_gated_references(
+            tla_top_level_disjuncts(normalized),
+            "FALSE",
+        )
+        if disjunct_references is not None:
+            return disjunct_references
+
+        implication_parts = tla_top_level_implication_operands(normalized)
+        if len(implication_parts) > 1:
+            antecedent, consequent = implication_parts
+            if tla_static_temporal_boolean_literal(antecedent) == "TRUE":
+                return collect(consequent)
+            return None
+
+        equivalence_references = literal_gated_references(
+            tla_top_level_equivalence_operands(normalized),
+            "TRUE",
+        )
+        if equivalence_references is not None:
+            return equivalence_references
+        return None
+
+    references = collect(expression)
+    if references is None or len(references) != 1:
+        return None
+    return references[0]
+
+
+def transition_identity_gated_single_reference(expression: str) -> str | None:
+    """Return the single reference behind identity-literal boolean gates."""
+
+    return tla_identity_gated_single_operand(expression, tla_user_identifier_alias)
+
+
+def transition_identity_gated_single_module_alias(
+    expression: str,
+) -> tuple[str, str] | None:
+    """Return the single Module!Operator behind identity-literal gates."""
+
+    return tla_identity_gated_single_operand(expression, tla_module_operator_alias)
+
+
+def transition_module_alias_cycle_errors(
+    module_path: Path,
+    alias: tuple[str, str],
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]],
+) -> list[str]:
+    """Return transition cycle errors reached through a module alias."""
+
+    alias_name, target_operator = alias
+    instance = tla_instance_alias_modules(module_path).get(alias_name)
+    if instance is None:
+        return []
+    _alias_line, target_module = instance
+    target_path = module_path.with_name(f"{target_module}.tla")
+    if not target_path.exists():
+        return []
+    return transition_reference_cycle_errors(
+        target_path,
+        target_operator,
+        root_kind,
+        seen,
+    )
+
+
+def transition_module_alias_disjunct_resolution_errors(
+    module_path: Path,
+    alias: tuple[str, str],
+    compact_disjunct: str,
+    next_operator: str,
+    next_line: int,
+    root_kind: str,
+) -> list[str]:
+    """Return direct transition disjunct errors for unresolved module aliases."""
+
+    alias_name, target_operator = alias
+    instance = tla_instance_alias_modules(module_path).get(alias_name)
+    if instance is None:
+        return [
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator}, but direct transition "
+            f"disjunct {compact_disjunct or '<empty>'} aliases "
+            f"{alias_name}!{target_operator} without a named INSTANCE alias "
+            f"{alias_name}; {root_kind} transition module-alias disjuncts "
+            "must resolve through named local INSTANCE declarations"
+        ]
+    _alias_line, target_module = instance
+    target_path = module_path.with_name(f"{target_module}.tla")
+    if not target_path.exists():
+        return [
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator}, but direct transition "
+            f"disjunct {compact_disjunct or '<empty>'} aliases "
+            f"{alias_name}!{target_operator}, but target module "
+            f"{display_path(target_path)} does not exist; {root_kind} "
+            "transition module-alias disjuncts must resolve to local "
+            "modules with defined zero-arity transition operators"
+        ]
+    target_signature = tla_operator_signatures(target_path).get(target_operator)
+    if target_signature is None:
+        return [
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator}, but direct transition "
+            f"disjunct {compact_disjunct or '<empty>'} aliases "
+            f"{alias_name}!{target_operator}, but target "
+            f"{display_path(target_path)} does not define {target_operator}; "
+            f"{root_kind} transition module-alias disjuncts must resolve to "
+            "defined zero-arity transition operators"
+        ]
+    target_line, target_arity = target_signature
+    if target_arity != 0:
+        return [
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator}, but direct transition "
+            f"disjunct {compact_disjunct or '<empty>'} aliases "
+            f"{alias_name}!{target_operator}, but target "
+            f"{display_path(target_path)}:{target_line} has arity "
+            f"{target_arity}; {root_kind} transition module-alias disjuncts "
+            "must resolve to defined zero-arity transition operators"
+        ]
+    target_definition = tla_single_expression_operator_definitions(target_path).get(
+        target_operator
+    )
+    if target_definition is None:
+        return [
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator}, but direct transition "
+            f"disjunct {compact_disjunct or '<empty>'} aliases "
+            f"{alias_name}!{target_operator}, but target "
+            f"{display_path(target_path)}:{target_line} is not an "
+            f"inspectable single-expression definition; {root_kind} "
+            "transition module-alias disjuncts must resolve to inspectable "
+            "transition operators"
+        ]
+    return []
+
+
+def transition_module_alias_helper_resolution_errors(
+    module_path: Path,
+    alias: tuple[str, str],
+    helper_name: str,
+    helper_line: int,
+    root_kind: str,
+    contract_label: str,
+) -> list[str]:
+    """Return transition helper errors for unresolved module aliases."""
+
+    alias_name, target_operator = alias
+    instance = tla_instance_alias_modules(module_path).get(alias_name)
+    if instance is None:
+        return [
+            f"{display_path(module_path)}:{helper_line} defines {root_kind} "
+            f"transition helper {helper_name}, but aliases "
+            f"{alias_name}!{target_operator} without a named INSTANCE alias "
+            f"{alias_name}; {root_kind} transition {contract_label} "
+            "must resolve through named local "
+            "INSTANCE declarations"
+        ]
+    _alias_line, target_module = instance
+    target_path = module_path.with_name(f"{target_module}.tla")
+    if not target_path.exists():
+        return [
+            f"{display_path(module_path)}:{helper_line} defines {root_kind} "
+            f"transition helper {helper_name}, but aliases "
+            f"{alias_name}!{target_operator}, but target module "
+            f"{display_path(target_path)} does not exist; {root_kind} "
+            f"transition {contract_label} must "
+            "resolve to local modules with defined zero-arity transition "
+            "operators"
+        ]
+    target_signature = tla_operator_signatures(target_path).get(target_operator)
+    if target_signature is None:
+        return [
+            f"{display_path(module_path)}:{helper_line} defines {root_kind} "
+            f"transition helper {helper_name}, but aliases "
+            f"{alias_name}!{target_operator}, but target "
+            f"{display_path(target_path)} does not define {target_operator}; "
+            f"{root_kind} transition {contract_label} must resolve to "
+            "defined zero-arity transition operators"
+        ]
+    target_line, target_arity = target_signature
+    if target_arity != 0:
+        return [
+            f"{display_path(module_path)}:{helper_line} defines {root_kind} "
+            f"transition helper {helper_name}, but aliases "
+            f"{alias_name}!{target_operator}, but target "
+            f"{display_path(target_path)}:{target_line} has arity "
+            f"{target_arity}; {root_kind} transition {contract_label} "
+            "must resolve to defined zero-arity "
+            "transition operators"
+        ]
+    target_definition = tla_single_expression_operator_definitions(target_path).get(
+        target_operator
+    )
+    if target_definition is None:
+        return [
+            f"{display_path(module_path)}:{helper_line} defines {root_kind} "
+            f"transition helper {helper_name}, but aliases "
+            f"{alias_name}!{target_operator}, but target "
+            f"{display_path(target_path)}:{target_line} is not an "
+            f"inspectable single-expression definition; {root_kind} "
+            f"transition {contract_label} must resolve to inspectable "
+            "transition operators"
+        ]
+    return []
+
+
+def tla_expression_mentions_fairness_or_temporal_marker(expression: str) -> bool:
+    """Return whether an expression mentions fairness or temporal operators."""
+
+    in_string = False
+    escaped = False
+    index = 0
+    while index < len(expression):
+        char = expression[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+        if char == '"':
+            in_string = True
+            index += 1
+            continue
+        if expression.startswith("[]", index) or expression.startswith("<>", index):
+            return True
+        match = TLA_IDENTIFIER_TOKEN_RE.match(expression, index)
+        if match is not None:
+            token = match.group(0)
+            if token in {"ENABLED"} or token.startswith(("WF_", "SF_")):
+                return True
+            index = match.end()
+            continue
+        index += 1
+    return False
+
+
+def transition_reference_action_witnesses(
+    module_path: Path,
+    reference: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> set[str]:
+    """Return action-shaped witnesses reached through a transition reference."""
+
+    key = (module_path, reference)
+    if key in seen:
+        return set()
+    signatures = tla_operator_signatures(module_path)
+    signature = signatures.get(reference)
+    if signature is None or signature[1] != 0:
+        return set()
+
+    definitions = tla_single_expression_operator_definitions(module_path)
+    definition = definitions.get(reference)
+    if definition is None:
+        return set()
+    _line, body = definition
+
+    alias = tla_module_operator_alias(body)
+    if alias is not None:
+        return transition_module_alias_action_witnesses(
+            module_path,
+            alias,
+            seen | frozenset({key}),
+        )
+
+    if tla_expression_mentions_fairness_or_temporal_marker(body):
+        return set()
+    if tla_expression_mentions_next_state_marker(body):
+        return {reference}
+
+    witnesses: set[str] = set()
+    for disjunct in tla_top_level_disjuncts(body):
+        for nested_reference in transition_direct_named_references(disjunct):
+            witnesses.update(
+                transition_reference_action_witnesses(
+                    module_path,
+                    nested_reference,
+                    seen | frozenset({key}),
+                )
+            )
+    return witnesses
+
+
+def transition_module_alias_action_witnesses(
+    module_path: Path,
+    alias: tuple[str, str],
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> set[str]:
+    """Return action-shaped witnesses reached through a module alias."""
+
+    alias_name, target_operator = alias
+    instance = tla_instance_alias_modules(module_path).get(alias_name)
+    if instance is None:
+        return set()
+    _alias_line, target_module = instance
+    target_path = module_path.with_name(f"{target_module}.tla")
+    if not target_path.exists():
+        return set()
+    target_witnesses = transition_reference_action_witnesses(
+        target_path,
+        target_operator,
+        seen,
+    )
+    witnesses = {f"{alias_name}!{witness}" for witness in target_witnesses}
+    witnesses.update(witness for witness in target_witnesses if "!" not in witness)
+    if target_operator in target_witnesses:
+        witnesses.add(target_operator)
+    return witnesses
+
+
+def transition_disjunct_action_witnesses(
+    module_path: Path,
+    expression: str,
+) -> set[str]:
+    """Return named action-shaped witnesses reached from a transition disjunct."""
+
+    witnesses: set[str] = set()
+    direct_alias = tla_module_operator_alias(expression)
+    if direct_alias is not None:
+        witnesses.update(
+            transition_module_alias_action_witnesses(module_path, direct_alias)
+        )
+    for reference in transition_direct_named_references(expression):
+        witnesses.update(transition_reference_action_witnesses(module_path, reference))
+    return witnesses
+
+
+def transition_reference_aggregate_targets(
+    module_path: Path,
+    reference: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> set[tuple[Path, str]]:
+    """Return nested transition aggregate operators reached from a reference."""
+
+    key = (module_path, reference)
+    if key in seen:
+        return set()
+
+    signature = tla_operator_signatures(module_path).get(reference)
+    if signature is None or signature[1] != 0:
+        return set()
+
+    definition = tla_single_expression_operator_definitions(module_path).get(reference)
+    if definition is None:
+        return set()
+    _line, body = definition
+
+    alias = tla_module_operator_alias(body)
+    if alias is not None:
+        alias_name, target_operator = alias
+        instance = tla_instance_alias_modules(module_path).get(alias_name)
+        if instance is None:
+            return set()
+        _alias_line, target_module = instance
+        target_path = module_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            return set()
+        return transition_reference_aggregate_targets(
+            target_path,
+            target_operator,
+            seen | frozenset({key}),
+        )
+
+    if tla_expression_mentions_next_state_marker(body):
+        return set()
+    disjuncts = tla_top_level_disjuncts(body)
+    if len(disjuncts) > 1:
+        return {key}
+    if len(disjuncts) == 1:
+        references = transition_direct_named_references(disjuncts[0])
+        if len(references) == 1:
+            if not transition_disjunct_is_bare_named_reference(disjuncts[0]):
+                return {key}
+            return transition_reference_aggregate_targets(
+                module_path,
+                next(iter(references)),
+                seen | frozenset({key}),
+            )
+    return set()
+
+
+def transition_disjunct_nested_aggregate_errors(
+    module_path: Path,
+    expression: str,
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]],
+) -> list[str]:
+    """Return errors from nested aggregate helpers used by a transition disjunct."""
+
+    errors: list[str] = []
+    for reference in transition_direct_named_references(expression):
+        for target_path, target_operator in transition_reference_aggregate_targets(
+            module_path,
+            reference,
+            seen,
+        ):
+            errors.extend(
+                progress_transition_direct_disjunct_errors(
+                    target_path,
+                    target_operator,
+                    root_kind,
+                    seen,
+                )
+            )
+    return errors
+
+
+def transition_reference_cycle_errors(
+    module_path: Path,
+    reference: str,
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return errors for transition helper wrappers that cycle."""
+
+    key = (module_path, reference)
+    signature = tla_operator_signatures(module_path).get(reference)
+    if signature is None or signature[1] != 0:
+        return []
+
+    definition = tla_single_expression_operator_definitions(module_path).get(reference)
+    if definition is None:
+        return []
+    reference_line, body = definition
+    if key in seen:
+        return [
+            f"{display_path(module_path)}:{reference_line} defines "
+            f"{root_kind} transition helper {reference}, but transition "
+            f"helper resolution cycles at {reference}; {root_kind} "
+            "transition helper wrappers must be acyclic and resolve to "
+            "inspectable transition operators"
+        ]
+
+    if tla_expression_mentions_fairness_or_temporal_marker(body):
+        return []
+    if tla_expression_mentions_next_state_marker(body):
+        return []
+
+    next_seen = seen | frozenset({key})
+    alias = tla_module_operator_alias(body)
+    if alias is not None:
+        cycle_errors = transition_module_alias_cycle_errors(
+            module_path,
+            alias,
+            root_kind,
+            next_seen,
+        )
+        if cycle_errors:
+            return cycle_errors
+        return transition_module_alias_helper_resolution_errors(
+            module_path,
+            alias,
+            reference,
+            reference_line,
+            root_kind,
+            "module-alias helper wrappers",
+        )
+
+    identity_reference = transition_identity_gated_single_reference(body)
+    if identity_reference is not None and not transition_disjunct_is_bare_named_reference(
+        body
+    ):
+        return transition_reference_cycle_errors(
+            module_path,
+            identity_reference,
+            root_kind,
+            next_seen,
+    )
+    identity_alias = transition_identity_gated_single_module_alias(body)
+    if identity_alias is not None:
+        cycle_errors = transition_module_alias_cycle_errors(
+            module_path,
+            identity_alias,
+            root_kind,
+            next_seen,
+        )
+        if cycle_errors:
+            return cycle_errors
+        return transition_module_alias_helper_resolution_errors(
+            module_path,
+            identity_alias,
+            reference,
+            reference_line,
+            root_kind,
+            "identity-gated module-alias helper wrappers",
+        )
+
+    disjuncts = tla_top_level_disjuncts(body)
+    if len(disjuncts) != 1:
+        return []
+    references = transition_direct_named_references(disjuncts[0])
+    if len(references) != 1:
+        return []
+    if not transition_disjunct_is_bare_named_reference(disjuncts[0]):
+        return []
+    return transition_reference_cycle_errors(
+        module_path,
+        next(iter(references)),
+        root_kind,
+        next_seen,
+    )
+
+
+def transition_action_keys_from_operator(
+    module_path: Path,
+    operator: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> set[str]:
+    """Return fair-action keys reachable from a transition operator."""
+
+    key = (module_path, operator)
+    if key in seen:
+        return set()
+    definitions = tla_single_expression_operator_definitions(module_path)
+    definition = definitions.get(operator)
+    if definition is None:
+        return set()
+
+    _line, body = definition
+    alias = tla_module_operator_alias(body)
+    if alias is not None:
+        return transition_module_alias_transition_keys(
+            module_path,
+            alias,
+            seen | frozenset({key}),
+        )
+
+    transition_keys: set[str] = set()
+    for disjunct in tla_top_level_disjuncts(body):
+        direct_alias = tla_module_operator_alias(disjunct)
+        if direct_alias is not None:
+            transition_keys.update(
+                transition_module_alias_transition_keys(
+                    module_path,
+                    direct_alias,
+                    seen | frozenset({key}),
+                )
+            )
+        for reference in transition_direct_named_references(disjunct):
+            transition_keys.add(reference)
+            reference_definition = definitions.get(reference)
+            if reference_definition is None:
+                continue
+            _reference_line, reference_body = reference_definition
+            if (
+                tla_module_operator_alias(reference_body) is None
+                and len(tla_top_level_disjuncts(reference_body)) <= 1
+            ):
+                if not tla_expression_mentions_next_state_marker(reference_body):
+                    nested_references = transition_direct_named_references(
+                        reference_body
+                    )
+                    if len(nested_references) == 1:
+                        nested_reference = next(iter(nested_references))
+                        transition_keys.add(nested_reference)
+                        transition_keys.update(
+                            transition_action_keys_from_operator(
+                                module_path,
+                                nested_reference,
+                                seen | frozenset({key}),
+                            )
+                        )
+                continue
+            transition_keys.update(
+                transition_action_keys_from_operator(
+                    module_path,
+                    reference,
+                    seen | frozenset({key}),
+                )
+            )
+    return transition_keys
+
+
+def transition_module_alias_transition_keys(
+    module_path: Path,
+    alias: tuple[str, str],
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> set[str]:
+    """Return transition keys reached through a module-alias transition."""
+
+    alias_name, target_operator = alias
+    instance = tla_instance_alias_modules(module_path).get(alias_name)
+    if instance is None:
+        return set()
+    _alias_line, target_module = instance
+    target_path = module_path.with_name(f"{target_module}.tla")
+    if not target_path.exists():
+        return set()
+    target_keys = transition_action_keys_from_operator(
+        target_path,
+        target_operator,
+        seen,
+    )
+    qualified_target = f"{alias_name}!{target_operator}"
+    return {qualified_target} | {
+        f"{alias_name}!{target_key}" for target_key in target_keys
+    }
+
+
+def fairness_action_transition_keys(
+    module_path: Path,
+    action: str,
+) -> set[str]:
+    """Return transition keys that can satisfy a fair action name."""
+
+    keys = {action}
+    action_definition = tla_single_expression_operator_definitions(module_path).get(
+        action
+    )
+    if action_definition is None:
+        return keys
+    _action_line, action_body = action_definition
+    alias = tla_module_operator_alias(action_body)
+    if alias is not None:
+        alias_name, target_operator = alias
+        keys.add(f"{alias_name}!{target_operator}")
+    return keys
+
+
+def progress_transition_direct_disjunct_errors(
+    module_path: Path,
+    next_operator: str,
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return errors for progress transition disjuncts without action witnesses."""
+
+    key = (module_path, next_operator)
+    definitions = tla_single_expression_operator_definitions(module_path)
+    definition = definitions.get(next_operator)
+    if definition is None:
+        return []
+    definition_line, body = definition
+    signature = tla_operator_signatures(module_path).get(next_operator)
+    next_line = signature[0] if signature is not None else definition_line
+    if key in seen:
+        return [
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator}, but transition alias "
+            f"resolution cycles at {next_operator}; {root_kind} transition "
+            "aliases must be acyclic and resolve to inspectable transition "
+            "operators"
+        ]
+
+    alias = tla_module_operator_alias(body)
+    if alias is not None:
+        alias_name, target_operator = alias
+        instance = tla_instance_alias_modules(module_path).get(alias_name)
+        if instance is None:
+            return [
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator} as "
+                f"{alias_name}!{target_operator} without a named INSTANCE "
+                f"alias {alias_name}; {root_kind} transition aliases must "
+                "resolve through named local INSTANCE declarations"
+            ]
+        _alias_line, target_module = instance
+        target_path = module_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            return [
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator} as "
+                f"{alias_name}!{target_operator}, but target module "
+                f"{display_path(target_path)} does not exist; {root_kind} "
+                "transition aliases must resolve to local modules"
+            ]
+        target_signature = tla_operator_signatures(target_path).get(target_operator)
+        if target_signature is None:
+            return [
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator} as "
+                f"{alias_name}!{target_operator}, but target "
+                f"{display_path(target_path)} does not define "
+                f"{target_operator}; {root_kind} transition aliases must "
+                "resolve to defined zero-arity transition operators"
+            ]
+        target_line, target_arity = target_signature
+        if target_arity != 0:
+            return [
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator} as "
+                f"{alias_name}!{target_operator}, but target "
+                f"{display_path(target_path)}:{target_line} has arity "
+                f"{target_arity}; {root_kind} transition aliases must "
+                "resolve to defined zero-arity transition operators"
+            ]
+        target_definition = tla_single_expression_operator_definitions(
+            target_path
+        ).get(target_operator)
+        if target_definition is None:
+            return [
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator} as "
+                f"{alias_name}!{target_operator}, but target "
+                f"{display_path(target_path)}:{target_line} is not an "
+                f"inspectable single-expression definition; {root_kind} "
+                "transition aliases must resolve to inspectable transition "
+                "operators"
+            ]
+        _target_definition_line, target_body = target_definition
+        if (
+            tla_expression_mentions_next_state_marker(target_body)
+            and not tla_expression_mentions_fairness_or_temporal_marker(target_body)
+        ):
+            return []
+        return progress_transition_direct_disjunct_errors(
+            target_path,
+            target_operator,
+            root_kind,
+            seen | frozenset({key}),
+        )
+
+    errors: list[str] = []
+    direct_disjuncts = tuple(tla_top_level_disjuncts(body))
+    compact_disjuncts = [
+        " ".join(strip_static_outer_parentheses(disjunct).split()) or "<empty>"
+        for disjunct in direct_disjuncts
+    ]
+    repeated_disjuncts = duplicate_values(compact_disjuncts)
+    if repeated_disjuncts:
+        errors.append(
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator}, but repeats direct "
+            f"transition disjunct(s) {', '.join(repeated_disjuncts)}; "
+            f"{root_kind} transition disjunct inventories must stay "
+            "duplicate-free"
+        )
+    if "progress" in root_kind.lower():
+        witness_disjuncts: dict[str, list[str]] = {}
+        for disjunct, compact_disjunct in zip(
+            direct_disjuncts,
+            compact_disjuncts,
+        ):
+            if not (
+                transition_disjunct_is_bare_named_reference(disjunct)
+                or tla_module_operator_alias(disjunct) is not None
+            ):
+                continue
+            for witness in sorted(
+                transition_disjunct_action_witnesses(module_path, disjunct)
+            ):
+                witness_disjuncts.setdefault(witness, []).append(compact_disjunct)
+        repeated_witnesses = [
+            witness
+            for witness in sorted(witness_disjuncts)
+            if len(set(witness_disjuncts[witness])) > 1
+        ]
+        if repeated_witnesses:
+            errors.append(
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator}, but "
+                "repeats reachable action witness(es) "
+                f"{', '.join(repeated_witnesses)} across direct transition "
+                f"disjuncts; {root_kind} transition action witness "
+                "inventories must stay duplicate-free"
+            )
+
+    for disjunct in direct_disjuncts:
+        compact_disjunct = " ".join(
+            strip_static_outer_parentheses(disjunct).split()
+        )
+        if len(tla_top_level_disjuncts(disjunct)) > 1:
+            errors.append(
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator}, but "
+                f"direct transition disjunct {compact_disjunct or '<empty>'} "
+                "contains nested disjunction alternatives; "
+                f"{root_kind} transition disjuncts must stay single-branch "
+                "action predicates"
+            )
+            continue
+        if tla_expression_mentions_fairness_or_temporal_marker(disjunct):
+            errors.append(
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator}, but "
+                f"direct transition disjunct {compact_disjunct or '<empty>'} "
+                "contains fairness or temporal syntax; "
+                f"{root_kind} transition disjuncts must stay single-branch "
+                "action predicates"
+            )
+            continue
+        direct_references = transition_direct_named_references(disjunct)
+        identity_reference = transition_identity_gated_single_reference(disjunct)
+        direct_alias = tla_module_operator_alias(disjunct)
+        identity_alias = transition_identity_gated_single_module_alias(disjunct)
+        is_bare_action_or_module_alias = (
+            transition_disjunct_is_bare_named_reference(disjunct)
+            or direct_alias is not None
+        )
+        cycle_references = set(direct_references)
+        if identity_reference is not None:
+            cycle_references.add(identity_reference)
+        cycle_aliases: set[tuple[str, str]] = set()
+        if direct_alias is not None:
+            cycle_aliases.add(direct_alias)
+        if identity_alias is not None:
+            cycle_aliases.add(identity_alias)
+        if "progress" in root_kind.lower() and direct_alias is not None:
+            cycle_errors: list[str] = []
+            for alias in sorted(cycle_aliases):
+                cycle_errors.extend(
+                    transition_module_alias_cycle_errors(
+                        module_path,
+                        alias,
+                        root_kind,
+                        seen | frozenset({key}),
+                    )
+                )
+            if cycle_errors:
+                errors.extend(cycle_errors)
+                continue
+            instance_errors = transition_module_alias_disjunct_resolution_errors(
+                module_path,
+                direct_alias,
+                compact_disjunct,
+                next_operator,
+                next_line,
+                root_kind,
+            )
+            if instance_errors:
+                errors.extend(instance_errors)
+                continue
+        if (
+            "progress" in root_kind.lower()
+            and (cycle_references or cycle_aliases)
+            and not is_bare_action_or_module_alias
+        ):
+            cycle_errors: list[str] = []
+            for reference in sorted(cycle_references):
+                cycle_errors.extend(
+                    transition_reference_cycle_errors(
+                        module_path,
+                        reference,
+                        root_kind,
+                        seen | frozenset({key}),
+                    )
+                )
+            for alias in sorted(cycle_aliases):
+                cycle_errors.extend(
+                    transition_module_alias_cycle_errors(
+                        module_path,
+                        alias,
+                        root_kind,
+                        seen | frozenset({key}),
+                    )
+                )
+            if cycle_errors:
+                errors.extend(cycle_errors)
+                continue
+            instance_errors: list[str] = []
+            for alias in sorted(cycle_aliases):
+                instance_errors.extend(
+                    transition_module_alias_disjunct_resolution_errors(
+                        module_path,
+                        alias,
+                        compact_disjunct,
+                        next_operator,
+                        next_line,
+                        root_kind,
+                    )
+                )
+            if instance_errors:
+                errors.extend(instance_errors)
+                continue
+            witnesses = transition_disjunct_action_witnesses(module_path, disjunct)
+            if len(witnesses) > 1:
+                errors.append(
+                    f"{display_path(module_path)}:{next_line} defines "
+                    f"{root_kind} transition operator {next_operator}, but "
+                    f"direct transition disjunct {compact_disjunct or '<empty>'} "
+                    "mixes multiple action witnesses "
+                    f"{', '.join(sorted(witnesses))}; guarded transition "
+                    "disjuncts must not mix multiple action witnesses"
+                )
+                continue
+            errors.append(
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator}, but "
+                f"direct transition disjunct {compact_disjunct or '<empty>'} "
+                "is not a bare named action or aggregate reference; "
+                f"{root_kind} transition disjuncts must stay bare named "
+                "action or aggregate references"
+            )
+            continue
+        witnesses = transition_disjunct_action_witnesses(module_path, disjunct)
+        if len(witnesses) > 1 and not is_bare_action_or_module_alias:
+            errors.append(
+                f"{display_path(module_path)}:{next_line} defines "
+                f"{root_kind} transition operator {next_operator}, but "
+                f"direct transition disjunct {compact_disjunct or '<empty>'} "
+                "mixes multiple action witnesses "
+                f"{', '.join(sorted(witnesses))}; guarded transition "
+                "disjuncts must not mix multiple action witnesses"
+            )
+            continue
+        cycle_errors: list[str] = []
+        for reference in sorted(cycle_references):
+            cycle_errors.extend(
+                transition_reference_cycle_errors(
+                    module_path,
+                    reference,
+                    root_kind,
+                    seen | frozenset({key}),
+                )
+            )
+        for alias in sorted(cycle_aliases):
+            cycle_errors.extend(
+                transition_module_alias_cycle_errors(
+                    module_path,
+                    alias,
+                    root_kind,
+                    seen | frozenset({key}),
+                )
+            )
+        if cycle_errors:
+            errors.extend(cycle_errors)
+            continue
+        nested_aggregate_errors = transition_disjunct_nested_aggregate_errors(
+            module_path,
+            disjunct,
+            root_kind,
+            seen | frozenset({key}),
+        )
+        if nested_aggregate_errors:
+            errors.extend(nested_aggregate_errors)
+            continue
+        if witnesses:
+            continue
+        errors.append(
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator}, but direct transition "
+            f"disjunct {compact_disjunct or '<empty>'} does not resolve to a "
+            f"named action-shaped operator; {root_kind} transition disjuncts "
+            "must resolve to named zero-arity action-shaped operators"
+        )
+    return errors
+
+
+def progress_transition_fairness_alignment_errors(
+    module_path: Path,
+    next_closure: str,
+    expected_fairness_actions: tuple[str, ...],
+    root_kind: str,
+) -> list[str]:
+    """Return errors when fairness actions are not reachable from Next."""
+
+    next_operator = progress_next_operator_from_closure(next_closure)
+    if next_operator is None:
+        return [
+            f"{root_kind} transition closure {next_closure} must have "
+            "static [][Next]_vars shape"
+        ]
+
+    signatures = tla_operator_signatures(module_path)
+    signature = signatures.get(next_operator)
+    if signature is None:
+        return [
+            f"{display_path(module_path)} does not define {root_kind} "
+            f"transition operator {next_operator} used by {next_closure}"
+        ]
+    next_line, next_arity = signature
+    if next_arity != 0:
+        return [
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator} with arity {next_arity}; "
+            f"{root_kind} transition operators must be zero-arity"
+        ]
+
+    errors = progress_transition_direct_disjunct_errors(
+        module_path,
+        next_operator,
+        root_kind,
+    )
+    transition_keys = transition_action_keys_from_operator(module_path, next_operator)
+    missing_actions = [
+        action
+        for action in expected_fairness_actions
+        if fairness_action_transition_keys(module_path, action).isdisjoint(
+            transition_keys
+        )
+    ]
+    if missing_actions:
+        errors.append(
+            f"{display_path(module_path)}:{next_line} defines {root_kind} "
+            f"transition operator {next_operator}, but {next_closure} cannot "
+            "reach fair action(s) "
+            f"{', '.join(missing_actions)}; {root_kind} fairness actions must be "
+            "reachable from the checked transition closure"
+        )
+    return errors
+
+
+def progress_init_operator_shape_requirement(root_kind: str) -> str:
+    """Return the diagnostic suffix for progress Init predicate shape."""
+
+    return (
+        f"{root_kind} init operators must be initial-state predicates without "
+        "next-state, UNCHANGED, ENABLED, WF_/SF_, [] or <> temporal markers"
+    )
+
+
+def progress_init_alias_resolution_errors(
+    module_path: Path,
+    operator_name: str,
+    init_line: int,
+    init_body: str,
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return errors for an Init definition that aliases another operator."""
+
+    key = (module_path, operator_name)
+    if key in seen:
+        return [
+            f"{display_path(module_path)}:{init_line} defines {root_kind} "
+            f"init operator {operator_name}, but init alias resolution "
+            f"cycles at {operator_name}; {root_kind} init aliases must be "
+            "acyclic and resolve to inspectable initial-state predicates"
+        ]
+    alias = tla_module_operator_alias(init_body)
+    local_alias = None if alias is not None else tla_user_identifier_alias(init_body)
+    if alias is not None:
+        alias_name, target_operator = alias
+        alias_modules = tla_instance_alias_modules(module_path)
+        instance = alias_modules.get(alias_name)
+        if instance is None:
+            return [
+                f"{display_path(module_path)}:{init_line} defines {root_kind} "
+                f"init operator {operator_name}, but aliases {alias_name}!"
+                f"{target_operator} "
+                f"without a named INSTANCE alias {alias_name}; {root_kind} init "
+                "aliases must resolve through named local INSTANCE declarations"
+            ]
+
+        _alias_line, target_module = instance
+        target_path = module_path.with_name(f"{target_module}.tla")
+        target_label = f"{alias_name}!{target_operator}"
+        missing_module_error = (
+            f"module {display_path(target_path)} does not exist; {root_kind} "
+            "init aliases must resolve to local modules"
+        )
+        missing_operator_error = (
+            f"{display_path(target_path)} does not define {target_operator}; "
+            f"{root_kind} init aliases must resolve to defined zero-arity "
+            "initial-state predicates"
+        )
+    elif local_alias is not None:
+        target_operator = local_alias
+        target_path = module_path
+        target_label = target_operator
+        missing_module_error = ""
+        missing_operator_error = (
+            f"{display_path(target_path)} does not define {target_operator}; "
+            f"{root_kind} init aliases must resolve to defined zero-arity "
+            "initial-state predicates"
+        )
+    else:
+        return []
+
+    if not target_path.exists():
+        return [
+            f"{display_path(module_path)}:{init_line} defines {root_kind} "
+            f"init operator {operator_name} as {target_label}, but target "
+            f"{missing_module_error}"
+        ]
+
+    target_signature = tla_operator_signatures(target_path).get(target_operator)
+    if target_signature is None:
+        return [
+            f"{display_path(module_path)}:{init_line} defines {root_kind} "
+            f"init operator {operator_name} as {target_label}, but target "
+            f"{missing_operator_error}"
+        ]
+
+    target_line, target_arity = target_signature
+    if target_arity != 0:
+        return [
+            f"{display_path(module_path)}:{init_line} defines {root_kind} "
+            f"init operator {operator_name} as {target_label}, but target "
+            f"{display_path(target_path)}:{target_line} has arity "
+            f"{target_arity}; {root_kind} init aliases must resolve to "
+            "defined zero-arity initial-state predicates"
+        ]
+
+    target_definition = tla_single_expression_operator_definitions(target_path).get(
+        target_operator
+    )
+    if target_definition is None:
+        return [
+            f"{display_path(module_path)}:{init_line} defines {root_kind} "
+            f"init operator {operator_name} as {target_label}, "
+            f"but target {display_path(target_path)}:{target_line} is not an "
+            f"inspectable single-expression definition; {root_kind} init "
+            "aliases must resolve to inspectable initial-state predicates"
+        ]
+
+    target_line, target_body = target_definition
+    nested_alias_errors = progress_init_alias_resolution_errors(
+        target_path,
+        target_operator,
+        target_line,
+        target_body,
+        root_kind,
+        seen | frozenset({key}),
+    )
+    if nested_alias_errors:
+        return nested_alias_errors
+    if tla_expression_mentions_temporal_or_next_state_marker(target_body):
+        return [
+            f"{display_path(module_path)}:{init_line} defines {root_kind} "
+            f"init operator {operator_name} as {target_label}, "
+            f"but target {display_path(target_path)}:{target_line} is not an "
+            f"initial-state predicate; "
+            f"{progress_init_operator_shape_requirement(root_kind)}"
+        ]
+    return progress_init_helper_reference_errors(
+        target_path,
+        target_operator,
+        target_line,
+        target_body,
+        root_kind,
+        seen | frozenset({key}),
+    )
+
+
+def progress_init_helper_reference_errors(
+    module_path: Path,
+    operator_name: str,
+    operator_line: int,
+    operator_body: str,
+    root_kind: str,
+    seen: frozenset[tuple[Path, str]] = frozenset(),
+) -> list[str]:
+    """Return errors for Init helpers that hide action or temporal syntax."""
+
+    key = (module_path, operator_name)
+    next_seen = seen | frozenset({key})
+    references: list[str] = []
+    for reference in (
+        tla_zero_arity_conjunct_references(operator_body)
+        + tla_zero_arity_boolean_references(operator_body)
+    ):
+        if reference not in references:
+            references.append(reference)
+
+    errors: list[str] = []
+    signatures = tla_operator_signatures(module_path)
+    definitions = tla_single_expression_operator_definitions(module_path)
+    for reference in references:
+        reference_key = (module_path, reference)
+        if reference_key in next_seen:
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but init helper "
+                f"resolution cycles at {reference}; {root_kind} init helpers "
+                "must be acyclic and resolve to inspectable initial-state "
+                "predicates"
+            )
+            continue
+
+        signature = signatures.get(reference)
+        if signature is None:
+            continue
+        reference_line, reference_arity = signature
+        if reference_arity != 0:
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but helper "
+                f"{reference} at {display_path(module_path)}:{reference_line} "
+                f"has arity {reference_arity}; {root_kind} init helpers must "
+                "resolve to defined zero-arity initial-state predicates"
+            )
+            continue
+
+        reference_definition = definitions.get(reference)
+        if reference_definition is None:
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but helper "
+                f"{reference} at {display_path(module_path)}:{reference_line} "
+                "is not an inspectable single-expression definition; "
+                f"{root_kind} init helpers must resolve to inspectable "
+                "initial-state predicates"
+            )
+            continue
+
+        reference_line, reference_body = reference_definition
+        alias_errors = progress_init_alias_resolution_errors(
+            module_path,
+            reference,
+            reference_line,
+            reference_body,
+            root_kind,
+            next_seen,
+        )
+        if alias_errors:
+            errors.extend(alias_errors)
+            continue
+        if tla_expression_mentions_temporal_or_next_state_marker(reference_body):
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but helper "
+                f"{reference} at {display_path(module_path)}:{reference_line} "
+                "is not an initial-state predicate; "
+                f"{progress_init_operator_shape_requirement(root_kind)}"
+            )
+            continue
+        errors.extend(
+            progress_init_helper_reference_errors(
+                module_path,
+                reference,
+                reference_line,
+                reference_body,
+                root_kind,
+                next_seen,
+            )
+        )
+
+    module_aliases: list[tuple[str, str]] = []
+    for module_alias in (
+        tla_module_operator_conjunct_aliases(operator_body)
+        + tla_module_operator_boolean_aliases(operator_body)
+    ):
+        if module_alias not in module_aliases:
+            module_aliases.append(module_alias)
+
+    instance_modules = tla_instance_alias_modules(module_path)
+    for alias_name, target_operator in module_aliases:
+        target_label = f"{alias_name}!{target_operator}"
+        instance = instance_modules.get(alias_name)
+        if instance is None:
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but module "
+                f"helper {target_label} has no named INSTANCE alias "
+                f"{alias_name}; {root_kind} init module-alias helpers must "
+                "resolve through named local INSTANCE declarations"
+            )
+            continue
+
+        _alias_line, target_module = instance
+        target_path = module_path.with_name(f"{target_module}.tla")
+        if not target_path.exists():
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but module "
+                f"helper {target_label} targets missing module "
+                f"{display_path(target_path)}; {root_kind} init module-alias "
+                "helpers must resolve to local modules"
+            )
+            continue
+
+        target_key = (target_path, target_operator)
+        if target_key in next_seen:
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but module "
+                f"helper {target_label} cycles at {target_operator}; "
+                f"{root_kind} init module-alias helpers must be acyclic and "
+                "resolve to inspectable initial-state predicates"
+            )
+            continue
+
+        target_signature = tla_operator_signatures(target_path).get(target_operator)
+        if target_signature is None:
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but module "
+                f"helper {target_label} target {display_path(target_path)} "
+                f"does not define {target_operator}; {root_kind} init "
+                "module-alias helpers must resolve to defined zero-arity "
+                "initial-state predicates"
+            )
+            continue
+
+        target_line, target_arity = target_signature
+        if target_arity != 0:
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but module "
+                f"helper {target_label} target {display_path(target_path)}:"
+                f"{target_line} has arity {target_arity}; {root_kind} init "
+                "module-alias helpers must resolve to defined zero-arity "
+                "initial-state predicates"
+            )
+            continue
+
+        target_definition = tla_single_expression_operator_definitions(
+            target_path
+        ).get(target_operator)
+        if target_definition is None:
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but module "
+                f"helper {target_label} target {display_path(target_path)}:"
+                f"{target_line} is not an inspectable single-expression "
+                f"definition; {root_kind} init module-alias helpers must "
+                "resolve to inspectable initial-state predicates"
+            )
+            continue
+
+        target_line, target_body = target_definition
+        alias_errors = progress_init_alias_resolution_errors(
+            target_path,
+            target_operator,
+            target_line,
+            target_body,
+            root_kind,
+            next_seen,
+        )
+        if alias_errors:
+            errors.extend(alias_errors)
+            continue
+        if tla_expression_mentions_temporal_or_next_state_marker(target_body):
+            errors.append(
+                f"{display_path(module_path)}:{operator_line} defines "
+                f"{root_kind} init operator {operator_name}, but module "
+                f"helper {target_label} target {display_path(target_path)}:"
+                f"{target_line} is not an initial-state predicate; "
+                f"{progress_init_operator_shape_requirement(root_kind)}"
+            )
+            continue
+        errors.extend(
+            progress_init_helper_reference_errors(
+                target_path,
+                target_operator,
+                target_line,
+                target_body,
+                root_kind,
+                next_seen,
+            )
+        )
+    return errors
+
+
+def progress_init_operator_contract_errors(
+    module_path: Path,
+    signatures: dict[str, tuple[int, int]],
+    definitions: dict[str, tuple[int, str]],
+    root_kind: str,
+) -> list[str]:
+    """Return errors when a progress spec cannot resolve static Init."""
+
+    signature = signatures.get("Init")
+    if signature is None:
+        return [
+            f"{display_path(module_path)} does not define {root_kind} "
+            "init operator Init"
+    ]
+
+    init_line, init_arity = signature
+    if init_arity != 0:
+        return [
+            f"{display_path(module_path)}:{init_line} defines {root_kind} "
+            f"init operator Init with arity {init_arity}; {root_kind} init "
+            "operators must be zero-arity"
+        ]
+    definition = definitions.get("Init")
+    if definition is None:
+        return [
+            f"{display_path(module_path)}:{init_line} defines {root_kind} "
+            "init operator Init, but its body is not an inspectable "
+            f"single-expression definition; {root_kind} init operators must "
+            "be inspectable initial-state predicates"
+        ]
+
+    init_line, init_body = definition
+    errors = progress_init_alias_resolution_errors(
+        module_path,
+        "Init",
+        init_line,
+        init_body,
+        root_kind,
+    )
+    if errors:
+        return errors
+
+    if (
+        tla_module_operator_alias(init_body) is None
+        and tla_expression_mentions_temporal_or_next_state_marker(init_body)
+    ):
+        return [
+            f"{display_path(module_path)}:{init_line} defines {root_kind} "
+            "init operator Init, but its body is not an initial-state "
+            f"predicate; {progress_init_operator_shape_requirement(root_kind)}"
+        ]
+    helper_errors = progress_init_helper_reference_errors(
+        module_path,
+        "Init",
+        init_line,
+        init_body,
+        root_kind,
+    )
+    if helper_errors:
+        return helper_errors
+    return []
 
 
 def tla_wf_vars_operator_references(body: str) -> tuple[str, ...]:
@@ -9733,28 +14978,71 @@ def commit_progress_spec_contract_errors(
         return errors
 
     definitions = tla_single_expression_operator_definitions(module_path)
+    definition_body_lines = tla_single_expression_operator_definition_body_lines(
+        module_path
+    )
     signatures = tla_operator_signatures(module_path)
+    errors.extend(
+        progress_init_operator_contract_errors(
+            module_path,
+            signatures,
+            definitions,
+            root_kind,
+        )
+    )
+    errors.extend(
+        progress_transition_fairness_alignment_errors(
+            module_path,
+            next_closure,
+            expected_fairness_actions,
+            root_kind,
+        )
+    )
 
     spec_definition = definitions.get(spec_operator)
     if spec_definition is not None:
         definition_line, body = spec_definition
-        compact_body = "".join(
-            "".join(tla_line_without_comment(line).split())
-            for line in body.splitlines()
+        transition_closure_count = direct_conjunct_occurrence_count(
+            body,
+            next_closure,
         )
-        if next_closure not in compact_body:
+        if transition_closure_count != 1:
             errors.append(
                 f"{display_path(module_path)}:{definition_line} defines "
-                f"{spec_operator}, but must keep direct {next_closure} "
-                "transition closure"
+                f"{spec_operator}, but must keep exactly one direct "
+                f"{next_closure} transition closure, found "
+                f"{transition_closure_count}"
             )
 
-        raw_fairness_operands = tla_wf_vars_operands(body)
+        unexpected_spec_conjuncts = (
+            unexpected_progress_spec_direct_non_named_conjuncts(
+                body,
+                next_closure,
+                fairness_operator,
+            )
+        )
+        if unexpected_spec_conjuncts:
+            errors.append(
+                f"{display_path(module_path)}:{definition_line} defines "
+                f"{spec_operator}, but contains unexpected direct "
+                "progress-spec conjunct(s) "
+                f"{', '.join(unexpected_spec_conjuncts)}; {root_kind} "
+                "specs must compose only Init, the direct "
+                f"{next_closure} transition closure, and {fairness_operator}"
+            )
+
+        raw_fairness_operand_occurrences = tla_wf_vars_operand_occurrences(
+            definition_body_lines.get(spec_operator, (definition_line, ()))[1]
+        )
+        raw_fairness_operands = tuple(
+            operand for operand, _line_number in raw_fairness_operand_occurrences
+        )
         if raw_fairness_operands:
             errors.append(
                 f"{display_path(module_path)}:{definition_line} defines "
                 f"{spec_operator}, but must compose {fairness_operator} "
-                "instead of raw WF_vars fairness clauses: "
+                "instead of raw WF_vars fairness clauses at "
+                f"{line_number_context([line for _operand, line in raw_fairness_operand_occurrences])}: "
                 f"{', '.join(' '.join(operand.split()) for operand in raw_fairness_operands)}"
             )
 
@@ -9777,30 +15065,347 @@ def commit_progress_spec_contract_errors(
         return errors
 
     fairness_line, fairness_body = fairness_definition
-    fairness_operands = tla_wf_vars_operands(fairness_body)
+    fairness_operand_occurrences = tla_wf_vars_operand_occurrences(
+        definition_body_lines.get(fairness_operator, (fairness_line, ()))[1]
+    )
+    non_wf_direct_conjuncts = [
+        " ".join(strip_static_outer_parentheses(conjunct).split())
+        for conjunct in tla_top_level_conjuncts(fairness_body)
+        if direct_wf_vars_conjunct_operand(conjunct) is None
+    ]
+    if non_wf_direct_conjuncts:
+        errors.append(
+            f"{display_path(module_path)}:{fairness_line} defines "
+            f"{fairness_operator}, but contains non-WF_vars direct fairness "
+            f"conjunct(s) {', '.join(non_wf_direct_conjuncts)}; "
+            f"{root_kind} fairness aggregate must contain only direct "
+            "WF_vars(Action) clauses"
+        )
+    fairness_operands = tuple(
+        operand for operand, _line_number in fairness_operand_occurrences
+    )
     invalid_fairness_operands = [
-        " ".join(operand.split()) or "<empty>"
-        for operand in fairness_operands
+        (" ".join(operand.split()) or "<empty>", line_number)
+        for operand, line_number in fairness_operand_occurrences
         if normalized_wf_vars_action_operand(operand) is None
     ]
     if invalid_fairness_operands:
         errors.append(
             f"{display_path(module_path)}:{fairness_line} defines "
             f"{fairness_operator}, but contains non-static WF_vars "
-            f"operand(s) {', '.join(invalid_fairness_operands)}; "
+            "operand(s) "
+            + ", ".join(
+                f"{operand} at {line_number_context([line_number])}"
+                for operand, line_number in invalid_fairness_operands
+            )
+            + "; "
             f"{root_kind} fairness actions must be named zero-arity "
             "operators"
         )
-    fairness_actions = tuple(
-        action
-        for action in (
-            normalized_wf_vars_action_operand(operand)
-            for operand in fairness_operands
-        )
-        if action is not None
+    fairness_actions_with_lines = tuple(
+        (action, line_number)
+        for operand, line_number in fairness_operand_occurrences
+        if (action := normalized_wf_vars_action_operand(operand)) is not None
     )
+    fairness_actions = tuple(action for action, _line_number in fairness_actions_with_lines)
+    fairness_action_lines: dict[str, list[int]] = {}
+    for action, line_number in fairness_actions_with_lines:
+        fairness_action_lines.setdefault(action, []).append(line_number)
     fairness_action_set = set(fairness_actions)
     expected_action_set = set(expected_fairness_actions)
+
+    for action in dict.fromkeys(fairness_actions):
+        signature = signatures.get(action)
+        if signature is None:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references undefined WF_vars "
+                f"action {action} at {line_number_context(fairness_action_lines[action])}; "
+                f"{root_kind} fairness actions must be defined zero-arity "
+                "operators"
+            )
+            continue
+        action_line, action_arity = signature
+        if action_arity != 0:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} has arity "
+                f"{action_arity}; {root_kind} fairness actions must be "
+                "defined zero-arity operators"
+            )
+            continue
+
+        action_definition = definitions.get(action)
+        if action_definition is None:
+            continue
+        action_line, action_body = action_definition
+        action_alias_cycle_errors = fairness_action_alias_cycle_errors(
+            module_path,
+            fairness_line,
+            fairness_operator,
+            action,
+            action_line,
+            action_body,
+            fairness_action_lines[action],
+            root_kind,
+        )
+        if action_alias_cycle_errors:
+            errors.extend(action_alias_cycle_errors)
+            continue
+        errors.extend(
+            fairness_action_alias_resolution_errors(
+                module_path,
+                fairness_line,
+                fairness_operator,
+                action,
+                action_line,
+                action_body,
+                fairness_action_lines[action],
+                expected_action_set,
+                root_kind,
+            )
+        )
+        action_body_lines = definition_body_lines.get(action, (action_line, ()))[1]
+        nested_fairness_occurrences = tla_wf_vars_operand_occurrences(
+            action_body_lines
+        )
+        if nested_fairness_occurrences:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} contains nested "
+                "WF_vars clause(s) at "
+                f"{line_number_context([line for _operand, line in nested_fairness_occurrences])}: "
+                f"{', '.join(' '.join(operand.split()) for operand, _line in nested_fairness_occurrences)}; "
+                f"{root_kind} fairness action definitions must not contain "
+                "fairness clauses"
+            )
+        elif tla_expression_mentions_fairness_or_temporal_marker(action_body):
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} contains fairness "
+                f"or temporal syntax; {root_kind} fairness action "
+                "definitions must not contain fairness or temporal operators"
+            )
+        nested_fair_actions = [
+            reference
+            for reference in tla_zero_arity_conjunct_references(action_body)
+            if reference in expected_action_set
+        ]
+        if nested_fair_actions:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} directly composes "
+                f"fair action(s) {', '.join(nested_fair_actions)}; "
+                f"{root_kind} fairness action definitions must not compose "
+                "other fair actions"
+            )
+        boolean_hidden_fair_actions = fairness_action_boolean_hidden_fair_actions(
+            action_body,
+            expected_action_set,
+        )
+        if boolean_hidden_fair_actions:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} hides fair "
+                f"action(s) {', '.join(boolean_hidden_fair_actions)} inside "
+                "boolean structure; "
+                f"{root_kind} fairness action definitions must not hide other "
+                "fair actions in boolean structure"
+            )
+        errors.extend(
+            fairness_action_module_alias_operand_resolution_errors(
+                module_path,
+                fairness_line,
+                fairness_operator,
+                action,
+                action_line,
+                action_body,
+                fairness_action_lines[action],
+                root_kind,
+            )
+        )
+        errors.extend(
+            fairness_action_helper_reference_resolution_errors(
+                module_path,
+                fairness_line,
+                fairness_operator,
+                action,
+                action_line,
+                action_body,
+                fairness_action_lines[action],
+                expected_action_set,
+                root_kind,
+            )
+        )
+        errors.extend(
+            fairness_action_helper_wrapper_cycle_errors(
+                module_path,
+                fairness_line,
+                fairness_operator,
+                action,
+                action_line,
+                action_body,
+                fairness_action_lines[action],
+                expected_action_set,
+                root_kind,
+            )
+        )
+        helper_wrapped_fair_actions = fairness_action_helper_wrapped_fair_actions(
+            module_path,
+            action_body,
+            expected_action_set,
+        )
+        if helper_wrapped_fair_actions:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} reaches fair "
+                f"action(s) {', '.join(helper_wrapped_fair_actions)} through "
+                "static helper wrapper(s); "
+                f"{root_kind} fairness action helper wrappers must not hide "
+                "composed fair actions"
+            )
+        errors.extend(
+            fairness_action_helper_action_cycle_errors(
+                module_path,
+                fairness_line,
+                fairness_operator,
+                action,
+                action_line,
+                action_body,
+                fairness_action_lines[action],
+                expected_action_set,
+                root_kind,
+            )
+        )
+        helper_action_fair_actions = fairness_action_helper_action_fair_actions(
+            module_path,
+            action_body,
+            expected_action_set,
+        )
+        if helper_action_fair_actions:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} reaches fair "
+                f"action(s) {', '.join(helper_action_fair_actions)} through "
+                "action helper(s); "
+                f"{root_kind} fairness action helper actions must not hide "
+                "composed fair actions"
+            )
+        errors.extend(
+            fairness_action_helper_alias_cycle_errors(
+                module_path,
+                fairness_line,
+                fairness_operator,
+                action,
+                action_line,
+                action_body,
+                fairness_action_lines[action],
+                expected_action_set,
+                root_kind,
+            )
+        )
+        errors.extend(
+            fairness_action_helper_alias_resolution_errors(
+                module_path,
+                fairness_line,
+                fairness_operator,
+                action,
+                action_line,
+                action_body,
+                fairness_action_lines[action],
+                expected_action_set,
+                root_kind,
+            )
+        )
+        helper_alias_fair_actions = fairness_action_helper_alias_fair_actions(
+            module_path,
+            action_body,
+            expected_action_set,
+        )
+        if helper_alias_fair_actions:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} reaches fair "
+                f"action(s) {', '.join(helper_alias_fair_actions)} through "
+                "helper alias(es); "
+                f"{root_kind} fairness action helper aliases must not hide "
+                "composed fair actions"
+            )
+        errors.extend(
+            fairness_action_module_alias_cycle_errors(
+                module_path,
+                fairness_line,
+                fairness_operator,
+                action,
+                action_line,
+                action_body,
+                fairness_action_lines[action],
+                expected_action_set,
+                root_kind,
+            )
+        )
+        module_alias_conjunct_fair_actions = (
+            fairness_action_module_alias_conjunct_fair_actions(
+                module_path,
+                action_body,
+                expected_action_set,
+            )
+        )
+        if module_alias_conjunct_fair_actions:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} reaches fair "
+                f"action(s) {', '.join(module_alias_conjunct_fair_actions)} "
+                "through module-alias conjunct(s); "
+                f"{root_kind} fairness action module-alias conjuncts must not "
+                "hide composed fair actions"
+            )
+        module_alias_boolean_fair_actions = (
+            fairness_action_module_alias_boolean_fair_actions(
+                module_path,
+                action_body,
+                expected_action_set,
+            )
+        )
+        if module_alias_boolean_fair_actions:
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} reaches fair "
+                f"action(s) {', '.join(module_alias_boolean_fair_actions)} "
+                "through module-alias boolean operand(s); "
+                f"{root_kind} fairness action module-alias boolean operands "
+                "must not hide composed fair actions"
+            )
+        if not fairness_action_definition_is_action_shaped(action_body):
+            errors.append(
+                f"{display_path(module_path)}:{fairness_line} defines "
+                f"{fairness_operator}, but references WF_vars action {action} "
+                f"at {line_number_context(fairness_action_lines[action])} "
+                f"whose definition at line {action_line} is not "
+                f"action-shaped; {root_kind} fairness actions must mention "
+                "next-state updates, UNCHANGED, or a module-instance action "
+                "alias"
+            )
 
     repeated_expected_actions = duplicate_values(list(expected_fairness_actions))
     if repeated_expected_actions:
@@ -9816,7 +15421,7 @@ def commit_progress_spec_contract_errors(
         errors.append(
             f"{display_path(module_path)}:{fairness_line} defines "
             f"{fairness_operator}, but repeats WF_vars action(s) "
-            f"{', '.join(repeated_actions)}; each {root_kind} "
+            f"{named_items_with_line_context(repeated_actions, fairness_action_lines)}; each {root_kind} "
             "fairness action must be counted once"
         )
 
@@ -9839,7 +15444,7 @@ def commit_progress_spec_contract_errors(
         errors.append(
             f"{display_path(module_path)}:{fairness_line} defines "
             f"{fairness_operator}, but contains unexpected WF_vars action(s) "
-            f"{', '.join(unexpected_actions)}; keep {root_kind} "
+            f"{named_items_with_line_context(unexpected_actions, fairness_action_lines)}; keep {root_kind} "
             "fairness on the documented action contract"
         )
 
@@ -9875,6 +15480,7 @@ def source_commit_progress_spec_contract_errors(
     """Return errors if source progress spec/fairness wiring drifts."""
 
     errors: list[str] = []
+    seen_contracts: set[tuple[Path, str]] = set()
     for (
         module_path,
         spec_operator,
@@ -9883,6 +15489,15 @@ def source_commit_progress_spec_contract_errors(
         expected_fairness_actions,
         root_kind,
     ) in contracts:
+        contract_key = (module_path, spec_operator)
+        if contract_key in seen_contracts:
+            errors.append(
+                "source commit progress spec contract inventory repeats "
+                f"{display_path(module_path)}::{spec_operator}; each source "
+                "commit progress spec contract must be counted once"
+            )
+            continue
+        seen_contracts.add(contract_key)
         errors.extend(
             commit_progress_spec_contract_errors(
                 module_path,
@@ -9905,6 +15520,7 @@ def top_level_commit_spec_contract_errors(
     """Return errors if top-level Sumeragi spec/fairness wiring drifts."""
 
     errors: list[str] = []
+    seen_contracts: set[tuple[Path, str]] = set()
     for (
         module_path,
         spec_operator,
@@ -9913,6 +15529,15 @@ def top_level_commit_spec_contract_errors(
         expected_fairness_actions,
         root_kind,
     ) in contracts:
+        contract_key = (module_path, spec_operator)
+        if contract_key in seen_contracts:
+            errors.append(
+                "top-level commit spec contract inventory repeats "
+                f"{display_path(module_path)}::{spec_operator}; each "
+                "top-level commit spec contract must be counted once"
+            )
+            continue
+        seen_contracts.add(contract_key)
         errors.extend(
             commit_progress_spec_contract_errors(
                 module_path,
@@ -9926,14 +15551,149 @@ def top_level_commit_spec_contract_errors(
     return errors
 
 
+def progress_finality_property_contract_errors(
+    contracts: tuple[
+        tuple[Path, str, str, tuple[str, ...], str],
+        ...,
+    ] = SUMERAGI_PROGRESS_FINALITY_PROPERTY_CONTRACTS,
+) -> list[str]:
+    """Return errors if progress finality eventualities drift."""
+
+    errors: list[str] = []
+    seen_contracts: set[tuple[Path, str, str]] = set()
+    for (
+        module_path,
+        eventual_operator,
+        stack_operator,
+        required_stack_conjuncts,
+        root_kind,
+    ) in contracts:
+        contract_key = (module_path, eventual_operator, stack_operator)
+        if contract_key in seen_contracts:
+            errors.append(
+                "progress finality property contract inventory repeats "
+                f"{display_path(module_path)}::{eventual_operator} -> "
+                f"{stack_operator}; each progress finality property contract "
+                "must be counted once"
+            )
+            continue
+        seen_contracts.add(contract_key)
+        if not module_path.exists():
+            continue
+        definitions = tla_single_expression_operator_definitions(module_path)
+        signatures = tla_operator_signatures(module_path)
+
+        eventual_definition = definitions.get(eventual_operator)
+        if eventual_definition is None:
+            errors.append(
+                f"{display_path(module_path)} does not define {root_kind} "
+                f"property {eventual_operator}"
+            )
+            continue
+        eventual_line, eventual_body = eventual_definition
+        signature = signatures.get(eventual_operator)
+        if signature is not None and signature[1] != 0:
+            _line, arity = signature
+            errors.append(
+                f"{display_path(module_path)}:{eventual_line} defines "
+                f"{eventual_operator} with arity {arity}; {root_kind} "
+                "properties must be zero-arity"
+            )
+            continue
+
+        temporal_operator_operand = tla_unary_temporal_operator_operand(
+            eventual_body
+        )
+        if temporal_operator_operand != ("<>", stack_operator):
+            errors.append(
+                f"{display_path(module_path)}:{eventual_line} defines "
+                f"{eventual_operator}, but must be exactly <>"
+                f"{stack_operator}; {root_kind} properties must be direct "
+                "<>FinalityStack obligations"
+            )
+
+        stack_definition = definitions.get(stack_operator)
+        if stack_definition is None:
+            errors.append(
+                f"{display_path(module_path)} does not define {root_kind} "
+                f"stack {stack_operator}"
+            )
+            continue
+        stack_line, stack_body = stack_definition
+        stack_signature = signatures.get(stack_operator)
+        if stack_signature is not None and stack_signature[1] != 0:
+            _line, arity = stack_signature
+            errors.append(
+                f"{display_path(module_path)}:{stack_line} defines "
+                f"{stack_operator} with arity {arity}; {root_kind} stacks "
+                "must be zero-arity"
+            )
+            continue
+
+        repeated_expected_conjuncts = duplicate_values(list(required_stack_conjuncts))
+        if repeated_expected_conjuncts:
+            errors.append(
+                f"{root_kind} stack {stack_operator} conjunct contract "
+                "repeats expected conjunct(s) "
+                f"{', '.join(repeated_expected_conjuncts)}; each "
+                f"{root_kind} finality-stack obligation must be counted once"
+            )
+
+        direct_conjuncts = [
+            " ".join(strip_static_outer_parentheses(conjunct).split())
+            for conjunct in tla_top_level_conjuncts(stack_body)
+        ]
+        direct_conjunct_set = set(direct_conjuncts)
+        expected_conjunct_set = set(required_stack_conjuncts)
+        repeated_direct_conjuncts = duplicate_values(direct_conjuncts)
+        if repeated_direct_conjuncts:
+            errors.append(
+                f"{display_path(module_path)}:{stack_line} defines "
+                f"{stack_operator}, but repeats finality evidence "
+                f"conjunct(s) {', '.join(repeated_direct_conjuncts)}; each "
+                f"{root_kind} finality-stack obligation must be counted once"
+            )
+        missing_conjuncts = [
+            conjunct
+            for conjunct in required_stack_conjuncts
+            if conjunct not in direct_conjunct_set
+        ]
+        if missing_conjuncts:
+            errors.append(
+                f"{display_path(module_path)}:{stack_line} defines "
+                f"{stack_operator}, but is missing finality evidence "
+                f"conjunct(s) {', '.join(missing_conjuncts)}; {root_kind} "
+                "stacks must retain committed/finality evidence conjuncts"
+            )
+        unexpected_conjuncts = [
+            conjunct
+            for conjunct in direct_conjuncts
+            if conjunct not in expected_conjunct_set
+        ]
+        if unexpected_conjuncts:
+            errors.append(
+                f"{display_path(module_path)}:{stack_line} defines "
+                f"{stack_operator}, but contains unexpected finality "
+                f"evidence conjunct(s) {', '.join(unexpected_conjuncts)}; "
+                f"{root_kind} stacks must stay on the documented finality "
+                "evidence conjunct contract"
+            )
+
+    return errors
+
+
 def direct_delivered_first_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiDirectDeliveredFirstCorridorGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for delivered-first progress-safety drift."""
 
     return consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_DIRECT_DELIVERED_FIRST_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         root_kind="direct delivered-first progress safety aggregate",
         zero_arity_requirement=(
             "direct delivered-first progress safety operators must be "
@@ -9952,12 +15712,16 @@ def direct_delivered_first_gate_conjunct_contract_errors(
 
 def direct_vote_first_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiDirectVoteFirstCorridorGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for vote-first progress-safety drift."""
 
     return consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_DIRECT_VOTE_FIRST_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         root_kind="direct vote-first progress safety aggregate",
         zero_arity_requirement=(
             "direct vote-first progress safety operators must be "
@@ -9976,12 +15740,16 @@ def direct_vote_first_gate_conjunct_contract_errors(
 
 def byzantine_interleaving_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiByzantineCommitInterleavingGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for Byzantine interleaving progress-safety drift."""
 
     return consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_BYZANTINE_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         root_kind="Byzantine interleaving progress safety aggregate",
         zero_arity_requirement=(
             "Byzantine interleaving progress safety operators must be "
@@ -10000,12 +15768,16 @@ def byzantine_interleaving_gate_conjunct_contract_errors(
 
 def direct_interleaving_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiDirectCommitInterleavingGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for direct interleaving progress-safety drift."""
 
     return consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_DIRECT_INTERLEAVING_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         root_kind="direct interleaving progress safety aggregate",
         zero_arity_requirement=(
             "direct interleaving progress safety operators must be "
@@ -10024,12 +15796,16 @@ def direct_interleaving_gate_conjunct_contract_errors(
 
 def projection_gate_conjunct_contract_errors(
     module_path: Path = SPEC_DIR / "SumeragiByzantineCommitProjectionGate.tla",
+    contracts: dict[
+        str,
+        tuple[str, ...],
+    ] = SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
 ) -> list[str]:
     """Return errors for Byzantine projection gate aggregate proof drift."""
 
     errors = consensus_core_root_conjunct_contract_errors(
         module_path,
-        SUMERAGI_PROJECTION_GATE_CONJUNCT_CONTRACTS,
+        contracts,
         allow_non_named_conjunct_operators=frozenset(
             SUMERAGI_PROJECTION_GATE_IMPLICATION_CONTRACTS
         ),
@@ -10393,8 +16169,10 @@ def tla_operator_parameter_names(path: Path) -> dict[str, frozenset[str]]:
 
 
 @cache
-def tla_single_expression_operator_definitions(path: Path) -> dict[str, tuple[int, str]]:
-    entries: dict[str, tuple[int, str]] = {}
+def tla_single_expression_operator_definition_body_lines(
+    path: Path,
+) -> dict[str, tuple[int, tuple[tuple[int, str], ...]]]:
+    entries: dict[str, tuple[int, tuple[tuple[int, str], ...]]] = {}
     lines = read_text(path).splitlines()
     for index, line in enumerate(lines):
         line_number = index + 1
@@ -10422,7 +16200,7 @@ def tla_single_expression_operator_definitions(path: Path) -> dict[str, tuple[in
             ):
                 continue
         if body:
-            entries[name] = (line_number, body)
+            entries[name] = (line_number, ((line_number, body),))
             continue
 
         body_lines: list[tuple[int, str]] = []
@@ -10435,11 +16213,19 @@ def tla_single_expression_operator_definitions(path: Path) -> dict[str, tuple[in
             body_lines.append((body_index, body_stripped.strip()))
 
         if body_lines:
-            entries[name] = (
-                body_lines[0][0],
-                " ".join(body for _, body in body_lines),
-            )
+            entries[name] = (body_lines[0][0], tuple(body_lines))
     return entries
+
+
+@cache
+def tla_single_expression_operator_definitions(path: Path) -> dict[str, tuple[int, str]]:
+    return {
+        name: (definition_line, " ".join(body for _line_number, body in body_lines))
+        for name, (
+            definition_line,
+            body_lines,
+        ) in tla_single_expression_operator_definition_body_lines(path).items()
+    }
 
 
 @cache
@@ -11012,6 +16798,28 @@ def tla_instance_alias_entries(path: Path) -> list[tuple[int, str]]:
         if is_tla_user_identifier(alias) and is_tla_module_name(module):
             entries.append((line_number, alias))
     return entries
+
+
+@cache
+def tla_instance_alias_modules(path: Path) -> dict[str, tuple[int, str]]:
+    aliases: dict[str, tuple[int, str]] = {}
+    for line_number, line in enumerate(read_text(path).splitlines(), 1):
+        stripped = tla_line_without_comment(line).strip()
+        if not stripped:
+            continue
+        match = TLA_INSTANCE_RE.match(stripped)
+        if match is None or match.group("local") is not None:
+            continue
+        alias = match.group("alias")
+        module = match.group("module")
+        if (
+            alias is None
+            or not is_tla_user_identifier(alias)
+            or not is_tla_module_name(module)
+        ):
+            continue
+        aliases.setdefault(alias, (line_number, module))
+    return aliases
 
 
 def tla_module_dependency_errors(mode: str, path: Path) -> list[str]:
@@ -23305,6 +29113,25 @@ def cfg_correctness_envelope_shape_errors(
     return errors
 
 
+def runner_cfg_correctness_envelope_shape_errors(
+    mode: str,
+    case: RunnerCase,
+    module_path: Path,
+    cfg_path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return CFG correctness-envelope errors with runner case source context."""
+
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in cfg_correctness_envelope_shape_errors(
+            mode, module_path, cfg_path, runner_name
+        )
+    ]
+
+
 def cfg_direct_exactness_shape_errors(
     mode: str,
     module_path: Path,
@@ -23338,6 +29165,25 @@ def cfg_direct_exactness_shape_errors(
             )
         )
     return errors
+
+
+def runner_cfg_direct_exactness_shape_errors(
+    mode: str,
+    case: RunnerCase,
+    module_path: Path,
+    cfg_path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return CFG direct-exactness shape errors with runner case context."""
+
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in cfg_direct_exactness_shape_errors(
+            mode, module_path, cfg_path, runner_name
+        )
+    ]
 
 
 def cfg_direct_exactness_envelope_pairing_errors(
@@ -23383,6 +29229,25 @@ def cfg_direct_exactness_envelope_pairing_errors(
             "but no checked correctness envelope in that CFG composes it"
         )
     return errors
+
+
+def runner_cfg_direct_exactness_envelope_pairing_errors(
+    mode: str,
+    case: RunnerCase,
+    module_path: Path,
+    cfg_path: Path,
+    runner_path: Path,
+    runner_name: str,
+) -> list[str]:
+    """Return CFG exactness-pairing errors with runner case source context."""
+
+    return [
+        f"{runner_name} runner {display_path(runner_path)} case "
+        f"{case.label!r} at line {case.line}: {error}"
+        for error in cfg_direct_exactness_envelope_pairing_errors(
+            mode, module_path, cfg_path, runner_name
+        )
+    ]
 
 
 def cfg_proof_target_shape_surface_errors(
@@ -26366,6 +32231,17 @@ def workflow_entrypoint_errors() -> list[str]:
     return errors
 
 
+def expected_failure_marker_line(case: RunnerCase) -> int | None:
+    """Return the line of the first explicit expected-failure marker."""
+
+    for line_number, value in scalar_assignment_values(
+        case, EXPECT_FAILURE_ASSIGN_RE
+    ):
+        if value == "1":
+            return line_number
+    return None
+
+
 def modes_without_expected_failure_marker(
     modes: list[str] | set[str],
     cases: dict[str, RunnerCase],
@@ -26374,9 +32250,7 @@ def modes_without_expected_failure_marker(
     missing: list[str] = []
     for mode in sorted_unique(modes):
         case = matching_case(mode, cases)
-        if case is not None and "1" not in EXPECT_FAILURE_ASSIGN_RE.findall(
-            case.body
-        ):
+        if case is not None and expected_failure_marker_line(case) is None:
             missing.append(
                 f"{mode}: {runner_name} runner case {case.label!r} "
                 f"at line {case.line}"
@@ -26399,7 +32273,7 @@ def sourced_modes_without_expected_failure_marker_errors(
     missing: list[str] = []
     for mode in sorted_unique(first_occurrences):
         case = matching_case(mode, cases)
-        if case is None or "1" in EXPECT_FAILURE_ASSIGN_RE.findall(case.body):
+        if case is None or expected_failure_marker_line(case) is not None:
             continue
         owner, path, line_number = first_occurrences[mode]
         missing.append(
@@ -26428,7 +32302,7 @@ def documented_modes_without_expected_failure_marker_errors(
     missing: list[str] = []
     for mode, line_number in sorted(first_lines.items()):
         case = matching_case(mode, cases)
-        if case is None or "1" in EXPECT_FAILURE_ASSIGN_RE.findall(case.body):
+        if case is None or expected_failure_marker_line(case) is not None:
             continue
         missing.append(
             f"{display_path(path)} {owner} mode {mode} at line "
@@ -26446,10 +32320,13 @@ def modes_with_unexpected_failure_marker(
     unexpected: list[str] = []
     for mode in sorted_unique(modes):
         case = matching_case(mode, cases)
-        if case is not None and "1" in EXPECT_FAILURE_ASSIGN_RE.findall(case.body):
+        if case is None:
+            continue
+        line_number = expected_failure_marker_line(case)
+        if line_number is not None:
             unexpected.append(
                 f"{mode}: {runner_name} runner case {case.label!r} "
-                f"at line {case.line}"
+                f"line {line_number} sets unexpected expect_failure=1"
             )
     return unexpected
 
@@ -26472,13 +32349,16 @@ def sourced_modes_with_unexpected_failure_marker_errors(
     unexpected: list[str] = []
     for mode in sorted_unique(first_occurrences):
         case = matching_case(mode, cases)
-        if case is None or "1" not in EXPECT_FAILURE_ASSIGN_RE.findall(case.body):
+        if case is None:
+            continue
+        marker_line = expected_failure_marker_line(case)
+        if marker_line is None:
             continue
         owner, path, line_number = first_occurrences[mode]
         unexpected.append(
             f"{owner} mode {mode} at {display_path(path)}:{line_number} "
-            f"maps to {runner_name} runner case {case.label!r} at line "
-            f"{case.line} with unexpected expect_failure=1"
+            f"maps to {runner_name} runner case {case.label!r} line "
+            f"{marker_line} with unexpected expect_failure=1"
         )
     return unexpected
 
@@ -26519,8 +32399,10 @@ def expected_failure_default_errors(
         values.append((line_number, match.group(1)))
 
     if len(values) != 1:
+        line_context = top_level_assignment_count_context(values)
         errors.append(
-            f"{runner_name} runner {display_path(path)} must declare exactly "
+            f"{runner_name} runner {display_path(path)}{line_context} must "
+            "declare exactly "
             f"one top-level expect_failure=0 default, found {len(values)}"
         )
     elif values[0][1] != "0":
@@ -26564,8 +32446,10 @@ def tlc_constraint_default_errors(path: Path = TLC_RUNNER) -> list[str]:
         values.append((line_number, match.group(1)))
 
     if len(values) != 1:
+        line_context = top_level_assignment_count_context(values)
         errors.append(
-            f"TLC runner {display_path(path)} must declare exactly one "
+            f"TLC runner {display_path(path)}{line_context} must declare "
+            "exactly one "
             f'top-level tlc_constraint="" default, found {len(values)}'
         )
     elif values[0][1] != "":
@@ -26596,16 +32480,18 @@ def expected_failure_assignment_errors(
                 f"{runner_name} runner",
             )
         )
-        assignments = EXPECT_FAILURE_ASSIGN_RE.findall(case.body)
+        assignments = scalar_assignment_values(case, EXPECT_FAILURE_ASSIGN_RE)
         if len(assignments) > 1:
+            lines = ", ".join(str(line_number) for line_number, _ in assignments)
             errors.append(
-                f"{mode}: {runner_name} runner case {case.label!r} at line "
-                f"{case.line} assigns expect_failure {len(assignments)} times"
+                f"{mode}: {runner_name} runner case {case.label!r} at lines "
+                f"{lines} assigns expect_failure {len(assignments)} times"
             )
-        elif assignments == ["0"]:
+        elif assignments and assignments[0][1] == "0":
+            line_number = assignments[0][0]
             errors.append(
-                f"{mode}: {runner_name} runner case {case.label!r} at line "
-                f"{case.line} sets expect_failure=0 inside a mode case; keep "
+                f"{mode}: {runner_name} runner case {case.label!r} line "
+                f"{line_number} sets expect_failure=0 inside a mode case; keep "
                 "the default at top level"
             )
     return errors
@@ -26644,8 +32530,10 @@ def apalache_typecheck_default_errors(path: Path = APALACHE_RUNNER) -> list[str]
         values.append((line_number, match.group(1)))
 
     if len(values) != 1:
+        line_context = top_level_assignment_count_context(values)
         errors.append(
-            f"Apalache runner {display_path(path)} must declare exactly one "
+            f"Apalache runner {display_path(path)}{line_context} must declare "
+            "exactly one "
             f"top-level typecheck_only=0 default, found {len(values)}"
         )
     elif values[0][1] != "0":
@@ -26682,28 +32570,29 @@ def apalache_typecheck_only_mode_errors(
                 "Apalache runner",
             )
         )
-        assignments = TYPECHECK_ONLY_ASSIGN_RE.findall(case.body)
+        assignments = scalar_assignment_values(case, TYPECHECK_ONLY_ASSIGN_RE)
         if len(assignments) > 1:
+            lines = ", ".join(str(line_number) for line_number, _ in assignments)
             errors.append(
-                f"{mode}: Apalache runner case {case.label!r} at line "
-                f"{case.line} assigns typecheck_only {len(assignments)} times"
+                f"{mode}: Apalache runner case {case.label!r} at lines "
+                f"{lines} assigns typecheck_only {len(assignments)} times"
             )
             continue
         if not assignments:
             continue
-        value = assignments[0]
+        line_number, value = assignments[0]
         if value == "0":
             errors.append(
-                f"{mode}: Apalache runner case {case.label!r} at line "
-                f"{case.line} sets typecheck_only=0 inside a mode case; keep "
+                f"{mode}: Apalache runner case {case.label!r} line "
+                f"{line_number} sets typecheck_only=0 inside a mode case; keep "
                 "the default at top level"
             )
             continue
         marked_modes.add(mode)
         if mode not in allowed_mode_set:
             errors.append(
-                f"{mode}: Apalache runner case {case.label!r} at line "
-                f"{case.line} sets typecheck_only=1 outside "
+                f"{mode}: Apalache runner case {case.label!r} line "
+                f"{line_number} sets typecheck_only=1 outside "
                 "APALACHE_TYPECHECK_ONLY_MODES"
             )
 
@@ -28659,6 +34548,9 @@ def main() -> int:
     top_level_commit_spec_contract_mismatches = (
         top_level_commit_spec_contract_errors()
     )
+    progress_finality_property_contract_mismatches = (
+        progress_finality_property_contract_errors()
+    )
     direct_delivered_first_contract_mismatches = (
         direct_delivered_first_gate_conjunct_contract_errors()
     )
@@ -28974,18 +34866,33 @@ def main() -> int:
                     )
                 )
                 reference_errors.extend(
-                    cfg_correctness_envelope_shape_errors(
-                        mode, spec_files[0], cfg_file, "Apalache"
+                    runner_cfg_correctness_envelope_shape_errors(
+                        mode,
+                        case,
+                        spec_files[0],
+                        cfg_file,
+                        APALACHE_RUNNER,
+                        "Apalache",
                     )
                 )
                 reference_errors.extend(
-                    cfg_direct_exactness_shape_errors(
-                        mode, spec_files[0], cfg_file, "Apalache"
+                    runner_cfg_direct_exactness_shape_errors(
+                        mode,
+                        case,
+                        spec_files[0],
+                        cfg_file,
+                        APALACHE_RUNNER,
+                        "Apalache",
                     )
                 )
                 reference_errors.extend(
-                    cfg_direct_exactness_envelope_pairing_errors(
-                        mode, spec_files[0], cfg_file, "Apalache"
+                    runner_cfg_direct_exactness_envelope_pairing_errors(
+                        mode,
+                        case,
+                        spec_files[0],
+                        cfg_file,
+                        APALACHE_RUNNER,
+                        "Apalache",
                     )
                 )
                 reference_errors.extend(
@@ -29467,18 +35374,33 @@ def main() -> int:
                         )
                     )
                     tlc_reference_errors.extend(
-                        cfg_correctness_envelope_shape_errors(
-                            mode, module_files[0], cfg_file, "TLC"
+                        runner_cfg_correctness_envelope_shape_errors(
+                            mode,
+                            case,
+                            module_files[0],
+                            cfg_file,
+                            TLC_RUNNER,
+                            "TLC",
                         )
                     )
                     tlc_reference_errors.extend(
-                        cfg_direct_exactness_shape_errors(
-                            mode, module_files[0], cfg_file, "TLC"
+                        runner_cfg_direct_exactness_shape_errors(
+                            mode,
+                            case,
+                            module_files[0],
+                            cfg_file,
+                            TLC_RUNNER,
+                            "TLC",
                         )
                     )
                     tlc_reference_errors.extend(
-                        cfg_direct_exactness_envelope_pairing_errors(
-                            mode, module_files[0], cfg_file, "TLC"
+                        runner_cfg_direct_exactness_envelope_pairing_errors(
+                            mode,
+                            case,
+                            module_files[0],
+                            cfg_file,
+                            TLC_RUNNER,
+                            "TLC",
                         )
                     )
                     tlc_reference_errors.extend(
@@ -30162,6 +36084,11 @@ def main() -> int:
         errors.append(
             "Sumeragi top-level commit spec/fairness contracts drifted:\n"
             + format_items(top_level_commit_spec_contract_mismatches)
+        )
+    if progress_finality_property_contract_mismatches:
+        errors.append(
+            "Sumeragi progress finality property contracts drifted:\n"
+            + format_items(progress_finality_property_contract_mismatches)
         )
     if direct_delivered_first_contract_mismatches:
         errors.append(

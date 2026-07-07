@@ -91,6 +91,116 @@ class HostileTomlString(str):
         raise AssertionError("secret-token Solana TOML string was compared")
 
 
+class HostileSolanaDestinationString(str):
+    """String subclass that Solana destination parsers must reject before hooks."""
+
+    def __new__(cls, value):
+        return str.__new__(cls, value)
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana destination string was stringified")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana destination string was repr'd")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token Solana destination string was compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token Solana destination string was compared")
+
+    def __iter__(self):
+        raise AssertionError("secret-token Solana destination string was iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token Solana destination string was indexed")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token Solana destination string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token Solana destination string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token Solana destination string lower ran")
+
+    def isascii(self):
+        raise AssertionError("secret-token Solana destination string isascii ran")
+
+    def isdecimal(self):
+        raise AssertionError("secret-token Solana destination string isdecimal ran")
+
+    def lstrip(self, *_args, **_kwargs):
+        raise AssertionError("secret-token Solana destination string lstrip ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token Solana destination string encode ran")
+
+
+class HostileSolanaDestinationBytes(bytes):
+    """Bytes subclass that destination evidence must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token Solana destination bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana destination bytes repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana destination bytes stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token Solana destination bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token Solana destination bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token Solana destination bytes indexed")
+
+    def hex(self):
+        raise AssertionError("secret-token Solana destination bytes hex encoded")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token Solana destination bytes startswith ran")
+
+
+class HostileSolanaDestinationBytearray(bytearray):
+    """Bytearray subclass that destination evidence must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token Solana destination bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token Solana destination bytearray repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token Solana destination bytearray stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token Solana destination bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token Solana destination bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token Solana destination bytearray indexed")
+
+    def hex(self):
+        raise AssertionError("secret-token Solana destination bytearray hex encoded")
+
+    def startswith(self, _prefix):
+        raise AssertionError(
+            "secret-token Solana destination bytearray startswith ran"
+        )
+
+
 class HostileTomlInt(int):
     def __new__(cls):
         return int.__new__(cls, 1)
@@ -426,6 +536,268 @@ def test_solana_destination_base64_parser_redacts_parser_causes(monkeypatch):
                     "Solana destination base64 "
                     f"{exception_type.__name__} decoder detail was accepted"
                 )
+
+
+def test_solana_destination_exact_string_parsers_reject_string_subclasses_without_hooks(
+    monkeypatch,
+):
+    module = load_evidence_module()
+    hostile_hex = HostileSolanaDestinationString("0x" + "11" * 32)
+    hostile_program_hex = HostileSolanaDestinationString(
+        "0x" + SOLANA_VERIFIER_PROGRAM_BYTES.hex()
+    )
+    hostile_base64 = HostileSolanaDestinationString(
+        SOLANA_VERIFIER_PROGRAM_BYTES_BASE64
+    )
+    hostile_program_id = HostileSolanaDestinationString(SOLANA_VERIFIER_PROGRAM_ID)
+    hostile_decimal = HostileSolanaDestinationString("4321")
+    hostile_commitment = HostileSolanaDestinationString("finalized")
+
+    direct_cases = (
+        (
+            lambda: module._strip_lower_0x_hex(
+                hostile_hex,
+                label="verifier code hash",
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier code hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_hex_bytes(
+                hostile_hex,
+                label="verifier code hash",
+                byte_length=32,
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier code hash must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_program_bytes_hex(
+                hostile_program_hex,
+                label="verifier program bytes",
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier program bytes must be canonical lowercase 0x hex",
+        ),
+        (
+            lambda: module.parse_program_bytes_base64(
+                hostile_base64,
+                label="verifier program bytes",
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier program bytes must be base64",
+        ),
+        (
+            lambda: module.decode_solana_base58(
+                hostile_program_id,
+                label="verifier_program_id",
+            ),
+            module.argparse.ArgumentTypeError,
+            "verifier_program_id must be canonical base58",
+        ),
+        (
+            lambda: module.parse_positive_u64(
+                hostile_decimal,
+                label="programdata slot",
+            ),
+            module.argparse.ArgumentTypeError,
+            "programdata slot must be a positive u64",
+        ),
+        (
+            lambda: module._require_exact_string(
+                hostile_commitment,
+                label="rpc_commitment",
+                expected="finalized",
+            ),
+            ValueError,
+            "rpc_commitment must be a non-empty canonical string",
+        ),
+    )
+    for parser, exception_type, expected_message in direct_cases:
+        try:
+            parser()
+        except exception_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "string-subclass Solana destination parser value was accepted"
+            )
+
+    byte_args = solana_toml_args(module)
+    module.apply_verifier_program_code_hash(byte_args)
+    byte_args.verifier_program_bytes_base64_text = hostile_base64
+    try:
+        module._validated_verifier_program_bytes_base64(byte_args)
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "Solana verifier program byte metadata is inconsistent"
+        assert "secret-token" not in rendered
+        assert exc.__cause__ is None
+    else:
+        raise AssertionError("Solana destination accepted hostile verifier byte text")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            module,
+            "_validated_verifier_program_bytes_base64",
+            lambda _args: hostile_base64,
+        )
+        try:
+            module._json_summary(
+                solana_args(module),
+                bytes.fromhex(SOLANA_DESTINATION_BINDING_VECTOR),
+                True,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "Solana verifier program byte metadata is inconsistent"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "Solana destination summary accepted hostile verifier byte text"
+            )
+
+
+def test_solana_destination_byte_helpers_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    fixed_hash = b"\x11" * 32
+    program_bytes = SOLANA_VERIFIER_PROGRAM_BYTES
+    expected_program_account_data = module.solana_upgradeable_program_account_data(
+        SOLANA_PROGRAMDATA_ADDRESS
+    )
+
+    assert (
+        module._require_fixed_bytes(
+            bytearray(fixed_hash),
+            label="verifier_code_hash",
+            byte_length=32,
+        )
+        == fixed_hash
+    )
+    assert (
+        module.solana_verifier_program_code_hash(bytearray(program_bytes))
+        == module.solana_verifier_program_code_hash(program_bytes)
+    )
+    assert (
+        module._require_byte_string(bytearray(program_bytes), label="programdata_executable")
+        == program_bytes
+    )
+
+    hostile_fixed_values = (
+        HostileSolanaDestinationBytes(fixed_hash),
+        HostileSolanaDestinationBytearray(fixed_hash),
+    )
+    hostile_program_values = (
+        HostileSolanaDestinationBytes(program_bytes),
+        HostileSolanaDestinationBytearray(program_bytes),
+    )
+    direct_cases = []
+    for hostile_fixed in hostile_fixed_values:
+        direct_cases.append(
+            (
+                lambda hostile_fixed=hostile_fixed: module._require_fixed_bytes(
+                    hostile_fixed,
+                    label="verifier_code_hash",
+                    byte_length=32,
+                ),
+                "verifier_code_hash must be 32 bytes",
+            )
+        )
+    for hostile_program in hostile_program_values:
+        direct_cases.extend(
+            (
+                (
+                    lambda hostile_program=hostile_program: (
+                        module.solana_verifier_program_code_hash(hostile_program)
+                    ),
+                    "Solana verifier program bytes must be bytes",
+                ),
+                (
+                    lambda hostile_program=hostile_program: module._require_byte_string(
+                        hostile_program,
+                        label="programdata_executable",
+                    ),
+                    "programdata_executable must be bytes",
+                ),
+            )
+        )
+
+    for call, expected_message in direct_cases:
+        try:
+            call()
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "byte-subclass Solana destination parser value was accepted"
+            )
+
+    for hostile_program in hostile_program_values:
+        args = solana_toml_args(module)
+        args.verifier_program_bytes_bytes = hostile_program
+        try:
+            module._validated_verifier_program_bytes_base64(args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "Solana verifier program bytes must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "Solana destination summary accepted hostile program bytes"
+            )
+
+    for hostile_account_data in (
+        HostileSolanaDestinationBytes(expected_program_account_data),
+        HostileSolanaDestinationBytearray(expected_program_account_data),
+    ):
+        try:
+            module.solana_route_canary_evidence_hash(
+                route_allowlist_hash=bytes.fromhex(SOLANA_ROUTE_ALLOWLIST_HASH_VECTOR),
+                destination_binding_hash=bytes.fromhex(
+                    SOLANA_DESTINATION_BINDING_VECTOR
+                ),
+                source_verifier_material_hash=bytes.fromhex(
+                    SOURCE_VERIFIER_MATERIAL_HASH
+                ),
+                source_adapter_engine_deployment_hash=bytes.fromhex(
+                    SOURCE_ADAPTER_ENGINE_DEPLOYMENT_HASH
+                ),
+                verifier_program_id=SOLANA_VERIFIER_PROGRAM_ID,
+                verifier_code_hash=module.solana_verifier_program_code_hash(
+                    program_bytes
+                ),
+                rpc_commitment="finalized",
+                program_owner=module.SOLANA_UPGRADEABLE_LOADER_ID,
+                programdata_owner=module.SOLANA_UPGRADEABLE_LOADER_ID,
+                program_immutable=True,
+                program_account_data=hostile_account_data,
+                programdata_address=SOLANA_PROGRAMDATA_ADDRESS,
+                programdata_slot=4321,
+                expected_programdata_slot=4321,
+                program_account_context_slot=9000,
+                programdata_account_context_slot=9000,
+                programdata_metadata=module.solana_immutable_programdata_metadata(
+                    4321
+                ),
+                programdata_executable=program_bytes,
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "program_account_data must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "Solana route canary accepted hostile account bytes"
+            )
 
 
 def test_solana_destination_file_parser_redacts_file_read_causes(tmp_path):

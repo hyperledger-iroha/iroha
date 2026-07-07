@@ -3057,6 +3057,16 @@ test("materialize refuses unsafe source build transcript references", async () =
       pattern: /sourceBuildTranscript sha256 must not use multiple aliases: sha256, hash/u,
     },
     {
+      name: "hash-retired-alias",
+      prepare: ({ inputs }) => ({
+        path: basename(inputs.circuitSource),
+        hash: "secret-token-bsc-groth16-retired-source-build-alias",
+      }),
+      pattern:
+        /sourceBuildTranscript sha256 must not use retired alias hash; use sha256/u,
+      notPattern: /secret-token-bsc-groth16-retired-source-build-alias/u,
+    },
+    {
       name: "symlink",
       prepare: async ({ root, inputs }) => {
         await mkdir(join(root, "out"), { recursive: true });
@@ -3135,6 +3145,13 @@ test("materialize refuses unsafe source build transcript references", async () =
         testCase.pattern,
         testCase.name,
       );
+      if (testCase.notPattern) {
+        assert.doesNotMatch(
+          result.productionBlockers.join("\n"),
+          testCase.notPattern,
+          testCase.name,
+        );
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -3309,6 +3326,129 @@ test("materialize refuses transcript shadow fields and duplicate aliases", async
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("materialize refuses transcript retired aliases without leaking values", async () => {
+  const cases = [
+    {
+      name: "trusted-setup-route",
+      mutate: ({ setupTranscript, secret }) => {
+        delete setupTranscript.routeId;
+        setupTranscript.route_id = secret;
+      },
+      pattern:
+        /trusted setup transcript routeId must not use retired alias route_id; use routeId/u,
+    },
+    {
+      name: "trusted-setup-phase1-verify",
+      mutate: ({ setupTranscript, secret }) => {
+        delete setupTranscript.phase1.snarkjsPowersOfTauVerify;
+        setupTranscript.phase1.snarkjs_powers_of_tau_verify = secret;
+      },
+      pattern:
+        /trusted setup transcript phase1 snarkjsPowersOfTauVerify must not use retired alias snarkjs_powers_of_tau_verify; use snarkjsPowersOfTauVerify/u,
+    },
+    {
+      name: "reproducible-source-build",
+      mutate: async ({ reproducibleTranscript, inputs }) => {
+        reproducibleTranscript.source_build_transcript = {
+          path: basename(inputs.circuitSource),
+          sha256: sha256Hex(await readFile(inputs.circuitSource)),
+        };
+      },
+      pattern:
+        /reproducible build transcript sourceBuildTranscript must not use retired alias source_build_transcript; use sourceBuildTranscript/u,
+    },
+    {
+      name: "reproducible-circuit-hash",
+      mutate: ({ reproducibleTranscript, inputs, secret }) => {
+        reproducibleTranscript.circuit = {
+          path: basename(inputs.circuitSource),
+          hash: secret,
+        };
+      },
+      pattern:
+        /reproducible build transcript circuit sha256 must not use retired alias hash; use sha256/u,
+    },
+    {
+      name: "reproducible-verification-key",
+      mutate: ({ reproducibleTranscript, secret }) => {
+        reproducibleTranscript.verificationKey = {
+          verifier_key_hash: secret,
+        };
+      },
+      pattern:
+        /reproducible build transcript verificationKey verifierKeyHash must not use retired alias verifier_key_hash; use verifierKeyHash/u,
+    },
+  ];
+
+  for (const testCase of cases) {
+    const root = await mkdtemp(
+      join(tmpdir(), `iroha-bsc-groth16-transcript-retired-${testCase.name}-`),
+    );
+    try {
+      const inputs = await writeMaterialInputs(root);
+      const setupTranscript = JSON.parse(
+        await readFile(inputs.trustedSetupTranscript, "utf8"),
+      );
+      const reproducibleTranscript = JSON.parse(
+        await readFile(inputs.reproducibleBuildTranscript, "utf8"),
+      );
+      const secret = "secret-token-bsc-groth16-retired-transcript-alias";
+      await testCase.mutate({
+        setupTranscript,
+        reproducibleTranscript,
+        inputs,
+        secret,
+      });
+      const setupTranscriptText = Buffer.from(
+        `${JSON.stringify(setupTranscript, null, 2)}\n`,
+        "utf8",
+      );
+      const reproducibleTranscriptText = Buffer.from(
+        `${JSON.stringify(reproducibleTranscript, null, 2)}\n`,
+        "utf8",
+      );
+      await writeFile(inputs.trustedSetupTranscript, setupTranscriptText);
+      await writeFile(
+        inputs.reproducibleBuildTranscript,
+        reproducibleTranscriptText,
+      );
+      inputs.context.trustedSetupTranscriptSha256 =
+        sha256Hex(setupTranscriptText);
+      inputs.context.reproducibleBuildTranscriptSha256 =
+        sha256Hex(reproducibleTranscriptText);
+      const attestations = await writeBoundAttestations(root, inputs.context);
+
+      const result = await materializeBscGroth16Material({
+        "bsc-network": "testnet",
+        ...trustedSignerOption(),
+        r1cs: inputs.r1cs,
+        zkey: inputs.zkey,
+        ptau: inputs.ptau,
+        "snarkjs-verifier-key": inputs.verificationKeyPath,
+        "snarkjs-bin": inputs.snarkjsStub,
+        "circuit-source": inputs.circuitSource,
+        ...transcriptOptions(inputs),
+        "semantic-attestation": attestations.semantic,
+        "circuit-security-attestation": attestations.security,
+        "trusted-setup-attestation": attestations.setup,
+        "reproducible-build-attestation": attestations.reproducible,
+        "out-dir": join(root, "out"),
+      });
+
+      const blockers = result.productionBlockers.join("\n");
+      assert.equal(result.productionReady, false, testCase.name);
+      assert.match(blockers, testCase.pattern, testCase.name);
+      assert.doesNotMatch(
+        blockers,
+        /secret-token-bsc-groth16-retired-transcript-alias/u,
+        testCase.name,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -4705,6 +4845,26 @@ test("handoff-bundle writes a hash-bound public readiness packet", async () => {
       /attestation handoff commands verifyHandoff must not use multiple aliases: verifyHandoff, verify_handoff/u,
     );
 
+    const retiredCommandSummaryPath = join(root, "retired-command-summary-handoff.json");
+    const retiredCommandHandoff = JSON.parse(JSON.stringify(handoff));
+    delete retiredCommandHandoff.commands.verifyHandoff;
+    retiredCommandHandoff.commands.verify_handoff =
+      "secret-token-bsc-groth16-retired-handoff-command-alias";
+    await writeJson(retiredCommandSummaryPath, retiredCommandHandoff);
+    const retiredCommandSummaryVerification =
+      await verifyBscGroth16AttestationHandoff({
+        handoff: retiredCommandSummaryPath,
+      });
+    assert.equal(retiredCommandSummaryVerification.valid, false);
+    assert.match(
+      retiredCommandSummaryVerification.referenceBlockers.join("\n"),
+      /attestation handoff commands verifyHandoff must not use retired alias verify_handoff; use verifyHandoff/u,
+    );
+    assert.doesNotMatch(
+      retiredCommandSummaryVerification.referenceBlockers.join("\n"),
+      /secret-token-bsc-groth16-retired-handoff-command-alias/u,
+    );
+
     const forgedCommandSummaryPath = join(root, "forged-command-summary-handoff.json");
     await writeJson(forgedCommandSummaryPath, {
       ...handoff,
@@ -5033,6 +5193,8 @@ test("attestation-request blocks semantic and circuit roles without review evide
 });
 
 test("attestation-request blocks malformed and adversarial review evidence", async () => {
+  const retiredEvidenceAliasSecret =
+    "secret-token-bsc-groth16-retired-evidence-alias";
   const cases = [
     {
       name: "semantic-false-coverage",
@@ -5051,6 +5213,19 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
       role: "semanticSccpCircuit",
       evidenceOverrides: { semantic: { route_id: "taira_bsc_xor" } },
       pattern: /semantic SCCP circuit review evidence routeId must not use multiple aliases: routeId, route_id/u,
+    },
+    {
+      name: "semantic-retired-route-alias",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        delete record.routeId;
+        record.route_id = retiredEvidenceAliasSecret;
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern:
+        /semantic SCCP circuit review evidence routeId must not use retired alias route_id; use routeId/u,
+      notPattern: /secret-token-bsc-groth16-retired-evidence-alias/u,
     },
     {
       name: "semantic-shadow-field",
@@ -5104,6 +5279,23 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
       pattern: /semantic SCCP circuit review evidence reviewReport must not use multiple aliases: reviewReport, review_report/u,
     },
     {
+      name: "semantic-retired-report-container-alias",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        const reviewReport = record.reviewReport;
+        delete record.reviewReport;
+        record.review_report = {
+          ...reviewReport,
+          path: `https://${retiredEvidenceAliasSecret}.invalid/report.md`,
+        };
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern:
+        /semantic SCCP circuit review evidence reviewReport must not use retired alias review_report; use reviewReport/u,
+      notPattern: /secret-token-bsc-groth16-retired-evidence-alias/u,
+    },
+    {
       name: "semantic-report-path-alias-conflict",
       role: "semanticSccpCircuit",
       mutate: async ({ evidence }) => {
@@ -5122,6 +5314,19 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
         await writeJson(evidence.semanticReviewEvidence, record);
       },
       pattern: /semantic SCCP circuit review evidence report sha256 must not use multiple aliases: sha256, hash/u,
+    },
+    {
+      name: "semantic-retired-report-hash-alias",
+      role: "semanticSccpCircuit",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.semanticReviewEvidence, "utf8"));
+        delete record.reviewReport.sha256;
+        record.reviewReport.report_sha256 = retiredEvidenceAliasSecret;
+        await writeJson(evidence.semanticReviewEvidence, record);
+      },
+      pattern:
+        /semantic SCCP circuit review evidence report sha256 must not use retired alias report_sha256; use sha256/u,
+      notPattern: /secret-token-bsc-groth16-retired-evidence-alias/u,
     },
     {
       name: "semantic-absolute-report-path",
@@ -5211,7 +5416,20 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
       name: "circuit-approved-alias-conflict",
       role: "circuitSecurity",
       evidenceOverrides: { security: { production_approved: true } },
-      pattern: /circuit security audit evidence productionApproved must not use multiple aliases: production_approved, approved/u,
+      pattern: /circuit security audit evidence approved must not use multiple aliases: approved, production_approved/u,
+    },
+    {
+      name: "circuit-retired-approved-alias",
+      role: "circuitSecurity",
+      mutate: async ({ evidence }) => {
+        const record = JSON.parse(await readFile(evidence.circuitSecurityAuditEvidence, "utf8"));
+        delete record.approved;
+        record.production_approved = retiredEvidenceAliasSecret;
+        await writeJson(evidence.circuitSecurityAuditEvidence, record);
+      },
+      pattern:
+        /circuit security audit evidence approved must not use retired alias production_approved; use approved/u,
+      notPattern: /secret-token-bsc-groth16-retired-evidence-alias/u,
     },
     {
       name: "circuit-placeholder-label",
@@ -5310,11 +5528,15 @@ test("attestation-request blocks malformed and adversarial review evidence", asy
       const request = JSON.parse(await readFile(requestPath, "utf8"));
 
       assert.equal(result.readyForSignature[testCase.role], false, testCase.name);
+      const blockers = request.roles[testCase.role].blockers.join("\n");
       assert.match(
-        request.roles[testCase.role].blockers.join("\n"),
+        blockers,
         testCase.pattern,
         testCase.name,
       );
+      if (testCase.notPattern) {
+        assert.doesNotMatch(blockers, testCase.notPattern, testCase.name);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -5762,6 +5984,124 @@ test("attestation-request refuses material manifest shadow fields and aliases", 
       },
     );
 
+    const secret = "secret-token-bsc-groth16-retired-material-alias";
+    const retiredAliasCases = [
+      {
+        name: "route-id",
+        mutate: (manifest) => {
+          delete manifest.routeId;
+          manifest.route_id = secret;
+        },
+        pattern:
+          /material manifest routeId must not use retired alias route_id; use routeId/u,
+      },
+      {
+        name: "bsc-network",
+        mutate: (manifest) => {
+          delete manifest.bscNetwork;
+          manifest.bsc_network = secret;
+        },
+        pattern:
+          /material manifest bscNetwork must not use retired alias bsc_network; use bscNetwork/u,
+      },
+      {
+        name: "production-ready",
+        mutate: (manifest) => {
+          delete manifest.productionReady;
+          manifest.production_ready = secret;
+        },
+        pattern:
+          /material manifest productionReady must not use retired alias production_ready; use productionReady/u,
+      },
+      {
+        name: "artifact-container",
+        mutate: (manifest) => {
+          delete manifest.artifacts.powersOfTau;
+          manifest.artifacts.powers_of_tau = secret;
+        },
+        pattern:
+          /material manifest artifacts powersOfTau must not use retired alias powers_of_tau; use powersOfTau/u,
+      },
+      {
+        name: "artifact-hash",
+        mutate: (manifest) => {
+          delete manifest.artifacts.provingKey.sha256;
+          manifest.artifacts.provingKey.artifact_hash = secret;
+        },
+        pattern:
+          /material manifest artifacts\.provingKey sha256 must not use retired alias artifact_hash; use sha256/u,
+      },
+      {
+        name: "trusted-setup",
+        mutate: (manifest) => {
+          delete manifest.trustedSetup.localPowersOfTau;
+          manifest.trustedSetup.local_powers_of_tau = secret;
+        },
+        pattern:
+          /material manifest trustedSetup localPowersOfTau must not use retired alias local_powers_of_tau; use localPowersOfTau/u,
+      },
+      {
+        name: "self-checks-container",
+        mutate: (manifest) => {
+          delete manifest.selfChecks.snarkjs;
+          manifest.selfChecks.snark_js = secret;
+        },
+        pattern:
+          /material manifest selfChecks snarkjs must not use retired alias snark_js; use snarkjs/u,
+      },
+      {
+        name: "snarkjs-self-check",
+        mutate: (manifest) => {
+          delete manifest.selfChecks.snarkjs.r1csInfoSource;
+          manifest.selfChecks.snarkjs.r1cs_info_source = secret;
+        },
+        pattern:
+          /material manifest selfChecks\.snarkjs r1csInfoSource must not use retired alias r1cs_info_source; use r1csInfoSource/u,
+      },
+      {
+        name: "circuit-source-self-check",
+        mutate: (manifest) => {
+          delete manifest.selfChecks.circuitSource.publicSignalConstraintCount;
+          manifest.selfChecks.circuitSource.public_signal_constraint_count = secret;
+        },
+        pattern:
+          /material manifest selfChecks\.circuitSource publicSignalConstraintCount must not use retired alias public_signal_constraint_count; use publicSignalConstraintCount/u,
+      },
+      {
+        name: "attestation-trust-policy",
+        mutate: (manifest) => {
+          delete manifest.attestationTrustPolicy.trustedSignerFingerprints;
+          manifest.attestationTrustPolicy.trusted_signer_fingerprints = secret;
+        },
+        pattern:
+          /material manifest attestationTrustPolicy trustedSignerFingerprints must not use retired alias trusted_signer_fingerprints; use trustedSignerFingerprints/u,
+      },
+    ];
+    for (const testCase of retiredAliasCases) {
+      const retiredAliasManifest = JSON.parse(JSON.stringify(baseline));
+      testCase.mutate(retiredAliasManifest);
+      await writeJson(result.manifest, retiredAliasManifest);
+      await assert.rejects(
+        () =>
+          main([
+            "attestation-request",
+            "--manifest",
+            result.manifest,
+            ...result.attestationRequestEvidenceArgs,
+            "--toolchain-sha256",
+            `0x${"ef".repeat(32)}`,
+            "--out",
+            join(root, `request.retired-alias-${testCase.name}.json`),
+          ]),
+        (error) => {
+          const message = String(error);
+          assert.match(message, testCase.pattern);
+          assert.doesNotMatch(message, /secret-token-bsc-groth16-retired-material-alias/u);
+          return true;
+        },
+      );
+    }
+
     await writeJson(result.manifest, {
       ...baseline,
       proofArtifactHash: `0x${"33".repeat(32)}`,
@@ -6027,6 +6367,70 @@ test("sign-attestation refuses request role bodies with unknown shadow fields", 
   }
 });
 
+test("sign-attestation refuses request role bodies with retired aliases without leaking values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-sign-retired-alias-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    const privateKeyPath = await writePrivateKeyPem(join(root, "semantic-key.pem"));
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      result.reproducibleBuildToolchainSha256,
+      "--out",
+      requestPath,
+    ]);
+    const secret = "secret-token-bsc-groth16-retired-request-body-alias";
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+    const role = request.roles.semanticSccpCircuit;
+    delete role.body.routeId;
+    role.body.route_id = secret;
+    const bodyHash = sha256Hex(canonicalJson(role.body));
+    role.signedPayloadSha256 = bodyHash;
+    role.signatureTemplate.signedPayloadSha256 = bodyHash;
+    await writeJson(requestPath, request);
+
+    await assert.rejects(
+      () =>
+        signBscGroth16AttestationRole({
+          request: requestPath,
+          role: "semantic",
+          "private-key-pem": privateKeyPath,
+          out: join(root, "semantic-attestation.json"),
+        }),
+      (error) => {
+        const message = String(error);
+        assert.match(
+          message,
+          /attestation request package semantic SCCP circuit body routeId must not use retired alias route_id; use routeId/u,
+        );
+        assert.doesNotMatch(message, /secret-token-bsc-groth16-retired-request-body-alias/u);
+        return true;
+      },
+    );
+
+    const status = await auditBscGroth16AttestationStatus({
+      request: requestPath,
+      ...trustedSignerOption(),
+    });
+    const blockers = status.roles.semanticSccpCircuit.blockers.join("\n");
+    assert.equal(status.readyToFinalize, false);
+    assert.match(
+      blockers,
+      /attestation request package semantic SCCP circuit body routeId must not use retired alias route_id; use routeId/u,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(status),
+      /secret-token-bsc-groth16-retired-request-body-alias/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("sign-attestation refuses request package shadow fields and duplicate aliases", async () => {
   const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-shape-"));
   try {
@@ -6133,6 +6537,152 @@ test("sign-attestation refuses request package shadow fields and duplicate alias
       JSON.stringify(status),
       /PRIVATE KEY|privateKey|private_key|mnemonic|seed phrase|password/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("sign-attestation refuses request package retired aliases without leaking values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-request-retired-alias-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    const privateKeyPath = await writePrivateKeyPem(join(root, "semantic-key.pem"));
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      result.reproducibleBuildToolchainSha256,
+      "--out",
+      requestPath,
+    ]);
+    const baseRequest = JSON.parse(await readFile(requestPath, "utf8"));
+    const secret = "secret-token-bsc-groth16-retired-request-package-alias";
+    const secretPattern =
+      /secret-token-bsc-groth16-retired-request-package-alias/u;
+    const cases = [
+      {
+        name: "top-level-route",
+        mutate: (request) => {
+          delete request.routeId;
+          request.route_id = secret;
+        },
+        pattern:
+          /attestation request package routeId must not use retired alias route_id; use routeId/u,
+      },
+      {
+        name: "manifest-ready",
+        mutate: (request) => {
+          delete request.manifest.productionReady;
+          request.manifest.production_ready = secret;
+        },
+        pattern:
+          /attestation request package manifest productionReady must not use retired alias production_ready; use productionReady/u,
+      },
+      {
+        name: "artifact-hash",
+        mutate: (request) => {
+          delete request.artifacts.r1cs.sha256;
+          request.artifacts.r1cs.artifact_hash = secret;
+        },
+        pattern:
+          /attestation request package artifacts\.r1cs sha256 must not use retired alias artifact_hash; use sha256/u,
+      },
+      {
+        name: "evidence-container",
+        mutate: (request) => {
+          delete request.evidence.semanticReview;
+          request.evidence.semantic_review = secret;
+        },
+        pattern:
+          /attestation request package evidence semanticReview must not use retired alias semantic_review; use semanticReview/u,
+      },
+      {
+        name: "evidence-report-path",
+        mutate: (request) => {
+          delete request.evidence.semanticReview.report.path;
+          request.evidence.semanticReview.report.report_path =
+            `https://${secret}.invalid/report.md`;
+        },
+        pattern:
+          /attestation request package evidence\.semanticReview\.report path must not use retired alias report_path; use path/u,
+      },
+      {
+        name: "evidence-validation-hash",
+        mutate: (request) => {
+          delete request.evidenceValidation.semanticReview.sha256;
+          request.evidenceValidation.semanticReview.hash = secret;
+        },
+        pattern:
+          /attestation request package evidenceValidation\.semanticReview sha256 must not use retired alias hash; use sha256/u,
+      },
+      {
+        name: "transcript-validation-hash",
+        mutate: (request) => {
+          delete request.transcriptValidation.trustedSetup.sha256;
+          request.transcriptValidation.trustedSetup.hash = secret;
+        },
+        pattern:
+          /attestation request package transcriptValidation\.trustedSetup sha256 must not use retired alias hash; use sha256/u,
+      },
+      {
+        name: "role-signature-template",
+        mutate: (request) => {
+          delete request.roles.semanticSccpCircuit.signatureTemplate;
+          request.roles.semanticSccpCircuit.signature_template = secret;
+        },
+        pattern:
+          /attestation request package semantic SCCP circuit role signatureTemplate must not use retired alias signature_template; use signatureTemplate/u,
+      },
+      {
+        name: "signing-instructions",
+        mutate: (request) => {
+          delete request.signingInstructions.signedPayloadSha256;
+          request.signingInstructions.signed_payload_sha256 = secret;
+        },
+        pattern:
+          /attestation request package signingInstructions signedPayloadSha256 must not use retired alias signed_payload_sha256; use signedPayloadSha256/u,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const request = JSON.parse(JSON.stringify(baseRequest));
+      testCase.mutate(request);
+      const variantPath = join(root, `request-retired-${testCase.name}.json`);
+      await writeJson(variantPath, request);
+
+      await assert.rejects(
+        () =>
+          signBscGroth16AttestationRole({
+            request: variantPath,
+            role: "semantic",
+            "private-key-pem": privateKeyPath,
+            out: join(root, `semantic-attestation-${testCase.name}.json`),
+          }),
+        (error) => {
+          const message = String(error);
+          assert.match(
+            message,
+            /attestation request package shape is not production-ready/u,
+            testCase.name,
+          );
+          assert.match(message, testCase.pattern, testCase.name);
+          assert.doesNotMatch(message, secretPattern, testCase.name);
+          return true;
+        },
+      );
+
+      const status = await auditBscGroth16AttestationStatus({
+        request: variantPath,
+        ...trustedSignerOption(),
+      });
+      const rendered = JSON.stringify(status);
+      assert.equal(status.requestValid, false, testCase.name);
+      assert.match(rendered, testCase.pattern, testCase.name);
+      assert.doesNotMatch(rendered, secretPattern, testCase.name);
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -6715,6 +7265,52 @@ test("attestation-status rejects signed role files with shadow signature metadat
     assert.doesNotMatch(
       JSON.stringify(status),
       /PRIVATE KEY|privateKey|private_key|mnemonic|seed phrase|password/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("attestation-status rejects signed role files with retired signature aliases without leaking values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "iroha-bsc-groth16-signature-retired-alias-"));
+  try {
+    const { result } = await writeAttestationRequestCandidate(root);
+    const requestPath = join(root, "request.json");
+    await main([
+      "attestation-request",
+      "--manifest",
+      result.manifest,
+      ...result.attestationRequestEvidenceArgs,
+      "--toolchain-sha256",
+      `0x${"ef".repeat(32)}`,
+      "--out",
+      requestPath,
+    ]);
+    const attestations = await writeAttestationsFromRequest(root, requestPath);
+    const semantic = JSON.parse(await readFile(attestations.semantic, "utf8"));
+    delete semantic.signature.signerFingerprint;
+    semantic.signature.signer_fingerprint =
+      "secret-token-bsc-groth16-retired-signature-alias";
+    await writeJson(attestations.semantic, semantic);
+
+    const status = await auditBscGroth16AttestationStatus({
+      request: requestPath,
+      ...trustedSignerOption(),
+      "semantic-attestation": attestations.semantic,
+      "circuit-security-attestation": attestations.security,
+      "trusted-setup-attestation": attestations.setup,
+      "reproducible-build-attestation": attestations.reproducible,
+    });
+
+    assert.equal(status.readyToFinalize, false);
+    const blockers = status.materialValidationBlockers.join("\n");
+    assert.match(
+      blockers,
+      /semantic SCCP circuit attestation signature signerFingerprint must not use retired alias signer_fingerprint; use signerFingerprint/u,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(status),
+      /secret-token-bsc-groth16-retired-signature-alias/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

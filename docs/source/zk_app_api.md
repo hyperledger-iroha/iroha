@@ -399,10 +399,13 @@ iroha ledger trigger register \
   --path ./on_verified.ko
 ```
 
-## Limitations and Future Work
+## Operational Boundaries
 
-- The prover worker verifies proofs using configured backend verifiers; it does not generate proofs (no proving pipeline).
-- Report retention is controlled by `torii.zk_prover_reports_ttl_secs` and can be managed via the report delete endpoints.
+- The prover worker verifies proofs using configured backend verifiers. Proof
+  generation remains a client/operator responsibility and is intentionally not
+  part of the Torii API surface.
+- Report retention is controlled by `torii.zk_prover_reports_ttl_secs` and can
+  be managed via the report delete endpoints.
 
 ## Governance Endpoints (ZK Ballots)
 

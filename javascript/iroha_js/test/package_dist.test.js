@@ -542,6 +542,8 @@ const PACKAGE_DIST_KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES = {
   KagemushaTransfer: "iroha_data_model::isi::offline::KagemushaTransfer",
   RedeemKagemushaRecursive:
     "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
+  TopUpKagemushaRecursive:
+    "iroha_data_model::isi::offline::TopUpKagemushaRecursive",
 };
 
 function privacyNoritoFrameFromSchemaHash(schemaHash, payload, flags = 0) {
@@ -3959,17 +3961,17 @@ test("package dist Kagemusha transaction helpers copy mutable buffers before nat
     Buffer.from([0x41, 0x42, 0x43]),
   );
   const topUpInstructionArchive = packageDistKagemushaInstructionArchive(
-    "KagemushaTransfer",
+    "TopUpKagemushaRecursive",
     Buffer.from([0x44, 0x45, 0x46]),
   );
   const redeemRequestArchive = Buffer.from([0x51, 0x52, 0x53]);
-  const initRequestArchive = Buffer.from([0x54, 0x55, 0x56]);
+  const topUpRequestArchive = Buffer.from([0x54, 0x55, 0x56]);
   const privateKey = Buffer.alloc(32, 0x61);
   const mutableTransferArchive = new Uint8Array(transferArchive);
   const mutableRedeemInstructionArchive = new Uint8Array(redeemInstructionArchive);
   const mutableRedeemRequestArchive = new Uint8Array(redeemRequestArchive);
   const mutableTopUpInstructionArchive = new Uint8Array(topUpInstructionArchive);
-  const mutableInitRequestArchive = new Uint8Array(initRequestArchive);
+  const mutableTopUpRequestArchive = new Uint8Array(topUpRequestArchive);
   const mutablePrivateKey = new Uint8Array(privateKey);
   const fakeResult = {
     signed_transaction: Buffer.from([0x71, 0x72]),
@@ -4037,7 +4039,7 @@ test("package dist Kagemusha transaction helpers copy mutable buffers before nat
     buildKagemushaRecursiveTopUpTransaction({
       chainId: "test-chain",
       authority,
-      initRequestArchive: mutableInitRequestArchive,
+      topUpRequestArchive: mutableTopUpRequestArchive,
       privateKey: mutablePrivateKey,
     });
   } finally {
@@ -4052,7 +4054,7 @@ test("package dist Kagemusha transaction helpers copy mutable buffers before nat
   mutableRedeemInstructionArchive.fill(0xa5);
   mutableRedeemRequestArchive.fill(0xa5);
   mutableTopUpInstructionArchive.fill(0xa5);
-  mutableInitRequestArchive.fill(0xa5);
+  mutableTopUpRequestArchive.fill(0xa5);
   mutablePrivateKey.fill(0xa5);
 
   const expectedTransferInstruction = {
@@ -4075,12 +4077,12 @@ test("package dist Kagemusha transaction helpers copy mutable buffers before nat
     },
   );
   assert.deepEqual(Buffer.from(calls[2].secret), privateKey);
-  assert.deepEqual(Buffer.from(calls[3].requestArchive), initRequestArchive);
+  assert.deepEqual(Buffer.from(calls[3].requestArchive), topUpRequestArchive);
   assert.deepEqual(
     JSON.parse(calls[4].instructions[0]),
     {
       KagemushaInstructionArchive: {
-        type: "KagemushaTransfer",
+        type: "TopUpKagemushaRecursive",
         bytes_base64: topUpInstructionArchive.toString("base64"),
       },
     },
@@ -11827,6 +11829,17 @@ test("package dist entrypoint enforces SCCP route-canary role separation", () =>
       solanaSccpRouteCanaryEvidenceHash(distSolanaRouteCanaryGovernedHashReuse),
     /Solana route canary governed hashes/u,
   );
+  const distSolanaRouteCanaryVerifierCodeHashReuse = {
+    ...distSolanaRouteCanaryEvidence,
+    routeAllowlistHash: distSolanaRouteCanaryEvidence.verifierCodeHash,
+  };
+  assert.throws(
+    () =>
+      solanaSccpRouteCanaryEvidenceHash(
+        distSolanaRouteCanaryVerifierCodeHashReuse,
+      ),
+    /Solana route canary governed hashes/u,
+  );
   const distSolanaRouteCanaryAliasReplay = {
     ...distSolanaRouteCanaryEvidence,
     route_allowlist_hash: distSolanaRouteCanaryEvidence.routeAllowlistHash,
@@ -11864,6 +11877,26 @@ test("package dist entrypoint enforces SCCP route-canary role separation", () =>
   };
   assert.throws(
     () => tonSccpRouteCanaryEvidenceHash(distTonRouteCanaryGovernedHashReuse),
+    /TON route canary governed hashes/u,
+  );
+  const distTonRouteCanaryVerifierCodeHashReuse = {
+    ...distTonRouteCanaryEvidence,
+    routeAllowlistHash: distTonRouteCanaryEvidence.verifierCodeHash,
+  };
+  assert.throws(
+    () =>
+      tonSccpRouteCanaryEvidenceHash(
+        distTonRouteCanaryVerifierCodeHashReuse,
+      ),
+    /TON route canary governed hashes/u,
+  );
+  const distTonRouteCanaryLiveAccountHashReuse = {
+    ...distTonRouteCanaryEvidence,
+    accountStateHash: distTonRouteCanaryEvidence.sourceVerifierMaterialHash,
+  };
+  assert.throws(
+    () =>
+      tonSccpRouteCanaryEvidenceHash(distTonRouteCanaryLiveAccountHashReuse),
     /TON route canary governed hashes/u,
   );
 
@@ -11906,6 +11939,26 @@ test("package dist entrypoint enforces SCCP route-canary role separation", () =>
   assert.throws(
     () => tronSccpRouteCanaryEvidenceHash(distTronRouteCanaryGovernedHashReuse),
     /TRON route canary governed hashes/u,
+  );
+  const distTronRouteCanaryGovernedTranscriptHashReuse = {
+    ...distTronRouteCanaryEvidence,
+    payloadHash: distTronRouteCanaryEvidence.routeAllowlistHash,
+  };
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(
+        distTronRouteCanaryGovernedTranscriptHashReuse,
+      ),
+    /TRON route canary governed hashes/u,
+  );
+  const distTronRouteCanaryTranscriptHashReuse = {
+    ...distTronRouteCanaryEvidence,
+    finalityHeight: distTronRouteCanaryEvidence.transactionId,
+  };
+  assert.throws(
+    () =>
+      tronSccpRouteCanaryEvidenceHash(distTronRouteCanaryTranscriptHashReuse),
+    /TRON route canary transcript hashes/u,
   );
 });
 

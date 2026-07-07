@@ -72,6 +72,159 @@ class HostileDecimalText(str):
         raise AssertionError("secret-token TRON live decimal text isdecimal ran")
 
 
+class HostileTronLiveString(str):
+    """String subclass that exact TRON live parsers must reject before hooks."""
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON live exact string was compared")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON live exact string was indexed")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON live exact string was iterated")
+
+    def strip(self, *args, **kwargs):
+        raise AssertionError("secret-token TRON live exact string was stripped")
+
+    def startswith(self, _prefix):
+        raise AssertionError("secret-token TRON live exact string startswith ran")
+
+    def lower(self):
+        raise AssertionError("secret-token TRON live exact string lower ran")
+
+    def encode(self, *_args, **_kwargs):
+        raise AssertionError("secret-token TRON live exact string encoded")
+
+
+class HostileTronLiveBytes(bytes):
+    """Bytes subclass that TRON live helpers must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token TRON live bytes coerced")
+
+    def __len__(self):
+        raise AssertionError("secret-token TRON live bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON live bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON live bytes indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON live bytes compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token TRON live bytes hashed")
+
+    def hex(self):
+        raise AssertionError("secret-token TRON live bytes hex encoded")
+
+    def __repr__(self):
+        return "secret-token-hostile-tron-live-bytes"
+
+
+class HostileTronLiveBytearray(bytearray):
+    """Bytearray subclass that TRON live helpers must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token TRON live bytearray coerced")
+
+    def __len__(self):
+        raise AssertionError("secret-token TRON live bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON live bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON live bytearray indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON live bytearray compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token TRON live bytearray hashed")
+
+    def hex(self):
+        raise AssertionError("secret-token TRON live bytearray hex encoded")
+
+    def __repr__(self):
+        return "secret-token-hostile-tron-live-bytearray"
+
+
+class HostileTronLiveDict(dict):
+    """Dict subclass that copied TRON live summaries must reject before hooks."""
+
+    def __init__(self, payload=None):
+        dict.__init__(self, {} if payload is None else payload)
+
+    def get(self, _key, _default=None):
+        raise AssertionError("secret-token TRON live dict get")
+
+    def __contains__(self, _key):
+        raise AssertionError("secret-token TRON live dict contains")
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON live dict iterated")
+
+    def __len__(self):
+        raise AssertionError("secret-token TRON live dict length read")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON live dict indexed")
+
+    def __repr__(self):
+        return "secret-token-hostile-tron-live-dict"
+
+
+class HostileTronLiveList(list):
+    """List subclass that TRON live repeated args must reject before hooks."""
+
+    def __init__(self, payload=()):
+        list.__init__(self, payload)
+
+    def __iter__(self):
+        raise AssertionError("secret-token TRON live list iterated")
+
+    def __len__(self):
+        raise AssertionError("secret-token TRON live list length read")
+
+    def __bool__(self):
+        raise AssertionError("secret-token TRON live list bool")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token TRON live list indexed")
+
+    def __repr__(self):
+        return "secret-token-hostile-tron-live-list"
+
+
+class HostileTronLiveInt(int):
+    """Integer subclass that numeric TRON live helpers must reject before hooks."""
+
+    def __new__(cls):
+        return int.__new__(cls, 5)
+
+    def __lt__(self, _other):
+        raise AssertionError("secret-token TRON live int ordered")
+
+    def __gt__(self, _other):
+        raise AssertionError("secret-token TRON live int ordered")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token TRON live int compared")
+
+    def __repr__(self):
+        return "secret-token-hostile-tron-live-int"
+
+
 def transaction_info_field(default, override):
     return default if override is DEFAULT_TRANSACTION_INFO_FIELD else override
 
@@ -1041,7 +1194,7 @@ def test_tron_runtime_witness_schedule_payload_rejects_non_string_without_string
 def test_tron_runtime_hex32_list_arg_rejects_scalar_without_stringifying():
     module = load_live_module()
 
-    for value in ("aa" * 32, HostileImportedScalar()):
+    for value in ("aa" * 32, HostileImportedScalar(), HostileTronLiveList()):
         try:
             module._runtime_hex32_list_arg(
                 SimpleNamespace(source_inclusion_branch_hex=value),
@@ -1089,7 +1242,7 @@ def test_tron_runtime_repeated_args_reject_scalar_without_stringifying():
         ),
     )
     for action, expected_message in cases:
-        for value in ("[]", HostileImportedScalar()):
+        for value in ("[]", HostileImportedScalar(), HostileTronLiveList(["0x11"])):
             try:
                 action(value)
             except ValueError as exc:
@@ -1126,6 +1279,169 @@ def test_tron_runtime_repeated_args_reject_scalar_without_stringifying():
             assert exc.__cause__ is None
         else:
             raise AssertionError("non-string TRON repeated runtime item was accepted")
+
+
+def test_tron_live_public_container_subclasses_reject_without_hooks():
+    module = load_live_module()
+    raw32 = b"\x11" * 32
+    hostile_byte_values = (
+        HostileTronLiveBytes(raw32),
+        HostileTronLiveBytearray(raw32),
+    )
+
+    for hostile in hostile_byte_values:
+        cases = (
+            (
+                lambda hostile=hostile: module._optional_hex32_arg(
+                    SimpleNamespace(route_allowlist_hash=hostile),
+                    "route_allowlist_hash",
+                ),
+                RuntimeError,
+                "route allowlist hash must be hex",
+            ),
+            (
+                lambda hostile=hostile: module._optional_hex_blob_arg(
+                    SimpleNamespace(witness_seal_signers_bitmap=hostile),
+                    "witness_seal_signers_bitmap",
+                ),
+                RuntimeError,
+                "witness seal signers bitmap must be hex",
+            ),
+            (
+                lambda hostile=hostile: module._require_nonzero_bytes(
+                    hostile,
+                    label="source proof hash",
+                    byte_length=32,
+                ),
+                RuntimeError,
+                "source proof hash must be bytes",
+            ),
+        )
+        for call, error_type, expected_message in cases:
+            try:
+                call()
+            except error_type as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError("TRON live byte subclass value was accepted")
+
+    hostile_int = HostileTronLiveInt()
+    int_cases = (
+        (
+            lambda: module._parse_canonical_u32(hostile_int, label="source domain"),
+            ValueError,
+            "source domain must be a u32",
+        ),
+        (
+            lambda: module._parse_protobuf_nonnegative_int(
+                hostile_int,
+                label="source-event fee",
+            ),
+            RuntimeError,
+            "source-event fee must fit non-negative int64",
+        ),
+        (
+            lambda: module._parse_transaction_enum(
+                hostile_int,
+                {"SUCCESS": 1},
+                label="source-event result",
+            ),
+            RuntimeError,
+            "source-event result enum is unsupported",
+        ),
+        (
+            lambda: module._require_u32_value(hostile_int, label="route target domain"),
+            RuntimeError,
+            "route target domain must be a u32",
+        ),
+        (
+            lambda: module._require_u64_value(hostile_int, label="route block number"),
+            RuntimeError,
+            "route block number must be a u64",
+        ),
+    )
+    for call, error_type, expected_message in int_cases:
+        try:
+            call()
+        except error_type as exc:
+            rendered = str(exc)
+            assert rendered == expected_message
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TRON live int subclass value was accepted")
+
+    original_json_loads = module.json.loads
+    module.json.loads = lambda *_args, **_kwargs: HostileTronLiveDict(
+        {"parentWitnessSchedulePayload": "0x11"}
+    )
+    try:
+        try:
+            module._runtime_witness_schedule_transitions(
+                SimpleNamespace(witness_schedule_transition_json=["{}"])
+            )
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == (
+                "--witness-schedule-transition-json 0 must be a JSON object"
+            )
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("TRON live JSON object subclass was accepted")
+    finally:
+        module.json.loads = original_json_loads
+
+    hostile_dict = HostileTronLiveDict({"destination_binding_hash": "0x" + "11" * 32})
+    assert (
+        module._source_event_call_verified(
+            {"source_bridge": hostile_dict, "source_event_call": {}}
+        )
+        is False
+    )
+    assert (
+        module._route_canary_transaction_verified(
+            {
+                "route_canary": hostile_dict,
+                "route_canary_transaction": {},
+                "destination_verifier": {},
+            }
+        )
+        is False
+    )
+    assert module._torii_destination_query_params({"destination_verifier": hostile_dict}) is None
+
+    try:
+        module._validate_route_allowlist_hash(
+            supplied_hash=raw32,
+            route_canary_evidence_hash=None,
+            source_records={},
+            destination_verifier=hostile_dict,
+            destination_binding_pinned=True,
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == (
+            "--route-allowlist-hash requires --destination-verifier-address"
+        )
+        assert "secret-token" not in rendered
+    else:
+        raise AssertionError("TRON live route allowlist accepted hostile destination")
+
+    try:
+        module._annotate_full_toml_with_live_metadata(
+            "",
+            {"source_bridge": hostile_dict, "destination_verifier": {}},
+        )
+    except ValueError as exc:
+        rendered = str(exc)
+        assert rendered == "TRON full TOML requires source and destination evidence"
+        assert "secret-token" not in rendered
+    else:
+        raise AssertionError("TRON live full TOML accepted hostile source summary")
 
 
 def test_tron_live_runtime_files_reject_unreadable_file_shapes(tmp_path):
@@ -2475,6 +2791,104 @@ def test_tron_live_cli_parsers_reject_non_string_values_without_stringification(
             assert str(exc) == expected_message
         else:
             raise AssertionError("non-string TRON live parser value was accepted")
+
+
+def test_tron_live_exact_string_parsers_reject_string_subclasses_without_hooks():
+    module = load_live_module()
+    hostile = HostileTronLiveString("0x" + "11" * 32)
+    hostile_address = HostileTronLiveString("0x41" + "22" * 20)
+
+    cases = (
+        (
+            lambda: module._parse_exact_hex_blob(
+                hostile,
+                label="source-event log data",
+            ),
+            RuntimeError,
+            "source-event log data must be hex",
+        ),
+        (
+            lambda: module._parse_exact_hex32_blob(
+                hostile,
+                label="source-event log topic0",
+            ),
+            RuntimeError,
+            "source-event log topic0 must be hex",
+        ),
+        (
+            lambda: module._parse_tron_payload_hex(
+                hostile_address,
+                label="source bridge address",
+            ),
+            RuntimeError,
+            "source bridge address must be hex",
+        ),
+        (
+            lambda: module._parse_log_address20(
+                hostile,
+                label="source-event log address",
+            ),
+            RuntimeError,
+            "source-event log address must be hex",
+        ),
+        (
+            lambda: module._parse_transaction_address_payload(
+                hostile_address,
+                label="route-canary transaction owner_address",
+            ),
+            RuntimeError,
+            "route-canary transaction owner_address must be a TRON address",
+        ),
+        (
+            lambda: module._protobuf_string_field(14, hostile),
+            RuntimeError,
+            "protobuf string field value must be a string",
+        ),
+        (
+            lambda: module._tron_pro_api_key_token(
+                hostile,
+                label="TRON-PRO-API-KEY",
+            ),
+            ValueError,
+            "TRON-PRO-API-KEY must be text",
+        ),
+        (
+            lambda: module._exact_summary_string(
+                {"route_allowlist_hash": hostile},
+                "route_allowlist_hash",
+                label="route allowlist hash",
+            ),
+            ValueError,
+            "route allowlist hash must be an exact non-empty string",
+        ),
+        (
+            lambda: module._check_contract_metadata_address(
+                {"contract_address": hostile_address},
+                expected_payload=bytes.fromhex("41" + "22" * 20),
+                label="source bridge",
+            ),
+            RuntimeError,
+            "/wallet/getcontract did not return source bridge contract_address",
+        ),
+    )
+
+    for parser, exception_type, expected_message in cases:
+        try:
+            parser()
+        except exception_type as exc:
+            assert str(exc) == expected_message
+            assert "secret-token" not in str(exc)
+        else:
+            raise AssertionError("string-subclass TRON live parser value was accepted")
+
+    assert (
+        module._metadata_runtime_bytecode(
+            {"bytecode": hostile},
+            label="source bridge",
+        )
+        is None
+    )
+    assert module._unsupported_tron_field_detail(hostile) == "non-string field name"
 
 
 def test_tron_live_decimal_parsers_reject_string_subclasses_without_hooks():

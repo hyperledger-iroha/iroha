@@ -720,15 +720,15 @@ asking wallet code to reframe native archives. Use
 `KagemushaInstructionTransactionRequest` for a typed `KagemushaTransfer` or
 `RedeemKagemushaRecursive` instruction archive, use
 `IrohaSDK.buildKagemushaRecursiveTopUp(...)` to derive the initial
-`KagemushaTransfer` top-up instruction from a native recursive spend init
-request archive, and use
+`TopUpKagemushaRecursive` instruction from a recursive spend top-up request
+archive, and use
 `IrohaSDK.buildKagemushaRecursiveRedeem(...)` to derive the redeem instruction
 from a native recursive redeem request before signing. These builders require
 valid Norito archives, reject empty, malformed, tampered, or wrong-type
 instruction archives, and keep recursive top-up/redeem derivation inside the
 native bridge. The recursive redeem derivation inside the native bridge remains
-unchanged; top-up derivation consumes the init request archive, not the init
-result bundle alone, because the request carries the checked hop proof,
+unchanged; top-up derivation consumes a top-up request that binds the public
+asset and amount to the nested init request carrying the checked hop proof,
 verifier records, and Pallas opening metadata needed for validation.
 `lineageAppendBoundary(profileArchive:)` derives the compact append-boundary
 Norito archive from a full append transition profile with native opening

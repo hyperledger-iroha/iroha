@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/taikai_segment_envelope.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1fdf7a2acebae39348bc30870bb7c9661216388324d00244a0ba75fc3d22722d
+source_hash: 6e9fda2ba79026f3b9a229422e8085867ea346052b911781c5a1cede48bba39b
 source_last_modified: "2026-01-22T15:38:30.727071+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -518,8 +518,9 @@ matching SSM:
 4. Successful uploads atomically spool the envelope, SSM, and (when provided)
    TRM window record. The anchor payload now includes `trm_base64` so the
    SoraNS uploader receives the routing manifest together with the envelope
-   artefacts. Upcoming work will refuse to anchor envelopes whose window
-   already has a newer TRM id to prevent manifest replays.
+   artefacts. The TRM lineage guard rejects duplicate digests and any incoming
+   window that overlaps an already accepted alias window, so older or replayed
+   routing manifests cannot displace a newer accepted window.
 5. Audit logs record `(manifest_digest, alias_name, ssm_digest)` so the SoraNS
    anchor service and governance panels can trace every broadcast segment.
 
@@ -545,14 +546,19 @@ returned by Torii. These hooks block deployment when:
 - or the TRM window does not reference the head segment uploaded by the
   publisher.
 
-## Future Work (Tracked under SNNet-13)
+## Integration Status
 
-- Torii ingest hooks and SoraNS anchoring that publish envelopes produced by
-  the bundler.
-- GAR v2 policy bindings for broadcast licensing and metric directives.
-- Viewer SDK updates that consume `TaikaiSegmentEnvelopeV1` directly and expose
-  deterministic metrics such as live-edge offset and rebuffer events.
+- Torii ingest hooks validate Taikai envelopes, SSMs, TRMs, lineage state,
+  cache hints, and proof-tier metadata before spooling the accepted artifacts
+  for SoraNS anchoring.
+- GAR policy inputs for broadcast licensing and metric directives are carried
+  by the current guard policy and telemetry metadata; future GAR revisions can
+  extend those policy documents without changing the v1 envelope layout.
+- Runtime telemetry already exposes deterministic Taikai ingest, viewer,
+  cache, queue, shard, live-edge, and rebuffer metrics. Viewer SDKs consume the
+  same `TaikaiSegmentEnvelopeV1` schema and can add product-specific UX without
+  changing the canonical envelope.
 
-The current implementation provides the shared data model, schema metadata, and
-the CLI bundler required for deterministic publishing. Subsequent patches will
-focus on Torii ingestion hooks and SoraNS anchoring atop this foundation.
+The current implementation provides the shared data model, schema metadata, CLI
+bundler, Torii ingestion hooks, SoraNS anchoring payloads, and lineage replay
+guards required for deterministic publishing.

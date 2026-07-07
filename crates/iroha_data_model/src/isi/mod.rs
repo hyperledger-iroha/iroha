@@ -1176,6 +1176,12 @@ impl From<crate::isi::offline::KagemushaTransfer> for InstructionBox {
     }
 }
 
+impl From<crate::isi::offline::TopUpKagemushaRecursive> for InstructionBox {
+    fn from(i: crate::isi::offline::TopUpKagemushaRecursive) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::offline::RedeemKagemushaRecursive> for InstructionBox {
     fn from(i: crate::isi::offline::RedeemKagemushaRecursive) -> Self {
         InstructionBox(Box::new(i))

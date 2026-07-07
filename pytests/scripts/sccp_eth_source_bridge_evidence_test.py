@@ -42,6 +42,74 @@ class HostileExpectedRecordHash:
         raise AssertionError("secret-token ETH expected record hash was compared")
 
 
+class HostileEthSourceBridgeBytes(bytes):
+    """Bytes subclass that source-bridge evidence must reject before hooks."""
+
+    def __new__(cls, value):
+        return bytes.__new__(cls, value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token ETH source bytes coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token ETH source bytes repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token ETH source bytes stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token ETH source bytes length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token ETH source bytes iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token ETH source bytes indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token ETH source bytes compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token ETH source bytes compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token ETH source bytes hashed")
+
+
+class HostileEthSourceBridgeBytearray(bytearray):
+    """Bytearray subclass that source-bridge evidence must reject before hooks."""
+
+    def __init__(self, value):
+        super().__init__(value)
+
+    def __bytes__(self):
+        raise AssertionError("secret-token ETH source bytearray coerced")
+
+    def __repr__(self):
+        raise AssertionError("secret-token ETH source bytearray repr'd")
+
+    def __str__(self):
+        raise AssertionError("secret-token ETH source bytearray stringified")
+
+    def __len__(self):
+        raise AssertionError("secret-token ETH source bytearray length read")
+
+    def __iter__(self):
+        raise AssertionError("secret-token ETH source bytearray iterated")
+
+    def __getitem__(self, _key):
+        raise AssertionError("secret-token ETH source bytearray indexed")
+
+    def __eq__(self, _other):
+        raise AssertionError("secret-token ETH source bytearray compared")
+
+    def __ne__(self, _other):
+        raise AssertionError("secret-token ETH source bytearray compared")
+
+    def __hash__(self):
+        raise AssertionError("secret-token ETH source bytearray hashed")
+
+
 class HostileDeploymentBlockNumber:
     def __str__(self):
         raise AssertionError("secret-token ETH deployment block number was stringified")
@@ -501,6 +569,93 @@ def test_eth_hash_parser_rejects_zero_and_wrong_width():
         assert "must be 32 bytes" in str(exc)
     else:
         raise AssertionError("short ETH component hash was accepted")
+
+
+def test_eth_source_bridge_fixed_bytes_reject_subclasses_without_hooks():
+    module = load_evidence_module()
+    raw = b"\x44" * 32
+
+    assert (
+        module._require_fixed_bytes(
+            bytearray(raw),
+            label="source_trust_anchor_hash",
+            byte_length=32,
+        )
+        == raw
+    )
+    exact_bytearray_args = eth_args(module)
+    exact_bytearray_args.source_trust_anchor_hash = bytearray(raw)
+    assert type(module.eth_source_verifier_material_record_hash(exact_bytearray_args)) is bytes
+
+    hostile_values = (
+        HostileEthSourceBridgeBytes(raw),
+        HostileEthSourceBridgeBytearray(raw),
+    )
+    for hostile in hostile_values:
+        cases = (
+            (
+                lambda hostile=hostile: module._require_fixed_bytes(
+                    hostile,
+                    label="source_trust_anchor_hash",
+                    byte_length=32,
+                ),
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._require_nonzero_fixed_bytes(
+                    hostile,
+                    label="source_trust_anchor_hash",
+                    byte_length=32,
+                ),
+                "source_trust_anchor_hash must be bytes",
+            ),
+            (
+                lambda hostile=hostile: module._optional_expected_record_hash(
+                    SimpleNamespace(expected_source_verifier_material_hash=hostile),
+                    "expected_source_verifier_material_hash",
+                    label="--expected-source-verifier-material-hash",
+                ),
+                "--expected-source-verifier-material-hash must be bytes",
+            ),
+        )
+        for call, expected_message in cases:
+            try:
+                call()
+            except ValueError as exc:
+                rendered = str(exc)
+                assert rendered == expected_message
+                assert "secret-token" not in rendered
+                assert exc.__cause__ is None
+            else:
+                raise AssertionError(
+                    "ETH source-bridge byte subclass value was accepted"
+                )
+
+        material_args = eth_args(module)
+        material_args.source_trust_anchor_hash = hostile
+        try:
+            module.eth_source_verifier_material_record_hash(material_args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "source_trust_anchor_hash must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError("ETH source material accepted hostile source hash")
+
+        adapter_args = eth_args(module)
+        adapter_args.adapter_verifier_vk_hash = hostile
+        try:
+            module._require_canonical_adapter_verifier_vk_hash(adapter_args)
+        except ValueError as exc:
+            rendered = str(exc)
+            assert rendered == "adapter_verifier_vk_hash must be bytes"
+            assert "secret-token" not in rendered
+            assert exc.__cause__ is None
+        else:
+            raise AssertionError(
+                "ETH source adapter accepted hostile verifier hash"
+            )
 
 
 def test_eth_source_numeric_parsers_require_canonical_ascii_decimal():
