@@ -18,7 +18,7 @@ Files:
 - genesis.json — generated with `kagami genesis generate --profile iroha3-taira` and patched with deterministic topology+PoPs
 - verify.txt — stdout from `kagami verify --profile iroha3-taira --genesis genesis.json`
 - config.toml — minimal Nexus config matching the topology (ports 8080/1337) and enabling native Torii MCP with the curated public `iroha.*` writer profile
-  plus an explicit `nexus.fees.fee_asset_id = "xor#universal"` override so public app-api writes charge fees in the live XOR alias instead of the canonical default selector
+  plus explicit `nexus.fees.fee_asset_id = "xor#universal"` and `nexus.staking.stake_asset_id = "xor#universal"` overrides. The alias is bound in genesis to the live Taira XOR asset definition `6TEAJqbb8oEPmLncoNiMRbLEK6tw`.
 - docker-compose.yml — single-node snippet mounting the config/genesis
 
 Operational note:

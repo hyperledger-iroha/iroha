@@ -81,9 +81,26 @@ def receipt_verification_summary(
             }
             for offset, kind in enumerate(kinds[: max(verified_receipts, 0)])
         ]
+    ok = (
+        set(kinds) == READINESS.REQUIRED_RECEIPT_KINDS
+        and verified_receipts == len(receipts)
+        and len(receipts) > 0
+        and not allow_failed
+        and not allow_insecure_http
+        and not allow_default_profile
+        and require_source_files
+        and all(receipt.get("ok") is True for receipt in receipts)
+        and not any(receipt.get("endpoint_requires_insecure_http") for receipt in receipts)
+        and not any(
+            receipt.get("receipt_kind") == "iso-rail-gateway"
+            and receipt.get("profile") is None
+            for receipt in receipts
+        )
+    )
     return refresh_digest(
         {
             "version": READINESS.RECEIPT_SUMMARY_VERSION,
+            "ok": ok,
             "verified_receipts": verified_receipts,
             "receipt_kind": kinds,
             "allow_failed": allow_failed,
@@ -2779,26 +2796,29 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 summary["xsd_summaries"][0]["version"],
                 READINESS.XSD_SUMMARY_VERSION,
             )
+            self.assertTrue(summary["xsd_summaries"][0]["ok"])
             self.assertIn("verified_at", summary["xsd_summaries"][0])
             self.assertEqual(
                 summary["xsd_summaries"][0]["schema_sources"][0]["license"],
                 "Apache-2.0",
             )
             self.assertIn("verified_at", summary["evidence_summaries"][0])
+            self.assertTrue(summary["evidence_summaries"][0]["ok"])
             self.assertFalse(
                 any(key.startswith("_") for key in summary["evidence_summaries"][0])
             )
-            self.assertEqual(
-                summary["evidence_summaries"][0]["policy"],
-                {
-                    "provider": "local-bank",
-                    "environment": "preprod",
-                    "default_rail_profile": None,
-                    "max_canary_age_days": 36500,
-                    "max_trust_age_days": 36500,
-                    "max_trust_source_age_days": 36500,
-                },
+            expected_policy = {
+                "provider": "local-bank",
+                "environment": "preprod",
+                "default_rail_profile": None,
+                "max_canary_age_days": 36500,
+                "max_trust_age_days": 36500,
+                "max_trust_source_age_days": 36500,
+            }
+            expected_policy.update(
+                {flag: False for flag in READINESS.PRODUCTION_FALSE_POLICY_FLAGS}
             )
+            self.assertEqual(summary["evidence_summaries"][0]["policy"], expected_policy)
             self.assertEqual(summary["policy"]["max_xsd_age_days"], 36500)
             self.assertEqual(summary["policy"]["max_evidence_age_days"], 36500)
             self.assertEqual(summary["policy"]["max_canary_age_days"], 36500)
@@ -2839,7 +2859,14 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "require_explicit_policy"
                 ]
             )
+            self.assertTrue(
+                summary["evidence_summaries"][0]["canary_summaries"][0][
+                    "receipt_summary"
+                ]["ok"]
+            )
+            self.assertTrue(summary["evidence_summaries"][0]["receipt_verification"]["ok"])
             canary_summary = summary["evidence_summaries"][0]["canary_summaries"][0]
+            self.assertTrue(canary_summary["ok"])
             self.assertEqual(canary_summary["version"], READINESS.CANARY_SUMMARY_VERSION)
             self.assertTrue(canary_summary["path"].endswith("canary.summary.json"))
             self.assertEqual(canary_summary["config_path"], "/ops/iso/canary.json")
@@ -2905,6 +2932,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertFalse(trust_summary["allow_synthetic_der"])
             self.assertFalse(trust_summary["allow_record_only"])
             self.assertFalse(trust_summary["allow_insecure_source_url"])
+            self.assertTrue(trust_summary["ok"])
             self.assertTrue(trust_summary["profile_json_emitted"])
             self.assertTrue(trust_summary["profile_json_emittable"])
             self.assertRegex(trust_summary["profile_json_sha256"], r"^[0-9a-f]{64}$")
@@ -4383,6 +4411,194 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("--environment must use printable ASCII", stderr)
             self.assertNotIn("prepr\u043ed", stderr)
 
+            canonical_context_cases = (
+                (
+                    ["--provider", "Local-Bank", "--environment", "preprod"],
+                    "--provider must be a canonical lowercase context id",
+                    "Local-Bank",
+                ),
+                (
+                    ["--provider", "local-bank", "--environment", "pre/prod"],
+                    "--environment must be a canonical lowercase context id",
+                    "pre/prod",
+                ),
+            )
+            for argv, expected, hidden in canonical_context_cases:
+                with self.subTest(argv=argv):
+                    rc, _stdout, stderr = run_readiness(
+                        base_argv + argv,
+                        include_context=False,
+                    )
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+            placeholder_context_cases = (
+                (
+                    ["--provider", "example", "--environment", "preprod"],
+                    "--provider must not use placeholder context id",
+                    "example",
+                ),
+                (
+                    ["--provider", "example-bank", "--environment", "preprod"],
+                    "--provider must not use placeholder context id",
+                    "example-bank",
+                ),
+                (
+                    ["--provider", "local-bank", "--environment", "test"],
+                    "--environment must not use placeholder context id",
+                    "test",
+                ),
+                (
+                    ["--provider", "local-bank", "--environment", "sample-preprod"],
+                    "--environment must not use placeholder context id",
+                    "sample-preprod",
+                ),
+            )
+            for argv, expected, hidden in placeholder_context_cases:
+                with self.subTest(argv=argv):
+                    rc, _stdout, stderr = run_readiness(
+                        base_argv + argv,
+                        include_context=False,
+                    )
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+    def test_digest_correct_evidence_policy_context_ids_must_be_canonical(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "provider",
+                    "local/bank",
+                    "policy.provider must be a canonical lowercase context id",
+                ),
+                (
+                    "environment",
+                    "pre/prod",
+                    "policy.environment must be a canonical lowercase context id",
+                ),
+            )
+            for field, value, expected in cases:
+                with self.subTest(field=field):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    evidence["policy"][field] = value
+                    refresh_digest(evidence)
+                    forged_path = write_json(
+                        root / f"bad-policy-{field}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(forged_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(value, stderr)
+
+    def test_digest_correct_evidence_policy_context_ids_must_not_be_placeholders(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "provider",
+                    "sample",
+                    "policy.provider must not use placeholder context id",
+                ),
+                (
+                    "provider",
+                    "sample-bank",
+                    "policy.provider must not use placeholder context id",
+                ),
+                (
+                    "environment",
+                    "test",
+                    "policy.environment must not use placeholder context id",
+                ),
+                (
+                    "environment",
+                    "test-preprod",
+                    "policy.environment must not use placeholder context id",
+                ),
+            )
+            for field, value, expected in cases:
+                with self.subTest(field=field):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    evidence["policy"][field] = value
+                    refresh_digest(evidence)
+                    forged_path = write_json(
+                        root / f"placeholder-policy-{field}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(forged_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn(value, stderr)
+
+    def test_digest_correct_trust_profile_context_ids_must_not_be_placeholders(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                "test",
+                "sample-bank",
+            )
+            for offset, value in enumerate(cases):
+                with self.subTest(value=value):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    evidence["trust_summaries"][0]["profiles"][0]["environment"] = value
+                    refresh_digest(evidence)
+                    forged_path = write_json(
+                        root / f"placeholder-trust-{offset}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(forged_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(
+                        "profiles[0].environment must not use placeholder context id",
+                        stderr,
+                    )
+                    self.assertNotIn(value, stderr)
+
     def test_freshness_budgets_are_required_and_positive(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -5264,7 +5480,13 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertNotIn("xsd.profile_schema_backed_not_proven", codes)
             self.assertNotIn("xsd.missing_schema_fixtures", codes)
             self.assertNotIn("xsd.missing_profile_schema_versions", codes)
-            self.assertEqual(codes, {"xsd.repository_fixture_manifest"})
+            self.assertEqual(
+                codes,
+                {
+                    "xsd.repository_fixture_manifest",
+                    "xsd.summary_not_ok",
+                },
+            )
 
     def test_reviewed_xsd_gaps_block_by_default_and_can_be_diagnostic_warnings(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -5293,6 +5515,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(
                 {blocker["code"] for blocker in blocked["blockers"]},
                 {
+                    "xsd.summary_not_ok",
                     "xsd.strict_schema_backed_not_proven",
                     "xsd.profile_schema_backed_not_proven",
                     "xsd.missing_schema_fixtures",
@@ -5329,7 +5552,11 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
             self.assertEqual(
                 {blocker["code"] for blocker in diagnostic["blockers"]},
-                {"xsd.pending_probe_missing"},
+                {
+                    "readiness.policy.allow_reviewed_xsd_gaps",
+                    "xsd.pending_probe_missing",
+                    "xsd.summary_not_ok",
+                },
             )
             pending_probe_blockers = [
                 blocker
@@ -5380,13 +5607,19 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 ]
             )
 
-            self.assertEqual(rc, 0, stderr)
+            self.assertEqual(rc, 1, stderr)
             diagnostic = json.loads(stdout)
-            self.assertTrue(diagnostic["ok"])
+            self.assertFalse(diagnostic["ok"])
             blocker_codes = {blocker["code"] for blocker in diagnostic["blockers"]}
             self.assertNotIn("xsd.pending_probe_missing", blocker_codes)
             self.assertNotIn("xsd.pending_probe_unreachable", blocker_codes)
-            self.assertEqual(blocker_codes, set())
+            self.assertEqual(
+                blocker_codes,
+                {
+                    "readiness.policy.allow_reviewed_xsd_gaps",
+                    "xsd.summary_not_ok",
+                },
+            )
             self.assertEqual(len(diagnostic["pending_xsd_probe_summaries"]), 1)
             self.assertEqual(
                 diagnostic["pending_xsd_probe_summaries"][0]["probe_count"],
@@ -5553,6 +5786,41 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     for entry in unreachable["entries"]
                 )
             )
+
+    def test_pending_xsd_probe_summary_ok_is_recomputed_by_readiness(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_reviewed_gap_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            probe_summary = write_pending_xsd_probe_summary(
+                root / "probe",
+                status="timeout",
+            )
+            forged = json.loads(probe_summary.read_text(encoding="utf-8"))
+            forged["ok"] = True
+            refresh_digest(forged)
+            forged_path = write_json(root / "forged-probe.summary.json", forged)
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                    "--pending-xsd-probe-summary",
+                    str(forged_path),
+                    "--allow-reviewed-xsd-gaps",
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            diagnostic = json.loads(stdout)
+            blocker_codes = {blocker["code"] for blocker in diagnostic["blockers"]}
+            self.assertIn("xsd.pending_probe_ok_mismatch", blocker_codes)
+            self.assertIn("xsd.pending_probe_unreachable", blocker_codes)
+            self.assertNotIn("xsd.pending_probe_summary_not_ok", blocker_codes)
 
     def test_pending_xsd_probe_summary_redacts_non_xsd_response_metadata(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -6456,7 +6724,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
             for extra_args, collection, expected_rc in (
                 ([], "blockers", 1),
-                (["--allow-reviewed-xsd-gaps"], "warnings", 0),
+                (["--allow-reviewed-xsd-gaps"], "warnings", 1),
             ):
                 with self.subTest(collection=collection):
                     rc, stdout, stderr = run_readiness(
@@ -9726,7 +9994,13 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 1, stderr)
                     self.assertEqual(stderr, "")
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
-                    self.assertEqual(codes, {"xsd.repository_fixture_manifest"})
+                    self.assertEqual(
+                        codes,
+                        {
+                            "xsd.repository_fixture_manifest",
+                            "xsd.summary_ok_drift",
+                        },
+                    )
 
                     rc, stdout, stderr = run_readiness(
                         [
@@ -11044,6 +11318,139 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertNotIn(expected_evidence_digest, stderr)
             self.assertNotIn(actual_evidence_digest, stderr)
 
+    def test_evidence_summary_ok_is_rechecked_by_readiness(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "production-policy-false-ok",
+                    lambda evidence: evidence.__setitem__("ok", False),
+                    {
+                        "evidence.summary_not_ok",
+                        "evidence.summary_ok_drift",
+                    },
+                ),
+                (
+                    "nonproduction-policy-true-ok",
+                    lambda evidence: evidence["policy"].__setitem__(
+                        "allow_failed_receipts",
+                        True,
+                    ),
+                    {
+                        "evidence.policy.allow_failed_receipts",
+                        "evidence.summary_ok_drift",
+                    },
+                ),
+            )
+            for name, mutate, expected_codes in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    mutate(evidence)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    summary = json.loads(stdout)
+                    self.assertFalse(summary["ok"])
+                    codes = {blocker["code"] for blocker in summary["blockers"]}
+                    self.assertTrue(expected_codes <= codes)
+
+    def test_compact_canary_summary_ok_is_rechecked_by_readiness(self):
+        def mark_dry_run_but_keep_ok_true(evidence):
+            canary = evidence["canary_summaries"][0]
+            canary["stage_dry_run"][0] = True
+            canary["stage_command_modes"][0]["rail_submitted_message_count"] = 0
+            evidence["policy"]["allow_dry_run"] = True
+
+        def remove_notary_but_keep_ok_true(evidence):
+            canary = evidence["canary_summaries"][0]
+            canary["stage_names"] = ["rail", "verify"]
+            canary["stage_dry_run"] = [False, False]
+            canary["stage_command_modes"] = [
+                mode
+                for mode in canary["stage_command_modes"]
+                if mode["name"] != "notary"
+            ]
+            canary["stage_windows"] = [
+                window
+                for window in canary["stage_windows"]
+                if window["name"] != "notary"
+            ]
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "production-canary-false-ok",
+                    lambda evidence: evidence["canary_summaries"][0].__setitem__(
+                        "ok",
+                        False,
+                    ),
+                    {
+                        "evidence.canary_summary_not_ok",
+                        "evidence.canary_summary_ok_drift",
+                    },
+                ),
+                (
+                    "dry-run-canary-true-ok",
+                    mark_dry_run_but_keep_ok_true,
+                    {
+                        "evidence.policy.allow_dry_run",
+                        "evidence.canary_summary_ok_drift",
+                    },
+                ),
+                (
+                    "partial-canary-true-ok",
+                    remove_notary_but_keep_ok_true,
+                    {
+                        "evidence.missing_canary_stages",
+                        "evidence.canary_summary_ok_drift",
+                    },
+                ),
+            )
+            for name, mutate, expected_codes in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    mutate(evidence)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"{name}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertTrue(expected_codes <= codes)
+
     def test_input_summary_digest_rejects_all_zero_placeholder(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -11225,6 +11632,64 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(f"strict.{flag} must be a boolean", stderr)
 
+    def test_xsd_summary_ok_is_rechecked_by_readiness(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            production_xsd = json.loads(
+                write_strict_xsd_summary(root / "production-xsd").read_text(
+                    encoding="utf-8"
+                )
+            )
+            production_xsd["ok"] = False
+            refresh_digest(production_xsd)
+            production_forged_path = write_json(
+                root / "production-xsd-forged-not-ok.summary.json",
+                production_xsd,
+            )
+
+            reviewed_xsd_path = write_reviewed_gap_xsd_summary(root / "reviewed-xsd")
+            reviewed_xsd = json.loads(reviewed_xsd_path.read_text(encoding="utf-8"))
+            reviewed_xsd["ok"] = True
+            refresh_digest(reviewed_xsd)
+            reviewed_forged_path = write_json(
+                root / "reviewed-xsd-forged-ok.summary.json",
+                reviewed_xsd,
+            )
+
+            cases = (
+                (
+                    production_forged_path,
+                    {
+                        "xsd.summary_not_ok",
+                        "xsd.summary_ok_drift",
+                    },
+                ),
+                (
+                    reviewed_forged_path,
+                    {
+                        "xsd.summary_ok_drift",
+                    },
+                ),
+            )
+            for path, expected_codes in cases:
+                with self.subTest(path=path.name):
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertTrue(expected_codes <= codes)
+
     def test_evidence_policy_and_provider_environment_drift_block_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -11303,7 +11768,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(archived_evidence["policy"]["provider"], "unsupported")
             self.assertEqual(archived_evidence["policy"]["environment"], "unsupported")
             for flag in READINESS.PRODUCTION_FALSE_POLICY_FLAGS:
-                self.assertNotIn(flag, archived_evidence["policy"])
+                self.assertEqual(archived_evidence["policy"][flag], "unsupported")
             self.assertEqual(
                 archived_evidence["canary_summaries"][0]["provider"],
                 "unsupported",
@@ -11589,6 +12054,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     codes = {blocker["code"] for blocker in blockers}
                     self.assertIn(blocker_code, codes)
                     self.assertIn("trust.profile_json_emittable_drift", codes)
+                    self.assertIn("trust.summary_ok_drift", codes)
                     self.assertEqual(
                         summary["evidence_summaries"][0]["trust_summaries"][0][field],
                         "unsupported",
@@ -11600,6 +12066,58 @@ class IsoProductionReadinessTest(unittest.TestCase):
                         self.assertTrue(
                             any(message in blocker["message"] for blocker in matching)
                         )
+
+    def test_compact_trust_summary_ok_is_rechecked_by_readiness(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "production-forged-not-ok",
+                    lambda trust: trust.__setitem__("ok", False),
+                    {
+                        "trust.summary_not_ok",
+                        "trust.summary_ok_drift",
+                    },
+                ),
+                (
+                    "synthetic-forged-ok",
+                    lambda trust: (
+                        trust.__setitem__("ok", True),
+                        trust.__setitem__("allow_synthetic_der", True),
+                        trust.__setitem__("profile_json_emitted", False),
+                        trust.__setitem__("profile_json_emittable", False),
+                        trust.__setitem__("profile_json_sha256", None),
+                    ),
+                    {
+                        "trust.allow_synthetic_der",
+                        "trust.profile_json_not_emitted",
+                        "trust.profile_json_not_emittable",
+                        "trust.summary_ok_drift",
+                    },
+                ),
+            )
+            for name, mutate, expected_codes in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    trust = evidence["trust_summaries"][0]
+                    mutate(trust)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"{name}.evidence.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertTrue(expected_codes <= codes)
 
     def test_compact_insecure_trust_source_blocks_readiness_without_malformed_abort(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -14243,6 +14761,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
             canary = evidence["canary_summaries"][0]
             canary["stage_dry_run"] = [True, False, False]
+            canary["ok"] = False
             canary["stage_command_modes"][0]["rail_submitted_message_count"] = 0
             canary["receipt_summary"] = receipt_verification_summary()
             evidence["policy"]["allow_dry_run"] = True
@@ -14265,11 +14784,13 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("evidence.stage_receipt_kind_unexecuted", codes)
             self.assertIn("evidence.policy.allow_dry_run", codes)
             canary = summary["evidence_summaries"][0]["canary_summaries"][0]
+            self.assertEqual(canary["ok"], "unsupported")
             self.assertEqual(canary["stage_dry_run"], ["unsupported", False, False])
 
             evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
             canary = evidence["canary_summaries"][0]
             canary["stage_dry_run"] = [True, False, False]
+            canary["ok"] = False
             canary["stage_command_modes"][0]["rail_submitted_message_count"] = 0
             canary["receipt_summary"] = receipt_verification_summary(
                 ["iso-audit-notary"],
@@ -14299,6 +14820,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertNotIn("evidence.stage_receipt_kind_missing", codes)
             self.assertNotIn("evidence.stage_receipt_kind_unexecuted", codes)
             canary = summary["evidence_summaries"][0]["canary_summaries"][0]
+            self.assertEqual(canary["ok"], "unsupported")
             self.assertEqual(canary["stage_dry_run"], ["unsupported", False, False])
 
     def test_default_profile_receipt_policy_blocks_readiness(self):
@@ -16432,10 +16954,17 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "--allow-canary-stage-receipts-only",
                 ]
             )
-            self.assertEqual(rc, 0, stderr)
+            self.assertEqual(rc, 1, stderr)
             diagnostic = json.loads(stdout)
-            self.assertTrue(diagnostic["ok"])
+            self.assertFalse(diagnostic["ok"])
             self.assertTrue(diagnostic["policy"]["allow_canary_stage_receipts_only"])
+            self.assertEqual(
+                {blocker["code"] for blocker in diagnostic["blockers"]},
+                {
+                    "evidence.summary_not_ok",
+                    "readiness.policy.allow_canary_stage_receipts_only",
+                },
+            )
 
             forged_policy = json.loads(evidence_summary.read_text(encoding="utf-8"))
             forged_policy["policy"]["allow_canary_stage_receipts_only"] = False
@@ -16534,8 +17063,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("evidence.policy.allow_plan_only", codes)
             self.assertIn("evidence.policy.allow_canary_stage_receipts_only", codes)
             self.assertIn("evidence.plan_only", codes)
+            self.assertIn("evidence.canary_summary_not_ok", codes)
             self.assertIn("evidence.archive_receipts_not_reverified", codes)
             canary = summary["evidence_summaries"][0]["canary_summaries"][0]
+            self.assertEqual(canary["ok"], "unsupported")
             self.assertEqual(canary["plan_only"], "unsupported")
             self.assertIsNone(canary["receipt_summary"])
             self.assertEqual(canary["verified_receipts"], 0)
@@ -17387,6 +17918,64 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 "require_source_files",
             ):
                 self.assertEqual(archived_receipts[field], "unsupported")
+
+    def test_receipt_summary_ok_is_rechecked_by_readiness(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda summary: summary.__setitem__("ok", False),
+                    {
+                        "evidence.receipt_summary_not_ok",
+                        "evidence.receipt_summary_ok_drift",
+                    },
+                ),
+                (
+                    ("receipt_verification",),
+                    lambda summary: summary.__setitem__("ok", False),
+                    {
+                        "evidence.archive_receipt_summary_not_ok",
+                        "evidence.archive_receipt_summary_ok_drift",
+                    },
+                ),
+                (
+                    ("receipt_verification",),
+                    lambda summary: (
+                        summary.__setitem__("allow_failed", True),
+                        summary.__setitem__("ok", True),
+                    ),
+                    {
+                        "evidence.archive_receipts_allow_failed",
+                        "evidence.archive_receipt_summary_ok_drift",
+                    },
+                ),
+            )
+            for offset, (path_parts, mutate, expected_codes) in enumerate(cases):
+                with self.subTest(offset=offset):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    receipt_summary = evidence
+                    for part in path_parts:
+                        receipt_summary = receipt_summary[part]
+                    mutate(receipt_summary)
+                    refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    forged_path = write_json(
+                        root / f"forged-receipt-ok-{offset}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(forged_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertTrue(expected_codes <= codes)
 
     def test_receipt_policy_flags_must_bind_receipt_entries(self):
         with tempfile.TemporaryDirectory() as raw_root:

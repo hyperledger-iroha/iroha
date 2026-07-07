@@ -6,7 +6,10 @@ use std::borrow::Cow;
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     query::store::LiveQueryStore,
-    smartcontracts::triggers::set::SetReadOnly,
+    smartcontracts::triggers::{
+        set::{ExecutableRef, SetReadOnly},
+        specialized::LoadedActionTrait,
+    },
     state::{State, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
@@ -17,15 +20,32 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let asset_definition = AssetDefinition::new(
-        iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ),
-        NumericSpec::default(),
-    )
-    .build(&ALICE_ID);
-    let world = iroha_core::state::World::with([domain], [account], [asset_definition]);
+    let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+        domain_id.clone(),
+        "rose".parse().expect("asset name"),
+    );
+    let asset_definition =
+        AssetDefinition::new(asset_definition_id, NumericSpec::default()).build(&ALICE_ID);
+    let stored_asset_definition_id = asset_definition.id().clone();
+    let fee_domain_id =
+        DomainId::parse_fully_qualified("universal.universal").expect("fee domain id");
+    let fee_domain = Domain::new(fee_domain_id.clone()).build(&ALICE_ID);
+    let fee_asset_definition_id =
+        iroha_data_model::asset::AssetDefinitionId::new(fee_domain_id, "xor".parse().unwrap());
+    let fee_asset_definition = AssetDefinition::numeric(fee_asset_definition_id.clone())
+        .with_name("xor".to_owned())
+        .build(&ALICE_ID);
+    let fee_asset = Asset::new(
+        AssetId::new(fee_asset_definition_id, ALICE_ID.clone()),
+        Numeric::new(100_000, 0),
+    );
+    let world = iroha_core::state::World::with_assets(
+        [domain, fee_domain],
+        [account],
+        [asset_definition, fee_asset_definition],
+        [fee_asset],
+        [],
+    );
 
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -48,13 +68,12 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     };
 
     let trigger_id: TriggerId = "sse_smoke_trigger".parse().expect("trigger id");
-    let asset_id = AssetId::new(
-        iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "rose".parse().unwrap(),
-        ),
-        ALICE_ID.clone(),
-    );
+    let asset_id = AssetId::new(stored_asset_definition_id, ALICE_ID.clone());
+    state
+        .view()
+        .world()
+        .asset_definition(asset_id.definition())
+        .expect("seeded asset definition must be resolvable");
 
     (state, chain_id, trigger_id, asset_id)
 }
@@ -107,6 +126,7 @@ fn execute_trigger(
     state: &State,
     chain_id: &ChainId,
     trigger_id: &TriggerId,
+    asset_id: &AssetId,
     parent: &iroha_core::block::CommittedBlock,
 ) -> (Vec<EventBox>, usize, Option<String>) {
     let exec_tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
@@ -123,6 +143,10 @@ fn execute_trigger(
         .sign(ALICE_KEYPAIR.private_key())
         .unpack(|_| {});
     let mut execute_state_block = state.block(execute_block.header());
+    execute_state_block
+        .world()
+        .asset_definition(asset_id.definition())
+        .expect("execute block must see seeded asset definition");
     let valid_execute =
         ValidBlock::validate_unchecked(execute_block.into(), &mut execute_state_block)
             .unpack(|_| {});
@@ -130,19 +154,36 @@ fn execute_trigger(
     let events = execute_state_block.apply_without_execution(&committed_execute, Vec::new());
     let fragment_count = execute_state_block.committed_fragment_count();
     execute_state_block.commit().expect("execute block commits");
-    let execute_error = committed_execute.as_ref().error(0).map(ToString::to_string);
+    let execute_error = committed_execute
+        .as_ref()
+        .error(0)
+        .map(|error| format!("{error:?}"));
     (events, fragment_count, execute_error)
 }
 
-fn assert_trigger_registered(state: &State, trigger_id: &TriggerId) {
-    let registered = state
-        .view()
+fn assert_trigger_registered(state: &State, trigger_id: &TriggerId, asset_id: &AssetId) {
+    let view = state.view();
+    let action = view
         .world()
         .triggers()
         .by_call_triggers()
         .get(trigger_id)
-        .is_some();
-    assert!(registered, "trigger should be registered");
+        .expect("trigger should be registered");
+    let ExecutableRef::Instructions(instructions) = action.executable() else {
+        panic!("trigger should store instruction executable");
+    };
+    let [instruction] = instructions.as_ref() else {
+        panic!("trigger should store exactly one instruction");
+    };
+    let mint = match instruction.as_any().downcast_ref::<MintBox>() {
+        Some(MintBox::Asset(mint)) => mint,
+        _ => panic!("trigger instruction should mint a numeric asset"),
+    };
+    assert_eq!(
+        mint.destination(),
+        asset_id,
+        "registered trigger must mint the seeded asset"
+    );
 }
 
 fn assert_trigger_events(
@@ -195,10 +236,20 @@ fn execute_trigger_emits_execute_and_data_events() {
         register_fragments > 0,
         "register transaction should be applied"
     );
-    assert_trigger_registered(&state, &trigger_id);
+    assert_trigger_registered(&state, &trigger_id, &asset_id);
+    state
+        .view()
+        .world()
+        .asset_definition(asset_id.definition())
+        .expect("asset definition must survive trigger registration");
 
-    let (events, fragment_count, execute_error) =
-        execute_trigger(&state, &chain_id, &trigger_id, &committed_register);
+    let (events, fragment_count, execute_error) = execute_trigger(
+        &state,
+        &chain_id,
+        &trigger_id,
+        &asset_id,
+        &committed_register,
+    );
     assert!(
         execute_error.is_none(),
         "ExecuteTrigger transaction rejected: {execute_error:?}"

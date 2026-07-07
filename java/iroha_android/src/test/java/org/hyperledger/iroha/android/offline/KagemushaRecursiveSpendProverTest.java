@@ -104,7 +104,8 @@ public final class KagemushaRecursiveSpendProverTest {
         == 8 * 1024 * 1024;
     assert KagemushaRecursiveSpendProver.RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES
         == 128;
-    assert KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES == 64 * 1024 * 1024;
+    assert KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024 * 1024;
+    assert KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES == 256 * 1024 * 1024;
     assert "iroha:kagemusha:v1:recursive-spend-accumulator"
         .equals(KagemushaRecursiveSpendProver.RECURSIVE_SPEND_ACCUMULATOR_DOMAIN);
     assert "iroha:kagemusha:v1:recursive-spend-transition-profile"

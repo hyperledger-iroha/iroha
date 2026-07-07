@@ -186,7 +186,8 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   fee sponsors also require fee sponsorship, enabled Nexus, and a dataspace key
   present in the active dataspace catalog. Runtime config swaps also mirror the
   parser's fee-shape checks: the Nexus fee asset selector must be the canonical
-  XOR asset definition id or `xor#universal`/`xor#universal.universal` and is
+  XOR asset definition id or `xor#universal`/`xor#universal.universal` after
+  genesis binds the alias to a canonical Base58 asset definition, and is
   trimmed to the parser-normalized selector, the fee sink literal cannot be
   blank, blank canonical sponsors are treated as absent, and each sponsored
   contract allowlist entry must name a contract target plus at least one

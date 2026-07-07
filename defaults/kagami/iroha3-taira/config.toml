@@ -42,6 +42,9 @@ per_instruction_fee = "0.001"
 sponsor_max_fee = "0"
 sponsorship_enabled = true
 
+[nexus.staking]
+stake_asset_id = "xor#universal"
+
 [nexus.storage]
 local_budget_bytes = 44141730227814
 

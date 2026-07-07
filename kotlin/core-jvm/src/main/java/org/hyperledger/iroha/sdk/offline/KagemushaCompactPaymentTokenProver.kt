@@ -4,7 +4,7 @@ package org.hyperledger.iroha.sdk.offline
 class KagemushaCompactPaymentTokenProver private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        const val NATIVE_ARCHIVE_MAX_BYTES: Int = 64 * 1024 * 1024
+        const val NATIVE_ARCHIVE_MAX_BYTES: Int = 256 * 1024 * 1024
         private const val NORITO_HEADER_BYTES: Int = 40
         private const val NORITO_MAX_HEADER_PADDING_BYTES: Int = 64
         private const val NORITO_SUPPORTED_FLAGS_MASK: Int = 0x27

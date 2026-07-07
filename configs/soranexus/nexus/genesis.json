@@ -109,20 +109,6 @@
               "metadata": {}
             }
           }
-        },
-        {
-          "Register": {
-            "AssetDefinition": {
-              "id": "xor#universal",
-              "logo": null,
-              "metadata": {},
-              "mintable": "Infinitely",
-              "spec": {
-                "scale": null
-              },
-              "name": "xor"
-            }
-          }
         }
       ],
       "ivm_triggers": [],

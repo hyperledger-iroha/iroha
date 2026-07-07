@@ -2890,6 +2890,7 @@ where
             let mut output: Option<PathBuf> = None;
             let mut profiles: Vec<String> = Vec::new();
             let mut kagami: Option<PathBuf> = None;
+            let mut nexus_xor_asset_definition_id: Option<String> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
                 match arg.as_str() {
@@ -2911,6 +2912,15 @@ where
                         };
                         kagami = Some(normalize_path(Path::new(&path))?);
                     }
+                    "--nexus-xor-asset-definition-id" => {
+                        let Some(asset_definition_id) = pending.next() else {
+                            return Err(
+                                "expected canonical Base58 id after --nexus-xor-asset-definition-id"
+                                    .into(),
+                            );
+                        };
+                        nexus_xor_asset_definition_id = Some(asset_definition_id);
+                    }
                     flag => {
                         return Err(format!("unknown flag for kagami-profiles: {flag}").into());
                     }
@@ -2924,6 +2934,7 @@ where
                     output,
                     profiles,
                     kagami_override: kagami,
+                    nexus_xor_asset_definition_id,
                 },
             })
         }
@@ -11959,10 +11970,10 @@ fn print_usage() {
         "    Measure PoR verification time against the Halo2 verifier budget using the provided manifest/payload (defaults to fixtures/da/reconstruct/rs_parity_v1). Fails if verification exceeds the budget."
     );
     eprintln!(
-        "  cargo xtask kagami-profiles [--profile <iroha3-dev|iroha3-taira|iroha3-nexus>] [--out <dir>] [--kagami <path>]"
+        "  cargo xtask kagami-profiles [--profile <iroha3-dev|iroha3-taira|iroha3-nexus>] [--out <dir>] [--kagami <path>] [--nexus-xor-asset-definition-id <BASE58>]"
     );
     eprintln!(
-        "    Rebuild the canned Kagami profile bundles (genesis + PoPs + snippets) under defaults/kagami for Iroha 3 smoke tests; use --kagami to point at a specific binary."
+        "    Rebuild the canned Kagami profile bundles (genesis + PoPs + snippets) under defaults/kagami for Iroha 3 smoke tests; Nexus regeneration requires an explicit canonical XOR asset id."
     );
     eprintln!(
         "    Lint and migrate Iroha 2 configs/genesis to Iroha 3 defaults (Nexus lanes, SoraFS, fee asset). Writes migrated copies when output paths are provided."

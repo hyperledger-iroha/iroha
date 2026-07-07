@@ -434,7 +434,8 @@ LaneConfigEntry {
   fee sponsorship, enabled Nexus, and dataspace keys present in the active
   catalog. Runtime config swaps also enforce the parser's fee-shape contract:
   the fee asset selector must be the canonical XOR asset definition id or
-  `xor#universal`/`xor#universal.universal` and is trimmed to the
+  `xor#universal`/`xor#universal.universal` after genesis binds the alias to a
+  canonical Base58 asset definition, and is trimmed to the
   parser-normalized selector, the fee sink literal must be non-empty, blank
   canonical sponsors are normalized to absence, and sponsored contract
   allowlist entries must carry a target plus non-empty entrypoints.

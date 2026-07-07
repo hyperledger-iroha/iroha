@@ -21,6 +21,9 @@ XSD corpus. The `blocked_schema_sources` and `pending_schema_sources` keys must
 be present even when their reviewed lists are intentionally empty, so absence
 cannot be interpreted as a clean production gap review. All checked-in XSDs have
 standalone XML fixtures, so `--require-fixture-for-schema` is expected to pass.
+Summaries generated from this repository fixture manifest intentionally record
+`ok: false`; production evidence must come from an operator-supplied official
+MDR/XSD package manifest outside checked-in fixture coordinates.
 Verify the manifest offline with:
 
 ```bash
@@ -101,7 +104,8 @@ roles. Pending-source probe summaries are versioned separately; version 2 record
 schema-root `target_namespace` extracted from the bounded sample and only treats
 a row as reachable when it equals
 `urn:iso:std:iso:20022:tech:xsd:<message_def_id>`. Final readiness replays that
-binding before pending-source probe evidence can cover a reviewed gap. The
+binding and recomputes the summary `ok` verdict before pending-source probe
+evidence can cover a reviewed gap. The
 `profile_catalog` key is always recorded; it is
 `null` only when no profile catalog was checked, and readiness requires that
 explicit state plus the manifest path to remain present. Profile catalog
@@ -119,7 +123,9 @@ checked-in XSD. For the first release, the checked-in release manifest and the
 embedded default rail profile catalog advertise only schema-backed concrete
 message definitions. The current checked-in manifest/profile pair passes all
 strict XSD gates with 7 schemas, 7 schema-backed XML fixtures, and 31
-schema-backed profile-advertised concrete versions. Broader runtime fixtures
+schema-backed profile-advertised concrete versions, but remains repository test
+material and therefore does not produce a production `ok: true` summary.
+Broader runtime fixtures
 for securities and collateral lifecycle parsing, including `sese.*` and
 `colr.*` samples, remain outside the production XSD manifest and default rail
 catalog until redistributable official schemas are checked in. Restricted public

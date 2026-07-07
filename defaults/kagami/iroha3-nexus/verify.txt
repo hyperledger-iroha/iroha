@@ -1,7 +1,6 @@
-profile: Iroha3Nexus
-chain_id: iroha3-nexus
-collectors: k=5 r=2
-vrf_seed: 3E448A9DBA73125E26B0178E036E291374CE17CD39AC321D7BC605963577332D
-peers_with_pop: 4
-consensus_fingerprint: 0xa521ddad8b2d372665bca6e60136333cfd0ad67162a9075ed3c4a91e74fc91b8
-kagami_version: 2.0.0-rc.2.0
+profile verification intentionally not recorded for this sample fixture
+
+Public Nexus genesis must bind xor#universal to the operator-supplied canonical
+XOR asset definition id. Regenerate this bundle with:
+
+cargo xtask kagami-profiles --profile iroha3-nexus --nexus-xor-asset-definition-id <BASE58>

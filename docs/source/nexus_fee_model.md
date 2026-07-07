@@ -10,7 +10,8 @@ assets.
   parameters documented here tie into the NX-3 roadmap deliverable and how SREs
   should monitor the router in production.
 - Nexus fee configuration accepts only the canonical XOR fee asset
-  (`xor#universal` or its canonical asset definition selector). Local gas-token
+  (`xor#universal` after genesis binds that alias to a canonical Base58 asset
+  definition, or the canonical asset definition selector directly). Local gas-token
   conversion metadata (`twap_local_per_xor`, `liquidity_profile`, and
   `volatility_class`) is reserved for explicit settlement products and is not
   the default gas path.

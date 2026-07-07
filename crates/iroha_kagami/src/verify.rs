@@ -1,7 +1,7 @@
 //! Profile-aware genesis verification entrypoint.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     io::{BufWriter, Write},
     path::PathBuf,
 };
@@ -9,11 +9,13 @@ use std::{
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_data_model::{
+    asset::{AssetDefinitionAlias, AssetDefinitionId},
+    isi::{Register, asset_alias::SetAssetDefinitionAlias},
     parameter::{
         custom::CustomParameterId,
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameters},
     },
-    prelude::PeerId,
+    prelude::{AssetDefinition, DomainId, PeerId},
 };
 use iroha_genesis::RawGenesisTransaction;
 
@@ -21,8 +23,9 @@ use crate::{
     Outcome, RunArgs,
     genesis::{
         GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
-        profile_requires_npos, resolve_vrf_seed,
+        profile_requires_npos, profile_uses_public_xor, resolve_vrf_seed,
     },
+    genesis::{PUBLIC_XOR_ALIAS, TAIRA_XOR_ASSET_DEFINITION_ID},
     tui,
 };
 
@@ -119,6 +122,9 @@ fn verify_manifest(
             "`--vrf-seed-hex` applies only to NPoS consensus manifests"
         ));
     }
+    if wants_npos && profile_uses_public_xor(profile) {
+        enforce_public_xor_binding(manifest, profile)?;
+    }
     let seed_hex = if wants_npos {
         let npos_params = resolve_npos_params(&params)?;
         let expected_seed = resolve_vrf_seed(profile, manifest.chain_id(), vrf_seed_override)?;
@@ -166,6 +172,99 @@ fn verify_manifest(
         vrf_seed_hex: seed_hex,
         peer_count: unique_peers.len(),
     })
+}
+
+fn enforce_public_xor_binding(
+    manifest: &RawGenesisTransaction,
+    profile: GenesisProfile,
+) -> Result<()> {
+    let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
+    let synthetic_stake_asset_id = AssetDefinitionId::new(
+        DomainId::parse_fully_qualified("nexus.universal")?,
+        "xor".parse()?,
+    );
+
+    let mut registered_asset_definitions = BTreeSet::new();
+    let mut public_xor_binding = None;
+    for instruction in manifest.instructions() {
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<Register<AssetDefinition>>()
+        {
+            registered_asset_definitions.insert(register.object.id.clone());
+            continue;
+        }
+        if let Some(register) = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+        {
+            if let iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) =
+                register
+            {
+                registered_asset_definitions.insert(register.object.id.clone());
+            }
+            continue;
+        }
+        if let Some(bind) = instruction
+            .as_any()
+            .downcast_ref::<SetAssetDefinitionAlias>()
+            && bind.alias.as_ref() == Some(&public_xor_alias)
+        {
+            if let Some(existing) = &public_xor_binding
+                && existing != &bind.asset_definition_id
+            {
+                return Err(eyre!(
+                    "public XOR alias `{PUBLIC_XOR_ALIAS}` is bound to multiple asset definitions"
+                ));
+            }
+            public_xor_binding = Some(bind.asset_definition_id.clone());
+        }
+    }
+
+    if registered_asset_definitions.contains(&synthetic_stake_asset_id) {
+        return Err(eyre!(
+            "public profile {:?} must not register synthetic `nexus.universal/xor` as the NPoS stake asset",
+            profile
+        ));
+    }
+
+    let Some(public_xor_asset_definition_id) = public_xor_binding else {
+        return Err(eyre!(
+            "public profile {:?} must bind `{PUBLIC_XOR_ALIAS}` to a canonical XOR asset definition in genesis",
+            profile
+        ));
+    };
+
+    if profile == GenesisProfile::Iroha3Taira
+        && public_xor_asset_definition_id.to_string() != TAIRA_XOR_ASSET_DEFINITION_ID
+    {
+        return Err(eyre!(
+            "Taira `{PUBLIC_XOR_ALIAS}` binding must target `{TAIRA_XOR_ASSET_DEFINITION_ID}`, found `{public_xor_asset_definition_id}`"
+        ));
+    }
+
+    if public_xor_asset_definition_id == synthetic_stake_asset_id {
+        return Err(eyre!(
+            "public profile {:?} binds `{PUBLIC_XOR_ALIAS}` to synthetic `nexus.universal/xor`; use the real canonical XOR asset definition",
+            profile
+        ));
+    }
+
+    if !public_xor_asset_definition_id.is_opaque_canonical() {
+        return Err(eyre!(
+            "public profile {:?} binds `{PUBLIC_XOR_ALIAS}` to domain-derived `{public_xor_asset_definition_id}`; use an explicit canonical Base58 asset definition id",
+            profile
+        ));
+    }
+
+    if !registered_asset_definitions.contains(&public_xor_asset_definition_id) {
+        return Err(eyre!(
+            "public profile {:?} binds `{PUBLIC_XOR_ALIAS}` to `{public_xor_asset_definition_id}` but does not register that asset definition",
+            profile
+        ));
+    }
+
+    Ok(())
 }
 
 fn ensure_chain_id(manifest: &RawGenesisTransaction, defaults: &ProfileDefaults) -> Result<()> {
@@ -279,8 +378,12 @@ fn collect_topology(manifest: &RawGenesisTransaction) -> Result<Vec<PeerId>> {
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
     use iroha_data_model::{
+        asset::{AssetDefinitionAlias, AssetDefinitionId},
+        isi::asset_alias::SetAssetDefinitionAlias,
         parameter::system::SumeragiConsensusMode,
-        prelude::{ChainId, PeerId, PublicKey},
+        prelude::{
+            AssetDefinition, ChainId, DomainId, Metadata, NumericSpec, PeerId, PublicKey, Register,
+        },
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
     use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
@@ -289,6 +392,47 @@ mod tests {
 
     use super::*;
     use crate::genesis::profile::derive_vrf_seed_from_chain;
+
+    fn test_public_xor_asset_definition_id(profile: GenesisProfile) -> AssetDefinitionId {
+        match profile {
+            GenesisProfile::Iroha3Taira => {
+                AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
+                    .expect("valid Taira XOR id")
+            }
+            GenesisProfile::Iroha3Nexus => {
+                AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+                    .expect("valid Nexus XOR fixture id")
+            }
+            GenesisProfile::Iroha3Dev => unreachable!("dev profile has no public XOR"),
+        }
+    }
+
+    fn append_public_xor_binding_for_test(
+        manifest: RawGenesisTransaction,
+        asset_definition_id: AssetDefinitionId,
+    ) -> RawGenesisTransaction {
+        let consensus_mode = manifest
+            .consensus_mode()
+            .expect("test manifest carries consensus mode");
+        let chain_discriminant = manifest.chain_discriminant();
+        let alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse().expect("valid alias");
+        manifest
+            .into_builder()
+            .next_transaction()
+            .append_instruction(Register::asset_definition(
+                AssetDefinition::new(asset_definition_id.clone(), NumericSpec::default())
+                    .with_name("xor".to_owned())
+                    .with_metadata(Metadata::default()),
+            ))
+            .append_instruction(SetAssetDefinitionAlias::bind(
+                asset_definition_id,
+                alias,
+                None,
+            ))
+            .build_raw()
+            .with_consensus_mode(consensus_mode)
+            .with_chain_discriminant(chain_discriminant)
+    }
 
     fn build_manifest_with_profile(
         profile: GenesisProfile,
@@ -311,6 +455,14 @@ mod tests {
             BuildLine::Iroha3,
         )
         .expect("generate profile manifest");
+        let manifest = if profile_uses_public_xor(profile) {
+            append_public_xor_binding_for_test(
+                manifest,
+                test_public_xor_asset_definition_id(profile),
+            )
+        } else {
+            manifest
+        };
 
         manifest
             .into_builder()
@@ -402,6 +554,197 @@ mod tests {
         assert!(
             ok.is_ok(),
             "explicit seed should satisfy verification: {ok:?}"
+        );
+    }
+
+    #[test]
+    fn verify_accepts_nexus_profile_with_explicit_public_xor_binding() {
+        let seed = [8u8; 32];
+        let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
+        let manifest = build_manifest_with_profile(
+            GenesisProfile::Iroha3Nexus,
+            SumeragiConsensusMode::Npos,
+            seed,
+            &peers,
+        );
+
+        let report = verify_manifest(&manifest, GenesisProfile::Iroha3Nexus, Some(seed))
+            .expect("Nexus explicit XOR binding should verify");
+        assert_eq!(report.peer_count, 4);
+    }
+
+    #[test]
+    fn verify_rejects_public_profile_missing_xor_binding() {
+        let seed = [9u8; 32];
+        let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
+        let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
+        let builder =
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let manifest = crate::genesis::generate_default(
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            None,
+            Some(&defaults),
+            Some(seed),
+            BuildLine::Iroha3,
+        )
+        .expect("generate profile manifest")
+        .into_builder()
+        .next_transaction()
+        .set_topology(
+            peers
+                .iter()
+                .map(|(pk, pop)| GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.clone()))
+                .collect(),
+        )
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Npos)
+        .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
+
+        let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
+            .expect_err("missing public XOR binding should fail");
+        assert!(
+            err.to_string().contains(PUBLIC_XOR_ALIAS),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_taira_wrong_public_xor_binding() {
+        let seed = [10u8; 32];
+        let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
+        let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
+        let builder =
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let manifest = crate::genesis::generate_default(
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            None,
+            Some(&defaults),
+            Some(seed),
+            BuildLine::Iroha3,
+        )
+        .expect("generate profile manifest");
+        let wrong_xor = AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+            .expect("valid fixture id");
+        let manifest = append_public_xor_binding_for_test(manifest, wrong_xor)
+            .into_builder()
+            .next_transaction()
+            .set_topology(
+                peers
+                    .iter()
+                    .map(|(pk, pop)| {
+                        GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.clone())
+                    })
+                    .collect(),
+            )
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Npos)
+            .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
+
+        let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
+            .expect_err("wrong Taira XOR id should fail");
+        assert!(
+            err.to_string().contains(TAIRA_XOR_ASSET_DEFINITION_ID),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_public_profile_synthetic_xor_binding() {
+        let seed = [11u8; 32];
+        let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
+        let defaults = profile_defaults(GenesisProfile::Iroha3Taira);
+        let builder =
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let manifest = crate::genesis::generate_default(
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            None,
+            Some(&defaults),
+            Some(seed),
+            BuildLine::Iroha3,
+        )
+        .expect("generate profile manifest");
+        let synthetic_xor = AssetDefinitionId::new(
+            DomainId::parse_fully_qualified("nexus.universal").expect("valid domain"),
+            "xor".parse().expect("valid asset name"),
+        );
+        let manifest = append_public_xor_binding_for_test(manifest, synthetic_xor)
+            .into_builder()
+            .next_transaction()
+            .set_topology(
+                peers
+                    .iter()
+                    .map(|(pk, pop)| {
+                        GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.clone())
+                    })
+                    .collect(),
+            )
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Npos)
+            .with_chain_discriminant(crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT);
+
+        let err = verify_manifest(&manifest, GenesisProfile::Iroha3Taira, Some(seed))
+            .expect_err("synthetic public XOR binding should fail");
+        assert!(
+            err.to_string().contains("synthetic"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_public_profile_domain_derived_xor_binding() {
+        let seed = [12u8; 32];
+        let peers = (0..4).map(|_| generate_peer_pop()).collect::<Vec<_>>();
+        let defaults = profile_defaults(GenesisProfile::Iroha3Nexus);
+        let builder =
+            GenesisBuilder::new_without_executor(defaults.chain_id.clone(), PathBuf::from("."));
+        let manifest = crate::genesis::generate_default(
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            None,
+            Some(&defaults),
+            Some(seed),
+            BuildLine::Iroha3,
+        )
+        .expect("generate profile manifest");
+        let domain_derived_xor = AssetDefinitionId::new(
+            DomainId::parse_fully_qualified("universal.universal").expect("valid domain"),
+            "xor".parse().expect("valid asset name"),
+        );
+        let manifest = append_public_xor_binding_for_test(manifest, domain_derived_xor)
+            .into_builder()
+            .next_transaction()
+            .set_topology(
+                peers
+                    .iter()
+                    .map(|(pk, pop)| {
+                        GenesisTopologyEntry::new(PeerId::new(pk.clone()), pop.clone())
+                    })
+                    .collect(),
+            )
+            .build_raw()
+            .with_consensus_mode(SumeragiConsensusMode::Npos)
+            .with_chain_discriminant(crate::genesis::profile::NEXUS_CHAIN_DISCRIMINANT);
+
+        let err = verify_manifest(&manifest, GenesisProfile::Iroha3Nexus, Some(seed))
+            .expect_err("domain-derived public XOR binding should fail");
+        assert!(
+            err.to_string().contains("canonical Base58"),
+            "unexpected error: {err}"
         );
     }
 

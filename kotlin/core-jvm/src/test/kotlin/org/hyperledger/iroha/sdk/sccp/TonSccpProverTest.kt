@@ -4,6 +4,10 @@ import java.io.ByteArrayOutputStream
 import java.math.BigInteger
 import org.bouncycastle.crypto.digests.KeccakDigest
 import org.hyperledger.iroha.sdk.crypto.Blake2b
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoDecoder
+import org.hyperledger.iroha.sdk.norito.NoritoEncoder
+import org.hyperledger.iroha.sdk.norito.TypeAdapter
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -13,6 +17,9 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class TonSccpProverTest {
+    private val testNexusBridgeFinalityProofSchema =
+        "iroha_sccp::NexusBridgeFinalityProofV1"
+
     @Test
     fun derivesTonRouteCanaryEvidenceHash() {
         val evidence = sampleTonRouteCanaryEvidence()
@@ -2107,10 +2114,11 @@ class TonSccpProverTest {
         }
         assertTrue(mismatchedBundle.message?.contains("proofResult.bundleBytes") == true)
 
+        val alternateFinalityBundle = sampleTonBundleBytesWithFinalityHeader(byteArrayOf(0x21, 0x23))
         val tamperedResultBundle = assertFailsWith<IllegalArgumentException> {
             TonSccpMessageBodyInput(
-                proofResult = result.copy(bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71, 0x73))),
-                bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71, 0x73)),
+                proofResult = result.copy(bundleBytes = alternateFinalityBundle),
+                bundleBytes = alternateFinalityBundle,
             )
         }
         assertTrue(tamperedResultBundle.message?.contains("requestHash") == true)
@@ -2360,7 +2368,7 @@ class TonSccpProverTest {
         assertNotEquals(request.requestHash, sourceStateBoundRequest.requestHash)
         val splitBoundaryRequest = SccpTon.buildProofRequest(
             sampleProofRequestInput(
-                bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71)),
+                bundleBytes = sampleTonBundleBytesWithFinalityHeader(byteArrayOf(0x21)),
                 sourceProofBytes = ByteArray(0),
                 sourceAdapterDeploymentHash = "aa".repeat(32),
                 sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
@@ -2368,7 +2376,7 @@ class TonSccpProverTest {
         )
         val shiftedSplitRequest = SccpTon.buildProofRequest(
             sampleProofRequestInput(
-                bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71, 0x73)),
+                bundleBytes = sampleTonBundleBytesWithFinalityHeader(byteArrayOf(0x21, 0x73)),
                 sourceProofBytes = ByteArray(0),
                 sourceAdapterDeploymentHash = "aa".repeat(32),
                 sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
@@ -2423,6 +2431,24 @@ class TonSccpProverTest {
             )
         }
         assertTrue(uppercasePayloadHash.message?.contains("payloadHash must be canonical hex") == true)
+        val nonSoraOrderingFixture = sampleTonBundleFixture(
+            sourceDomain = SccpSolana.DOMAIN_SOLANA,
+            senderCodec = SccpTon.CODEC_SOLANA_BASE58,
+            sender = "11111111111111111111111111111111",
+        )
+        val publicInputOrder = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                sampleProofRequestInput(
+                    publicInputs = nonSoraOrderingFixture.publicInputs.copy(
+                        payloadHash = "0x" + "AA".repeat(32),
+                    ),
+                    bundleBytes = nonSoraOrderingFixture.bundleBytes,
+                    sourceProofBytes = byteArrayOf(9, 10),
+                ),
+            )
+        }
+        assertTrue(publicInputOrder.message?.contains("payloadHash must be canonical hex") == true)
+        assertFalse(publicInputOrder.message?.contains("sourceProofBytes") == true)
         val paddedStatementHash = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildProofRequest(
                 sampleProofRequestInput(statementHash = "56".repeat(32) + "\n"),
@@ -2863,7 +2889,7 @@ class TonSccpProverTest {
             request.sourceAdapterDeploymentBindingHash,
         )
         assertEquals(
-            "0x01c228459f04cf7a6c863fd116e6c916e4b44f192168ec6dc24a0bf62775e966",
+            "0xf0a1c6d7b987392d9956a2e291552287d063dea146772d1f16909a79e0afe5ca",
             request.requestHash,
         )
         val proofResult = SccpTon.wrapProofResult(
@@ -2871,7 +2897,7 @@ class TonSccpProverTest {
             request,
         )
         assertEquals(
-            "0x5c7f16603f28514899734ab2809f6e1ceb3da0e9d47e13ed95ca60f8c3a88864",
+            "0x09df47e8a2509f4e7fbb6cf4b0b271bb87fd8c1d76b37823332d08ee2c062e5e",
             proofResult.envelopeHash,
         )
     }
@@ -2955,7 +2981,7 @@ class TonSccpProverTest {
         amount: BigInteger = BigInteger.valueOf(42),
         routeId: String = "sccp-ton-proof-request",
         merkleProofSteps: List<Pair<ByteArray, Int>> = emptyList(),
-        finalityProof: ByteArray = byteArrayOf(0x71, 0x72),
+        finalityProof: ByteArray? = null,
     ): ByteArray =
         sampleTonBundleFixture(
             sourceDomain = sourceDomain,
@@ -2968,6 +2994,18 @@ class TonSccpProverTest {
             finalityProof = finalityProof,
         ).bundleBytes
 
+    private fun sampleTonBundleBytesWithFinalityHeader(blockHeaderBytes: ByteArray): ByteArray {
+        val publicInputs = samplePublicInputs()
+        return sampleTonBundleBytes(
+            finalityProof = testNexusBridgeFinalityProofBytes(
+                commitmentRoot = publicInputs.commitmentRoot,
+                finalityHeight = publicInputs.finalityHeight,
+                finalityBlockHash = publicInputs.finalityBlockHash,
+                blockHeaderBytes = blockHeaderBytes,
+            ),
+        )
+    }
+
     private fun sampleTonBundleFixture(
         sourceDomain: Int = SccpSolana.DOMAIN_SORA,
         senderCodec: Int = SccpTon.CODEC_TEXT_UTF8,
@@ -2976,7 +3014,7 @@ class TonSccpProverTest {
         amount: BigInteger = BigInteger.valueOf(42),
         routeId: String = "sccp-ton-proof-request",
         merkleProofSteps: List<Pair<ByteArray, Int>> = emptyList(),
-        finalityProof: ByteArray = byteArrayOf(0x71, 0x72),
+        finalityProof: ByteArray? = null,
     ): SampleTonBundleFixture {
         val payloadBody = ByteArrayOutputStream()
         payloadBody.write(1)
@@ -3025,24 +3063,35 @@ class TonSccpProverTest {
         }
         val commitmentRoot = "0x" + hexLower(currentRoot)
 
+        val publicInputs = TonSccpPublicInputsInput(
+            version = 1,
+            messageId = messageId,
+            payloadHash = payloadHash,
+            targetDomain = SccpTon.DOMAIN_TON,
+            commitmentRoot = commitmentRoot,
+            finalityHeight = "19",
+            finalityBlockHash = "aa".repeat(32),
+        )
+        val resolvedFinalityProof = finalityProof ?: if (sourceDomain == SccpSolana.DOMAIN_SORA) {
+            testNexusBridgeFinalityProofBytes(
+                commitmentRoot = publicInputs.commitmentRoot,
+                finalityHeight = publicInputs.finalityHeight,
+                finalityBlockHash = publicInputs.finalityBlockHash,
+            )
+        } else {
+            byteArrayOf(0x71, 0x72)
+        }
+
         val bundle = ByteArrayOutputStream()
         bundle.write(1)
         bundle.write(currentRoot)
         writeTestBytes(bundle, commitmentBytes)
         writeTestBytes(bundle, merkleProof.toByteArray())
         writeTestBytes(bundle, payloadBytes)
-        writeTestBytes(bundle, finalityProof)
+        writeTestBytes(bundle, resolvedFinalityProof)
 
         return SampleTonBundleFixture(
-            publicInputs = TonSccpPublicInputsInput(
-                version = 1,
-                messageId = messageId,
-                payloadHash = payloadHash,
-                targetDomain = SccpTon.DOMAIN_TON,
-                commitmentRoot = commitmentRoot,
-                finalityHeight = "19",
-                finalityBlockHash = "aa".repeat(32),
-            ),
+            publicInputs = publicInputs,
             bundleBytes = bundle.toByteArray(),
         )
     }
@@ -3052,7 +3101,7 @@ class TonSccpProverTest {
         nonce: Long = 327L,
         name: ByteArray = fixedTestAscii32("Token"),
         symbol: ByteArray = fixedTestAscii32("TOK"),
-        finalityProof: ByteArray = byteArrayOf(0x71, 0x72),
+        finalityProof: ByteArray? = null,
     ): SampleTonBundleFixture {
         require(name.size == 32)
         require(symbol.size == 32)
@@ -3086,26 +3135,151 @@ class TonSccpProverTest {
         val merkleProof = ByteArrayOutputStream()
         writeTestU32Le(merkleProof, 0)
 
+        val publicInputs = TonSccpPublicInputsInput(
+            version = 1,
+            messageId = messageId,
+            payloadHash = payloadHash,
+            targetDomain = targetDomain,
+            commitmentRoot = commitmentRoot,
+            finalityHeight = "19",
+            finalityBlockHash = "aa".repeat(32),
+        )
+        val resolvedFinalityProof = finalityProof ?: testNexusBridgeFinalityProofBytes(
+            commitmentRoot = publicInputs.commitmentRoot,
+            finalityHeight = publicInputs.finalityHeight,
+            finalityBlockHash = publicInputs.finalityBlockHash,
+        )
+
         val bundle = ByteArrayOutputStream()
         bundle.write(1)
         bundle.write(currentRoot)
         writeTestBytes(bundle, commitmentBytes)
         writeTestBytes(bundle, merkleProof.toByteArray())
         writeTestBytes(bundle, payloadBytes)
-        writeTestBytes(bundle, finalityProof)
+        writeTestBytes(bundle, resolvedFinalityProof)
 
         return SampleTonBundleFixture(
-            publicInputs = TonSccpPublicInputsInput(
-                version = 1,
-                messageId = messageId,
-                payloadHash = payloadHash,
-                targetDomain = targetDomain,
-                commitmentRoot = commitmentRoot,
-                finalityHeight = "19",
-                finalityBlockHash = "aa".repeat(32),
-            ),
+            publicInputs = publicInputs,
             bundleBytes = bundle.toByteArray(),
         )
+    }
+
+    private data class TestNexusBridgeFinalityProof(
+        val commitmentRoot: String,
+        val finalityHeight: Long,
+        val finalityBlockHash: String,
+        val blockHeaderBytes: ByteArray,
+    )
+
+    private val testNexusBridgeFinalityProofAdapter = object : TypeAdapter<TestNexusBridgeFinalityProof> {
+        override fun encode(encoder: NoritoEncoder, value: TestNexusBridgeFinalityProof) {
+            writeTestNoritoField(encoder) { it.writeUInt(1, 8) }
+            writeTestNoritoField(encoder) { writeTestNoritoString(it, "00000000-0000-0000-0000-000000000753") }
+            writeTestNoritoField(encoder) { it.writeUInt(value.finalityHeight, 64) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.finalityBlockHash.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.commitmentRoot.removePrefix("0x"))) }
+            writeTestNoritoField(encoder) { writeTestNoritoRawByteVec(it, value.blockHeaderBytes) }
+            writeTestNoritoField(encoder) { writeTestNexusCommitQc(it, value) }
+        }
+
+        override fun decode(decoder: NoritoDecoder): TestNexusBridgeFinalityProof =
+            throw UnsupportedOperationException("test Nexus finality proof decoding is not used")
+    }
+
+    private fun testNexusBridgeFinalityProofBytes(
+        commitmentRoot: String,
+        finalityHeight: String,
+        finalityBlockHash: String,
+        blockHeaderBytes: ByteArray = byteArrayOf(0x21, 0x22),
+    ): ByteArray =
+        NoritoCodec.encode(
+            TestNexusBridgeFinalityProof(
+                commitmentRoot = commitmentRoot,
+                finalityHeight = finalityHeight.toLong(),
+                finalityBlockHash = finalityBlockHash,
+                blockHeaderBytes = blockHeaderBytes,
+            ),
+            testNexusBridgeFinalityProofSchema,
+            testNexusBridgeFinalityProofAdapter,
+        )
+
+    private fun writeTestNexusCommitQc(
+        encoder: NoritoEncoder,
+        value: TestNexusBridgeFinalityProof,
+    ) {
+        writeTestNoritoField(encoder) { it.writeUInt(1, 8) }
+        writeTestNoritoField(encoder) { it.writeUInt(2, 32) }
+        writeTestNoritoField(encoder) { it.writeUInt(value.finalityHeight, 64) }
+        writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
+        writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
+        writeTestNoritoField(encoder) {
+            writeTestNoritoString(it, "iroha2-consensus::permissioned-sumeragi@v1")
+        }
+        writeTestNoritoField(encoder) { it.writeBytes(hexBytes(value.finalityBlockHash.removePrefix("0x"))) }
+        writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32)) }
+        writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32)) }
+        writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32)) }
+        writeTestNoritoField(encoder) { it.writeUInt(0, 64) }
+        writeTestNoritoField(encoder) { it.writeByte(0) }
+        writeTestNoritoField(encoder) { it.writeBytes(ByteArray(32) { 0x77.toByte() }) }
+        writeTestNoritoField(encoder) { it.writeUInt(1, 16) }
+        writeTestNoritoField(encoder) {
+            writeTestNoritoStringSequence(
+                it,
+                listOf(
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2",
+                ),
+            )
+        }
+        writeTestNoritoField(encoder) {
+            writeTestNoritoRawByteVecSequence(it, listOf(ByteArray(48) { 0x01.toByte() }))
+        }
+        writeTestNoritoField(encoder) { writeTestNoritoRawByteVec(it, byteArrayOf(0x01)) }
+        writeTestNoritoField(encoder) { writeTestNoritoRawByteVec(it, ByteArray(96) { 0x02.toByte() }) }
+    }
+
+    private fun writeTestNoritoField(
+        encoder: NoritoEncoder,
+        writePayload: (NoritoEncoder) -> Unit,
+    ) {
+        val child = encoder.childEncoder()
+        writePayload(child)
+        val payload = child.toByteArray()
+        encoder.writeLength(payload.size.toLong(), compact = true)
+        encoder.writeBytes(payload)
+    }
+
+    private fun writeTestNoritoString(encoder: NoritoEncoder, value: String) {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        encoder.writeLength(bytes.size.toLong(), compact = true)
+        encoder.writeBytes(bytes)
+    }
+
+    private fun writeTestNoritoStringSequence(encoder: NoritoEncoder, values: List<String>) {
+        encoder.writeLength(values.size.toLong(), compact = false)
+        values.forEach { value ->
+            val child = encoder.childEncoder()
+            writeTestNoritoString(child, value)
+            val payload = child.toByteArray()
+            encoder.writeLength(payload.size.toLong(), compact = true)
+            encoder.writeBytes(payload)
+        }
+    }
+
+    private fun writeTestNoritoRawByteVec(encoder: NoritoEncoder, value: ByteArray) {
+        encoder.writeLength(value.size.toLong(), compact = false)
+        encoder.writeBytes(value)
+    }
+
+    private fun writeTestNoritoRawByteVecSequence(encoder: NoritoEncoder, values: List<ByteArray>) {
+        encoder.writeLength(values.size.toLong(), compact = false)
+        values.forEach { value ->
+            val child = encoder.childEncoder()
+            writeTestNoritoRawByteVec(child, value)
+            val payload = child.toByteArray()
+            encoder.writeLength(payload.size.toLong(), compact = true)
+            encoder.writeBytes(payload)
+        }
     }
 
     private fun fixedTestAscii32(value: String): ByteArray {

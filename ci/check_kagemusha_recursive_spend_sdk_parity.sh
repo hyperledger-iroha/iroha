@@ -18560,6 +18560,28 @@ def check_javascript(texts, errors):
         require_block_contains(
             texts,
             relative,
+            "function callKagemushaRecursiveSpendNative(",
+            "function callKagemushaRecursiveSpendTopUpNative(",
+            (
+                "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
+            ),
+            f"{relative} recursive spend native input copy",
+            errors,
+        )
+        require_block_contains(
+            texts,
+            relative,
+            "function callKagemushaRecursiveSpendTopUpNative(",
+            "function kagemushaRecursiveSpendOutputToBuffer(",
+            (
+                "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
+            ),
+            f"{relative} recursive spend top-up native input copy",
+            errors,
+        )
+        require_block_contains(
+            texts,
+            relative,
             "function normalizeConfidentialV2ExactString(",
             "function fixed32Buffer",
             (
@@ -24548,6 +24570,31 @@ def check_java_kotlin(texts, errors):
     kotlin_offline_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt"
     java_offline_v2_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteV2Test.java"
     kotlin_offline_v2_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteV2Test.kt"
+    java_ton_sccp_test = "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java"
+    kotlin_ton_sccp_test = "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt"
+    require_contains(
+        texts,
+        kotlin_ton_sccp_test,
+        (
+            "val publicInputOrder = assertFailsWith<IllegalArgumentException>",
+            "payloadHash = \"0x\" + \"AA\".repeat(32)",
+            "assertFalse(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
+        ),
+        "Kotlin TON SCCP public-input validation ordering coverage",
+        errors,
+    )
+    require_contains(
+        texts,
+        java_ton_sccp_test,
+        (
+            "malformedPublicInputsBeforeSourceProof",
+            "ex.getMessage().contains(\"payloadHash must be canonical hex\")",
+            "&& !ex.getMessage().contains(\"sourceProofBytes\")",
+            "TON proof requests must validate public inputs before source-proof matching",
+        ),
+        "Android Java TON SCCP public-input validation ordering coverage",
+        errors,
+    )
     require_contains(
         texts,
         kotlin,
@@ -37483,6 +37530,51 @@ if mode == "--negative-control-jvm-recursive-compact-shape-classifier":
         print(detected_message)
     raise SystemExit(0)
 
+if mode == "--negative-control-ton-sccp-public-input-validation-ordering":
+    mutated_texts = dict(texts)
+    mutations = (
+        (
+            "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
+            "assertFalse(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
+            "assertTrue(publicInputOrder.message?.contains(\"sourceProofBytes\") == true)",
+            "Kotlin TON SCCP public-input validation ordering coverage",
+        ),
+        (
+            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
+            "&& !ex.getMessage().contains(\"sourceProofBytes\")",
+            "&& ex.getMessage().contains(\"sourceProofBytes\")",
+            "Android Java TON SCCP public-input validation ordering coverage",
+        ),
+    )
+    detected_messages = []
+    for target, old, new, expected in mutations:
+        original = mutated_texts[target]
+        mutated = original.replace(old, new, 1)
+        if mutated == original:
+            raise SystemExit(
+                "negative control failed: unable to mutate TON SCCP validation-order coverage in "
+                + target
+            )
+        mutated_texts[target] = mutated
+        try:
+            detected_messages.extend(
+                detect_negative_control(
+                    mutated_texts,
+                    (expected,),
+                    "TON SCCP public-input validation-order drift",
+                )
+            )
+        finally:
+            mutated_texts[target] = original
+    if not detected_messages:
+        raise SystemExit(
+            "negative control failed: TON SCCP public-input validation-order drift was not detected"
+        )
+    print("negative control rejected TON SCCP public-input validation-order drift")
+    for detected_message in detected_messages:
+        print(detected_message)
+    raise SystemExit(0)
+
 if mode == "--negative-control-mobile-recursive-spend-native-output-headers":
     mutated_texts = dict(texts)
     targets = (
@@ -48248,8 +48340,8 @@ if mode == "--negative-control-android-java-kagemusha-jdk8-api-surface":
         ),
         (
             offline_explorer_outcome_source,
-            "kind.trim().isEmpty()",
-            "kind.isBlank()",
+            "value.equals(value.trim())",
+            "value.isBlank()",
         ),
         (
             executable_source,
@@ -49195,6 +49287,7 @@ if mode == "--negative-control-js-package-dist-pallas-opening-vectors":
     )
     updated = texts[target]
     detected_messages = []
+    expected_labels = []
 
     def replace_in_package_dist_vector_block(updated, block_start_marker, replacements, block_name):
         block_end_marker = "  ];"
@@ -53802,13 +53895,29 @@ if mode == "--negative-control-sdk-archive-input-copy":
             "javascript/iroha_js/src/crypto.js",
             "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
             "const request = toOwnedBuffer(requestArchive, archiveName)",
-            "javascript/iroha_js/src/crypto.js native output Norito guard",
+            "javascript/iroha_js/src/crypto.js recursive spend native input copy",
+        ),
+        (
+            "javascript/iroha_js/src/crypto.js",
+            "function callKagemushaRecursiveSpendTopUpNative(operation, requestArchive, archiveName = \"requestArchive\") {\n"
+            "  const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
+            "function callKagemushaRecursiveSpendTopUpNative(operation, requestArchive, archiveName = \"requestArchive\") {\n"
+            "  const request = toOwnedBuffer(requestArchive, archiveName)",
+            "javascript/iroha_js/src/crypto.js recursive spend top-up native input copy",
         ),
         (
             "javascript/iroha_js/dist/crypto.js",
             "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
             "const request = toOwnedBuffer(requestArchive, archiveName)",
-            "javascript/iroha_js/dist/crypto.js native output Norito guard",
+            "javascript/iroha_js/dist/crypto.js recursive spend native input copy",
+        ),
+        (
+            "javascript/iroha_js/dist/crypto.js",
+            "function callKagemushaRecursiveSpendTopUpNative(operation, requestArchive, archiveName = \"requestArchive\") {\n"
+            "  const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)",
+            "function callKagemushaRecursiveSpendTopUpNative(operation, requestArchive, archiveName = \"requestArchive\") {\n"
+            "  const request = toOwnedBuffer(requestArchive, archiveName)",
+            "javascript/iroha_js/dist/crypto.js recursive spend top-up native input copy",
         ),
         (
             "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
@@ -54143,6 +54252,14 @@ if mode == "--negative-control-sdk-archive-input-copy":
     def expected_archive_input_copy_label(target, old, label):
         if " missing " in label:
             return label
+        if (
+            target in ("javascript/iroha_js/src/crypto.js", "javascript/iroha_js/dist/crypto.js")
+            and "toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)" in old
+        ):
+            return (
+                f"{label} missing "
+                "const request = toOwnedKagemushaArchiveBuffer(requestArchive, archiveName)"
+            )
         if label == "Android Java recursive compact archive input copy":
             return (
                 f"{label} missing pattern "

@@ -2607,11 +2607,35 @@ def run(args: argparse.Namespace) -> int:
 
     _reject_unused_local_overrides(args, verified)
     receipt_entries.sort(key=_receipt_summary_entry_order_key)
+    receipt_kind_set = {receipt["receipt_kind"] for receipt in verified}
+    has_failed_receipt = any(receipt.get("ok") is not True for receipt in verified)
+    has_insecure_receipt_endpoint = any(
+        _url_requires_insecure_http_override(
+            urllib.parse.urlparse(_receipt_endpoint_url(receipt))
+        )
+        for receipt in verified
+    )
+    has_default_profile_receipt = any(
+        receipt.get("receipt_kind") == "iso-rail-gateway"
+        and receipt.get("profile") is None
+        for receipt in verified
+    )
+    ok = (
+        receipt_kind_set == SUPPORTED_KINDS
+        and not args.allow_failed
+        and not args.allow_insecure_http
+        and not args.allow_default_profile
+        and args.require_source_files
+        and not has_failed_receipt
+        and not has_insecure_receipt_endpoint
+        and not has_default_profile_receipt
+    )
 
     summary = {
         "version": RECEIPT_SUMMARY_VERSION,
+        "ok": ok,
         "verified_receipts": len(verified),
-        "receipt_kind": sorted({receipt["receipt_kind"] for receipt in verified}),
+        "receipt_kind": sorted(receipt_kind_set),
         "allow_failed": args.allow_failed,
         "allow_insecure_http": args.allow_insecure_http,
         "allow_default_profile": args.allow_default_profile,

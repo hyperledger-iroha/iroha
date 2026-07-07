@@ -61,6 +61,34 @@ MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
 MAX_TIMESTAMP_CHARS = 128
+PLACEHOLDER_CONTEXT_IDS = {
+    "ci",
+    "dev",
+    "development",
+    "dummy",
+    "example",
+    "fake",
+    "local",
+    "not-production",
+    "not-production-ready",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_TOKENS = {
+    "dummy",
+    "example",
+    "fake",
+    "placeholder",
+    "sample",
+    "template",
+    "test",
+}
+PLACEHOLDER_CONTEXT_PHRASES = (
+    "not-production",
+    "not-production-ready",
+)
 PLACEHOLDER_TRUST_SOURCE_MARKERS = (
     "dummy",
     "fake",
@@ -226,6 +254,7 @@ IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 POLICIES = {"record-only", "reject-unsupported", "require-verified"}
 REQUIRE_VERIFIED = "require-verified"
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+CONTEXT_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 KNOWN_RAILS = {
     "generic-iso20022",
     "swift-cbpr-plus",
@@ -1043,6 +1072,20 @@ def _reject_non_ascii_context(value: str, label: str) -> None:
         raise TrustBundleError(f"{label} must use printable ASCII")
 
 
+def _reject_noncanonical_context_id(value: str, label: str) -> None:
+    if CONTEXT_ID_RE.fullmatch(value) is None:
+        raise TrustBundleError(f"{label} must be a canonical lowercase context id")
+
+
+def _reject_placeholder_context_id(value: str, label: str) -> None:
+    if (
+        value in PLACEHOLDER_CONTEXT_IDS
+        or any(token in PLACEHOLDER_CONTEXT_TOKENS for token in value.split("-"))
+        or any(phrase in value for phrase in PLACEHOLDER_CONTEXT_PHRASES)
+    ):
+        raise TrustBundleError(f"{label} must not use placeholder context id")
+
+
 def _reject_overlong_trust_policy(value: str, label: str) -> None:
     if len(value) > MAX_TRUST_POLICY_CHARS:
         raise TrustBundleError(
@@ -1061,6 +1104,8 @@ def _required_context_string(bundle: dict[str, Any], key: str, label: str) -> st
     raw = _required_string(bundle, key, label)
     _reject_non_ascii_context(raw, f"{label}.{key}")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    _reject_noncanonical_context_id(raw, f"{label}.{key}")
+    _reject_placeholder_context_id(raw, f"{label}.{key}")
     return raw
 
 
@@ -2420,15 +2465,24 @@ def run(args: argparse.Namespace) -> int:
             json.dumps(profile_config, allow_nan=False, indent=2, sort_keys=True) + "\n"
         )
         profile_json_sha256 = sha256_hex(profile_text.encode("utf-8"))
+    profile_json_emitted = args.emit_profile_json is not None
+    ok = (
+        profile_json_emitted
+        and profile_json_emittable
+        and not args.allow_record_only
+        and not args.allow_insecure_source_url
+        and not args.allow_synthetic_der
+    )
     output: dict[str, Any] = {
         "version": TRUST_SUMMARY_VERSION,
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
+        "ok": ok,
         "verified_bundles": len(summaries),
         "allow_record_only": args.allow_record_only,
         "allow_insecure_source_url": args.allow_insecure_source_url,
         "allow_synthetic_der": args.allow_synthetic_der,
         "max_source_age_days": args.max_source_age_days,
-        "profile_json_emitted": args.emit_profile_json is not None,
+        "profile_json_emitted": profile_json_emitted,
         "profile_json_emittable": profile_json_emittable,
         "profile_json_sha256": profile_json_sha256,
         "bundles": public_summaries,

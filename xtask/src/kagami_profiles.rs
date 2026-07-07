@@ -20,6 +20,7 @@ pub(crate) struct KagamiProfileOptions {
     pub output: PathBuf,
     pub profiles: Vec<String>,
     pub kagami_override: Option<PathBuf>,
+    pub nexus_xor_asset_definition_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +96,12 @@ pub(crate) fn generate(options: KagamiProfileOptions) -> AnyResult<()> {
     fs::create_dir_all(&options.output)?;
 
     for spec in specs {
-        write_profile_bundle(&spec, &kagami_bin, &options.output)?;
+        write_profile_bundle(
+            &spec,
+            &kagami_bin,
+            &options.output,
+            options.nexus_xor_asset_definition_id.as_deref(),
+        )?;
     }
 
     Ok(())
@@ -126,6 +132,7 @@ fn write_profile_bundle(
     spec: &ProfileSpec,
     kagami_bin: &Path,
     output_root: &Path,
+    nexus_xor_asset_definition_id: Option<&str>,
 ) -> AnyResult<()> {
     let bundle_root = output_root.join(spec.slug);
     if bundle_root.exists() {
@@ -135,7 +142,13 @@ fn write_profile_bundle(
 
     let genesis_key =
         deterministic_keypair(&format!("{}-genesis-key", spec.slug), Algorithm::Ed25519)?;
-    let genesis_json = generate_genesis(spec, kagami_bin, genesis_key.public_key(), &bundle_root)?;
+    let genesis_json = generate_genesis(
+        spec,
+        kagami_bin,
+        genesis_key.public_key(),
+        &bundle_root,
+        nexus_xor_asset_definition_id,
+    )?;
     let peers = build_peers(spec)?;
     let patched_genesis = inject_topology(genesis_json, &peers)?;
     let genesis_path = bundle_root.join("genesis.json");
@@ -171,6 +184,7 @@ fn generate_genesis(
     kagami_bin: &Path,
     genesis_public_key: &iroha_crypto::PublicKey,
     workdir: &Path,
+    nexus_xor_asset_definition_id: Option<&str>,
 ) -> AnyResult<RawGenesisTransaction> {
     let mut command = Command::new(kagami_bin);
     command.args([
@@ -188,6 +202,15 @@ fn generate_genesis(
 
     if spec.requires_seed {
         command.args(["--vrf-seed-hex", &spec.vrf_seed_hex()]);
+    }
+    if spec.profile_flag == "iroha3-nexus" {
+        let Some(asset_definition_id) = nexus_xor_asset_definition_id else {
+            return Err(
+                "iroha3-nexus profile generation requires --nexus-xor-asset-definition-id <BASE58>"
+                    .into(),
+            );
+        };
+        command.args(["--xor-asset-definition-id", asset_definition_id]);
     }
 
     let output = command

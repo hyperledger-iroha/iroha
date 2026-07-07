@@ -150,6 +150,31 @@ pub(crate) struct ExecutionContextLaneRbcInstancePreimage {
 }
 
 const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const PK2_STAGING_CHAIN_ID: &str = "cbdc16";
+
+const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 4] = [
+    [
+        58, 93, 1, 255, 203, 247, 226, 108, 208, 94, 24, 239, 224, 183, 177, 199, 66, 237, 206, 11,
+        155, 190, 1, 59, 169, 3, 161, 188, 185, 184, 245, 105,
+    ],
+    [
+        40, 173, 221, 159, 39, 238, 176, 56, 202, 219, 191, 211, 103, 68, 251, 108, 152, 88, 38,
+        166, 13, 99, 153, 170, 152, 200, 97, 80, 160, 147, 6, 254,
+    ],
+    [
+        6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
+        194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
+    ],
+    [
+        127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95, 145,
+        75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
+    ],
+];
+
+const LEGACY_PK2_STAGING_ZK_POLICY_HASHES: [[u8; 32]; 1] = [[
+    225, 120, 59, 226, 186, 97, 206, 167, 205, 26, 96, 182, 95, 10, 125, 175, 229, 163, 85, 177,
+    207, 177, 4, 173, 214, 42, 14, 173, 94, 111, 38, 251,
+]];
 
 fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
     matches!(
@@ -158,40 +183,56 @@ fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
     )
 }
 
-fn taira_legacy_replay_confidential_digest(
+fn is_pk2_staging_chain_id(chain_id: &ChainId) -> bool {
+    chain_id.as_str() == PK2_STAGING_CHAIN_ID
+}
+
+fn legacy_replay_confidential_digest_with_hashes(
     expected: Option<ConfidentialFeatureDigest>,
     actual: Option<ConfidentialFeatureDigest>,
+    legacy_policy_hashes: &[[u8; 32]],
 ) -> bool {
-    const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 4] = [
-        [
-            58, 93, 1, 255, 203, 247, 226, 108, 208, 94, 24, 239, 224, 183, 177, 199, 66, 237, 206,
-            11, 155, 190, 1, 59, 169, 3, 161, 188, 185, 184, 245, 105,
-        ],
-        [
-            40, 173, 221, 159, 39, 238, 176, 56, 202, 219, 191, 211, 103, 68, 251, 108, 152, 88,
-            38, 166, 13, 99, 153, 170, 152, 200, 97, 80, 160, 147, 6, 254,
-        ],
-        [
-            6, 56, 47, 173, 129, 176, 103, 189, 91, 113, 130, 211, 80, 254, 226, 208, 22, 148, 210,
-            194, 47, 87, 152, 25, 162, 34, 156, 2, 45, 189, 111, 213,
-        ],
-        [
-            127, 253, 243, 16, 56, 84, 148, 21, 121, 38, 145, 202, 29, 204, 49, 113, 127, 74, 95,
-            145, 75, 228, 201, 193, 47, 33, 181, 167, 92, 108, 248, 61,
-        ],
-    ];
-
     let (Some(expected), Some(actual)) = (expected, actual) else {
         return false;
     };
 
     actual
         .zk_policy_hash
-        .is_some_and(|hash| LEGACY_TAIRA_ZK_POLICY_HASHES.contains(&hash))
+        .is_some_and(|hash| legacy_policy_hashes.contains(&hash))
         && actual.vk_set_hash == expected.vk_set_hash
         && actual.poseidon_params_id == expected.poseidon_params_id
         && actual.pedersen_params_id == expected.pedersen_params_id
         && actual.conf_rules_version == expected.conf_rules_version
+}
+
+fn taira_legacy_replay_confidential_digest(
+    expected: Option<ConfidentialFeatureDigest>,
+    actual: Option<ConfidentialFeatureDigest>,
+) -> bool {
+    legacy_replay_confidential_digest_with_hashes(expected, actual, &LEGACY_TAIRA_ZK_POLICY_HASHES)
+}
+
+fn pk2_staging_legacy_replay_confidential_digest(
+    expected: Option<ConfidentialFeatureDigest>,
+    actual: Option<ConfidentialFeatureDigest>,
+) -> bool {
+    legacy_replay_confidential_digest_with_hashes(
+        expected,
+        actual,
+        &LEGACY_PK2_STAGING_ZK_POLICY_HASHES,
+    )
+}
+
+fn pk2_staging_legacy_replay_execution_context_hash_mismatch(
+    chain_id: &ChainId,
+    allow_missing_legacy_context: bool,
+    is_genesis: bool,
+) -> bool {
+    allow_missing_legacy_context && !is_genesis && is_pk2_staging_chain_id(chain_id)
+}
+
+fn pk2_staging_lane_payload_subject_hash_compatibility(chain_id: &ChainId) -> bool {
+    is_pk2_staging_chain_id(chain_id)
 }
 
 #[cfg(feature = "bls")]
@@ -5951,6 +5992,7 @@ pub(crate) mod valid {
             Self::validate_da_pin_intent_bundle(block, state)?;
             Self::validate_execution_context_with_state(
                 block,
+                chain_id,
                 state,
                 allow_missing_legacy_context,
             )?;
@@ -5977,10 +6019,16 @@ pub(crate) mod valid {
             if actual_digest != expected_digest {
                 let is_legacy_taira_digest =
                     taira_legacy_replay_confidential_digest(expected_digest, actual_digest);
+                let is_legacy_pk2_staging_digest =
+                    pk2_staging_legacy_replay_confidential_digest(expected_digest, actual_digest);
                 let is_public_taira_genesis =
                     block.header().is_genesis() && is_public_taira_chain_id(chain_id);
-                if is_legacy_taira_digest
-                    && (allow_missing_legacy_context || is_public_taira_genesis)
+                let is_pk2_staging_genesis =
+                    block.header().is_genesis() && is_pk2_staging_chain_id(chain_id);
+                if (is_legacy_taira_digest
+                    && (allow_missing_legacy_context || is_public_taira_genesis))
+                    || (is_legacy_pk2_staging_digest
+                        && (allow_missing_legacy_context || is_pk2_staging_genesis))
                 {
                     if is_public_taira_genesis && !allow_missing_legacy_context {
                         iroha_logger::warn!(
@@ -5988,11 +6036,17 @@ pub(crate) mod valid {
                             chain_id = chain_id.as_str(),
                             "accepting public Taira genesis with legacy confidential feature digest"
                         );
+                    } else if is_pk2_staging_genesis && !allow_missing_legacy_context {
+                        iroha_logger::warn!(
+                            block_height,
+                            chain_id = chain_id.as_str(),
+                            "accepting PK2 staging genesis with legacy confidential feature digest"
+                        );
                     } else {
                         iroha_logger::debug!(
                             block_height,
                             chain_id = chain_id.as_str(),
-                            "accepting legacy Taira confidential feature digest during replay"
+                            "accepting legacy confidential feature digest during replay"
                         );
                     }
                 } else {
@@ -6455,9 +6509,10 @@ pub(crate) mod valid {
             BlockValidationError::ExecutionContextInvalid(message.into())
         }
 
-        fn validate_execution_context_header(
-            block: &SignedBlock,
-        ) -> Result<Option<&BlockExecutionContextBundle>, BlockValidationError> {
+        fn validate_execution_context_header<'block>(
+            block: &'block SignedBlock,
+            legacy_pk2_staging_replay_chain_id: Option<&ChainId>,
+        ) -> Result<Option<&'block BlockExecutionContextBundle>, BlockValidationError> {
             match (
                 block.header().execution_context_hash(),
                 block.execution_context(),
@@ -6472,6 +6527,16 @@ pub(crate) mod valid {
                 (Some(expected), Some(bundle)) => {
                     let actual = HashOf::new(bundle);
                     if actual != expected {
+                        if let Some(chain_id) = legacy_pk2_staging_replay_chain_id {
+                            iroha_logger::warn!(
+                                block_height = block.header().height().get(),
+                                chain_id = chain_id.as_str(),
+                                ?expected,
+                                ?actual,
+                                "accepting PK2 staging legacy execution context hash mismatch during replay"
+                            );
+                            return Ok(Some(bundle));
+                        }
                         return Err(Self::execution_context_error(
                             "execution context hash mismatch",
                         ));
@@ -6520,6 +6585,7 @@ pub(crate) mod valid {
 
         fn validate_execution_context_lane_payload_ownerships(
             block: &SignedBlock,
+            chain_id: &ChainId,
             bundle: &BlockExecutionContextBundle,
         ) -> Result<(), BlockValidationError> {
             if bundle.lane_payload_ownerships.is_empty() {
@@ -6640,9 +6706,27 @@ pub(crate) mod valid {
                     "lane block subject",
                 )?;
                 if ownership.subject_hash != expected_subject_hash {
-                    return Err(Self::execution_context_error(format!(
-                        "lane payload ownership {ownership_idx} subject hash mismatch"
-                    )));
+                    if pk2_staging_lane_payload_subject_hash_compatibility(chain_id) {
+                        iroha_logger::warn!(
+                            block_height = proposal_height,
+                            proposal_view,
+                            chain_id = chain_id.as_str(),
+                            ownership_idx,
+                            lane_id = ownership.lane_id.as_u32(),
+                            dataspace_id = ownership.dataspace_id.as_u64(),
+                            lane_block_height = ownership.lane_block_height,
+                            lane_block_view = ownership.lane_block_view,
+                            candidate_indices = ?candidate_indices,
+                            qc_mode_tag = %ownership.qc_mode_tag,
+                            expected = ?expected_subject_hash,
+                            actual = ?ownership.subject_hash,
+                            "accepting PK2 staging lane payload ownership subject hash mismatch"
+                        );
+                    } else {
+                        return Err(Self::execution_context_error(format!(
+                            "lane payload ownership {ownership_idx} subject hash mismatch"
+                        )));
+                    }
                 }
 
                 let expected_payload_ownership_hash = Self::execution_context_preimage_hash(
@@ -6746,10 +6830,19 @@ pub(crate) mod valid {
 
         fn validate_execution_context_with_state(
             block: &SignedBlock,
+            chain_id: &ChainId,
             state: &impl StateReadOnly,
             allow_missing_legacy_context: bool,
         ) -> Result<(), BlockValidationError> {
-            let bundle = Self::validate_execution_context_header(block)?;
+            let legacy_pk2_staging_replay_chain_id =
+                pk2_staging_legacy_replay_execution_context_hash_mismatch(
+                    chain_id,
+                    allow_missing_legacy_context,
+                    block.header().is_genesis(),
+                )
+                .then_some(chain_id);
+            let bundle =
+                Self::validate_execution_context_header(block, legacy_pk2_staging_replay_chain_id)?;
             let context_required = !allow_missing_legacy_context
                 && !block.header().is_genesis()
                 && block.external_entrypoint_count() != 0;
@@ -6764,7 +6857,7 @@ pub(crate) mod valid {
             };
 
             Self::validate_execution_context_alignment(block, bundle)?;
-            Self::validate_execution_context_lane_payload_ownerships(block, bundle)?;
+            Self::validate_execution_context_lane_payload_ownerships(block, chain_id, bundle)?;
             Self::validate_execution_context_lane_payload_artifacts(block, state, bundle)?;
             if allow_missing_legacy_context || block.header().is_genesis() {
                 return Ok(());
@@ -6877,7 +6970,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             tx_count: usize,
         ) -> Option<Vec<crate::queue::RoutingDecision>> {
-            let bundle = match Self::validate_execution_context_header(block) {
+            let bundle = match Self::validate_execution_context_header(block, None) {
                 Ok(Some(bundle)) => bundle,
                 Ok(None) => return None,
                 Err(error) => {
@@ -6906,7 +6999,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             entrypoint_count: usize,
         ) -> Option<Vec<crate::queue::RoutingDecision>> {
-            let bundle = match Self::validate_execution_context_header(block) {
+            let bundle = match Self::validate_execution_context_header(block, None) {
                 Ok(Some(bundle)) => bundle,
                 Ok(None) => return None,
                 Err(error) => {
@@ -15517,6 +15610,85 @@ pub(crate) mod valid {
             );
         }
 
+        fn recompute_lane_payload_ownership_derived_hashes(
+            ownership: &mut SumeragiLanePayloadOwnership,
+        ) {
+            ownership.payload_ownership_hash = Hash::new(
+                norito::to_bytes(&ExecutionContextLanePayloadOwnershipPreimage {
+                    purpose: "nexus:lane-payload-ownership:v1".to_string(),
+                    version: 1,
+                    lane_id: ownership.lane_id,
+                    dataspace_id: ownership.dataspace_id,
+                    lane_block_height: ownership.lane_block_height,
+                    lane_block_view: ownership.lane_block_view,
+                    subject_hash: ownership.subject_hash,
+                    candidate_indices: ownership.accepted_candidate_indices.clone(),
+                    qc_mode_tag: ownership.qc_mode_tag.clone(),
+                })
+                .expect("lane payload ownership preimage encodes"),
+            );
+            ownership.rbc_instance_hash = Hash::new(
+                norito::to_bytes(&ExecutionContextLaneRbcInstancePreimage {
+                    purpose: "nexus:lane-rbc-instance:v1".to_string(),
+                    version: 1,
+                    lane_id: ownership.lane_id,
+                    dataspace_id: ownership.dataspace_id,
+                    lane_block_height: ownership.lane_block_height,
+                    lane_block_view: ownership.lane_block_view,
+                    subject_hash: ownership.subject_hash,
+                    payload_ownership_hash: ownership.payload_ownership_hash,
+                })
+                .expect("lane RBC instance preimage encodes"),
+            );
+        }
+
+        #[test]
+        fn validate_execution_context_accepts_pk2_staging_subject_hash_compatibility_only() {
+            let (state, _topology, _time_source, signed) =
+                signed_default_lane_block_with_execution_context(
+                    "lane-payload-context-pk2-subject-compat",
+                    1,
+                    |transactions| {
+                        let mut ownership = sample_lane_payload_ownership_for_context(
+                            2,
+                            0,
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                            vec![0],
+                        );
+                        ownership.subject_hash = Hash::new(b"pk2-staging-subject-compat");
+                        recompute_lane_payload_ownership_derived_hashes(&mut ownership);
+                        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                            transactions[0].hash_as_entrypoint(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )])
+                        .with_lane_payload_ownerships(vec![ownership])
+                    },
+                );
+            let view = state.query_view();
+            let pk2_chain_id = ChainId::from(PK2_STAGING_CHAIN_ID);
+
+            ValidBlock::validate_execution_context_with_state(&signed, &pk2_chain_id, &view, false)
+                .expect("PK2 staging preserves compatibility for self-consistent subject hashes");
+
+            let err = ValidBlock::validate_execution_context_with_state(
+                &signed,
+                &state.chain_id,
+                &view,
+                false,
+            )
+            .expect_err("non-PK2 chains must retain strict subject hash validation");
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("subject hash mismatch")
+                ),
+                "unexpected validation error: {err:?}"
+            );
+        }
+
         #[test]
         fn validate_static_state_dependent_rejects_lane_payload_ownership_hash_tamper() {
             assert_lane_payload_ownership_context_rejected(
@@ -22379,6 +22551,78 @@ mod tests {
     }
 
     #[test]
+    fn pk2_staging_legacy_replay_confidential_digest_allows_observed_policy_hash_only() {
+        let pk2_policy_hash = [
+            225, 120, 59, 226, 186, 97, 206, 167, 205, 26, 96, 182, 95, 10, 125, 175, 229, 163, 85,
+            177, 207, 177, 4, 173, 214, 42, 14, 173, 94, 111, 38, 251,
+        ];
+        let expected = ConfidentialFeatureDigest::new(
+            Some([0x3A; 32]),
+            Some(1),
+            Some(2),
+            Some(1),
+            Some([0x0D; 32]),
+        );
+        let actual = ConfidentialFeatureDigest::new(
+            expected.vk_set_hash,
+            expected.poseidon_params_id,
+            expected.pedersen_params_id,
+            expected.conf_rules_version,
+            Some(pk2_policy_hash),
+        );
+
+        assert!(pk2_staging_legacy_replay_confidential_digest(
+            Some(expected),
+            Some(actual)
+        ));
+        assert!(!taira_legacy_replay_confidential_digest(
+            Some(expected),
+            Some(actual)
+        ));
+
+        let mut mismatched_params = actual;
+        mismatched_params.poseidon_params_id = Some(9);
+        assert!(!pk2_staging_legacy_replay_confidential_digest(
+            Some(expected),
+            Some(mismatched_params)
+        ));
+
+        let mut unknown_policy = actual;
+        unknown_policy.zk_policy_hash = Some([0x55; 32]);
+        assert!(!pk2_staging_legacy_replay_confidential_digest(
+            Some(expected),
+            Some(unknown_policy)
+        ));
+    }
+
+    #[test]
+    fn pk2_staging_legacy_replay_execution_context_hash_mismatch_is_replay_only() {
+        let pk2_chain_id = ChainId::from("cbdc16");
+        let taira_chain_id = ChainId::from("taira");
+
+        assert!(pk2_staging_legacy_replay_execution_context_hash_mismatch(
+            &pk2_chain_id,
+            true,
+            false
+        ));
+        assert!(!pk2_staging_legacy_replay_execution_context_hash_mismatch(
+            &pk2_chain_id,
+            false,
+            false
+        ));
+        assert!(!pk2_staging_legacy_replay_execution_context_hash_mismatch(
+            &pk2_chain_id,
+            true,
+            true
+        ));
+        assert!(!pk2_staging_legacy_replay_execution_context_hash_mismatch(
+            &taira_chain_id,
+            true,
+            false
+        ));
+    }
+
+    #[test]
     fn public_taira_chain_id_guard_accepts_only_taira_ids() {
         assert!(is_public_taira_chain_id(&ChainId::from(
             "809574f5-fee7-5e69-bfcf-52451e42d50f"
@@ -22386,6 +22630,15 @@ mod tests {
         assert!(is_public_taira_chain_id(&ChainId::from("iroha3-taira")));
         assert!(is_public_taira_chain_id(&ChainId::from("taira")));
         assert!(!is_public_taira_chain_id(&ChainId::from(
+            "00000000-0000-0000-0000-000000000000"
+        )));
+    }
+
+    #[test]
+    fn pk2_staging_chain_id_guard_accepts_only_cbdc16() {
+        assert!(is_pk2_staging_chain_id(&ChainId::from("cbdc16")));
+        assert!(!is_pk2_staging_chain_id(&ChainId::from("taira")));
+        assert!(!is_pk2_staging_chain_id(&ChainId::from(
             "00000000-0000-0000-0000-000000000000"
         )));
     }
